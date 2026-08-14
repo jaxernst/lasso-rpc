@@ -455,6 +455,27 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     end
   end
 
+  @doc false
+  @spec report_external_bounded(breaker_id(), term()) ::
+          :ok | {:error, :saturated | :stale}
+  def report_external_bounded(id, result) do
+    case Snapshot.lookup(id) do
+      {:ok, snapshot} ->
+        receipt = %AdmissionReceipt{
+          breaker_id: id,
+          kind: :closed,
+          generation: snapshot.generation,
+          epoch: snapshot.epoch,
+          owner_pid: self()
+        }
+
+        ControlRing.enqueue(receipt, control_signal(result, id))
+
+      :missing ->
+        {:error, :stale}
+    end
+  end
+
   @doc """
   Record a failed operation for the circuit breaker (synchronous).
   Returns the circuit state after recording the failure.
@@ -605,18 +626,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_call({:claim_attempt, token, caller_pid}, {lifecycle_pid, _tag}, state) do
+  def handle_call({:claim_attempt, token, caller_pid}, _from, state) do
     case Map.fetch(state.inflight_attempts, token) do
-      {:ok, %{owner_pid: ^caller_pid, owner_monitor: owner_monitor} = attempt} ->
-        Process.demonitor(owner_monitor, [:flush])
-        lifecycle_monitor = Process.monitor(lifecycle_pid)
-
-        claimed_attempt = %{
-          attempt
-          | owner_pid: lifecycle_pid,
-            owner_monitor: lifecycle_monitor,
-            claimed?: true
-        }
+      {:ok, %{owner_pid: ^caller_pid} = attempt} ->
+        claimed_attempt = %{attempt | claimed?: true}
 
         attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
         {:reply, :ok, %{state | inflight_attempts: attempts}}
@@ -708,7 +721,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   @impl true
   def handle_call(
         {:claim_attempt, token, caller_pid, expected_generation, expected_epoch, deadline_us},
-        {lifecycle_pid, _tag},
+        _from,
         state
       ) do
     cond do
@@ -721,17 +734,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
       true ->
         case Map.fetch(state.inflight_attempts, token) do
-          {:ok, %{owner_pid: ^caller_pid, owner_monitor: owner_monitor} = attempt} ->
-            persist_claimed_owner({state.instance_id, state.transport}, token, lifecycle_pid)
-            Process.demonitor(owner_monitor, [:flush])
-            lifecycle_monitor = Process.monitor(lifecycle_pid)
-
-            claimed_attempt = %{
-              attempt
-              | owner_pid: lifecycle_pid,
-                owner_monitor: lifecycle_monitor,
-                claimed?: true
-            }
+          {:ok, %{owner_pid: ^caller_pid} = attempt} ->
+            persist_claimed_owner({state.instance_id, state.transport}, token, caller_pid)
+            claimed_attempt = %{attempt | claimed?: true}
 
             attempts = Map.put(state.inflight_attempts, token, claimed_attempt)
             {:reply, :ok, %{state | inflight_attempts: attempts}}
@@ -1154,12 +1159,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     ArgumentError -> 0
   end
 
-  defp persist_claimed_owner(breaker_id, token, lifecycle_pid) do
+  defp persist_claimed_owner(breaker_id, token, owner_pid) do
     case :ets.lookup(Storage.lease_table(), breaker_id) do
       [{^breaker_id, %{token: ^token} = lease}] ->
         :ets.insert(
           Storage.lease_table(),
-          {breaker_id, lease |> Map.put(:owner_pid, lifecycle_pid) |> Map.put(:claimed?, true)}
+          {breaker_id, lease |> Map.put(:owner_pid, owner_pid) |> Map.put(:claimed?, true)}
         )
 
       _ ->

@@ -9,10 +9,9 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   @behaviour Lasso.RPC.Transport
 
-  require Logger
   alias Lasso.Core.Support.{AttemptLifecycle, ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
 
   # Channel is the provider configuration for HTTP (stateless)
@@ -70,59 +69,29 @@ defmodule Lasso.RPC.Transports.HTTP do
 
     io_start_us = System.monotonic_time(:microsecond)
     dispatch_context = AttemptLifecycle.dispatch_context()
+    deadline_us = request_deadline_us(io_start_us, timeout, AttemptProtocol.deadline_us())
 
     result =
       case HttpClient.request(provider_config, method, params,
              request_id: request_id,
              timeout: timeout,
+             deadline_us: deadline_us,
              attempt_dispatch: dispatch_context
            ) do
         {:ok, {:raw, raw_bytes}} ->
-          # Parse raw bytes using envelope parser for passthrough optimization
-          case Response.from_bytes(raw_bytes) do
-            {:ok, %Response.Success{} = resp} ->
-              {:ok, resp}
+          received_at_us = System.monotonic_time(:microsecond)
+          validation = UpstreamResponse.validate_unary(raw_bytes, request_id, request_id)
+          validated_at_us = System.monotonic_time(:microsecond)
 
-            {:ok, %Response.Error{error: jerr}} ->
-              %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-                ErrorClassifier.classify(jerr.code, jerr.message,
-                  data: jerr.data,
-                  provider_id: provider_id
-                )
-
-              enriched_jerr = %{
-                jerr
-                | provider_id: provider_id,
-                  source: :jsonrpc,
-                  transport: :http,
-                  category: category,
-                  retriable?: retriable?,
-                  breaker_penalty?: breaker_penalty?
-              }
-
-              {:error, enriched_jerr}
-
-            {:error, parse_reason} ->
-              Logger.warning("Unparseable JSON-RPC envelope from provider",
-                provider_id: provider_id,
-                reason: parse_reason,
-                raw_bytes_size: byte_size(raw_bytes),
-                raw_sample: binary_part(raw_bytes, 0, min(200, byte_size(raw_bytes)))
-              )
-
-              {:error,
-               JError.new(-32_700, "Invalid JSON-RPC response format",
-                 data: %{reason: parse_reason, raw_bytes_size: byte_size(raw_bytes)},
-                 provider_id: provider_id,
-                 source: :transport,
-                 transport: :http,
-                 # Upstream returned malformed/non-enveloped bytes.
-                 # Treat as provider-side server failure so pipeline can fail over.
-                 category: :server_error,
-                 retriable?: true,
-                 breaker_penalty?: true
-               )}
-          end
+          settle_raw_response(%{
+            validation: validation,
+            raw_bytes: raw_bytes,
+            provider_id: provider_id,
+            dispatch_context: dispatch_context,
+            deadline_us: deadline_us,
+            io_duration_us: max(received_at_us - io_start_us, 0),
+            validated_at_us: validated_at_us
+          })
 
         {:error, reason} ->
           {:error,
@@ -136,27 +105,12 @@ defmodule Lasso.RPC.Transports.HTTP do
     # Calculate I/O latency
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
 
-    # Emit telemetry
-    :telemetry.execute(
-      [:lasso, :http, :request, :io],
-      %{io_ms: io_ms},
-      %{provider_id: provider_id, method: method}
-    )
-
     # Return latency as third tuple element for both success and error
     case result do
       {:ok, response} ->
         {:ok, response, io_ms}
 
       {:error, reason} ->
-        Logger.debug("HTTP request failed",
-          provider: provider_id,
-          method: method,
-          rpc_id: request_id,
-          io_latency_ms: io_ms,
-          error: inspect(reason, limit: 500, printable_limit: 1000)
-        )
-
         {:error, reason, io_ms}
     end
   end
@@ -183,5 +137,92 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   defp get_http_url(provider_config) do
     Map.get(provider_config, :url) || Map.get(provider_config, :http_url)
+  end
+
+  defp request_deadline_us(started_at_us, timeout, decision_deadline_us)
+       when is_integer(timeout) and timeout >= 0 and is_integer(decision_deadline_us),
+       do: min(decision_deadline_us, started_at_us + timeout * 1_000)
+
+  defp request_deadline_us(started_at_us, timeout, nil)
+       when is_integer(timeout) and timeout >= 0,
+       do: started_at_us + timeout * 1_000
+
+  defp settle_raw_response(%{validated_at_us: validated_at_us, deadline_us: deadline_us} = input)
+       when validated_at_us >= deadline_us do
+    AttemptProtocol.terminal_at(
+      input.dispatch_context,
+      :transport_failure,
+      %{reason: :timeout, certainty: :dispatched},
+      validated_at_us
+    )
+
+    {:error,
+     ErrorNormalizer.normalize(:timeout,
+       provider_id: input.provider_id,
+       context: :transport,
+       transport: :http
+     )}
+  end
+
+  defp settle_raw_response(%{validation: {:ok, response}} = input) do
+    AttemptProtocol.terminal_at(
+      input.dispatch_context,
+      :response,
+      %{response_kind: :success, io_duration_us: input.io_duration_us},
+      input.validated_at_us
+    )
+
+    {:ok, response}
+  end
+
+  defp settle_raw_response(%{validation: {:error, %JError{} = jerr}} = input) do
+    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+      ErrorClassifier.classify(jerr.code, jerr.message,
+        data: jerr.data,
+        provider_id: input.provider_id
+      )
+
+    AttemptProtocol.terminal_at(
+      input.dispatch_context,
+      :response,
+      %{
+        response_kind: :error,
+        error_code: jerr.code,
+        error_category: category,
+        io_duration_us: input.io_duration_us
+      },
+      input.validated_at_us
+    )
+
+    {:error,
+     %{
+       jerr
+       | provider_id: input.provider_id,
+         source: :jsonrpc,
+         transport: :http,
+         category: category,
+         retriable?: retriable?,
+         breaker_penalty?: breaker_penalty?
+     }}
+  end
+
+  defp settle_raw_response(%{validation: {:invalid, parse_reason}} = input) do
+    AttemptProtocol.terminal_at(
+      input.dispatch_context,
+      :invalid_response,
+      %{reason: parse_reason, io_duration_us: input.io_duration_us},
+      input.validated_at_us
+    )
+
+    {:error,
+     JError.new(-32_700, "Invalid JSON-RPC response format",
+       data: %{reason: parse_reason, raw_bytes_size: byte_size(input.raw_bytes)},
+       provider_id: input.provider_id,
+       source: :transport,
+       transport: :http,
+       category: :server_error,
+       retriable?: true,
+       breaker_penalty?: true
+     )}
   end
 end

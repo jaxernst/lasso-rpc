@@ -1,308 +1,265 @@
 defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @moduledoc """
-  Finch-based implementation of `Lasso.RPC.Transport.HTTP.Client`.
+  HTTP client adapter using Finch.
   """
 
   @behaviour Lasso.RPC.Transport.HTTP.Client
-  require Logger
 
-  alias Finch.HTTP1.Conn
-  alias Lasso.Core.Support.AttemptLifecycle
+  alias Lasso.Core.Transport.AttemptProtocol
+  alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Providers.ProviderHeaders
-  alias Lasso.URLMask
+
+  @minimum_timeout_us 1_000
 
   @impl true
   def deferred_dispatch?, do: true
 
   @impl true
   def request(%{url: url} = provider, method, params, opts) do
-    # Extract options with defaults
     request_id = Keyword.get(opts, :request_id) || generate_id()
     timeout_ms = Keyword.get(opts, :timeout, 30_000)
+    deadline_us = Keyword.get(opts, :deadline_us) || deadline_from_timeout(timeout_ms)
     finch_name = Keyword.get(opts, :finch_name, Lasso.Finch)
+    context = Keyword.get(opts, :attempt_dispatch)
 
-    body = %{
-      "jsonrpc" => "2.0",
-      "method" => method,
-      "params" => params,
-      "id" => request_id
-    }
+    body = %{"jsonrpc" => "2.0", "method" => method, "params" => params, "id" => request_id}
 
-    dispatch_context = Keyword.get(opts, :attempt_dispatch)
-
-    with {:ok, json} <- encode_body(body, dispatch_context),
-         headers <- base_headers(provider),
-         {:ok, req} <- build_request(url, headers, json, dispatch_context),
-         {:ok, %Finch.Response{status: status, body: resp_body}} <-
-           finch_request(
-             req,
-             timeout_ms,
-             dispatch_context,
-             finch_name
-           ) do
-      handle_response(status, resp_body)
-    else
-      {:error, {:encode_error, _reason} = encode_error} ->
-        {:error, encode_error}
-
-      {:error, {:request_build_error, _reason} = build_error} ->
-        {:error, build_error}
-
-      {:error, {:local_capacity_rejection, _reason} = local_rejection} ->
-        {:error, local_rejection}
-
-      {:error, %Finch.TransportError{reason: :timeout}} ->
-        {:error, :timeout}
-
-      # Handle NimblePool checkout errors specifically
-      {:error, {:exit, {{:shutdown, :idle_timeout}, {NimblePool, :checkout, _}}}} ->
-        Logger.warning("Finch connection pool idle timeout",
-          provider_url: URLMask.mask(url),
-          request_id: request_id
-        )
-
-        # Emit telemetry for monitoring
-        :telemetry.execute(
-          [:lasso, :finch, :pool_idle_timeout],
-          %{count: 1},
-          %{provider_url: URLMask.mask(url), request_id: request_id}
-        )
-
-        {:error, {:local_capacity_rejection, :pool_idle_timeout}}
-
-      # Handle other NimblePool errors
-      {:error, {:exit, {{:shutdown, reason}, {NimblePool, :checkout, _}}}} ->
-        Logger.warning("Finch connection pool checkout failed",
-          provider_url: URLMask.mask(url),
-          request_id: request_id,
-          shutdown_reason: reason
-        )
-
-        # Emit telemetry for monitoring
-        :telemetry.execute(
-          [:lasso, :finch, :pool_checkout_failed],
-          %{count: 1},
-          %{provider_url: URLMask.mask(url), request_id: request_id, reason: reason}
-        )
-
-        {:error, {:local_capacity_rejection, {:pool_checkout_failed, reason}}}
-
-      {:error, %Finch.TransportError{reason: reason}} ->
-        Logger.debug("Finch request failed - Mint transport error",
-          provider_url: URLMask.mask(url),
-          request_id: request_id,
-          reason: reason
-        )
-
-        message =
-          case reason do
-            :timeout -> "Connection timeout"
-            :closed -> "Connection closed"
-            :econnrefused -> "Connection refused"
-            :nxdomain -> "DNS resolution failed"
-            {:error, reason} when is_atom(reason) -> "Connection error: #{reason}"
-            _ -> "Connection error"
-          end
-
-        {:error, {:network_error, message}}
-
-      {:error, reason} ->
-        Logger.debug("Finch request failed",
-          provider_url: URLMask.mask(url),
-          request_id: request_id,
-          error: inspect(reason)
-        )
-
-        {:error, {:network_error, "Request failed: #{inspect(reason)}"}}
+    with {:ok, json} <- encode_body(body, context),
+         {:ok, request} <- build_request(url, ProviderHeaders.build(provider), json, context),
+         {:ok, tracker_token} <- tracker_token(context) do
+      run_request(request, finch_name, deadline_us, context, tracker_token, opts)
     end
   end
 
-  defp base_headers(provider), do: ProviderHeaders.build(provider)
-
-  defp encode_body(body, dispatch_context) do
+  defp encode_body(body, context) do
     case Jason.encode(body) do
       {:ok, json} ->
         {:ok, json}
 
       {:error, reason} ->
-        AttemptLifecycle.abort_dispatch(dispatch_context)
+        AttemptProtocol.predispatch_failure(context, :encode_error)
         {:error, {:encode_error, Exception.message(reason)}}
     end
   end
 
-  defp build_request(url, headers, json, dispatch_context) do
-    {:ok, Finch.build(:post, url, headers, json)}
+  defp build_request(url, headers, json, context) do
+    request =
+      :post
+      |> Finch.build(url, headers, json)
+      |> Finch.Request.put_private(:lasso_attempt, context)
+
+    {:ok, request}
   rescue
     error ->
-      AttemptLifecycle.abort_dispatch(dispatch_context)
+      AttemptProtocol.predispatch_failure(context, :request_build_error)
       {:error, {:request_build_error, Exception.message(error)}}
   end
 
-  defp finch_request(request, timeout_ms, dispatch_context, finch_name) do
-    pool = %Finch.Pool{
-      scheme: request.scheme,
-      host: request.host,
-      port: request.port,
-      tag: request.pool_tag
-    }
+  defp tracker_token(nil), do: {:ok, nil}
 
-    request_opts = [
-      pool_timeout: timeout_ms,
-      receive_timeout: timeout_ms,
-      request_timeout: :infinity
-    ]
+  defp tracker_token(context) do
+    case DispatchTracker.ready_token() do
+      {:ok, token} ->
+        {:ok, token}
 
-    case Finch.Pool.Manager.get_pool(finch_name, pool, request_opts) do
-      {pool_pid, Finch.HTTP1.Pool} ->
-        http1_request(pool_pid, request, request_opts, dispatch_context, finch_name)
-
-      {_pool_pid, _pool_module} ->
-        {:error, {:local_capacity_rejection, :unsupported_http_protocol}}
-
-      _unavailable ->
-        {:error, {:local_capacity_rejection, :pool_not_available}}
-    end
-  rescue
-    error in RuntimeError ->
-      if String.contains?(Exception.message(error), "unable to provide a connection") do
-        {:error, {:local_capacity_rejection, :pool_checkout_timeout}}
-      else
-        reraise(error, __STACKTRACE__)
-      end
-  catch
-    :exit, {:timeout, {NimblePool, :checkout, _affected_pids}} ->
-      {:error, {:local_capacity_rejection, :pool_checkout_timeout}}
-
-    :exit, {{:shutdown, :idle_timeout}, {NimblePool, :checkout, _affected_pids}} ->
-      {:error, {:local_capacity_rejection, :pool_idle_timeout}}
-  end
-
-  defp http1_request(pool, request, opts, dispatch_context, finch_name) do
-    pool_timeout = Keyword.fetch!(opts, :pool_timeout)
-    receive_timeout = Keyword.fetch!(opts, :receive_timeout)
-    request_timeout = Keyword.fetch!(opts, :request_timeout)
-    acc = {nil, [], [], []}
-
-    response =
-      NimblePool.checkout!(
-        pool,
-        :checkout,
-        fn from, {checkout_state, conn, idle_time} ->
-          case AttemptLifecycle.mark_dispatched(dispatch_context) do
-            :ok ->
-              execute_http1_request(
-                conn,
-                {checkout_state, idle_time, from},
-                request,
-                acc,
-                {receive_timeout, request_timeout, finch_name}
-              )
-
-            {:error, :cancelled} ->
-              result = {:error, {:local_capacity_rejection, :dispatch_cancelled}, acc}
-              {result, transfer_if_open(conn, checkout_state, from)}
-          end
-        end,
-        pool_timeout
-      )
-
-    case response do
-      {:ok, {status, headers, body, trailers}} ->
-        {:ok,
-         %Finch.Response{
-           status: status,
-           headers: headers,
-           body: IO.iodata_to_binary(body),
-           trailers: trailers
-         }}
-
-      {:error, error, _acc} ->
-        {:error, error}
+      {:error, :unavailable} ->
+        AttemptProtocol.predispatch_failure(context, :tracker_unavailable)
+        {:error, {:local_capacity_rejection, :dispatch_tracker_unavailable}}
     end
   end
 
-  defp execute_http1_request(
-         conn,
-         {checkout_state, idle_time, from},
-         request,
-         acc,
-         {receive_timeout, request_timeout, finch_name}
-       ) do
-    result =
-      case Conn.connect(conn, finch_name) do
-        {:ok, conn} ->
-          Conn.request(
-            conn,
-            request,
-            acc,
-            &collect_response/2,
-            finch_name,
-            receive_timeout,
-            request_timeout,
-            idle_time
-          )
-          |> case do
-            {:ok, conn, response_acc} -> {:ok, conn, response_acc}
-            {:error, conn, error, response_acc} -> {:error, conn, error, response_acc}
-          end
+  defp request_options(deadline_us, context, opts) do
+    monotonic_now =
+      Keyword.get(opts, :monotonic_now_fun, fn -> System.monotonic_time(:microsecond) end)
 
-        {:error, conn, error} ->
-          {:error, conn, error, acc}
-      end
+    remaining_us = deadline_us - monotonic_now.()
 
-    case result do
-      {:ok, conn, response_acc} ->
-        {{:ok, response_acc}, transfer_if_open(conn, checkout_state, from)}
+    if remaining_us >= @minimum_timeout_us do
+      remaining_ms = div(remaining_us, 1_000)
 
-      {:error, conn, error, response_acc} ->
-        {{:error, error, response_acc}, transfer_if_open(conn, checkout_state, from)}
-    end
-  end
-
-  defp collect_response({:status, value}, {_, headers, body, trailers}),
-    do: {:cont, {value, headers, body, trailers}}
-
-  defp collect_response({:headers, value}, {status, headers, body, trailers}),
-    do: {:cont, {status, headers ++ value, body, trailers}}
-
-  defp collect_response({:data, value}, {status, headers, body, trailers}),
-    do: {:cont, {status, headers, [body | value], trailers}}
-
-  defp collect_response({:trailers, value}, {status, headers, body, trailers}),
-    do: {:cont, {status, headers, body, trailers ++ value}}
-
-  defp transfer_if_open(conn, checkout_state, {pid, _tag} = from) do
-    if Conn.open?(conn) do
-      if checkout_state == :fresh do
-        NimblePool.update(from, conn)
-
-        case Conn.transfer(conn, pid) do
-          {:ok, conn} -> {:ok, conn}
-          {:error, _conn, _reason} -> :closed
-        end
-      else
-        {:ok, conn}
-      end
+      {:ok,
+       [
+         pool_timeout: remaining_ms,
+         receive_timeout: remaining_ms,
+         request_timeout: remaining_ms
+       ]}
     else
-      :closed
+      AttemptProtocol.predispatch_failure(context, :deadline)
+      {:error, {:local_capacity_rejection, :deadline}}
     end
   end
 
-  defp handle_response(status, body) when status in 200..299 do
-    # Return raw bytes for passthrough optimization
-    # The caller (HTTP transport) will parse using Response.from_bytes/1
-    {:ok, {:raw, body}}
+  defp run_request(request, finch_name, deadline_us, context, tracker_token, opts) do
+    DispatchTracker.begin_attempt(context, tracker_token)
+
+    case request_options(deadline_us, context, opts) do
+      {:ok, request_options} ->
+        with :ok <- DispatchTracker.open_send(context, tracker_token),
+             :ok <- final_deadline_gate(deadline_us, context, opts) do
+          outcome =
+            try do
+              {:returned, finch_request(request, finch_name, request_options, opts)}
+            rescue
+              error -> {:raised, error}
+            catch
+              kind, reason -> {:caught, kind, reason}
+            end
+
+          dispatch_state = DispatchTracker.attempt_state(context)
+
+          tracker_healthy? =
+            is_nil(context) or dispatch_state != :not_started or
+              DispatchTracker.session_healthy?(tracker_token)
+
+          DispatchTracker.clear_attempt(context)
+          handle_request_outcome({outcome, dispatch_state, tracker_healthy?}, context)
+        else
+          {:error, reason} ->
+            DispatchTracker.clear_attempt(context)
+            send_start_error(reason, context)
+        end
+
+      {:error, _reason} = error ->
+        DispatchTracker.clear_attempt(context)
+        error
+    end
   end
 
-  defp handle_response(429, body), do: {:error, {:rate_limit, %{status: 429, body: body}}}
+  defp final_deadline_gate(deadline_us, _context, opts) do
+    monotonic_now =
+      Keyword.get(opts, :monotonic_now_fun, fn -> System.monotonic_time(:microsecond) end)
 
-  # Treat 408 Request Timeout as retriable infrastructure failure
+    if monotonic_now.() < deadline_us, do: :ok, else: {:error, :deadline_expired}
+  end
+
+  defp send_start_error(:deadline_expired, context) do
+    AttemptProtocol.predispatch_failure(context, :deadline)
+    {:error, {:local_capacity_rejection, :deadline}}
+  end
+
+  defp send_start_error(:owner_down, context) do
+    AttemptProtocol.predispatch_failure(context, :local)
+    {:error, {:local_capacity_rejection, :dispatch_cancelled}}
+  end
+
+  defp finch_request(request, finch_name, request_options, opts) do
+    case Keyword.get(opts, :request_fun) do
+      nil ->
+        Finch.request(request, finch_name, request_options)
+
+      request_fun when is_function(request_fun, 3) ->
+        request_fun.(request, finch_name, request_options)
+    end
+  end
+
+  defp handle_request_outcome(
+         {{:returned, {:ok, %Finch.Response{status: status, body: body}}}, _state, _healthy?},
+         context
+       ) do
+    case handle_response(status, body) do
+      {:error, reason} = error ->
+        AttemptProtocol.terminal(context, :transport_failure, %{
+          reason: http_status_reason(reason),
+          certainty: :dispatched
+        })
+
+        error
+
+      success ->
+        success
+    end
+  end
+
+  defp handle_request_outcome(
+         {{:returned, {:error, reason}}, dispatch_state, tracker_healthy?},
+         context
+       ) do
+    certainty = dispatch_certainty(dispatch_state, tracker_healthy?)
+    emit_failure(context, reason, certainty)
+    normalize_finch_error(reason)
+  end
+
+  defp handle_request_outcome({{:raised, error}, dispatch_state, tracker_healthy?}, context) do
+    certainty = dispatch_certainty(dispatch_state, tracker_healthy?)
+    emit_failure(context, error, certainty)
+
+    if certainty == :not_dispatched do
+      {:error, {:local_capacity_rejection, :pool_checkout_timeout}}
+    else
+      {:error, {:network_error, "Request failed"}}
+    end
+  end
+
+  defp handle_request_outcome(
+         {{:caught, _kind, reason}, dispatch_state, tracker_healthy?},
+         context
+       ) do
+    certainty = dispatch_certainty(dispatch_state, tracker_healthy?)
+    emit_failure(context, reason, certainty)
+
+    if certainty == :not_dispatched do
+      {:error, {:local_capacity_rejection, :pool_unavailable}}
+    else
+      {:error, {:network_error, "Request failed"}}
+    end
+  end
+
+  defp dispatch_certainty(:confirmed, _tracker_healthy?), do: :dispatched
+  defp dispatch_certainty(:started, _tracker_healthy?), do: :indeterminate
+  defp dispatch_certainty(:not_started, true), do: :not_dispatched
+  defp dispatch_certainty(:not_started, false), do: :indeterminate
+
+  defp emit_failure(context, _reason, :not_dispatched) do
+    AttemptProtocol.predispatch_failure(context, :pool_unavailable)
+  end
+
+  defp emit_failure(context, reason, certainty) do
+    AttemptProtocol.terminal(context, :transport_failure, %{
+      reason: transport_reason(reason),
+      certainty: certainty
+    })
+  end
+
+  defp normalize_finch_error(%Finch.TransportError{reason: :timeout}), do: {:error, :timeout}
+
+  defp normalize_finch_error(%Finch.TransportError{reason: reason}),
+    do: {:error, {:network_error, transport_message(reason)}}
+
+  defp normalize_finch_error(%Finch.Error{reason: reason}),
+    do: {:error, {:local_capacity_rejection, reason}}
+
+  defp normalize_finch_error(%Finch.HTTPError{}),
+    do: {:error, {:network_error, "HTTP protocol error"}}
+
+  defp normalize_finch_error(reason), do: {:error, reason}
+
+  defp transport_reason(%Finch.TransportError{reason: :timeout}), do: :timeout
+  defp transport_reason(%Finch.TransportError{reason: :nxdomain}), do: :dns
+  defp transport_reason(%Finch.TransportError{reason: :closed}), do: :closed
+  defp transport_reason(%Finch.HTTPError{}), do: :protocol
+  defp transport_reason(_reason), do: :connection
+
+  defp transport_message(:closed), do: "Connection closed"
+  defp transport_message(:econnrefused), do: "Connection refused"
+  defp transport_message(:nxdomain), do: "DNS resolution failed"
+  defp transport_message(reason) when is_atom(reason), do: "Connection error: #{reason}"
+  defp transport_message(_reason), do: "Connection error"
+
+  defp handle_response(status, body) when status in 200..299, do: {:ok, {:raw, body}}
+  defp handle_response(429, body), do: {:error, {:rate_limit, %{status: 429, body: body}}}
   defp handle_response(408, body), do: {:error, {:server_error, %{status: 408, body: body}}}
 
   defp handle_response(status, body) when status >= 500,
     do: {:error, {:server_error, %{status: status, body: body}}}
 
   defp handle_response(status, body), do: {:error, {:client_error, %{status: status, body: body}}}
+
+  defp http_status_reason({:rate_limit, _body}), do: :rate_limited
+  defp http_status_reason({:server_error, _body}), do: :server_error
+  defp http_status_reason({:client_error, _body}), do: :client_error
+
+  defp deadline_from_timeout(timeout_ms),
+    do: System.monotonic_time(:microsecond) + timeout_ms * 1_000
 
   defp generate_id, do: :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
 end

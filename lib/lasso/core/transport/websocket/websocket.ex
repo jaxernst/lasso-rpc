@@ -6,12 +6,20 @@ defmodule Lasso.RPC.Transports.WebSocket do
   (single request/response) and streaming subscriptions with proper connection
   management and error normalization. Implements the new Transport behaviour
   for transport-agnostic request routing.
+
+  Outbound frames use a one-way WebSockex cast guarded by the connection
+  generation, absolute decision cutoff, and a shared cancellation latch. Direct
+  `WebSockex.send_frame/2` is not used because its queued `GenServer.call` may
+  send after the waiting task has been cancelled or its deadline has expired.
+  Cast acceptance opens an indeterminate send phase; only a correlated response
+  proves positive dispatch.
   """
 
   @behaviour Lasso.RPC.Transport
 
   require Logger
-  alias Lasso.Core.Support.{AttemptLifecycle, ErrorNormalizer}
+  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.Response
@@ -103,42 +111,368 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
     io_start_us = System.monotonic_time(:microsecond)
 
-    result =
-      case WSConnection.request(
-             instance_id,
-             method,
-             params,
-             timeout,
-             request_id,
-             AttemptLifecycle.dispatch_context()
-           ) do
-        {:ok, result} ->
-          {:ok, result}
+    context = AttemptProtocol.context()
 
-        {:error, %JError{} = jerr} ->
-          {:error, jerr}
+    transport_deadline_us = io_start_us + timeout * 1_000
 
-        {:error, other} ->
-          {:error,
-           ErrorNormalizer.normalize(other,
-             provider_id: provider_id,
-             context: :transport,
-             transport: :ws
-           )}
+    decision_deadline_us =
+      case AttemptProtocol.deadline_us() do
+        nil -> transport_deadline_us
+        decision_deadline_us -> min(decision_deadline_us, transport_deadline_us)
       end
 
-    io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
+    settlement_deadline_us =
+      case AttemptProtocol.settlement_deadline_us() do
+        nil -> decision_deadline_us
+        lifecycle_settlement_us -> max(decision_deadline_us, lifecycle_settlement_us)
+      end
 
-    :telemetry.execute(
-      [:lasso, :websocket, :request, :io],
-      %{io_ms: io_ms},
-      %{provider_id: provider_id, method: method, request_id: request_id}
-    )
+    result =
+      transport_request(
+        instance_id,
+        provider_id,
+        method,
+        params,
+        request_id,
+        context,
+        decision_deadline_us,
+        settlement_deadline_us
+      )
+
+    io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
 
     case result do
       {:ok, response} -> {:ok, response, io_ms}
       {:error, reason} -> {:error, reason, io_ms}
     end
+  end
+
+  defp transport_request(
+         instance_id,
+         provider_id,
+         method,
+         params,
+         client_id,
+         context,
+         decision_deadline_us,
+         settlement_deadline_us
+       ) do
+    transport_id = generate_transport_id()
+
+    case Jason.encode(%{
+           "jsonrpc" => "2.0",
+           "id" => transport_id,
+           "method" => method,
+           "params" => params || []
+         }) do
+      {:ok, encoded} ->
+        authorize_transport_request(%{
+          instance_id: instance_id,
+          provider_id: provider_id,
+          transport_id: transport_id,
+          encoded: encoded,
+          client_id: client_id,
+          context: context,
+          decision_deadline_us: decision_deadline_us,
+          settlement_deadline_us: settlement_deadline_us
+        })
+
+      {:error, reason} ->
+        AttemptProtocol.predispatch_failure(context, :encode_error)
+        {:error, normalize_ws_error(reason, provider_id)}
+    end
+  end
+
+  defp authorize_transport_request(%{
+         instance_id: instance_id,
+         provider_id: provider_id,
+         transport_id: transport_id,
+         encoded: encoded,
+         client_id: client_id,
+         context: context,
+         decision_deadline_us: decision_deadline_us,
+         settlement_deadline_us: settlement_deadline_us
+       }) do
+    with true <- AttemptProtocol.authorized?(context, decision_deadline_us),
+         :ok <- AttemptProtocol.send_started(context),
+         send_started_us = System.monotonic_time(:microsecond),
+         true <- send_started_us < decision_deadline_us,
+         {:ok, {connection, generation, token}} <-
+           WSConnection.authorize_transport(
+             instance_id,
+             transport_id,
+             self(),
+             decision_deadline_us,
+             settlement_deadline_us,
+             encoded,
+             call_timeout_ms(decision_deadline_us)
+           ) do
+      await_transport_response(%{
+        token: token,
+        generation: generation,
+        transport_id: transport_id,
+        client_id: client_id,
+        provider_id: provider_id,
+        context: context,
+        deadline_us: decision_deadline_us,
+        started_us: send_started_us,
+        connection: connection
+      })
+    else
+      false ->
+        record_send_failure(context, :deadline)
+        {:error, normalize_start_error(:deadline, provider_id)}
+
+      {:error, :deadline_expired} ->
+        record_send_failure(context, :deadline)
+        {:error, normalize_start_error(:deadline, provider_id)}
+
+      {:error, :owner_down} ->
+        record_send_failure(context, :owner_down)
+        {:error, normalize_start_error(:owner_down, provider_id)}
+
+      {:error, reason} ->
+        record_send_failure(context, reason)
+        {:error, normalize_start_error(reason, provider_id)}
+    end
+  end
+
+  defp normalize_start_error(:owner_down, provider_id) do
+    JError.new(-32_000, "WebSocket attempt owner ended before send",
+      provider_id: provider_id,
+      transport: :ws,
+      category: :cancelled,
+      retriable?: false,
+      breaker_penalty?: false
+    )
+  end
+
+  defp normalize_start_error(reason, provider_id), do: normalize_ws_error(reason, provider_id)
+
+  defp await_transport_response(%{
+         token: token,
+         generation: generation,
+         transport_id: transport_id,
+         client_id: client_id,
+         provider_id: provider_id,
+         context: context,
+         deadline_us: deadline_us,
+         started_us: started_us,
+         connection: connection
+       }) do
+    receive do
+      {:ws_transport_send_accepted, ^token, ^generation, accepted_at_us} ->
+        await_transport_response(%{
+          token: token,
+          generation: generation,
+          transport_id: transport_id,
+          client_id: client_id,
+          provider_id: provider_id,
+          context: context,
+          deadline_us: deadline_us,
+          started_us: accepted_at_us,
+          connection: connection
+        })
+
+      {:ws_transport_send_rejected, ^token, ^generation, reason} ->
+        record_send_failure(context, reason)
+        {:error, normalize_start_error(reason, provider_id)}
+
+      {:ws_transport_response, ^token, ^generation, ^connection, validation, raw_bytes,
+       received_at_us, validated_at_us}
+      when validated_at_us < deadline_us ->
+        io_duration_us = max(received_at_us - started_us, 0)
+
+        settle_validated_response(%{
+          validation: validation,
+          raw_bytes: raw_bytes,
+          transport_id: transport_id,
+          client_id: client_id,
+          context: context,
+          provider_id: provider_id,
+          io_duration_us: io_duration_us,
+          validated_at_us: validated_at_us
+        })
+
+      {:ws_transport_response, ^token, ^generation, ^connection, _validation, _raw_bytes,
+       _received_at_us, _validated_at_us} ->
+        AttemptProtocol.terminal(context, :transport_failure, %{
+          reason: :timeout,
+          certainty: :dispatched
+        })
+
+        {:error, normalize_ws_error(:timeout, provider_id)}
+
+      {:ws_transport_timeout, ^token, ^generation} ->
+        AttemptProtocol.terminal(context, :transport_failure, %{
+          reason: :timeout,
+          certainty: :indeterminate
+        })
+
+        {:error, normalize_ws_error(:timeout, provider_id)}
+
+      {:ws_transport_disconnected, ^token, ^generation, reason} ->
+        AttemptProtocol.terminal(context, :transport_failure, %{
+          reason: :connection_error,
+          certainty: :indeterminate
+        })
+
+        {:error, normalize_ws_error(reason, provider_id)}
+    end
+  end
+
+  defp settle_validated_response(%{
+         validation: validation,
+         raw_bytes: raw_bytes,
+         transport_id: transport_id,
+         client_id: client_id,
+         context: context,
+         provider_id: provider_id,
+         io_duration_us: io_duration_us,
+         validated_at_us: validated_at_us
+       }) do
+    finalized =
+      case validation do
+        {:ok, validated} ->
+          UpstreamResponse.finalize_unary(validated, raw_bytes, transport_id, client_id)
+
+        {:invalid, reason} ->
+          {:invalid, reason}
+      end
+
+    case finalized do
+      {:ok, response} ->
+        AttemptProtocol.terminal_at(
+          context,
+          :response,
+          %{response_kind: :success, io_duration_us: io_duration_us},
+          validated_at_us
+        )
+
+        {:ok, response}
+
+      {:error, %JError{} = error} ->
+        %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+          ErrorClassifier.classify(error.code, error.message,
+            data: error.data,
+            provider_id: provider_id
+          )
+
+        AttemptProtocol.terminal_at(
+          context,
+          :response,
+          %{
+            response_kind: :error,
+            error_code: error.code,
+            error_category: category,
+            io_duration_us: io_duration_us
+          },
+          validated_at_us
+        )
+
+        {:error,
+         %{
+           error
+           | provider_id: provider_id,
+             transport: :ws,
+             category: category,
+             retriable?: retriable?,
+             breaker_penalty?: breaker_penalty?
+         }}
+
+      {:invalid, reason} ->
+        AttemptProtocol.terminal_at(
+          context,
+          :invalid_response,
+          %{reason: reason, io_duration_us: io_duration_us},
+          validated_at_us
+        )
+
+        {:error,
+         JError.new(-32_700, "Invalid JSON-RPC response",
+           provider_id: provider_id,
+           transport: :ws,
+           category: :server_error,
+           retriable?: true,
+           breaker_penalty?: true,
+           data: %{reason: reason}
+         )}
+    end
+  end
+
+  defp send_error_certainty(:deadline), do: :not_dispatched
+  defp send_error_certainty(:owner_down), do: :not_dispatched
+  defp send_error_certainty(:cancelled), do: :not_dispatched
+  defp send_error_certainty(:stale_generation), do: :not_dispatched
+  defp send_error_certainty(:stale_connection), do: :not_dispatched
+  defp send_error_certainty(:invalid_latch), do: :not_dispatched
+  defp send_error_certainty(:capacity), do: :not_dispatched
+  defp send_error_certainty(:not_connected), do: :not_dispatched
+  defp send_error_certainty(:duplicate_transport_id), do: :not_dispatched
+  defp send_error_certainty(:invalid_transport_id), do: :not_dispatched
+  defp send_error_certainty(_reason), do: :indeterminate
+
+  defp ws_reason(:deadline), do: :deadline
+  defp ws_reason(:owner_down), do: :cancelled
+  defp ws_reason(:cancelled), do: :cancelled
+  defp ws_reason(:stale_generation), do: :stale_connection
+  defp ws_reason(:stale_connection), do: :stale_connection
+  defp ws_reason(:not_connected), do: :not_connected
+  defp ws_reason(_reason), do: :send_error
+
+  defp record_send_failure(context, reason) do
+    case send_error_certainty(reason) do
+      :not_dispatched ->
+        AttemptProtocol.predispatch_failure(context, ws_reason(reason))
+
+      certainty ->
+        AttemptProtocol.terminal(context, :transport_failure, %{
+          reason: ws_reason(reason),
+          certainty: certainty
+        })
+    end
+  end
+
+  defp normalize_ws_error(:capacity, provider_id) do
+    JError.new(-32_008, "WebSocket transport admission unavailable",
+      provider_id: provider_id,
+      transport: :ws,
+      category: :local_capacity_rejection,
+      retriable?: true,
+      breaker_penalty?: false,
+      data: %{reason: :capacity}
+    )
+  end
+
+  defp normalize_ws_error(:deadline, provider_id),
+    do:
+      ErrorNormalizer.normalize(:timeout,
+        provider_id: provider_id,
+        context: :transport,
+        transport: :ws
+      )
+
+  defp normalize_ws_error(reason, provider_id) do
+    ErrorNormalizer.normalize(reason,
+      provider_id: provider_id,
+      context: :transport,
+      transport: :ws
+    )
+  end
+
+  defp call_timeout_ms(deadline_us) do
+    case remaining_us(deadline_us) do
+      0 -> 0
+      remaining_us -> div(remaining_us + 999, 1_000)
+    end
+  end
+
+  defp remaining_us(deadline_us),
+    do: max(deadline_us - System.monotonic_time(:microsecond), 0)
+
+  defp generate_transport_id do
+    sequence = System.unique_integer([:positive, :monotonic])
+    "lasso-#{sequence}"
   end
 
   @impl true

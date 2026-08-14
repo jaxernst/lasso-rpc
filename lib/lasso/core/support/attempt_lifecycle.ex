@@ -5,14 +5,25 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
+  alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.JSONRPC.Error, as: JError
 
   @dispatch_context_key :lasso_attempt_dispatch_context
-  @dispatch_settle_timeout 1_000
+  @deadline_key :lasso_attempt_deadline_us
+  @settlement_deadline_key :lasso_attempt_settlement_deadline_us
+  @dispatch_receipt_key :lasso_attempt_dispatch_receipt
+  @dispatch_timestamp_unset -9_223_372_036_854_775_808
+  @open_unset 0
+  @open_ambiguous 1
+  @open_not_dispatched 2
+  @open_dispatched 3
+  @closed_offset 4
+  @settlement_margin_us 1_000
+  @minimum_settlement_budget_ms 25
 
   @type terminal_callback :: CircuitBreaker.terminal_callback() | nil
   @type dispatch_callback :: (integer() -> term()) | nil
-  @type dispatch_context :: {pid(), reference()}
+  @type dispatch_context :: AttemptProtocol.context()
 
   @spec run(
           pid(),
@@ -99,35 +110,93 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         deadline_us
       ) do
     lifecycle_ref = make_ref()
+    lifecycle_start_ref = make_ref()
+    dispatch_latch = new_dispatch_latch()
+    decision_deadline_us = decision_deadline_us(deadline_us, timeout)
+    attempt_deadline_us = attempt_deadline_us(decision_deadline_us, timeout)
+    settlement_deadline_us = min(deadline_us, attempt_deadline_us + @settlement_margin_us)
 
-    {lifecycle_pid, monitor_ref} =
-      spawn_monitor(fn ->
-        execute(%{
+    lifecycle_deadline_us = settlement_deadline_us
+
+    case claim_for_execution(receipt, caller_pid, dispatch_latch, attempt_deadline_us) do
+      :ok ->
+        context = %{
           caller_pid: caller_pid,
           lifecycle_ref: lifecycle_ref,
+          lifecycle_start_ref: lifecycle_start_ref,
           receipt: receipt,
-          breaker_id: receipt.breaker_id,
           fun: fun,
           timeout: timeout,
-          terminal_callback: terminal_callback,
-          dispatch_callback: dispatch_callback,
+          legacy_terminal_callback: terminal_callback,
           dispatch_mode: dispatch_mode,
-          deadline_us: deadline_us
-        })
-      end)
+          attempt_deadline_us: attempt_deadline_us,
+          settlement_deadline_us: settlement_deadline_us,
+          lifecycle_deadline_us: lifecycle_deadline_us,
+          dispatch_latch: dispatch_latch
+        }
 
-    receive do
-      {^lifecycle_ref, result} ->
-        Process.demonitor(monitor_ref, [:flush])
+        {lifecycle_pid, monitor_ref} = spawn_monitor(fn -> execute(context) end)
+
+        terminal_dispatch_callback =
+          prepare_dispatch(
+            dispatch_mode,
+            dispatch_latch,
+            dispatch_callback,
+            attempt_deadline_us
+          )
+
+        send(lifecycle_pid, {:start_attempt_lifecycle, lifecycle_start_ref})
+
+        terminal_candidate =
+          receive do
+            {^lifecycle_ref,
+             {:attempt_terminal_candidate, result, elapsed_ms, accounting?, callback_eligible?}} ->
+              {:candidate, result, elapsed_ms, accounting?, callback_eligible?}
+
+            {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, reason} ->
+              {:owner_down, reason}
+          after
+            deadline_wait_ms(deadline_us) ->
+              :client_timeout
+          end
+
+        {certainty, dispatched_at_us} = close_dispatch_latch(dispatch_latch)
+
+        {result, elapsed_ms, accounting?} =
+          outer_terminal_candidate(
+            terminal_candidate,
+            certainty,
+            dispatched_at_us,
+            timeout
+          )
+
+        if accounting? do
+          finalize_receipt(dispatch_latch, receipt, result, certainty, terminal_callback)
+
+          publish_owner_terminal(
+            receipt.breaker_id,
+            result,
+            certainty,
+            dispatched_at_us,
+            terminal_dispatch_callback
+          )
+        end
+
+        finish_compatibility_lifecycle(
+          terminal_candidate,
+          lifecycle_pid,
+          monitor_ref,
+          lifecycle_ref,
+          result,
+          terminal_elapsed_ms(elapsed_ms, dispatched_at_us),
+          accounting?,
+          certainty
+        )
+
         result
 
-      {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, reason} ->
-        {:exception, {:exit, reason, []}}
-    after
-      deadline_wait_ms(deadline_us) ->
-        send(lifecycle_pid, {:attempt_caller_timeout, lifecycle_ref})
-        Process.demonitor(monitor_ref, [:flush])
-        {:__attempt_lifecycle_rejected__, :timeout}
+      {:error, reason} ->
+        {:__attempt_lifecycle_rejected__, reason}
     end
   end
 
@@ -161,58 +230,64 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   def dispatch_context, do: Process.get(@dispatch_context_key)
 
   @doc false
+  @spec deadline_us() :: integer() | nil
+  def deadline_us, do: Process.get(@deadline_key)
+
+  @doc false
+  @spec settlement_deadline_us() :: integer() | nil
+  def settlement_deadline_us, do: Process.get(@settlement_deadline_key)
+
+  @doc false
+  @spec dispatch_owner_alive?() :: boolean()
+  def dispatch_owner_alive? do
+    case Process.get(@dispatch_receipt_key) do
+      %{caller_pid: caller_pid} -> Process.alive?(caller_pid)
+      _ -> true
+    end
+  end
+
+  @doc false
+  @spec record_dispatch_state(:ambiguous | :not_dispatched | :dispatched, integer()) ::
+          :ok | {:error, :owner_down | :deadline_expired}
+  def record_dispatch_state(certainty, event_us)
+      when certainty in [:ambiguous, :not_dispatched, :dispatched] and is_integer(event_us) do
+    case Process.get(@dispatch_receipt_key) do
+      %{latch: latch, caller_pid: caller_pid} ->
+        deadline_us = deadline_us()
+
+        cond do
+          not Process.alive?(caller_pid) -> {:error, :owner_down}
+          is_integer(deadline_us) and event_us >= deadline_us -> {:error, :deadline_expired}
+          true -> transition_dispatch_latch(latch, certainty, event_us)
+        end
+
+      %{latch: latch} ->
+        transition_dispatch_latch(latch, certainty, event_us)
+
+      _ ->
+        :ok
+    end
+  end
+
+  @doc false
   @spec authorize_dispatch(dispatch_context() | nil) :: :ok | {:error, :cancelled}
   def authorize_dispatch(nil), do: :ok
 
-  def authorize_dispatch({lifecycle_pid, dispatch_ref}) do
-    authorization_ref = make_ref()
-    monitor_ref = Process.monitor(lifecycle_pid)
-
-    send(
-      lifecycle_pid,
-      {:authorize_attempt_dispatch, dispatch_ref, self(), authorization_ref}
-    )
-
-    receive do
-      {:attempt_dispatch_authorized, ^authorization_ref} ->
-        Process.demonitor(monitor_ref, [:flush])
-        :ok
-
-      {:attempt_dispatch_rejected, ^authorization_ref} ->
-        Process.demonitor(monitor_ref, [:flush])
-        {:error, :cancelled}
-
-      {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, _reason} ->
-        {:error, :cancelled}
-    after
-      1_000 ->
-        Process.demonitor(monitor_ref, [:flush])
-        _abort_result = abort_dispatch({lifecycle_pid, dispatch_ref})
-        {:error, :cancelled}
-    end
-  end
+  def authorize_dispatch({lifecycle_pid, _dispatch_ref}),
+    do: if(Process.alive?(lifecycle_pid), do: :ok, else: {:error, :cancelled})
 
   @doc false
   @spec confirm_dispatched(dispatch_context() | nil) :: :ok | {:error, :cancelled}
   def confirm_dispatched(nil), do: :ok
 
-  def confirm_dispatched({lifecycle_pid, dispatch_ref}) do
-    confirmation_ref = make_ref()
-    monitor_ref = Process.monitor(lifecycle_pid)
-
-    send(lifecycle_pid, {:attempt_dispatched, dispatch_ref, self(), confirmation_ref})
-
-    receive do
-      {:attempt_dispatch_confirmed, ^confirmation_ref} ->
-        Process.demonitor(monitor_ref, [:flush])
-        :ok
-
-      {:attempt_dispatch_rejected, ^confirmation_ref} ->
-        Process.demonitor(monitor_ref, [:flush])
-        {:error, :cancelled}
-
-      {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, _reason} ->
-        {:error, :cancelled}
+  def confirm_dispatched({lifecycle_pid, _dispatch_ref} = context) do
+    if Process.alive?(lifecycle_pid) do
+      case AttemptProtocol.send_started(context) do
+        :ok -> AttemptProtocol.send_confirmed(context)
+        {:error, _reason} -> {:error, :cancelled}
+      end
+    else
+      {:error, :cancelled}
     end
   end
 
@@ -220,57 +295,91 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   @spec abort_dispatch(dispatch_context() | nil) :: :ok | {:error, :cancelled}
   def abort_dispatch(nil), do: :ok
 
-  def abort_dispatch({lifecycle_pid, dispatch_ref}) do
-    abort_ref = make_ref()
-    monitor_ref = Process.monitor(lifecycle_pid)
-    send(lifecycle_pid, {:attempt_dispatch_aborted, dispatch_ref, self(), abort_ref})
-
-    receive do
-      {:attempt_dispatch_aborted, ^abort_ref} ->
-        Process.demonitor(monitor_ref, [:flush])
-        :ok
-
-      {:attempt_dispatch_rejected, ^abort_ref} ->
-        Process.demonitor(monitor_ref, [:flush])
-        {:error, :cancelled}
-
-      {:DOWN, ^monitor_ref, :process, ^lifecycle_pid, _reason} ->
-        {:error, :cancelled}
+  def abort_dispatch({lifecycle_pid, _dispatch_ref} = context) do
+    if Process.alive?(lifecycle_pid) do
+      AttemptProtocol.predispatch_failure(context, :local)
+    else
+      {:error, :cancelled}
     end
   end
 
   @doc false
   @spec mark_dispatched(dispatch_context() | nil) :: :ok | {:error, :cancelled}
-  def mark_dispatched(context) do
-    with :ok <- authorize_dispatch(context), do: confirm_dispatched(context)
+  def mark_dispatched(context), do: confirm_dispatched(context)
+
+  defp claim_for_execution(receipt, caller_pid, dispatch_latch, attempt_deadline_us) do
+    case claim_receipt(receipt, caller_pid) do
+      :ok ->
+        mark_receipt_claimed(dispatch_latch)
+
+        if Process.alive?(caller_pid) and
+             System.monotonic_time(:microsecond) < attempt_deadline_us do
+          :ok
+        else
+          release_receipt(receipt)
+          mark_receipt_finalized(dispatch_latch)
+          {:error, :timeout}
+        end
+
+      {:error, reason} ->
+        abandon_unclaimed_receipt(receipt, caller_pid)
+        mark_receipt_finalized(dispatch_latch)
+        {:error, reason}
+    end
+  end
+
+  defp prepare_dispatch(:deferred, _latch, dispatch_callback, _attempt_deadline_us),
+    do: dispatch_callback
+
+  defp prepare_dispatch(:immediate, latch, dispatch_callback, attempt_deadline_us) do
+    dispatched_at_us = System.monotonic_time(:microsecond)
+
+    if dispatched_at_us < attempt_deadline_us do
+      :ok = transition_dispatch_latch(latch, :dispatched, dispatched_at_us)
+      invoke_dispatch_callback(dispatch_callback, dispatched_at_us)
+      nil
+    else
+      dispatch_callback
+    end
   end
 
   defp execute(context) do
     Process.flag(:trap_exit, true)
     caller_monitor = Process.monitor(context.caller_pid)
 
-    case claim_receipt(context.receipt, context.caller_pid) do
-      :ok ->
+    receive do
+      {:start_attempt_lifecycle, start_ref} when start_ref == context.lifecycle_start_ref ->
         if Process.alive?(context.caller_pid) and
-             System.monotonic_time(:microsecond) < context.deadline_us do
+             System.monotonic_time(:microsecond) < context.attempt_deadline_us do
           start_attempt(Map.put(context, :caller_monitor, caller_monitor))
         else
           release_receipt(context.receipt)
+          mark_receipt_finalized(context.dispatch_latch)
 
-          send(context.caller_pid, {
-            context.lifecycle_ref,
-            {:__attempt_lifecycle_rejected__, :timeout}
-          })
+          send_terminal_candidate(
+            context,
+            {:__attempt_lifecycle_rejected__, :timeout},
+            nil,
+            false,
+            false
+          )
         end
 
-      {:error, reason} ->
-        Process.demonitor(caller_monitor, [:flush])
-        abandon_unclaimed_receipt(context.receipt, context.caller_pid)
+      {:DOWN, ^caller_monitor, :process, caller_pid, _reason}
+      when caller_pid == context.caller_pid ->
+        :ok
+    after
+      deadline_wait_ms(context.attempt_deadline_us) ->
+        release_receipt(context.receipt)
+        mark_receipt_finalized(context.dispatch_latch)
 
-        send(context.caller_pid, {
-          context.lifecycle_ref,
-          {:__attempt_lifecycle_rejected__, reason}
-        })
+        send_terminal_candidate(
+          context,
+          {:__attempt_lifecycle_rejected__, :timeout},
+          nil,
+          false,
+          false
+        )
     end
   end
 
@@ -283,10 +392,22 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
       :erlang.spawn_opt(
         fn ->
           Process.put(@dispatch_context_key, {lifecycle_pid, dispatch_ref})
+          Process.put(@deadline_key, context.attempt_deadline_us)
+          Process.put(@settlement_deadline_key, context.settlement_deadline_us)
+
+          Process.put(@dispatch_receipt_key, %{
+            latch: context.dispatch_latch,
+            caller_pid: context.caller_pid
+          })
 
           receive do
             {:run_attempt, ^task_ref} ->
-              send(lifecycle_pid, {:attempt_task_result, task_ref, execute_fun(context.fun)})
+              result = execute_fun(context.fun)
+
+              send(
+                lifecycle_pid,
+                {:attempt_task_result, task_ref, System.monotonic_time(:microsecond), result}
+              )
           end
         end,
         [:link, :monitor]
@@ -303,55 +424,28 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
         task_monitor: task_monitor,
         phase: phase,
         started_at_us: System.monotonic_time(:microsecond),
-        pending_terminal: nil,
-        pending_result: nil
+        terminal_candidate_at_us: nil,
+        completed_result: nil
       })
     )
   end
 
   defp loop(state) do
     receive do
-      {:authorize_attempt_dispatch, dispatch_ref, requester, authorization_ref}
-      when dispatch_ref == state.dispatch_ref ->
-        authorize_or_reject_dispatch(state, requester, authorization_ref)
+      {:transport_observation, dispatch_ref, observation}
+      when dispatch_ref == state.dispatch_ref and is_map(observation) ->
+        loop(apply_transport_observation(state, observation))
 
-      {:attempt_dispatched, dispatch_ref, requester, confirmation_ref}
-      when dispatch_ref == state.dispatch_ref ->
-        case confirmation_rejection(state) do
-          nil ->
-            {phase, transition} = confirm_phase(state.phase)
-            maybe_invoke_dispatch_callback(state.dispatch_callback, transition)
-            send(requester, {:attempt_dispatch_confirmed, confirmation_ref})
-
-            state
-            |> Map.put(:phase, phase)
-            |> resolve_pending_terminal()
-
-          reason ->
-            send(requester, {:attempt_dispatch_rejected, confirmation_ref})
-            finalize_unconfirmed(state, reason)
-        end
-
-      {:attempt_dispatch_aborted, dispatch_ref, requester, abort_ref}
-      when dispatch_ref == state.dispatch_ref ->
-        if match?({:dispatched, _}, state.phase) do
-          send(requester, {:attempt_dispatch_rejected, abort_ref})
-          loop(state)
-        else
-          send(requester, {:attempt_dispatch_aborted, abort_ref})
-
-          state
-          |> Map.put(:phase, :aborted)
-          |> resolve_pending_terminal()
-        end
-
-      {:attempt_task_result, task_ref, result} when task_ref == state.task_ref ->
+      {:attempt_task_result, task_ref, completed_at_us, result} when task_ref == state.task_ref ->
         Process.demonitor(state.task_monitor, [:flush])
-        handle_task_result(state, unwrap_result(result))
+
+        if result_eligible?(state, completed_at_us),
+          do: handle_task_result(state, unwrap_result(result)),
+          else: handle_interruption(state, :timeout)
 
       {:DOWN, monitor_ref, :process, caller_pid, _reason}
       when monitor_ref == state.caller_monitor and caller_pid == state.caller_pid ->
-        handle_interruption(state, :caller_down)
+        stop_task(state)
 
       {:DOWN, monitor_ref, :process, task_pid, reason}
       when monitor_ref == state.task_monitor and task_pid == state.task_pid ->
@@ -359,97 +453,121 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
 
       {:EXIT, task_pid, reason} when task_pid == state.task_pid ->
         handle_task_death(state, reason)
-
-      {:attempt_caller_timeout, lifecycle_ref} when lifecycle_ref == state.lifecycle_ref ->
-        loop(state)
     after
       remaining_timeout(state) ->
         handle_interruption(state, :timeout)
     end
   end
 
-  defp authorize_phase(:predispatch),
-    do: {:dispatching, System.monotonic_time(:microsecond)}
-
-  defp authorize_phase(phase), do: phase
-
-  defp authorize_or_reject_dispatch(state, requester, authorization_ref) do
-    cond do
-      state.phase == :aborted ->
-        send(requester, {:attempt_dispatch_rejected, authorization_ref})
-        loop(state)
-
-      not Process.alive?(state.caller_pid) ->
-        send(requester, {:attempt_dispatch_rejected, authorization_ref})
-        handle_interruption(state, :caller_down)
-
-      System.monotonic_time(:microsecond) >= state.deadline_us ->
-        send(requester, {:attempt_dispatch_rejected, authorization_ref})
-        handle_interruption(state, :timeout)
-
-      true ->
-        send(requester, {:attempt_dispatch_authorized, authorization_ref})
-        loop(%{state | phase: authorize_phase(state.phase)})
-    end
-  end
-
   defp initial_phase(%{dispatch_mode: :immediate} = context) do
-    dispatched_at_us = System.monotonic_time(:microsecond)
-    invoke_dispatch_callback(context.dispatch_callback, dispatched_at_us)
+    dispatched_at_us =
+      dispatch_timestamp(context.dispatch_latch) || System.monotonic_time(:microsecond)
+
+    transition_dispatch_latch(context.dispatch_latch, :dispatched, dispatched_at_us)
     {:dispatched, dispatched_at_us}
   end
 
   defp initial_phase(_context), do: :predispatch
 
-  defp confirm_phase({:dispatching, _authorized_at_us}) do
-    dispatched_at_us = System.monotonic_time(:microsecond)
-    {{:dispatched, dispatched_at_us}, {:transitioned, dispatched_at_us}}
-  end
-
-  defp confirm_phase({:dispatched, _dispatched_at_us} = phase), do: {phase, :unchanged}
-
-  defp confirm_phase(:predispatch) do
-    dispatched_at_us = System.monotonic_time(:microsecond)
-    {{:dispatched, dispatched_at_us}, {:transitioned, dispatched_at_us}}
-  end
-
-  defp confirmation_rejection(%{phase: :aborted}), do: :aborted
-
-  defp confirmation_rejection(%{pending_terminal: terminal}) when not is_nil(terminal),
-    do: terminal
-
-  defp confirmation_rejection(state) do
-    cond do
-      not Process.alive?(state.caller_pid) -> :caller_down
-      System.monotonic_time(:microsecond) >= state.deadline_us -> :timeout
-      true -> nil
+  defp open_send_phase(phase, started_at_us) do
+    case phase do
+      {:ambiguous, _} -> {phase, :unchanged}
+      {:dispatched, _} -> {phase, :unchanged}
+      _ -> {{:ambiguous, started_at_us}, {:transitioned, started_at_us}}
     end
   end
 
-  defp finalize_unconfirmed(state, :caller_down) do
-    handle_interruption(%{state | phase: :predispatch, pending_terminal: nil}, :caller_down)
+  defp confirm_phase(phase, dispatched_at_us) do
+    case phase do
+      {:ambiguous, started_at_us} -> {{:dispatched, started_at_us}, :unchanged}
+      {:dispatched, _} -> {phase, :unchanged}
+      _ -> {{:dispatched, dispatched_at_us}, {:transitioned, dispatched_at_us}}
+    end
   end
 
-  defp finalize_unconfirmed(state, :timeout) do
-    handle_interruption(%{state | phase: :predispatch, pending_terminal: nil}, :timeout)
+  defp abort_phase({:dispatched, _} = phase), do: phase
+  defp abort_phase(_phase), do: :aborted
+
+  defp apply_transport_observation(
+         state,
+         %{kind: :send_started, event_us: event_us}
+       )
+       when event_us < state.attempt_deadline_us do
+    transition_dispatch_latch(state.dispatch_latch, :ambiguous, event_us)
+    {phase, _transition} = open_send_phase(state.phase, event_us)
+    %{state | phase: phase}
   end
 
-  defp finalize_unconfirmed(state, :aborted) do
-    handle_interruption(%{state | phase: :aborted, pending_terminal: nil}, :caller_down)
+  defp apply_transport_observation(
+         state,
+         %{kind: :send_confirmed, event_us: event_us}
+       )
+       when event_us < state.attempt_deadline_us do
+    transition_dispatch_latch(state.dispatch_latch, :dispatched, event_us)
+    {phase, _transition} = confirm_phase(state.phase, event_us)
+    %{state | phase: phase}
   end
 
-  defp handle_task_result(%{phase: {:dispatching, _}} = state, result) do
-    loop(%{state | pending_result: result})
+  defp apply_transport_observation(
+         state,
+         %{kind: :predispatch_failure, event_us: event_us}
+       )
+       when event_us < state.attempt_deadline_us do
+    transition_dispatch_latch(state.dispatch_latch, :not_dispatched, event_us)
+    %{state | phase: abort_phase(state.phase), terminal_candidate_at_us: event_us}
   end
+
+  defp apply_transport_observation(
+         state,
+         %{kind: :transport_failure, event_us: event_us, certainty: :not_dispatched}
+       )
+       when event_us < state.attempt_deadline_us do
+    transition_dispatch_latch(state.dispatch_latch, :not_dispatched, event_us)
+    %{state | phase: abort_phase(state.phase), terminal_candidate_at_us: event_us}
+  end
+
+  defp apply_transport_observation(
+         state,
+         %{kind: :transport_failure, event_us: event_us, certainty: :indeterminate}
+       )
+       when event_us < state.attempt_deadline_us do
+    transition_dispatch_latch(state.dispatch_latch, :ambiguous, event_us)
+    {phase, _transition} = open_send_phase(state.phase, event_us)
+    %{state | phase: phase, terminal_candidate_at_us: event_us}
+  end
+
+  defp apply_transport_observation(
+         state,
+         %{kind: :transport_failure, event_us: event_us, certainty: :dispatched}
+       )
+       when event_us < state.attempt_deadline_us do
+    transition_dispatch_latch(state.dispatch_latch, :dispatched, event_us)
+    {phase, _transition} = confirm_phase(state.phase, event_us)
+    %{state | phase: phase, terminal_candidate_at_us: event_us}
+  end
+
+  defp apply_transport_observation(state, %{kind: kind, event_us: event_us})
+       when event_us < state.attempt_deadline_us and kind in [:response, :invalid_response] do
+    transition_dispatch_latch(state.dispatch_latch, :dispatched, event_us)
+    {phase, _transition} = confirm_phase(state.phase, event_us)
+    %{state | phase: phase, terminal_candidate_at_us: event_us}
+  end
+
+  defp apply_transport_observation(state, _observation), do: state
 
   defp handle_task_result(%{phase: {:dispatched, dispatched_at_us}} = state, result) do
     finalize_dispatched(state, result, elapsed_ms(dispatched_at_us))
+  end
+
+  defp handle_task_result(%{phase: {:ambiguous, started_at_us}} = state, result) do
+    finalize_dispatched(state, result, elapsed_ms(started_at_us))
   end
 
   defp handle_task_result(%{phase: :predispatch} = state, result) do
     if predispatch_result?(result) do
       finalize_predispatch(state, result)
     else
+      transition_dispatch_latch(state.dispatch_latch, :dispatched, state.started_at_us)
       finalize_dispatched(state, result, elapsed_ms(state.started_at_us))
     end
   end
@@ -459,18 +577,18 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   end
 
   defp handle_task_death(state, :normal) do
-    case state.pending_result do
-      nil -> handle_task_death(state, :missing_result)
-      result -> handle_task_result(state, result)
+    case take_completed_result(state) do
+      {:ok, result} -> handle_task_result(state, result)
+      :none -> handle_task_death(state, :missing_result)
     end
-  end
-
-  defp handle_task_death(%{phase: {:dispatching, _}} = state, reason) do
-    loop(%{state | pending_result: task_exit_result(reason)})
   end
 
   defp handle_task_death(%{phase: {:dispatched, dispatched_at_us}} = state, reason) do
     finalize_dispatched(state, task_exit_result(reason), elapsed_ms(dispatched_at_us))
+  end
+
+  defp handle_task_death(%{phase: {:ambiguous, started_at_us}} = state, reason) do
+    finalize_dispatched(state, task_exit_result(reason), elapsed_ms(started_at_us))
   end
 
   defp handle_task_death(%{phase: :predispatch} = state, reason) do
@@ -481,118 +599,107 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     finalize_predispatch(state, task_exit_result(reason))
   end
 
-  defp handle_interruption(
-         %{phase: {:dispatching, _dispatched_at_us}, pending_terminal: pending_terminal} = state,
-         _terminal
-       )
-       when not is_nil(pending_terminal) do
-    finalize_unconfirmed(state, pending_terminal)
+  defp handle_interruption(state, terminal) do
+    state = drain_queued_closure_messages(state)
+
+    case take_completed_result(state) do
+      {:ok, result} ->
+        Process.demonitor(state.task_monitor, [:flush])
+        handle_task_result(state, result)
+
+      :none ->
+        finalize_interruption(state, terminal)
+    end
   end
 
-  defp handle_interruption(%{phase: {:dispatching, _}} = state, terminal) do
-    loop(
-      state
-      |> Map.put(:pending_terminal, terminal)
-      |> Map.put(
-        :settle_deadline_us,
-        System.monotonic_time(:microsecond) + @dispatch_settle_timeout * 1_000
-      )
+  defp finalize_interruption(%{phase: :predispatch} = state, :timeout) do
+    stop_task(state)
+
+    send_terminal_candidate(
+      state,
+      {:__attempt_lifecycle_rejected__, :timeout},
+      nil,
+      true,
+      false
     )
   end
 
-  defp handle_interruption(%{phase: :predispatch} = state, :caller_down) do
+  defp finalize_interruption(%{phase: :aborted} = state, :timeout) do
     stop_task(state)
-    release_receipt(state.receipt)
+
+    send_terminal_candidate(
+      state,
+      {:__attempt_lifecycle_rejected__, :timeout},
+      nil,
+      true,
+      false
+    )
   end
 
-  defp handle_interruption(%{phase: :aborted} = state, :caller_down) do
+  defp finalize_interruption(%{phase: {certainty, started_at_us}} = state, :timeout)
+       when certainty in [:dispatched, :ambiguous] do
     stop_task(state)
-    release_receipt(state.receipt)
+    finalize_timeout(state, elapsed_ms(started_at_us))
   end
 
-  defp handle_interruption(%{phase: :predispatch} = state, :timeout) do
-    stop_task(state)
+  defp drain_queued_closure_messages(state) do
+    {observations, completed_result} =
+      take_queued_closure_messages(state.dispatch_ref, state.task_ref, [], state.completed_result)
 
-    result =
-      {:error,
-       JError.new(-32_008, "Local transport admission timed out",
-         category: :local_capacity_rejection,
-         retriable?: true,
-         breaker_penalty?: false
-       ), state.timeout}
+    state =
+      observations
+      |> Enum.reverse()
+      |> Enum.reduce(state, &apply_transport_observation(&2, &1))
 
-    finalize_predispatch(state, result)
+    %{state | completed_result: completed_result}
   end
 
-  defp handle_interruption(%{phase: :aborted} = state, :timeout) do
-    stop_task(state)
+  defp take_queued_closure_messages(dispatch_ref, task_ref, observations, completed_result) do
+    receive do
+      {:transport_observation, ^dispatch_ref, observation} when is_map(observation) ->
+        take_queued_closure_messages(
+          dispatch_ref,
+          task_ref,
+          [observation | observations],
+          completed_result
+        )
 
-    result =
-      {:error,
-       JError.new(-32_008, "Local transport admission timed out",
-         category: :local_capacity_rejection,
-         retriable?: true,
-         breaker_penalty?: false
-       ), state.timeout}
-
-    finalize_predispatch(state, result)
-  end
-
-  defp handle_interruption(%{phase: {:dispatched, dispatched_at_us}} = state, terminal) do
-    completed_result = take_completed_result(state)
-    stop_task(state)
-
-    case completed_result do
-      {:ok, result} ->
-        finalize_dispatched(state, result, elapsed_ms(dispatched_at_us))
-
-      :none when terminal == :caller_down ->
-        elapsed_ms = elapsed_ms(dispatched_at_us)
-
-        cancellation =
-          {:error,
-           JError.new(-32_000, "Upstream attempt cancelled",
-             category: :cancelled,
-             retriable?: false,
-             breaker_penalty?: false
-           ), elapsed_ms}
-
-        report_receipt(state.receipt, cancellation)
-        invoke_terminal_callback(state.terminal_callback, cancellation, elapsed_ms)
-
-      :none ->
-        finalize_timeout(state, elapsed_ms(dispatched_at_us))
+      {:attempt_task_result, ^task_ref, completed_at_us, result} ->
+        take_queued_closure_messages(
+          dispatch_ref,
+          task_ref,
+          observations,
+          {completed_at_us, result}
+        )
+    after
+      0 -> {observations, completed_result}
     end
-  end
-
-  defp resolve_pending_terminal(%{pending_terminal: nil, pending_result: nil} = state),
-    do: loop(state)
-
-  defp resolve_pending_terminal(%{pending_terminal: nil, pending_result: result} = state) do
-    handle_task_result(%{state | pending_result: nil}, result)
-  end
-
-  defp resolve_pending_terminal(%{phase: :aborted, pending_terminal: terminal} = state) do
-    handle_interruption(%{state | pending_terminal: nil}, terminal)
-  end
-
-  defp resolve_pending_terminal(%{phase: {:dispatched, _}, pending_terminal: terminal} = state) do
-    handle_interruption(%{state | pending_terminal: nil}, terminal)
   end
 
   defp take_completed_result(state) do
-    case state.pending_result do
+    case state.completed_result do
+      {completed_at_us, result} ->
+        if result_eligible?(state, completed_at_us),
+          do: {:ok, unwrap_result(result)},
+          else: :none
+
       nil ->
         receive do
-          {:attempt_task_result, task_ref, result} when task_ref == state.task_ref ->
-            {:ok, unwrap_result(result)}
+          {:attempt_task_result, task_ref, completed_at_us, result}
+          when task_ref == state.task_ref ->
+            if result_eligible?(state, completed_at_us),
+              do: {:ok, unwrap_result(result)},
+              else: :none
         after
           0 -> :none
         end
-
-      result ->
-        {:ok, result}
     end
+  end
+
+  defp result_eligible?(state, completed_at_us) do
+    completed_at_us < state.attempt_deadline_us or
+      (is_integer(state.terminal_candidate_at_us) and
+         state.terminal_candidate_at_us < state.attempt_deadline_us)
   end
 
   defp stop_task(state) do
@@ -601,34 +708,14 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   end
 
   defp finalize_predispatch(state, result) do
-    release_receipt(state.receipt)
-    Process.demonitor(state.caller_monitor, [:flush])
-    send(state.caller_pid, {state.lifecycle_ref, result})
+    send_terminal_candidate(state, result, nil, true, true)
   end
 
   defp finalize_dispatched(state, result, elapsed_ms) do
-    report_receipt(state.receipt, breaker_result(result, state.terminal_callback))
-
-    Process.demonitor(state.caller_monitor, [:flush])
-    invoke_terminal_callback(state.terminal_callback, result, elapsed_ms)
-    send(state.caller_pid, {state.lifecycle_ref, result})
+    send_terminal_candidate(state, result, elapsed_ms, true, true)
   end
 
   defp finalize_timeout(state, elapsed_ms) do
-    {instance_id, transport} = state.breaker_id
-
-    Logger.warning("Request timeout in circuit breaker",
-      instance_id: instance_id,
-      transport: transport,
-      timeout_ms: state.timeout
-    )
-
-    :telemetry.execute(
-      [:lasso, :circuit_breaker, :timeout],
-      %{timeout_ms: state.timeout},
-      %{instance_id: instance_id, transport: transport}
-    )
-
     result =
       {:error,
        JError.new(-32_000, "Request timeout after #{state.timeout}ms",
@@ -637,7 +724,7 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
          breaker_penalty?: true
        ), state.timeout}
 
-    finalize_dispatched(state, result, elapsed_ms)
+    send_terminal_candidate(state, result, elapsed_ms, true, false)
   end
 
   defp execute_fun(fun) do
@@ -677,9 +764,31 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
   end
 
   defp remaining_timeout(state) do
-    case Map.fetch(state, :settle_deadline_us) do
-      {:ok, settle_deadline_us} -> remaining_ms(settle_deadline_us, 1)
-      :error -> remaining_ms(state.deadline_us, 0)
+    remaining_ms(state.lifecycle_deadline_us, 0)
+  end
+
+  defp send_terminal_candidate(state, result, elapsed_ms, accounting?, callback_eligible?) do
+    send(
+      state.caller_pid,
+      {state.lifecycle_ref,
+       {:attempt_terminal_candidate, result, elapsed_ms, accounting?, callback_eligible?}}
+    )
+
+    if accounting? and callback_eligible?, do: await_compatibility_callback(state)
+  end
+
+  # Compatibility boundary: this process may be lost or remain blocked in a legacy callback.
+  # Owner cutover deletes this path in favor of the bounded projection dispatcher.
+  defp await_compatibility_callback(state) do
+    receive do
+      {lifecycle_ref, {:authorize_legacy_terminal_callback, result, elapsed_ms}}
+      when lifecycle_ref == state.lifecycle_ref ->
+        Process.demonitor(state.caller_monitor, [:flush])
+        invoke_terminal_callback(state.legacy_terminal_callback, result, elapsed_ms)
+
+      {:DOWN, monitor_ref, :process, caller_pid, _reason}
+      when monitor_ref == state.caller_monitor and caller_pid == state.caller_pid ->
+        :ok
     end
   end
 
@@ -768,8 +877,257 @@ defmodule Lasso.Core.Support.AttemptLifecycle do
     :ok
   end
 
-  defp maybe_invoke_dispatch_callback(callback, {:transitioned, dispatched_at_us}),
-    do: invoke_dispatch_callback(callback, dispatched_at_us)
+  defp new_dispatch_latch do
+    latch = :atomics.new(3, signed: true)
+    :atomics.put(latch, 1, @open_unset)
+    :atomics.put(latch, 2, @dispatch_timestamp_unset)
+    :atomics.put(latch, 3, 0)
+    latch
+  end
 
-  defp maybe_invoke_dispatch_callback(_callback, :unchanged), do: :ok
+  defp transition_dispatch_latch(latch, certainty, event_us) do
+    if certainty in [:ambiguous, :dispatched], do: record_dispatch_timestamp(latch, event_us)
+
+    current = :atomics.get(latch, 1)
+
+    case next_open_dispatch_state(current, certainty) do
+      :closed ->
+        {:error, :owner_down}
+
+      ^current ->
+        :ok
+
+      next ->
+        case :atomics.compare_exchange(latch, 1, current, next) do
+          :ok -> :ok
+          _raced -> transition_dispatch_latch(latch, certainty, event_us)
+        end
+    end
+  end
+
+  defp next_open_dispatch_state(current, _certainty) when current >= @closed_offset,
+    do: :closed
+
+  defp next_open_dispatch_state(@open_dispatched, _certainty), do: @open_dispatched
+  defp next_open_dispatch_state(@open_not_dispatched, :ambiguous), do: @open_not_dispatched
+  defp next_open_dispatch_state(_current, :ambiguous), do: @open_ambiguous
+  defp next_open_dispatch_state(_current, :not_dispatched), do: @open_not_dispatched
+  defp next_open_dispatch_state(_current, :dispatched), do: @open_dispatched
+
+  defp record_dispatch_timestamp(latch, event_us) do
+    _result =
+      :atomics.compare_exchange(latch, 2, @dispatch_timestamp_unset, event_us)
+
+    :ok
+  end
+
+  defp dispatch_timestamp(latch) do
+    case :atomics.get(latch, 2) do
+      @dispatch_timestamp_unset -> nil
+      event_us -> event_us
+    end
+  end
+
+  defp close_dispatch_latch(latch) do
+    current = :atomics.get(latch, 1)
+
+    if current >= @closed_offset do
+      closed_dispatch_state(latch, current)
+    else
+      case :atomics.compare_exchange(latch, 1, current, current + @closed_offset) do
+        :ok -> closed_dispatch_state(latch, current + @closed_offset)
+        _raced -> close_dispatch_latch(latch)
+      end
+    end
+  end
+
+  defp closed_dispatch_state(latch, closed_state) do
+    certainty =
+      case closed_state - @closed_offset do
+        @open_unset -> :unset
+        @open_ambiguous -> :ambiguous
+        @open_not_dispatched -> :not_dispatched
+        @open_dispatched -> :dispatched
+      end
+
+    dispatched_at_us =
+      case :atomics.get(latch, 2) do
+        @dispatch_timestamp_unset -> nil
+        event_us -> event_us
+      end
+
+    {certainty, dispatched_at_us}
+  end
+
+  defp mark_receipt_claimed(latch) do
+    _result = :atomics.compare_exchange(latch, 3, 0, 1)
+    :ok
+  end
+
+  defp mark_receipt_finalized(latch) do
+    case :atomics.get(latch, 3) do
+      2 ->
+        :ok
+
+      current ->
+        case :atomics.compare_exchange(latch, 3, current, 2) do
+          :ok -> :ok
+          _raced -> mark_receipt_finalized(latch)
+        end
+    end
+  end
+
+  defp outer_terminal_candidate(
+         {:candidate, {:__attempt_lifecycle_rejected__, :timeout}, _elapsed_ms, true,
+          _callback_eligible?},
+         certainty,
+         dispatched_at_us,
+         timeout
+       )
+       when certainty in [:ambiguous, :dispatched] do
+    {timeout_result(timeout), elapsed_from_dispatch(dispatched_at_us), true}
+  end
+
+  defp outer_terminal_candidate(
+         {:candidate, result, elapsed_ms, accounting?, _callback_eligible?},
+         _certainty,
+         _dispatched_at_us,
+         _timeout
+       ),
+       do: {result, elapsed_ms, accounting?}
+
+  defp outer_terminal_candidate(
+         {:owner_down, reason},
+         _certainty,
+         dispatched_at_us,
+         _timeout
+       ) do
+    {{:exception, {:exit, reason, []}}, elapsed_from_dispatch(dispatched_at_us), true}
+  end
+
+  defp outer_terminal_candidate(:client_timeout, certainty, dispatched_at_us, timeout)
+       when certainty in [:ambiguous, :dispatched],
+       do: {timeout_result(timeout), elapsed_from_dispatch(dispatched_at_us), true}
+
+  defp outer_terminal_candidate(:client_timeout, _certainty, _dispatched_at_us, _timeout),
+    do: {{:__attempt_lifecycle_rejected__, :timeout}, nil, true}
+
+  defp finish_compatibility_lifecycle(
+         {:candidate, _result, _elapsed_ms, _accounting?, true},
+         lifecycle_pid,
+         monitor_ref,
+         lifecycle_ref,
+         result,
+         elapsed_ms,
+         true,
+         certainty
+       )
+       when certainty in [:ambiguous, :dispatched] do
+    Process.demonitor(monitor_ref, [:flush])
+
+    send(
+      lifecycle_pid,
+      {lifecycle_ref, {:authorize_legacy_terminal_callback, result, elapsed_ms}}
+    )
+
+    :ok
+  end
+
+  defp finish_compatibility_lifecycle(
+         _terminal_candidate,
+         lifecycle_pid,
+         monitor_ref,
+         _lifecycle_ref,
+         _result,
+         _elapsed_ms,
+         _accounting?,
+         _certainty
+       ) do
+    terminate_lifecycle(lifecycle_pid, monitor_ref)
+  end
+
+  defp publish_owner_terminal(
+         breaker_id,
+         result,
+         certainty,
+         dispatched_at_us,
+         dispatch_callback
+       ) do
+    if certainty in [:ambiguous, :dispatched] do
+      dispatched_at_us = dispatched_at_us || System.monotonic_time(:microsecond)
+      invoke_dispatch_callback(dispatch_callback, dispatched_at_us)
+      maybe_emit_timeout(breaker_id, result)
+    end
+
+    :ok
+  end
+
+  defp finalize_receipt(latch, receipt, result, certainty, terminal_callback) do
+    case :atomics.compare_exchange(latch, 3, 1, 2) do
+      :ok ->
+        if certainty in [:ambiguous, :dispatched],
+          do: report_receipt(receipt, breaker_result(result, terminal_callback)),
+          else: release_receipt(receipt)
+
+      0 ->
+        case :atomics.compare_exchange(latch, 3, 0, 2) do
+          :ok -> abandon_unclaimed_receipt(receipt, self())
+          _raced -> finalize_receipt(latch, receipt, result, certainty, terminal_callback)
+        end
+
+      2 ->
+        :ok
+    end
+  end
+
+  defp timeout_result(timeout) do
+    {:error,
+     JError.new(-32_000, "Request timeout after #{timeout}ms",
+       category: :timeout,
+       retriable?: true,
+       breaker_penalty?: true
+     ), timeout}
+  end
+
+  defp elapsed_from_dispatch(nil), do: 0.0
+  defp elapsed_from_dispatch(dispatched_at_us), do: elapsed_ms(dispatched_at_us)
+
+  defp terminal_elapsed_ms(elapsed_ms, nil), do: elapsed_ms || 0.0
+
+  defp terminal_elapsed_ms(elapsed_ms, dispatched_at_us),
+    do: elapsed_ms || elapsed_ms(dispatched_at_us)
+
+  defp maybe_emit_timeout({instance_id, transport}, {:error, %JError{category: :timeout}, _}) do
+    Logger.warning("Request timeout in circuit breaker",
+      instance_id: instance_id,
+      transport: transport
+    )
+
+    :telemetry.execute(
+      [:lasso, :circuit_breaker, :timeout],
+      %{count: 1},
+      %{instance_id: instance_id, transport: transport}
+    )
+  end
+
+  defp maybe_emit_timeout(_breaker_id, _result), do: :ok
+
+  defp terminate_lifecycle(lifecycle_pid, monitor_ref) do
+    if Process.alive?(lifecycle_pid), do: Process.exit(lifecycle_pid, :kill)
+    Process.demonitor(monitor_ref, [:flush])
+    :ok
+  end
+
+  defp decision_deadline_us(deadline_us, timeout_ms)
+       when timeout_ms >= @minimum_settlement_budget_ms,
+       do: deadline_us - @settlement_margin_us
+
+  defp decision_deadline_us(deadline_us, _timeout_ms), do: deadline_us
+
+  defp attempt_deadline_us(decision_deadline_us, timeout_ms) do
+    min(
+      decision_deadline_us,
+      System.monotonic_time(:microsecond) + timeout_ms * 1_000
+    )
+  end
 end

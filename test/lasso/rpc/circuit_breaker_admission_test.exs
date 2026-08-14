@@ -114,12 +114,13 @@ defmodule Lasso.RPC.CircuitBreakerAdmissionTest do
                fn -> send(test_pid, :transport_ran) end,
                100,
                nil,
-               nil,
+               fn _dispatched_at_us -> send(test_pid, :dispatch_receipt) end,
                :immediate,
                deadline_us
              )
 
     refute_receive :transport_ran, 20
+    refute_receive :dispatch_receipt, 20
   end
 
   defp run_after_admission(id, deadline_us, fun) do

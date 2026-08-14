@@ -73,7 +73,7 @@ defmodule Lasso.MixProject do
       {:plug_cowboy, "~> 2.8"},
       {:decimal, "~> 3.0"},
       {:yaml_elixir, "~> 2.9"},
-      {:finch, "~> 0.22"},
+      {:finch, "~> 0.23.0"},
       {:phoenix_live_dashboard, "~> 0.8", only: :dev},
       {:esbuild, "~> 0.8", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.2.0", runtime: Mix.env() == :dev},
