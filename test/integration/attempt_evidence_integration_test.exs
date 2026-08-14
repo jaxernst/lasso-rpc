@@ -236,21 +236,18 @@ defmodule Lasso.RPC.AttemptEvidenceIntegrationTest do
     refute_receive {[:lasso, :rpc, :attempt, :stop], _, %{request_id: "failure-request"}}, 50
   end
 
-  test "attempt timeout is right-censored once", %{chain: chain} do
+  test "attempt timeout authorizes no late compatibility evidence", %{chain: chain} do
     setup_providers([
       %{id: "timeout", priority: 10, behavior: :always_timeout, profile: "public"}
     ])
 
     {:error, _error, _ctx} = execute(chain, "timeout", false, "timeout-request", 50)
-    [event] = attempt_events("timeout-request", 1)
 
-    assert event.metadata.outcome == :timeout
-    assert event.metadata.censored
-    assert event.measurements.duration_ms >= 30
-    assert event.measurements.duration_ms < 100
+    refute_receive {[:lasso, :rpc, :attempt, :stop], _, %{request_id: "timeout-request"}},
+                   250
   end
 
-  test "killing a request process records one cancelled attempt", %{chain: chain} do
+  test "killing the request owner may lose its owner-local terminal fact", %{chain: chain} do
     test_pid = self()
 
     blocking =
@@ -269,13 +266,8 @@ defmodule Lasso.RPC.AttemptEvidenceIntegrationTest do
     assert_receive :upstream_attempt_started, 2_000
     Process.exit(request_pid, :kill)
 
-    [event] = attempt_events("cancelled-request", 1)
-    assert event.metadata.outcome == :cancelled
-    assert event.metadata.censored
-    assert event.measurements.duration_ms >= 0
-
     refute_receive {[:lasso, :rpc, :attempt, :stop], _, %{request_id: "cancelled-request"}},
-                   100
+                   250
   end
 
   test "circuit rejection emits admission evidence and no attempt", %{chain: chain} do

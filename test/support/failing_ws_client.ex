@@ -15,4 +15,6 @@ defmodule TestSupport.FailingWSClient do
   def send_frame(_pid, _frame) do
     {:error, :not_connected}
   end
+
+  def cast(_pid, _message), do: :ok
 end

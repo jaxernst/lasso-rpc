@@ -34,18 +34,23 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   use WebSockex
   require Logger
 
+  alias Lasso.Core.Transport.UpstreamResponse
+
   # WebSockex callbacks
 
   @spec handle_connect(map(), map()) :: {:ok, map()}
   def handle_connect(_conn, state) do
-    send(state.parent, {:ws_connected})
+    send(state.parent, {:ws_connected, self(), state.connection_generation})
     {:ok, state}
   end
 
   @spec handle_frame({:text, String.t()}, map()) :: {:ok, map()}
   def handle_frame({:text, message}, state) do
     received_at = System.monotonic_time(:microsecond)
-    send(state.parent, {:ws_message, message, received_at})
+    parsed = UpstreamResponse.parse_ws_frame(message)
+    validated_at = System.monotonic_time(:microsecond)
+    send_parsed_frame(state, parsed, message, received_at, validated_at)
+
     {:ok, state}
   end
 
@@ -60,6 +65,59 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
     Logger.debug("Received pong")
     {:ok, state}
   end
+
+  @spec handle_cast(term(), map()) :: {:ok, map()} | {:reply, WebSockex.frame(), map()}
+  def handle_cast(
+        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame},
+        state
+      ) do
+    decided_at_us = System.monotonic_time(:microsecond)
+
+    decision =
+      cond do
+        generation != state.connection_generation ->
+          cancel_send(cancel_latch)
+          {:rejected, :stale_generation}
+
+        decided_at_us >= deadline_us ->
+          cancel_send(cancel_latch)
+          {:rejected, :deadline}
+
+        true ->
+          accept_send(cancel_latch)
+      end
+
+    send(
+      state.parent,
+      {:ws_send_decision, self(), state.connection_generation, send_key, decision, decided_at_us}
+    )
+
+    case decision do
+      :accepted ->
+        send(self(), {:lasso_ws_send_written, generation, send_key})
+        {:reply, frame, state}
+
+      {:rejected, _reason} ->
+        {:ok, state}
+    end
+  end
+
+  def handle_cast(_message, state), do: {:ok, state}
+
+  @spec handle_info(term(), map()) :: {:ok, map()}
+  def handle_info(
+        {:lasso_ws_send_written, generation, send_key},
+        %{connection_generation: generation} = state
+      ) do
+    send(
+      state.parent,
+      {:ws_send_written, self(), generation, send_key, System.monotonic_time(:microsecond)}
+    )
+
+    {:ok, state}
+  end
+
+  def handle_info(_message, state), do: {:ok, state}
 
   # This fires for ALL disconnection events.
   # WebSockex embeds close frame info directly in the reason parameter,
@@ -98,7 +156,36 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
           {:ws_disconnect, :error, other}
       end
 
-    send(state.parent, disconnect_info)
+    send(
+      state.parent,
+      {:ws_disconnect_event, self(), state.connection_generation, disconnect_info}
+    )
+
     {:ok, state}
+  end
+
+  defp send_parsed_frame(state, parsed, message, received_at, validated_at) do
+    send(
+      state.parent,
+      {:ws_message, self(), state.connection_generation, parsed, message, received_at,
+       validated_at}
+    )
+  end
+
+  defp accept_send(cancel_latch) do
+    case :atomics.compare_exchange(cancel_latch, 1, 0, 2) do
+      value when value in [:ok, 0] -> :accepted
+      1 -> {:rejected, :cancelled}
+      2 -> {:rejected, :already_accepted}
+    end
+  rescue
+    ArgumentError -> {:rejected, :invalid_latch}
+  end
+
+  defp cancel_send(cancel_latch) do
+    _previous = :atomics.compare_exchange(cancel_latch, 1, 0, 1)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 end

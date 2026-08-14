@@ -13,6 +13,10 @@ defmodule TestSupport.MockWSClient do
     GenServer.call(pid, {:send_frame, frame})
   end
 
+  def cast(pid, message) do
+    GenServer.cast(pid, {:websockex_cast, message})
+  end
+
   # Test helpers for simulating various WebSocket behaviors
   def emit_message(pid, json_map) when is_map(json_map) do
     GenServer.cast(pid, {:emit_message, json_map})
@@ -135,7 +139,8 @@ defmodule TestSupport.MockWSClient do
       response_delay: 0,
       pending_responses: %{},
       response_mode: :result,
-      hang_mode: hang_mode
+      hang_mode: hang_mode,
+      successful_writes: MapSet.new()
     }
 
     cond do
@@ -174,6 +179,26 @@ defmodule TestSupport.MockWSClient do
   def handle_info({:"$websockex_send", _ref, :ping}, s) do
     # Pretend the ping was handled; also simulate a pong at handler level
     {:noreply, s}
+  end
+
+  def handle_info(
+        {:lasso_ws_send_written, generation, send_key} = message,
+        %{handler: handler, state: handler_state} = state
+      ) do
+    write_key = {generation, send_key}
+
+    if MapSet.member?(state.successful_writes, write_key) do
+      {:ok, handler_state} = handler.handle_info(message, handler_state)
+
+      {:noreply,
+       %{
+         state
+         | state: handler_state,
+           successful_writes: MapSet.delete(state.successful_writes, write_key)
+       }}
+    else
+      {:noreply, state}
+    end
   end
 
   def handle_info({:delayed_response, payload}, %{handler: handler, state: st} = s) do
@@ -279,6 +304,27 @@ defmodule TestSupport.MockWSClient do
   end
 
   @impl true
+  def handle_cast(
+        {:websockex_cast, message},
+        %{handler: handler, state: handler_state} = state
+      ) do
+    case handler.handle_cast(message, handler_state) do
+      {:reply, frame, handler_state} ->
+        state = %{state | state: handler_state}
+
+        case dispatch_cast_frame(frame, state) do
+          {:ok, state} ->
+            {:noreply, mark_write_success(message, state)}
+
+          {:error, reason, state} ->
+            fail_cast_write(message, reason, state)
+        end
+
+      {:ok, handler_state} ->
+        {:noreply, %{state | state: handler_state}}
+    end
+  end
+
   def handle_cast({:emit_message, json_map}, %{handler: handler, state: st, connected: true} = s) do
     {:ok, new_state} = handler.handle_frame({:text, Jason.encode!(json_map)}, st)
     {:noreply, %{s | state: new_state}}
@@ -343,5 +389,95 @@ defmodule TestSupport.MockWSClient do
   def handle_cast({:emit_subscription, _subscription_id, _result}, %{connected: false} = s) do
     # Ignore subscription notifications when not connected
     {:noreply, s}
+  end
+
+  defp dispatch_cast_frame({:text, _payload}, %{failure_mode: :fail_sends} = state),
+    do: {:error, :connection_closed, state}
+
+  defp dispatch_cast_frame(_frame, %{connected: false} = state),
+    do: {:error, :not_connected, state}
+
+  defp dispatch_cast_frame(
+         {:text, payload},
+         %{
+           handler: handler,
+           state: handler_state,
+           connected: true,
+           response_delay: delay,
+           response_mode: mode
+         } = state
+       ) do
+    response_payload = response_payload(payload, mode)
+
+    if delay > 0 do
+      Process.send_after(self(), {:delayed_response, response_payload}, delay)
+      {:ok, state}
+    else
+      case handler.handle_frame({:text, response_payload}, handler_state) do
+        {:ok, new_handler_state} -> {:ok, %{state | state: new_handler_state}}
+        other -> {:ok, %{state | state: elem(other, 1)}}
+      end
+    end
+  end
+
+  defp dispatch_cast_frame(:ping, %{failure_mode: :fail_pings} = state),
+    do: {:error, :connection_closed, state}
+
+  defp dispatch_cast_frame(:ping, %{handler: handler, state: handler_state} = state) do
+    {:ok, new_handler_state} = handler.handle_frame({:pong, ""}, handler_state)
+    {:ok, %{state | state: new_handler_state}}
+  end
+
+  defp dispatch_cast_frame(_frame, state), do: {:ok, state}
+
+  defp mark_write_success(
+         {:send_if_live, generation, send_key, _deadline_us, _cancel_latch, _frame},
+         state
+       ) do
+    %{state | successful_writes: MapSet.put(state.successful_writes, {generation, send_key})}
+  end
+
+  defp fail_cast_write(message, reason, %{handler: handler, state: handler_state} = state) do
+    :ok = drop_post_write_ack(message)
+    {:ok, handler_state} = handler.handle_disconnect(%{reason: {:error, reason}}, handler_state)
+
+    {:stop, {:socket_write_error, reason}, %{state | state: handler_state, connected: false}}
+  end
+
+  defp drop_post_write_ack(
+         {:send_if_live, generation, send_key, _deadline_us, _cancel_latch, _frame}
+       ) do
+    receive do
+      {:lasso_ws_send_written, ^generation, ^send_key} -> :ok
+    after
+      0 -> raise "missing queued post-write acknowledgement"
+    end
+  end
+
+  defp response_payload(payload, mode) do
+    case Jason.decode(payload) do
+      {:ok, %{"id" => id, "method" => "eth_subscribe", "params" => _params}} ->
+        subscription_id = "0x" <> Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+
+        case mode do
+          :result ->
+            ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":#{Jason.encode!(subscription_id)}})
+
+          :error ->
+            ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"error":{"code":-32_601,"message":"Subscription not supported"}})
+        end
+
+      {:ok, %{"id" => id, "method" => method, "params" => params}} ->
+        case mode do
+          :result ->
+            ~s({"jsonrpc":"2.0","id":#{Jason.encode!(id)},"result":{"rpc_method":#{Jason.encode!(method)},"params":#{Jason.encode!(params)},"mock_response":true}})
+
+          :error ->
+            get_error_for_method(method, id)
+        end
+
+      _other ->
+        payload
+    end
   end
 end
