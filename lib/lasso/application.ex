@@ -75,28 +75,16 @@ defmodule Lasso.Application do
         Lasso.Core.Transport.HTTP.DispatchTracker,
 
         # Start Finch HTTP client for RPC provider requests
-        # Pool size tuned for typical RPC proxy workloads:
+        # The bounded pool leaves headroom for concurrent client traffic and probes.
         # - size: max connections per pool (per unique host)
-        # - count: number of independent pools for parallel access
+        # - count: number of independent pools
         # - pool_max_idle_time: keep pools alive longer to reduce TLS handshake overhead
         # - idle_timeout: individual connection idle timeout
         # - transport_opts: TLS session reuse to reduce handshake CPU cost
         {Finch,
          name: Lasso.Finch,
          pools: %{
-           :default => [
-             protocols: [:http1],
-             size: 30,
-             count: 3,
-             pool_max_idle_time: :timer.seconds(60),
-             conn_opts: [
-               idle_timeout: 60_000,
-               transport_opts: [
-                 timeout: 5_000,
-                 reuse_sessions: true
-               ]
-             ]
-           ]
+           :default => http_pool_options()
          }},
 
         # Start benchmark store for performance metrics
@@ -170,6 +158,35 @@ defmodule Lasso.Application do
       Lasso.Telemetry.attach_default_handlers()
 
       {:ok, supervisor}
+    end
+  end
+
+  @doc false
+  @spec http_pool_options() :: keyword()
+  def http_pool_options do
+    config = Application.fetch_env!(:lasso, :http_pool)
+    size = positive_pool_value!(config, :size)
+    count = positive_pool_value!(config, :count)
+
+    [
+      protocols: [:http1],
+      size: size,
+      count: count,
+      pool_max_idle_time: :timer.seconds(60),
+      conn_opts: [
+        idle_timeout: 60_000,
+        transport_opts: [
+          timeout: 5_000,
+          reuse_sessions: true
+        ]
+      ]
+    ]
+  end
+
+  defp positive_pool_value!(config, key) do
+    case Keyword.fetch(config, key) do
+      {:ok, value} when is_integer(value) and value > 0 -> value
+      _other -> raise ArgumentError, "http pool #{key} must be a positive integer"
     end
   end
 

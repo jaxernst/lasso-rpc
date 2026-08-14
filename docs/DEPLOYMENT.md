@@ -158,6 +158,8 @@ The dashboard aggregates data across all nodes for unified observability with re
 | `PORT` | No | HTTP listener port | `4000` |
 | `LASSO_NODE_ID` | Prod | Unique node identifier | `"local"` in dev |
 | `LASSO_VM_METRICS_ENABLED` | No | Set to `false` to disable VM metrics | `true` |
+| `LASSO_HTTP_POOL_SIZE` | No | Maximum HTTP/1 connections per upstream host and pool | `256` |
+| `LASSO_HTTP_POOL_COUNT` | No | Independent Finch pools per upstream host | `1` |
 
 ### Clustering
 
