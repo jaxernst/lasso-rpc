@@ -1,13 +1,14 @@
 defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Core.Request.RequestOwner
   alias Lasso.Core.Support.{CircuitBreaker, ErrorClassifier}
   alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Snapshot}
   alias Lasso.Core.Transport.UpstreamResponse
   alias Lasso.Core.Transport.UpstreamResponse.Validated
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.InstanceState
-  alias Lasso.RPC.Response
+  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, Response}
   alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint, Handler}
   alias Lasso.RPC.Transports.WebSocket
 
@@ -142,6 +143,48 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     assert_observation(attempt_ref, :response)
     assert {:ok, %Response.Success{id: "observed"}, _io_ms} = Task.await(task)
+  end
+
+  test "request ownership projects production WebSocket errors into canonical classes", context do
+    cases = [
+      {-32_602, "invalid params", :deterministic, :return_response, :none},
+      {-32_005, "rate limited", :quota, :try_next_candidate, :none},
+      {-32_601, "method not found", :capability, :try_next_candidate, :none},
+      {-32_002, "provider unavailable", :provider_failure, :try_next_candidate, :failure}
+    ]
+
+    for {code, message, category, action, breaker_effect} <- cases do
+      client_id = "owner-error-#{code}"
+
+      task =
+        Task.async(fn ->
+          RequestOwner.execute(
+            ws_attempt_identity(context, client_id),
+            System.monotonic_time(:microsecond) + 1_000_000,
+            fn -> WebSocket.request(context.channel, rpc_request(client_id), 1_000) end
+          )
+        end)
+
+      assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
+
+      raw =
+        Jason.encode!(%{
+          "jsonrpc" => "2.0",
+          "id" => transport_id,
+          "error" => %{"code" => code, "message" => message}
+        })
+
+      :ok = TestSupport.ProtocolWSClient.acknowledge(ws_pid, transport_id, raw)
+      outcome = Task.await(task, 1_000)
+
+      assert %AttemptTerminal.Response{
+               kind: :application_error,
+               error_category: ^category
+             } = outcome.fact
+
+      assert outcome.projection.recommended_action == action
+      assert outcome.projection.breaker_effect == breaker_effect
+    end
   end
 
   test "a timeout after the post-write acknowledgement remains dispatched", context do
@@ -1302,6 +1345,26 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       end)
 
     {task, attempt_ref}
+  end
+
+  defp ws_attempt_identity(context, request_id) do
+    AttemptIdentity.new(
+      request_id: request_id,
+      attempt_id: "#{request_id}-attempt",
+      profile: "public",
+      chain_id: 1,
+      upstream_instance_id: context.instance_id,
+      transport: :ws,
+      route_generation: 1,
+      circuit_scope: :broad,
+      circuit_epoch: 1,
+      execution_safety: :replay_safe,
+      routing_intent: "default",
+      workload_key: "eth_blockNumber",
+      request_budget_ms: 1_000,
+      candidate_admission_count: 1,
+      dispatch_count: 1
+    )
   end
 
   defp assert_observation(attempt_ref, kind) do

@@ -41,7 +41,8 @@ defmodule Lasso.RPC.ExecutionReducer do
   @type event :: %{
           required(:id) => term(),
           required(:kind) => atom(),
-          required(:event_us) => integer()
+          required(:event_us) => integer(),
+          optional(atom()) => term()
         }
 
   @spec new(AttemptIdentity.t(), integer(), integer()) :: t()
@@ -51,27 +52,21 @@ defmodule Lasso.RPC.ExecutionReducer do
   end
 
   @spec observe(t(), event()) :: t()
-  def observe(%__MODULE__{} = state, %{id: _id, kind: kind, event_us: event_us} = event)
-      when kind in @observation_kinds and is_integer(event_us) do
-    normalized = normalize(event)
+  def observe(%__MODULE__{} = state, event), do: observe_many(state, [event])
 
-    cond do
-      existing_event(state, normalized.id) ->
-        diagnose_reused_id(state, normalized)
+  @doc "Reduces a bounded observation batch with one normalization/sort pass."
+  @spec observe_many(t(), [event()]) :: t()
+  def observe_many(%__MODULE__{} = state, events) when is_list(events) do
+    {state, recompute?} =
+      Enum.reduce(events, {state, false}, fn event, {acc, dirty?} ->
+        case stage_observation(acc, event) do
+          {:accepted, next} -> {next, true}
+          {:unchanged, next} -> {next, dirty?}
+        end
+      end)
 
-      state.committed ->
-        late(state, event)
-
-      event_us >= state.deadline_us ->
-        late(state, event)
-
-      true ->
-        state |> put_seen(normalized) |> add_observation(normalized) |> recompute()
-    end
+    if recompute?, do: recompute(state), else: state
   end
-
-  def observe(%__MODULE__{}, event),
-    do: raise(ArgumentError, "invalid observation: #{inspect(event)}")
 
   @spec close_deadline(t()) :: t()
   def close_deadline(%__MODULE__{terminal: nil} = state) do
@@ -84,6 +79,14 @@ defmodule Lasso.RPC.ExecutionReducer do
   end
 
   def close_deadline(state), do: commit(state)
+
+  @spec close_deadline(t(), :not_dispatched | :indeterminate | :dispatched) :: t()
+  def close_deadline(%__MODULE__{terminal: nil} = state, certainty) do
+    state = promote(state, certainty)
+    %{state | terminal: :deadline, terminal_at_us: state.deadline_us, committed: true}
+  end
+
+  def close_deadline(state, _certainty), do: commit(state)
 
   @spec commit(t()) :: t()
   def commit(%__MODULE__{terminal: nil}),
@@ -122,17 +125,19 @@ defmodule Lasso.RPC.ExecutionReducer do
   def terminal_fact(%__MODULE__{
         terminal: :transport_failure,
         terminal_event: %{kind: :task_exit},
-        identity: identity
+        identity: identity,
+        dispatch_certainty: certainty
       }),
-      do: AttemptTerminal.TransportFailure.new(identity, :unknown, :indeterminate)
+      do: AttemptTerminal.TransportFailure.new(identity, :unknown, certainty)
 
   def terminal_fact(%__MODULE__{
         terminal: :transport_failure,
         terminal_event: event,
-        identity: identity
+        identity: identity,
+        dispatch_certainty: certainty
       }) do
     opts = maybe_option([], :io_duration_us, event)
-    AttemptTerminal.TransportFailure.new(identity, event.reason, event.certainty, opts)
+    AttemptTerminal.TransportFailure.new(identity, event.reason, certainty, opts)
   end
 
   def terminal_fact(%__MODULE__{terminal: :cancelled, terminal_event: event, identity: identity}),
@@ -208,13 +213,15 @@ defmodule Lasso.RPC.ExecutionReducer do
 
   defp fold(state, %{kind: kind, event_us: event_us, certainty: certainty} = event)
        when kind in [:transport_failure, :cancelled] do
+    original_event = event
     {certainty, event} = resolve_terminal_certainty(state, event, certainty)
+    regression? = @certainty_rank[certainty] < @certainty_rank[state.dispatch_certainty]
+    certainty = if regression?, do: state.dispatch_certainty, else: certainty
+    event = normalize_terminal_censor(state, %{event | certainty: certainty})
 
-    if @certainty_rank[certainty] < @certainty_rank[state.dispatch_certainty] do
-      violation(state, event, :certainty_regression)
-    else
-      state |> promote(certainty) |> terminal(kind, event_us, event)
-    end
+    state = state |> promote(certainty) |> terminal(kind, event_us, event)
+
+    if regression?, do: violation(state, original_event, :certainty_regression), else: state
   end
 
   defp fold(state, %{kind: :task_exit, event_us: event_us} = event) do
@@ -285,6 +292,31 @@ defmodule Lasso.RPC.ExecutionReducer do
 
     validate_observation!(normalized)
   end
+
+  defp stage_observation(
+         %__MODULE__{} = state,
+         %{id: _id, kind: kind, event_us: event_us} = event
+       )
+       when kind in @observation_kinds and is_integer(event_us) do
+    normalized = normalize(event)
+
+    cond do
+      existing_event(state, normalized.id) ->
+        {:unchanged, diagnose_reused_id(state, normalized)}
+
+      state.committed ->
+        {:unchanged, late(state, event)}
+
+      event_us >= state.deadline_us ->
+        {:unchanged, late(state, event)}
+
+      true ->
+        {:accepted, state |> put_seen(normalized) |> add_observation(normalized)}
+    end
+  end
+
+  defp stage_observation(%__MODULE__{}, event),
+    do: raise(ArgumentError, "invalid observation: #{inspect(event)}")
 
   defp bounded_id(id) when is_integer(id), do: bounded_integer(id, :id)
   defp bounded_id(id) when is_binary(id), do: Lasso.RPC.BoundedIdentifier.encode(id)
@@ -437,13 +469,28 @@ defmodule Lasso.RPC.ExecutionReducer do
 
   defp resolve_terminal_certainty(state, %{kind: :cancelled} = event, :not_dispatched) do
     if unresolved_send?(state, event.event_us) do
-      {:indeterminate, %{event | certainty: :indeterminate}}
+      {:indeterminate,
+       %{
+         event
+         | certainty: :indeterminate,
+           censoring_boundary_us: max(event.event_us - state.started_us, 1)
+       }}
     else
       {:not_dispatched, event}
     end
   end
 
   defp resolve_terminal_certainty(_state, event, certainty), do: {certainty, event}
+
+  defp normalize_terminal_censor(
+         state,
+         %{kind: :cancelled, certainty: certainty} = event
+       )
+       when certainty in [:indeterminate, :dispatched] do
+    %{event | censoring_boundary_us: max(event.event_us - state.started_us, 1)}
+  end
+
+  defp normalize_terminal_censor(_state, event), do: event
 
   defp unresolved_send?(state, boundary_us) do
     case Map.fetch(state.observations, :send_started) do

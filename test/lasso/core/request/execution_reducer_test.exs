@@ -66,6 +66,15 @@ defmodule Lasso.RPC.ExecutionReducerTest do
              ExecutionReducer.terminal_fact(reduced)
   end
 
+  test "deadline closure retains an authoritative external dispatch snapshot" do
+    reduced = ExecutionReducer.close_deadline(state(), :dispatched)
+
+    assert reduced.dispatch_certainty == :dispatched
+
+    assert %Lasso.RPC.AttemptTerminal.Deadline{dispatch_certainty: :dispatched} =
+             ExecutionReducer.terminal_fact(reduced)
+  end
+
   test "certainty only increases" do
     reduced =
       state()
@@ -248,6 +257,71 @@ defmodule Lasso.RPC.ExecutionReducerTest do
              ExecutionReducer.terminal_fact(reduced)
   end
 
+  test "task loss preserves prior positive dispatch proof" do
+    reduced =
+      state()
+      |> ExecutionReducer.observe(%{id: 1, kind: :send_confirmed, event_us: 40})
+      |> ExecutionReducer.observe(%{id: 2, kind: :task_exit, event_us: 50})
+
+    assert reduced.terminal == :transport_failure
+    assert reduced.dispatch_certainty == :dispatched
+
+    assert %Lasso.RPC.AttemptTerminal.TransportFailure{
+             reason: :unknown,
+             dispatch_certainty: :dispatched
+           } = ExecutionReducer.terminal_fact(reduced)
+  end
+
+  test "a weaker terminal failure materializes the strongest dispatch proof in either order" do
+    failure = %{
+      id: 2,
+      kind: :transport_failure,
+      event_us: 50,
+      reason: :closed,
+      certainty: :indeterminate
+    }
+
+    for events <- [
+          [%{id: 1, kind: :send_confirmed, event_us: 40}, failure],
+          [failure, %{id: 1, kind: :send_confirmed, event_us: 40}]
+        ] do
+      reduced = ExecutionReducer.observe_many(state(), events)
+
+      assert reduced.terminal == :transport_failure
+      assert reduced.dispatch_certainty == :dispatched
+
+      assert %Lasso.RPC.AttemptTerminal.TransportFailure{
+               dispatch_certainty: :dispatched
+             } = ExecutionReducer.terminal_fact(reduced)
+
+      assert Enum.any?(reduced.protocol_violations, &(&1.reason == :certainty_regression))
+    end
+  end
+
+  test "bounded batch reduction agrees with sequential logical reduction" do
+    events = [
+      %{id: 1, kind: :send_started, event_us: 10},
+      %{id: 2, kind: :send_confirmed, event_us: 20},
+      %{
+        id: 3,
+        kind: :transport_failure,
+        event_us: 30,
+        reason: :closed,
+        certainty: :dispatched,
+        io_duration_us: 20
+      }
+    ]
+
+    batched = ExecutionReducer.observe_many(state(), events)
+    sequential = Enum.reduce(events, state(), &ExecutionReducer.observe(&2, &1))
+
+    assert batched.dispatch_certainty == sequential.dispatch_certainty
+    assert batched.terminal == sequential.terminal
+    assert batched.terminal_event == sequential.terminal_event
+    assert batched.protocol_violations == sequential.protocol_violations
+    assert ExecutionReducer.terminal_fact(batched) == ExecutionReducer.terminal_fact(sequential)
+  end
+
   test "cancellation during unresolved send is indeterminate" do
     reduced =
       state()
@@ -264,8 +338,30 @@ defmodule Lasso.RPC.ExecutionReducerTest do
     assert reduced.terminal == :cancelled
     assert reduced.dispatch_certainty == :indeterminate
 
-    assert %Lasso.RPC.AttemptTerminal.Cancelled{dispatch_certainty: :indeterminate} =
+    assert %Lasso.RPC.AttemptTerminal.Cancelled{
+             dispatch_certainty: :indeterminate,
+             censoring_boundary_us: 20
+           } =
              ExecutionReducer.terminal_fact(reduced)
+  end
+
+  test "cancellation upgraded by positive dispatch proof receives a positive censor" do
+    reduced =
+      state()
+      |> ExecutionReducer.observe(%{id: 1, kind: :send_confirmed, event_us: 10})
+      |> ExecutionReducer.observe(%{
+        id: 2,
+        kind: :cancelled,
+        event_us: 20,
+        reason: :caller_abandoned,
+        certainty: :not_dispatched,
+        censoring_boundary_us: 0
+      })
+
+    assert %Lasso.RPC.AttemptTerminal.Cancelled{
+             dispatch_certainty: :dispatched,
+             censoring_boundary_us: 20
+           } = ExecutionReducer.terminal_fact(reduced)
   end
 
   test "authoritative not-dispatched proof closes ambiguity before cancellation" do
