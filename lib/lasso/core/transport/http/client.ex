@@ -47,6 +47,16 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
     function_exported?(adapter, :deferred_dispatch?, 0) and adapter.deferred_dispatch?()
   end
 
+  @doc false
+  @spec prepare_provider(provider_config) :: provider_config
+  def prepare_provider(provider_config) do
+    adapter = adapter()
+
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :prepare_provider, 1),
+      do: adapter.prepare_provider(provider_config),
+      else: provider_config
+  end
+
   # Facade to configured adapter
   @spec request(provider_config, method, params, opts) ::
           {:ok, raw_response()} | {:error, error_reason}

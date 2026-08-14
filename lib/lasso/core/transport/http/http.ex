@@ -36,7 +36,8 @@ defmodule Lasso.RPC.Transports.HTTP do
         channel = %{
           url: url,
           provider_id: provider_id,
-          config: provider_config
+          config: provider_config,
+          request_config: HttpClient.prepare_provider(provider_config)
         }
 
         {:ok, channel}
@@ -85,7 +86,7 @@ defmodule Lasso.RPC.Transports.HTTP do
   end
 
   defp perform_request(
-         %{provider_id: provider_id, config: provider_config},
+         %{provider_id: provider_id, config: provider_config} = channel,
          upstream_id,
          client_id,
          timeout,
@@ -95,8 +96,10 @@ defmodule Lasso.RPC.Transports.HTTP do
     dispatch_context = AttemptProtocol.context()
     deadline_us = request_deadline_us(io_start_us, timeout, AttemptProtocol.deadline_us())
 
+    request_config = Map.get(channel, :request_config, provider_config)
+
     result =
-      case request_fun.(provider_config,
+      case request_fun.(request_config,
              request_id: upstream_id,
              timeout: timeout,
              deadline_us: deadline_us,

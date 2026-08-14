@@ -5,6 +5,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: FinchClient
+  alias Lasso.RPC.Transports.HTTP
 
   @finch_name __MODULE__.Client
 
@@ -94,6 +95,71 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
              )
 
     assert raw =~ "lasso-finch-prepared"
+  end
+
+  test "prepared providers reuse immutable URL and header work" do
+    provider = %{
+      url: "http://example.invalid/rpc?network=mainnet",
+      headers: %{"x-tenant" => "tenant-a"}
+    }
+
+    prepared_provider = FinchClient.prepare_provider(provider)
+    template = prepared_provider.lasso_finch_template
+
+    assert template.scheme == :http
+    assert template.host == "example.invalid"
+    assert template.path == "/rpc"
+    assert template.query == "network=mainnet"
+    assert {"x-tenant", "tenant-a"} in template.headers
+
+    request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_blockNumber",
+      "params" => [],
+      "id" => "client"
+    }
+
+    assert {:ok, prepared} = PreparedRequest.new(request, "lasso-finch-template")
+
+    assert {:ok, {:raw, _raw}} =
+             FinchClient.request_prepared(
+               prepared_provider,
+               prepared,
+               timeout: 100,
+               request_fun: fn finch_request, _name, _options ->
+                 assert finch_request.body === prepared.encoded
+                 assert finch_request.scheme == template.scheme
+                 assert finch_request.host == template.host
+                 assert finch_request.path == template.path
+                 assert finch_request.query == template.query
+
+                 {:ok,
+                  %Finch.Response{
+                    status: 200,
+                    body: ~s({"jsonrpc":"2.0","id":"lasso-finch-template","result":"0x1"})
+                  }}
+               end
+             )
+  end
+
+  test "HTTP channels retain canonical config beside the prepared request template" do
+    original_client = Application.get_env(:lasso, :http_client)
+    Application.put_env(:lasso, :http_client, FinchClient)
+
+    on_exit(fn ->
+      Application.put_env(:lasso, :http_client, original_client)
+    end)
+
+    provider = %{
+      id: "prepared-channel",
+      url: "http://example.invalid/rpc",
+      headers: %{"x-tenant" => "tenant-a"}
+    }
+
+    assert {:ok, channel} = HTTP.open(provider, provider_id: provider.id)
+    assert channel.config === provider
+    assert %Finch.Request{} = channel.request_config.lasso_finch_template
+    assert {"x-tenant", "tenant-a"} in channel.request_config.lasso_finch_template.headers
   end
 
   test "predispatch Finch failure is proven only while the tracker remains authoritative" do

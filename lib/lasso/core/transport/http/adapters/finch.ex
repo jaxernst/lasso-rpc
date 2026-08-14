@@ -15,6 +15,15 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @impl true
   def deferred_dispatch?, do: true
 
+  @doc false
+  @spec prepare_provider(map()) :: map()
+  def prepare_provider(%{url: url} = provider) do
+    template = Finch.build(:post, url, ProviderHeaders.build(provider), nil)
+    Map.put(provider, :lasso_finch_template, template)
+  rescue
+    _error -> provider
+  end
+
   @impl true
   def request(%{url: url} = provider, method, params, opts) do
     request_id = Keyword.get(opts, :request_id) || generate_id()
@@ -46,7 +55,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
   defp request_encoded(provider, url, encoded, context, deadline_us, finch_name, opts) do
     with {:ok, request} <-
-           build_request(url, ProviderHeaders.build(provider), encoded, context),
+           build_request(provider, url, encoded, context),
          {:ok, tracker_token} <- tracker_token(context) do
       run_request(request, finch_name, deadline_us, context, tracker_token, opts)
     end
@@ -63,10 +72,20 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     end
   end
 
-  defp build_request(url, headers, json, context) do
+  defp build_request(%{lasso_finch_template: %Finch.Request{} = template}, _url, json, context) do
+    request = %{
+      template
+      | body: json,
+        private: Map.put(template.private, :lasso_attempt, context)
+    }
+
+    {:ok, request}
+  end
+
+  defp build_request(provider, url, json, context) do
     request =
       :post
-      |> Finch.build(url, headers, json)
+      |> Finch.build(url, ProviderHeaders.build(provider), json)
       |> Finch.Request.put_private(:lasso_attempt, context)
 
     {:ok, request}
