@@ -102,7 +102,7 @@ Routes without `/profile/:profile` use the included `public` profile. Use a name
 ### Prerequisites
 
 - **Elixir**: 1.17+ (check with `elixir --version`)
-- **Erlang/OTP**: 26+ (check with `erl -version`)
+- **Erlang/OTP**: 27+ (check with `erl -version`)
 - **Node.js**: 18+ (for asset compilation)
 
 ### Local (recommended)
