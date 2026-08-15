@@ -1,6 +1,7 @@
 defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.Core.Transport.HTTP.DispatchTracker
 
   @handler_id "lasso-finch-dispatch-tracker"
@@ -20,9 +21,8 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
   end
 
   test "synchronously forwards bounded send observations correlated through request private" do
-    attempt_ref = make_ref()
     {:ok, token} = DispatchTracker.ready_token()
-    context = {self(), attempt_ref}
+    context = attempt_context()
 
     request =
       Finch.build(:post, "http://localhost", [], "{}")
@@ -31,15 +31,13 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     DispatchTracker.begin_attempt(context, token)
     :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :send_started, event_us: started_us}}
+    started_us = assert_started(context)
 
     assert DispatchTracker.attempt_state(context) == :started
 
     :telemetry.execute([:finch, :send, :stop], %{duration: 1}, %{request: request})
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :send_confirmed, event_us: confirmed_us}}
+    confirmed_us = assert_confirmed(context)
 
     assert confirmed_us >= started_us
     assert DispatchTracker.attempt_state(context) == :confirmed
@@ -47,9 +45,8 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
   end
 
   test "adapter-opened ambiguity is emitted once before Finch reaches its send boundary" do
-    attempt_ref = make_ref()
     {:ok, token} = DispatchTracker.ready_token()
-    context = {self(), attempt_ref}
+    context = attempt_context()
 
     request =
       Finch.build(:post, "http://localhost", [], "{}")
@@ -58,21 +55,19 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     DispatchTracker.begin_attempt(context, token)
     assert :ok = DispatchTracker.open_send(context, token)
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :send_started, event_us: event_us}}
+    event_us = assert_started(context)
 
     assert is_integer(event_us)
 
     :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert_started_once(context, event_us)
     assert DispatchTracker.attempt_state(context) == :started
     DispatchTracker.clear_attempt(context)
   end
 
   test "send stop carrying an error never confirms dispatch" do
-    attempt_ref = make_ref()
     {:ok, token} = DispatchTracker.ready_token()
-    context = {self(), attempt_ref}
+    context = attempt_context()
 
     request =
       Finch.build(:post, "http://localhost", [], "{}")
@@ -81,14 +76,14 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     DispatchTracker.begin_attempt(context, token)
 
     :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert_started(context)
 
     :telemetry.execute([:finch, :send, :stop], %{duration: 1}, %{
       request: request,
       error: :closed
     })
 
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}
+    refute_confirmed(context)
     assert DispatchTracker.attempt_state(context) == :started
     DispatchTracker.clear_attempt(context)
   end
@@ -119,8 +114,7 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
   end
 
   test "repair gives in-flight sessions a fresh incarnation without certainty regression" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
     {:ok, old_token} = DispatchTracker.ready_token()
 
     request =
@@ -129,7 +123,7 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
 
     DispatchTracker.begin_attempt(context, old_token)
     :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    started_us = assert_started(context)
     assert DispatchTracker.attempt_state(context) == :started
 
     :ok = :telemetry.detach(@handler_id)
@@ -140,18 +134,17 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     assert DispatchTracker.attempt_state(context) == :started
 
     :telemetry.execute([:finch, :send, :stop], %{duration: 1}, %{request: request})
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}
+    assert_confirmed(context)
     assert DispatchTracker.attempt_state(context) == :confirmed
 
     :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
     assert DispatchTracker.attempt_state(context) == :confirmed
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_started}}
+    assert_started_once(context, started_us)
     DispatchTracker.clear_attempt(context)
   end
 
   test "restart keeps unobserved certainty, reclaims handlers, and returns ready" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context = attempt_context()
     {:ok, old_token} = DispatchTracker.ready_token()
     DispatchTracker.begin_attempt(context, old_token)
 
@@ -212,8 +205,7 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     parent = self()
 
     spawn_link(fn ->
-      attempt_ref = make_ref()
-      context = {self(), attempt_ref}
+      context = attempt_context()
 
       request =
         Finch.build(:post, "http://localhost", [], "{}")
@@ -221,9 +213,9 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
 
       DispatchTracker.begin_attempt(context, token)
       :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
-      receive_observation(attempt_ref, :send_started)
+      assert_started(context)
       :telemetry.execute([:finch, :send, :stop], %{duration: 1}, %{request: request})
-      receive_observation(attempt_ref, :send_confirmed)
+      assert_confirmed(context)
       send(parent, {:confirmed_session_ready, self()})
 
       receive do
@@ -237,11 +229,30 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTrackerTest do
     end)
   end
 
-  defp receive_observation(attempt_ref, kind) do
-    receive do
-      {:transport_observation, ^attempt_ref, %{kind: ^kind}} -> :ok
-    after
-      1_000 -> exit({:missing_transport_observation, kind})
-    end
+  defp attempt_context do
+    AttemptProtocol.new_context(
+      self(),
+      make_ref(),
+      System.monotonic_time(:microsecond) + 5_000_000
+    )
   end
+
+  defp assert_started(%{gate: gate}) do
+    timestamp = :atomics.get(gate, 2)
+    assert timestamp != unset_timestamp()
+    timestamp
+  end
+
+  defp assert_confirmed(%{gate: gate}) do
+    timestamp = :atomics.get(gate, 3)
+    assert timestamp != unset_timestamp()
+    timestamp
+  end
+
+  defp assert_started_once(%{gate: gate}, started_us),
+    do: assert(:atomics.get(gate, 2) == started_us)
+
+  defp refute_confirmed(%{gate: gate}), do: assert(:atomics.get(gate, 3) == unset_timestamp())
+
+  defp unset_timestamp, do: -9_223_372_036_854_775_808
 end

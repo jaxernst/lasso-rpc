@@ -1,7 +1,7 @@
 defmodule Lasso.Core.Request.RequestOwnerTest do
   use ExUnit.Case, async: true
 
-  alias Lasso.Core.Request.RequestOwner
+  alias Lasso.Core.Request.{ExecutionScope, RequestOwner}
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.AttemptIdentity
   alias Lasso.RPC.AttemptTerminal
@@ -28,6 +28,19 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
 
   defp deadline_after(ms),
     do: System.monotonic_time(:microsecond) + ms * 1_000
+
+  defp with_caller_guard(caller_pid, fun) do
+    caller_guard =
+      self()
+      |> ExecutionScope.monitored(caller_pid)
+      |> ExecutionScope.open()
+
+    try do
+      fun.(caller_guard)
+    after
+      ExecutionScope.close(caller_guard)
+    end
+  end
 
   defp success_terminal(context, io_duration_us \\ 1) do
     AttemptProtocol.terminal(context, :response, %{
@@ -103,6 +116,35 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     assert outcome.projection.recommended_action == :return_response
   end
 
+  test "a supplied caller guard is observed without creating a second monitor" do
+    owner = self()
+    caller = spawn(fn -> Process.sleep(:infinity) end)
+
+    outcome =
+      with_caller_guard(caller, fn caller_guard ->
+        RequestOwner.execute(
+          identity(),
+          deadline_after(100),
+          fn ->
+            {:monitors, monitors} = Process.info(owner, :monitors)
+
+            send(
+              owner,
+              {:caller_monitor_count, Enum.count(monitors, &(&1 == {:process, caller}))}
+            )
+
+            success_terminal(AttemptProtocol.context())
+            {:ok, :response}
+          end,
+          caller_guard: caller_guard
+        )
+      end)
+
+    assert_receive {:caller_monitor_count, 1}
+    assert outcome.result == {:ok, :response}
+    Process.exit(caller, :kill)
+  end
+
   test "the task result and terminal fact settle as one completion" do
     outcome =
       RequestOwner.execute(identity(), deadline_after(100), fn ->
@@ -132,6 +174,21 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
 
     assert with_gate.fact == without_gate.fact
     assert with_gate.projection == without_gate.projection
+  end
+
+  test "compatibility dispatch confirmation is idempotent for owner contexts" do
+    outcome =
+      RequestOwner.execute(identity(), deadline_after(100), fn ->
+        context = AttemptProtocol.context()
+        assert :ok = AttemptProtocol.send_confirmed(context)
+        assert :ok = AttemptProtocol.send_confirmed(context)
+        success_terminal(context, 7)
+        {:ok, :response}
+      end)
+
+    assert outcome.result == {:ok, :response}
+    assert %AttemptTerminal.Response{io_duration_us: 7} = outcome.fact
+    assert outcome.projection.recommended_action == :return_response
   end
 
   test "missing, conflicting, mismatched, and malformed terminals fail conservatively" do
@@ -426,7 +483,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
           send(test_pid, {:owner_outcome, outcome})
         end)
 
-      assert_receive {:transport_ready, task}
+      assert_receive {:transport_ready, task}, 1_000
       assert :erlang.suspend_process(owner)
       send(task, :complete)
 
@@ -501,15 +558,17 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     await_down(caller)
 
     outcome =
-      RequestOwner.execute(
-        identity(),
-        deadline_after(100),
-        fn ->
-          send(test_pid, :transport_should_not_run)
-          {:ok, :impossible}
-        end,
-        caller_pid: caller
-      )
+      with_caller_guard(caller, fn caller_guard ->
+        RequestOwner.execute(
+          identity(),
+          deadline_after(100),
+          fn ->
+            send(test_pid, :transport_should_not_run)
+            {:ok, :impossible}
+          end,
+          caller_guard: caller_guard
+        )
+      end)
 
     refute_receive :transport_should_not_run
     assert outcome.result == {:error, :caller_abandoned}
@@ -550,16 +609,18 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
         end)
 
       outcome =
-        RequestOwner.execute(
-          identity(),
-          deadline_after(100),
-          fn ->
-            prepare.(AttemptProtocol.context())
-            send(killer, {:task_ready, self()})
-            Process.sleep(:infinity)
-          end,
-          caller_pid: caller
-        )
+        with_caller_guard(caller, fn caller_guard ->
+          RequestOwner.execute(
+            identity(),
+            deadline_after(100),
+            fn ->
+              prepare.(AttemptProtocol.context())
+              send(killer, {:task_ready, self()})
+              Process.sleep(:infinity)
+            end,
+            caller_guard: caller_guard
+          )
+        end)
 
       assert_receive {:transport_stopped, :killed}
 
@@ -588,17 +649,19 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
       end)
 
     outcome =
-      RequestOwner.execute(
-        identity(),
-        deadline_after(100),
-        fn ->
-          success_terminal(AttemptProtocol.context())
-          send(killer, {:candidate_ready, self()})
-          assert_receive :hold
-          Process.sleep(:infinity)
-        end,
-        caller_pid: caller
-      )
+      with_caller_guard(caller, fn caller_guard ->
+        RequestOwner.execute(
+          identity(),
+          deadline_after(100),
+          fn ->
+            success_terminal(AttemptProtocol.context())
+            send(killer, {:candidate_ready, self()})
+            assert_receive :hold
+            Process.sleep(:infinity)
+          end,
+          caller_guard: caller_guard
+        )
+      end)
 
     assert outcome.result == {:error, :caller_abandoned}
     assert %AttemptTerminal.Cancelled{dispatch_certainty: :dispatched} = outcome.fact

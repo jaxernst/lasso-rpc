@@ -23,7 +23,8 @@ defmodule Lasso.RPC.Channel do
           transport: :http | :ws,
           raw_channel: term(),
           transport_module: module(),
-          capabilities: map() | nil
+          capabilities: map() | nil,
+          provider_capabilities: map() | nil | :unbound
         }
 
   @derive {Jason.Encoder,
@@ -37,7 +38,8 @@ defmodule Lasso.RPC.Channel do
     :transport,
     :raw_channel,
     :transport_module,
-    :capabilities
+    :capabilities,
+    provider_capabilities: :unbound
   ]
 
   @doc """
@@ -61,7 +63,8 @@ defmodule Lasso.RPC.Channel do
       transport: transport,
       raw_channel: raw_channel,
       transport_module: transport_module,
-      capabilities: nil
+      capabilities: nil,
+      provider_capabilities: Keyword.get(opts, :provider_capabilities, :unbound)
     }
   end
 
@@ -90,10 +93,28 @@ defmodule Lasso.RPC.Channel do
 
   Returns a 3-tuple with the result/error, and the I/O latency in milliseconds.
   """
-  @spec request(t(), map(), timeout()) ::
+  @spec request(t(), map() | Lasso.RPC.PreparedRequest.t(), timeout()) ::
           {:ok, term(), non_neg_integer()}
           | {:error, :unsupported_method | :timeout | term(), non_neg_integer()}
-  def request(%__MODULE__{} = channel, rpc_request, timeout \\ 30_000) do
+  def request(channel, request, timeout \\ 30_000)
+
+  def request(
+        %__MODULE__{transport_module: transport_module} = channel,
+        %Lasso.RPC.PreparedRequest{} = prepared,
+        timeout
+      ) do
+    if Code.ensure_loaded?(transport_module) and
+         function_exported?(transport_module, :request_prepared, 3) do
+      transport_module.request_prepared(channel.raw_channel, prepared, timeout)
+    else
+      case Lasso.RPC.PreparedRequest.to_legacy_map(prepared) do
+        {:ok, rpc_request} -> transport_module.request(channel.raw_channel, rpc_request, timeout)
+        {:error, reason} -> {:error, {:prepared_request_decode_error, reason}, 0}
+      end
+    end
+  end
+
+  def request(%__MODULE__{} = channel, rpc_request, timeout) do
     channel.transport_module.request(channel.raw_channel, rpc_request, timeout)
   end
 

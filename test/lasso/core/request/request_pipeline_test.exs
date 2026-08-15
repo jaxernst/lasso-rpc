@@ -10,11 +10,25 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.RPC.{RequestPipeline, RequestContext, RequestOptions}
-  alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
-  alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Test.TelemetrySync
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.JSONRPC.Error, as: JError
+
+  alias Lasso.RPC.{
+    AttemptIdentity,
+    AttemptTerminal,
+    Channel,
+    ExecutionProjector,
+    PreparedRequest,
+    RequestContext,
+    RequestOptions,
+    RequestPipeline,
+    RequestTerminal,
+    Selection,
+    SelectionFilters
+  }
+
+  alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
+  alias Lasso.Test.TelemetrySync
 
   setup do
     Application.ensure_all_started(:lasso)
@@ -113,7 +127,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert ctx.retries >= 0
     end
 
-    test "stores request metadata in context" do
+    test "retains bounded request metadata and releases execution payloads" do
       result =
         RequestPipeline.execute_via_channels(
           1,
@@ -125,7 +139,165 @@ defmodule Lasso.RPC.RequestPipelineTest do
       ctx = extract_context(result)
       assert ctx.chain_id == 1
       assert ctx.method == "eth_getBalance"
-      assert ctx.params == ["0x123", "latest"]
+      assert ctx.params == []
+      assert ctx.rpc_request == nil
+      assert ctx.prepared_request == nil
+      assert ctx.opts.request_context == nil
+    end
+
+    test "large request trees are absent from the returned context" do
+      marker = String.duplicate("sensitive-request-tree", 100_000)
+
+      custom_ctx =
+        RequestContext.new(9_999_999, marker, [marker],
+          strategy: :fastest,
+          request_id: marker,
+          path: marker,
+          client_ip: marker,
+          user_agent: marker
+        )
+        |> Map.put(:selection_reason, marker)
+
+      result =
+        RequestPipeline.execute_via_channels(9_999_999, marker, [marker], %RequestOptions{
+          profile: "public",
+          strategy: :fastest,
+          timeout_ms: 100,
+          request_id: marker,
+          jsonrpc_id: marker,
+          request_context: custom_ctx
+        })
+
+      ctx = extract_context(result)
+      retained = :erlang.term_to_binary(ctx)
+
+      assert byte_size(retained) < 32_000
+      refute retained =~ "sensitive-request-tree"
+      assert ctx.params == []
+      assert ctx.rpc_request == nil
+      assert ctx.opts.jsonrpc_id == nil
+      assert ctx.opts.request_context == nil
+      assert byte_size(ctx.request_id) <= 96
+      assert byte_size(ctx.method) <= 96
+    end
+
+    test "transport task captures the prepared request but never a request context" do
+      marker = String.duplicate("decoded-params", 100_000)
+
+      channel = %Channel{
+        profile: "public",
+        chain_id: 1,
+        provider_id: "provider",
+        instance_id: "instance",
+        route_generation: 1,
+        transport: :http,
+        raw_channel: :raw,
+        transport_module: __MODULE__
+      }
+
+      rpc_request = %{"jsonrpc" => "2.0", "method" => "eth_call", "params" => [marker], "id" => 1}
+      assert {:ok, prepared} = PreparedRequest.new(rpc_request, "lasso-copy-bound")
+      task = RequestPipeline.build_transport_task(channel, prepared, 100)
+      {:env, environment} = Function.info(task, :env)
+
+      refute Enum.any?(environment, &match?(%RequestContext{}, &1))
+      refute Enum.any?(environment, &(&1 == rpc_request))
+      assert Enum.count(environment, &(&1 == prepared)) == 1
+      assert :erts_debug.flat_size(environment) < 256
+
+      assert :erts_debug.same(
+               prepared.encoded,
+               hd(for %PreparedRequest{encoded: body} <- environment, do: body)
+             )
+    end
+
+    test "unencodable internal params fail before provider selection" do
+      assert {:error, %JError{category: :invalid_params, retriable?: false}, ctx} =
+               RequestPipeline.execute_via_channels(1, "eth_call", [self()], %RequestOptions{
+                 profile: "public",
+                 strategy: :fastest,
+                 timeout_ms: 100
+               })
+
+      assert ctx.execution_envelope.candidate_admission_count == 0
+      assert ctx.execution_envelope.dispatch_count == 0
+      assert ctx.prepared_request == nil
+      assert ctx.rpc_request == nil
+    end
+  end
+
+  describe "canonical request closure" do
+    test "a stale quota response cannot become the terminal fact after later admission rejection" do
+      ctx = terminal_context(2, 1, :admission_unavailable)
+      prior_identity = attempt_identity(ctx, 1, 1)
+
+      prior =
+        AttemptTerminal.Response.new(prior_identity, :application_error, 10,
+          error_code: -32_005,
+          error_category: :quota,
+          retry_after_ms: 100
+        )
+
+      ctx = %{
+        ctx
+        | terminal_attempt_fact: prior,
+          terminal_attempt_projection: ExecutionProjector.project(prior),
+          request_dispatch_certainty: :dispatched
+      }
+
+      public_error =
+        JError.new(-32_000, "No channels available",
+          category: :provider_error,
+          retriable?: true
+        )
+
+      assert %RequestTerminal.OrdinaryExhaustion{
+               reason: :admission_unavailable,
+               candidate_admission_count: 2,
+               dispatch_count: 1
+             } = RequestPipeline.build_request_terminal(:error, public_error, ctx)
+    end
+
+    test "a prior provider failure cannot override later ordinary exhaustion" do
+      ctx = terminal_context(2, 1, :providers_exhausted)
+      prior_identity = attempt_identity(ctx, 1, 1)
+
+      prior =
+        AttemptTerminal.Response.new(prior_identity, :application_error, 10,
+          error_code: -32_000,
+          error_category: :provider_failure
+        )
+
+      ctx = %{
+        ctx
+        | terminal_attempt_fact: prior,
+          terminal_attempt_projection: ExecutionProjector.project(prior),
+          request_dispatch_certainty: :dispatched
+      }
+
+      public_error =
+        JError.new(-32_000, "No channels available",
+          category: :provider_error,
+          retriable?: true
+        )
+
+      assert %RequestTerminal.OrdinaryExhaustion{
+               reason: :providers_exhausted,
+               candidate_admission_count: 2,
+               dispatch_count: 1
+             } = RequestPipeline.build_request_terminal(:error, public_error, ctx)
+    end
+
+    test "only the response returned to the client is embedded" do
+      ctx = terminal_context(2, 2, nil)
+      final = AttemptTerminal.Response.new(attempt_identity(ctx, 2, 2), :success, 10)
+      ctx = %{ctx | public_response_attempt: final, request_dispatch_certainty: :dispatched}
+
+      assert %RequestTerminal.UpstreamResponse{
+               attempt: ^final,
+               candidate_admission_count: 2,
+               dispatch_count: 2
+             } = RequestPipeline.build_request_terminal(:ok, %{"ok" => true}, ctx)
     end
   end
 
@@ -239,7 +411,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "execute_via_channels/4 - JSON-RPC request construction" do
-    test "builds proper JSON-RPC 2.0 request structure" do
+    test "releases non-empty request parameters after completion" do
       params = ["0xabcd", "latest"]
 
       result =
@@ -251,10 +423,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
         )
 
       ctx = extract_context(result)
-      assert ctx.params == ["0xabcd", "latest"]
+      assert ctx.params == []
+      assert ctx.rpc_request == nil
     end
 
-    test "handles nil params" do
+    test "normalizes released nil parameters to the bounded empty value" do
       result =
         RequestPipeline.execute_via_channels(1, "eth_blockNumber", nil, %RequestOptions{
           profile: "public",
@@ -263,7 +436,8 @@ defmodule Lasso.RPC.RequestPipelineTest do
         })
 
       ctx = extract_context(result)
-      assert ctx.params == nil
+      assert ctx.params == []
+      assert ctx.rpc_request == nil
     end
   end
 
@@ -464,8 +638,11 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert String.contains?(error.message, "No available channels")
     end
 
-    test "exhaustion telemetry emitted when all channels exhausted" do
-      collector = TelemetrySync.start_collector([:lasso, :failover, :exhaustion])
+    test "canonical request terminal is projected asynchronously when channels are exhausted" do
+      collector =
+        TelemetrySync.start_collector([:lasso, :rpc, :request, :terminal],
+          match: %{chain_id: 9_999_999}
+        )
 
       _result =
         RequestPipeline.execute_via_channels(
@@ -479,8 +656,10 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       assert measurements.count == 1
       assert metadata.chain_id == 9_999_999
-      assert metadata.method == "eth_blockNumber"
-      assert is_integer(metadata.retry_after_ms)
+      assert metadata.profile == "public"
+      assert metadata.diagnostic == :ordinary_exhaustion
+      assert metadata.candidate_admission_count == 0
+      assert metadata.dispatch_count == 0
     end
 
     test "Observability.record_degraded_mode emits [:lasso, :failover, :degraded_mode]" do
@@ -551,28 +730,24 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
   describe "Degraded mode selection behavior" do
     test "SelectionFilters supports include_half_open flag" do
-      filters = Lasso.RPC.SelectionFilters.new(include_half_open: true)
+      filters = SelectionFilters.new(include_half_open: true)
       assert filters.include_half_open == true
 
-      filters = Lasso.RPC.SelectionFilters.new(include_half_open: false)
+      filters = SelectionFilters.new(include_half_open: false)
       assert filters.include_half_open == false
 
       # Default is false
-      filters = Lasso.RPC.SelectionFilters.new()
+      filters = SelectionFilters.new()
       assert filters.include_half_open == false
     end
 
     test "Selection.select_channels accepts include_half_open option" do
       # include_half_open defaults to true in Selection.select_channels
       channels_with =
-        Lasso.RPC.Selection.select_channels("public", 1, "eth_blockNumber",
-          include_half_open: true
-        )
+        Selection.select_channels("public", 1, "eth_blockNumber", include_half_open: true)
 
       channels_without =
-        Lasso.RPC.Selection.select_channels("public", 1, "eth_blockNumber",
-          include_half_open: false
-        )
+        Selection.select_channels("public", 1, "eth_blockNumber", include_half_open: false)
 
       assert is_list(channels_with)
       assert is_list(channels_without)
@@ -702,5 +877,50 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert metadata.provider == "provider_1"
       assert metadata.transport == :http
     end
+  end
+
+  defp terminal_context(candidate_count, dispatch_count, terminal_reason) do
+    opts = %RequestOptions{
+      profile: "public",
+      strategy: :load_balanced,
+      timeout_ms: 100
+    }
+
+    ctx =
+      RequestContext.new(1, "eth_blockNumber", [],
+        strategy: :load_balanced,
+        request_id: "request-terminal-test"
+      )
+
+    rpc_request = %{"jsonrpc" => "2.0", "method" => "eth_blockNumber", "params" => [], "id" => 1}
+    ctx = RequestContext.set_execution_params(ctx, rpc_request, 100, opts)
+
+    envelope = %{
+      ctx.execution_envelope
+      | candidate_admission_count: candidate_count,
+        dispatch_count: dispatch_count
+    }
+
+    %{ctx | execution_envelope: envelope, terminal_reason: terminal_reason}
+  end
+
+  defp attempt_identity(ctx, candidate_count, dispatch_count) do
+    AttemptIdentity.new(
+      request_id: ctx.request_id,
+      attempt_id: "terminal-attempt-#{candidate_count}-#{dispatch_count}",
+      profile: ctx.opts.profile,
+      chain_id: ctx.chain_id,
+      upstream_instance_id: "terminal-instance",
+      transport: :http,
+      route_generation: Lasso.Config.ConfigStore.route_generation(),
+      circuit_scope: :broad,
+      circuit_epoch: 1,
+      execution_safety: ctx.execution_envelope.execution_safety,
+      routing_intent: Atom.to_string(ctx.opts.strategy),
+      workload_key: "default",
+      request_budget_ms: ctx.execution_envelope.original_timeout_ms,
+      candidate_admission_count: candidate_count,
+      dispatch_count: dispatch_count
+    )
   end
 end

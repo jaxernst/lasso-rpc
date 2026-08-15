@@ -4,11 +4,12 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   alias Lasso.Core.Request.RequestOwner
   alias Lasso.Core.Support.{CircuitBreaker, ErrorClassifier}
   alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Snapshot}
+  alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.Core.Transport.UpstreamResponse
   alias Lasso.Core.Transport.UpstreamResponse.Validated
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.InstanceState
-  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, Response}
+  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, PreparedRequest, Response}
   alias Lasso.RPC.Transport.WebSocket.{Connection, Endpoint, Handler}
   alias Lasso.RPC.Transports.WebSocket
 
@@ -99,6 +100,19 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     assert %{pending_requests: 0, transport_pending_requests: 0} =
              Connection.status(context.instance_id)
+  end
+
+  @tag send_mode: :auto_success
+  test "prepared request sends the existing bytes and restores an explicit null id", context do
+    request = %{"jsonrpc" => "2.0", "id" => nil, "method" => "eth_blockNumber", "params" => []}
+    assert {:ok, prepared} = PreparedRequest.new(request, "lasso-ws-prepared")
+
+    task = Task.async(fn -> WebSocket.request_prepared(context.channel, prepared, 1_000) end)
+
+    assert_receive {:protocol_ws_send, _ws_pid, "lasso-ws-prepared", payload}
+    assert payload === prepared.encoded
+
+    assert {:ok, %Response.Success{id: nil}, _io_ms} = Task.await(task)
   end
 
   @tag pending_limit: 1
@@ -194,9 +208,8 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert_observation(attempt_ref, :send_started)
     assert_observation(attempt_ref, :send_confirmed)
 
-    assert_receive {:transport_observation, ^attempt_ref,
-                    %{kind: :transport_failure, certainty: :dispatched}},
-                   1_000
+    assert %{certainty: :dispatched} =
+             assert_observation(attempt_ref, :transport_failure)
 
     assert {:error, %JError{category: :timeout}, _io_ms} = Task.await(task, 1_000)
   end
@@ -300,7 +313,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
              Connection.status(context.instance_id).transport_pending_requests == 0
            end)
 
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+    refute_confirmed(attempt_ref)
   end
 
   @tag send_mode: :pause_before_write
@@ -351,7 +364,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
            end)
   end
 
-  test "does not send when the lifecycle owner is already down", context do
+  test "does not send when the request owner is already down", context do
     owner = spawn(fn -> receive do: (:stop -> :ok) end)
     owner_monitor = Process.monitor(owner)
     Process.exit(owner, :kill)
@@ -359,8 +372,14 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     task =
       Task.async(fn ->
-        Process.put(:lasso_attempt_dispatch_context, {owner, make_ref()})
-        Process.put(:lasso_attempt_deadline_us, System.monotonic_time(:microsecond) + 1_000_000)
+        attempt_context =
+          AttemptProtocol.new_context(
+            owner,
+            make_ref(),
+            System.monotonic_time(:microsecond) + 1_000_000
+          )
+
+        :ok = AttemptProtocol.install_context(attempt_context)
         WebSocket.request(context.channel, rpc_request("owner-down"), 1_000)
       end)
 
@@ -921,27 +940,30 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   end
 
   test "parses an attributed transport frame exactly once in the WebSockex process", context do
-    mfa = {UpstreamResponse, :parse_ws_frame, 1}
-    :erlang.trace_pattern(mfa, true, [:local])
-    :erlang.trace(context.ws_pid, true, [:call])
+    mfa = {:json, :decode, 3}
+    tracer = self()
+    {:module, :json} = :code.ensure_loaded(:json)
+    1 = :erlang.trace_pattern(mfa, true, [{:meta, tracer}])
 
     on_exit(fn ->
-      if Process.alive?(context.ws_pid), do: :erlang.trace(context.ws_pid, false, [:call])
-      :erlang.trace_pattern(mfa, false, [:local])
+      :erlang.trace_pattern(mfa, false, [{:meta, tracer}])
     end)
 
     task = request_task(context.channel, "single-parse", 1_000)
     task_pid = task.pid
-    :erlang.trace(task_pid, true, [:call])
 
     assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
     raw = success_response(transport_id, %{"payload" => String.duplicate("x", 32_000)})
     :ok = TestSupport.ProtocolWSClient.acknowledge(ws_pid, transport_id, raw)
 
-    assert_receive {:trace, ^ws_pid, :call, {UpstreamResponse, :parse_ws_frame, [^raw]}}
+    assert_receive {:trace_ts, ^ws_pid, :call, {:json, :decode, [^raw, _acc, _decoders]}, _ts},
+                   1_000
 
-    refute_receive {:trace, ^ws_pid, :call, {UpstreamResponse, :parse_ws_frame, [_raw]}}, 0
-    refute_receive {:trace, ^task_pid, :call, {UpstreamResponse, :parse_ws_frame, [_raw]}}, 0
+    refute_receive {:trace_ts, ^ws_pid, :call, {:json, :decode, [_raw, _acc, _decoders]}, _ts},
+                   0
+
+    refute_receive {:trace_ts, ^task_pid, :call, {:json, :decode, [_raw, _acc, _decoders]}, _ts},
+                   0
 
     assert {:ok, %Response.Success{id: "single-parse"}, _io_ms} = Task.await(task)
   end
@@ -985,16 +1007,15 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
   test "a D-1 response already in the task mailbox remains eligible after D",
        context do
-    owner = self()
-    attempt_ref = make_ref()
     deadline_us = System.monotonic_time(:microsecond) + 500_000
 
-    task =
-      Task.async(fn ->
-        Process.put(:lasso_attempt_dispatch_context, {owner, attempt_ref})
-        Process.put(:lasso_attempt_deadline_us, deadline_us)
-        WebSocket.request(context.channel, rpc_request("validation-deadline"), 5_000)
-      end)
+    {task, attempt_ref} =
+      observed_request_task_at(
+        context.channel,
+        "validation-deadline",
+        5_000,
+        deadline_us
+      )
 
     assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
     pending = transport_pending(context.connection_pid, transport_id)
@@ -1023,7 +1044,6 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert %{event_us: event_us} = assert_observation(attempt_ref, :response)
 
     assert event_us < deadline_us
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :transport_failure}}, 0
     assert {:ok, %Response.Success{id: "validation-deadline"}, _io_ms} = Task.await(task)
   end
 
@@ -1240,7 +1260,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert_receive {:protocol_ws_write_failed, ^ws_pid, ^transport_id, :econnreset}
     assert_receive {:DOWN, ^ws_monitor, :process, ^ws_pid, {:socket_write_error, :econnreset}}
 
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+    refute_confirmed(attempt_ref)
 
     assert %{certainty: :indeterminate} =
              assert_observation(attempt_ref, :transport_failure)
@@ -1258,7 +1278,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
              )
            end)
 
-    refute_receive {:transport_observation, ^attempt_ref, %{kind: :send_confirmed}}, 0
+    refute_confirmed(attempt_ref)
   end
 
   test "a disconnect after write confirmation remains dispatched and cannot be replayed",
@@ -1314,8 +1334,22 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert :ok = Task.await(disconnect, 1_000)
 
     assert %{connected: false} = Connection.status(context.instance_id)
-    assert {:message_queue_len, queued} = Process.info(context.breaker_pid, :message_queue_len)
-    assert queued <= 1
+
+    {:messages, queued_messages} = Process.info(context.breaker_pid, :messages)
+
+    {control_messages, other_messages} =
+      Enum.split_with(queued_messages, fn
+        {:breaker_control_ready, _breaker_id, _generation, _epoch} -> true
+        :breaker_control_audit -> true
+        _other -> false
+      end)
+
+    # Disconnect schedules an immediate reconnect, whose connect path issues one
+    # bounded, timeout-guarded state query. That is not control-ring traffic.
+    assert Enum.all?(other_messages, &match?({:"$gen_call", _from, :get_state}, &1))
+    assert length(other_messages) <= 1
+
+    assert length(control_messages) <= 2
 
     assert {:ok, %Snapshot{control_health: :degraded}} =
              Snapshot.lookup({context.instance_id, :ws})
@@ -1342,24 +1376,35 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   end
 
   defp observed_request_task(channel, timeout \\ 5_000) do
+    observed_request_task_at(
+      channel,
+      "observed",
+      timeout,
+      System.monotonic_time(:microsecond) + timeout * 1_000
+    )
+  end
+
+  defp observed_request_task_at(channel, client_id, timeout, deadline_us) do
     owner = self()
     attempt_ref = make_ref()
 
     task =
       Task.async(fn ->
-        Process.put(:lasso_attempt_dispatch_context, {owner, attempt_ref})
+        attempt_context =
+          AttemptProtocol.new_context(self(), attempt_ref, deadline_us)
 
-        attempt_deadline_us = System.monotonic_time(:microsecond) + timeout * 1_000
+        :ok = AttemptProtocol.install_context(attempt_context)
+        send(owner, {:attempt_context, attempt_ref, attempt_context})
 
-        Process.put(
-          :lasso_attempt_deadline_us,
-          attempt_deadline_us
-        )
-
-        WebSocket.request(channel, rpc_request("observed"), timeout)
+        result = WebSocket.request(channel, rpc_request(client_id), timeout)
+        candidate = AttemptProtocol.take_terminal_candidate(attempt_context)
+        snapshot = AttemptProtocol.close(attempt_context)
+        send(owner, {:attempt_finished, attempt_ref, candidate, snapshot})
+        result
       end)
 
-    {task, attempt_ref}
+    assert_receive {:attempt_context, ^attempt_ref, attempt_context}
+    {task, %{ref: attempt_ref, context: attempt_context}}
   end
 
   defp ws_attempt_identity(context, request_id) do
@@ -1382,10 +1427,29 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     )
   end
 
-  defp assert_observation(attempt_ref, kind) do
-    assert_receive {:transport_observation, ^attempt_ref, %{kind: ^kind} = observation}
+  defp assert_observation(%{context: %{gate: gate}}, :send_started) do
+    assert eventually(fn -> :atomics.get(gate, 2) != unset_timestamp() end)
+    %{kind: :send_started, event_us: :atomics.get(gate, 2)}
+  end
+
+  defp assert_observation(%{context: %{gate: gate}}, :send_confirmed) do
+    assert eventually(fn -> :atomics.get(gate, 3) != unset_timestamp() end)
+    %{kind: :send_confirmed, event_us: :atomics.get(gate, 3)}
+  end
+
+  defp assert_observation(%{ref: attempt_ref}, kind) do
+    assert_receive {:attempt_finished, ^attempt_ref, {:ok, %{kind: ^kind} = observation},
+                    _snapshot},
+                   1_000
+
     observation
   end
+
+  defp refute_confirmed(%{context: %{gate: gate}}) do
+    assert :atomics.get(gate, 3) == unset_timestamp()
+  end
+
+  defp unset_timestamp, do: -9_223_372_036_854_775_808
 
   defp rpc_request(id) do
     %{"jsonrpc" => "2.0", "id" => id, "method" => "eth_blockNumber", "params" => []}

@@ -8,11 +8,21 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Providers.ProviderHeaders
+  alias Lasso.RPC.PreparedRequest
 
   @minimum_timeout_us 1_000
 
   @impl true
   def deferred_dispatch?, do: true
+
+  @doc false
+  @spec prepare_provider(map()) :: map()
+  def prepare_provider(%{url: url} = provider) do
+    template = Finch.build(:post, url, ProviderHeaders.build(provider), nil)
+    Map.put(provider, :lasso_finch_template, template)
+  rescue
+    _error -> provider
+  end
 
   @impl true
   def request(%{url: url} = provider, method, params, opts) do
@@ -24,8 +34,28 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
     body = %{"jsonrpc" => "2.0", "method" => method, "params" => params, "id" => request_id}
 
-    with {:ok, json} <- encode_body(body, context),
-         {:ok, request} <- build_request(url, ProviderHeaders.build(provider), json, context),
+    with {:ok, json} <- encode_body(body, context) do
+      request_encoded(provider, url, json, context, deadline_us, finch_name, opts)
+    end
+  end
+
+  @impl true
+  def request_prepared(
+        %{url: url} = provider,
+        %PreparedRequest{encoded: encoded},
+        opts
+      ) do
+    timeout_ms = Keyword.get(opts, :timeout, 30_000)
+    deadline_us = Keyword.get(opts, :deadline_us) || deadline_from_timeout(timeout_ms)
+    finch_name = Keyword.get(opts, :finch_name, Lasso.Finch)
+    context = Keyword.get(opts, :attempt_dispatch)
+
+    request_encoded(provider, url, encoded, context, deadline_us, finch_name, opts)
+  end
+
+  defp request_encoded(provider, url, encoded, context, deadline_us, finch_name, opts) do
+    with {:ok, request} <-
+           build_request(provider, url, encoded, context),
          {:ok, tracker_token} <- tracker_token(context) do
       run_request(request, finch_name, deadline_us, context, tracker_token, opts)
     end
@@ -42,10 +72,20 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     end
   end
 
-  defp build_request(url, headers, json, context) do
+  defp build_request(%{lasso_finch_template: %Finch.Request{} = template}, _url, json, context) do
+    request = %{
+      template
+      | body: json,
+        private: Map.put(template.private, :lasso_attempt, context)
+    }
+
+    {:ok, request}
+  end
+
+  defp build_request(provider, url, json, context) do
     request =
       :post
-      |> Finch.build(url, headers, json)
+      |> Finch.build(url, ProviderHeaders.build(provider), json)
       |> Finch.Request.put_private(:lasso_attempt, context)
 
     {:ok, request}

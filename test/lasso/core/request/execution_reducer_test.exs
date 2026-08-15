@@ -109,8 +109,14 @@ defmodule Lasso.RPC.ExecutionReducerTest do
   end
 
   test "protocol-normalized no-send transport failure constructs a predispatch terminal" do
-    attempt_ref = make_ref()
-    context = {self(), attempt_ref}
+    context =
+      Lasso.Core.Transport.AttemptProtocol.new_context(
+        self(),
+        make_ref(),
+        System.monotonic_time(:microsecond) + 1_000_000
+      )
+
+    :ok = Lasso.Core.Transport.AttemptProtocol.install_context(context)
 
     assert :ok =
              Lasso.Core.Transport.AttemptProtocol.terminal_at(
@@ -120,7 +126,8 @@ defmodule Lasso.RPC.ExecutionReducerTest do
                20
              )
 
-    assert_receive {:transport_observation, ^attempt_ref, observation}
+    assert {:ok, observation} =
+             Lasso.Core.Transport.AttemptProtocol.take_terminal_candidate(context)
 
     reduced = ExecutionReducer.observe(state(), observation)
 

@@ -113,6 +113,7 @@ defmodule LassoWeb.Endpoint do
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
+    body_reader: {LassoWeb.Plugs.RequestByteBudget, :read_body, []},
     json_decoder: Phoenix.json_library()
   )
 

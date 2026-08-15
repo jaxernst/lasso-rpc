@@ -4,8 +4,7 @@ defmodule LassoWeb.Plugs.RequestTimingPlug do
 
   This plug records the start time as early as possible in the plug chain
   and uses `register_before_send` to calculate total request duration just
-  before the response is sent. It also logs request completion with E2E
-  timing when a RequestContext is available.
+  before the response is sent.
 
   ## Usage
 
@@ -25,12 +24,6 @@ defmodule LassoWeb.Plugs.RequestTimingPlug do
 
   - `:lasso_e2e_latency_ms` - End-to-end latency from plug entry to response send
 
-  ## Request Logging
-
-  If a RequestContext is stored in `conn.private[:lasso_request_context]` (single request)
-  or `conn.private[:lasso_request_contexts]` (batch request), the plug will update the
-  context with E2E timing and log request completion via `Observability.log_request_completed/1`.
-
   ## Extracting Timing
 
   Use `get_start_time/1` to retrieve the start time for use in RequestContext:
@@ -39,8 +32,6 @@ defmodule LassoWeb.Plugs.RequestTimingPlug do
   """
 
   import Plug.Conn
-
-  alias Lasso.RPC.Observability
 
   @behaviour Plug
 
@@ -64,56 +55,12 @@ defmodule LassoWeb.Plugs.RequestTimingPlug do
     |> register_before_send(&finalize_timing(&1, start_time))
   end
 
-  # Calculate timing and log request completion just before response is sent
+  # Calculate timing just before response is sent.
   defp finalize_timing(conn, start_time) do
     end_time = System.monotonic_time(:microsecond)
     e2e_latency_ms = (end_time - start_time) / 1000.0
 
-    # Log single request context if available
-    case conn.private[:lasso_request_context] do
-      nil -> :ok
-      ctx -> log_with_timing(ctx, e2e_latency_ms)
-    end
-
-    # Log first batch request context as representative (avoid spamming logs)
-    case conn.private[:lasso_request_contexts] do
-      nil ->
-        :ok
-
-      [] ->
-        :ok
-
-      [first_ctx | _rest] ->
-        log_batch_with_timing(
-          first_ctx,
-          e2e_latency_ms,
-          length(conn.private[:lasso_request_contexts])
-        )
-    end
-
     put_private(conn, :lasso_e2e_latency_ms, e2e_latency_ms)
-  end
-
-  defp log_with_timing(ctx, e2e_latency_ms) do
-    updated_ctx = update_ctx_timing(ctx, e2e_latency_ms)
-    Observability.log_request_completed(updated_ctx)
-  end
-
-  defp log_batch_with_timing(ctx, e2e_latency_ms, batch_size) do
-    updated_ctx = update_ctx_timing(ctx, e2e_latency_ms)
-    Observability.log_request_completed(updated_ctx, batch_size: batch_size)
-  end
-
-  defp update_ctx_timing(ctx, e2e_latency_ms) do
-    # Update the context with the true E2E timing from plug boundary
-    updated_ctx = %{ctx | end_to_end_latency_ms: e2e_latency_ms}
-
-    # Recalculate Lasso overhead if we have upstream latency
-    if updated_ctx.upstream_latency_ms do
-      %{updated_ctx | lasso_overhead_ms: e2e_latency_ms - updated_ctx.upstream_latency_ms}
-    else
-      updated_ctx
-    end
   end
 
   @doc """

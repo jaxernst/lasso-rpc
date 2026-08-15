@@ -38,7 +38,8 @@ defmodule Lasso.Bench.RoutingKernelDiagnosticTest do
     assert counter.projection.deliveries_observed == 4
     assert counter.projection.handoffs == %{accepted: 4, dropped: 0}
     assert counter.reductions.checkpointed_total > 0
-    assert counter.reductions.components.compatibility_lifecycle > 0
+    assert counter.reductions.components.transport_task > 0
+    refute Map.has_key?(counter.reductions.components, :compatibility_lifecycle)
     assert counter.garbage_collections.forced_collections_in_measured_window == 0
     refute counter.word_accounting.allocated_words.available
     refute counter.word_accounting.reclaimed_words.available
@@ -48,21 +49,25 @@ defmodule Lasso.Bench.RoutingKernelDiagnosticTest do
     assert timing.successful_iterations == 4
     assert timing.projection.deliveries_observed == 4
     assert timing.projection.handoffs == %{accepted: 4, dropped: 0}
-    assert timing.instrumentation.decision_stamp_message_per_success == 1
+    assert timing.instrumentation.decision_stamp_message_per_success == 0
     assert timing.local_timing_us.local_total_us.max >= 0
 
     structural = result.measurements.structural
     assert structural.iterations == 3
     assert structural.attribution_scope == "request_owner_process_tree"
     assert structural.projection.handoffs == %{accepted: 3, dropped: 0}
-    assert structural.process_spawns.total == 6
+    assert structural.process_spawns.total == 3
     assert structural.messages.sent > 0
     assert structural.messages.received > 0
-    assert structural.messages.sent_by_tag_raw["run_attempt"] == 3
-    assert structural.messages.sent_by_tag_raw["attempt_task_result"] == 3
-    assert structural.messages.sent_by_tag_raw["routing_kernel_dispatch"] == 3
-    assert structural.ets.reads in [9, 12]
-    assert structural.ets.writes == 6
+    assert structural.messages.sent_by_tag_raw["reference_reply"] == 3
+    assert structural.messages.sent_by_tag_raw["tuple_5"] == 3
+    assert structural.scheduling.receive_timeouts >= 0
+    assert structural.scheduling.receive_timeouts_per_success >= 0
+    assert structural.ets.reads in [9, 15]
+    assert structural.ets.writes == 3
+    assert structural.ets.other == 0
+    assert structural.ets.by_operation["insert_new/2"] == 3
+    assert structural.ets.by_operation["lookup/2"] in [6, 9, 12]
     assert structural.ets.total == structural.ets.reads + structural.ets.writes
   end
 

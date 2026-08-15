@@ -12,6 +12,17 @@ defmodule LassoWeb.ErrorJSON do
     JError.to_response(error_response, nil)
   end
 
+  def render("503.json", %{reason: %LassoWeb.Plugs.RequestByteBudget.CapacityError{}}) do
+    error_response =
+      JError.new(-32_008, "Local request byte capacity unavailable",
+        category: :local_capacity_rejection,
+        retriable?: true,
+        breaker_penalty?: false
+      )
+
+    JError.to_response(error_response, nil)
+  end
+
   # By default, Phoenix returns the status message from
   # the template name. For example, "404.json" becomes
   # "Not Found".

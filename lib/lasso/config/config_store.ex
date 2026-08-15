@@ -1899,7 +1899,10 @@ defmodule Lasso.Config.ConfigStore do
 
   defp normalize_selection_config(attrs) when is_map(attrs) do
     %ChainConfig.Selection{
-      max_lag_blocks: Map.get(attrs, :max_lag_blocks) || Map.get(attrs, "max_lag_blocks")
+      max_lag_blocks: Map.get(attrs, :max_lag_blocks) || Map.get(attrs, "max_lag_blocks"),
+      archival_threshold:
+        Map.get(attrs, :archival_threshold) || Map.get(attrs, "archival_threshold") ||
+          ChainConfig.Selection.default_archival_threshold()
     }
   end
 

@@ -61,6 +61,7 @@ defmodule Lasso.Bench.RoutingKernel.StructuralTrace do
     %{
       messages_sent: 0,
       messages_received: 0,
+      receive_timeouts: 0,
       sends_by_tag: %{},
       receives_by_tag: %{},
       process_spawns: 0,
@@ -79,6 +80,9 @@ defmodule Lasso.Bench.RoutingKernel.StructuralTrace do
 
       {:trace, _pid, :send_to_non_existing_process, message, _destination} ->
         loop(count_message(counters, :send, message))
+
+      {:trace, _pid, :receive, :timeout} ->
+        loop(Map.update!(counters, :receive_timeouts, &(&1 + 1)))
 
       {:trace, _pid, :receive, message} ->
         loop(count_message(counters, :receive, message))
@@ -152,14 +156,16 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
   @moduledoc false
 
   alias Lasso.Core.{ProjectionLane, Support.CircuitBreaker}
-  alias Lasso.RPC.{AttemptIdentity, AttemptTerminal, ExecutionProjector}
+  alias Lasso.Core.Request.RequestOwner
+  alias Lasso.Core.Transport.AttemptProtocol
+  alias Lasso.RPC.{AttemptIdentity, ExecutionProjector}
 
   @profile "routing-kernel-diagnostic"
   @chain_id 1
   @transport :http
   @request_id "routing-kernel-request"
   @attempt_id "routing-kernel-attempt"
-  @route_generation 1
+  @route_generation 0
   @execution_safety :replay_safe
   @routing_intent "state_read"
   @workload_key "read"
@@ -289,23 +295,16 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
     reference = make_ref()
     started_us = System.monotonic_time(:microsecond)
 
-    result =
-      CircuitBreaker.call(state.breaker_id, &prepared_success/0, @timeout_ms,
-        deadline_us: started_us + @timeout_ms * 1_000,
-        on_dispatch: fn dispatched_at_us ->
-          send(owner, {:routing_kernel_dispatch, reference, dispatched_at_us})
-        end,
-        on_terminal: fn terminal_result, elapsed_ms ->
-          decided_at_us = System.monotonic_time(:microsecond)
-          enqueue_projection(state, terminal_result, elapsed_ms)
-          send(owner, {:routing_kernel_decision, reference, decided_at_us})
-        end
-      )
+    attempt = fn ->
+      send(owner, {:routing_kernel_dispatch, reference, System.monotonic_time(:microsecond)})
+      prepared_success()
+    end
+
+    {outcome, decided_at_us} = execute_attempt(state, attempt)
 
     finished_us = System.monotonic_time(:microsecond)
     dispatched_at_us = receive_stamp!(:routing_kernel_dispatch, reference)
-    decided_at_us = receive_stamp!(:routing_kernel_decision, reference)
-    assert_success!(result)
+    assert_success!(outcome)
 
     %{
       local_total_us: finished_us - started_us,
@@ -326,41 +325,16 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
       result
     end
 
-    result =
-      CircuitBreaker.call(state.breaker_id, attempt, @timeout_ms,
-        on_dispatch: fn dispatched_at_us ->
-          send(owner, {:routing_kernel_dispatch, reference, dispatched_at_us})
-        end,
-        on_terminal: fn terminal_result, elapsed_ms ->
-          enqueue_projection(state, terminal_result, elapsed_ms)
-          checkpoint = process_checkpoint()
-          send(owner, {:routing_kernel_lifecycle_checkpoint, reference, checkpoint})
-        end
-      )
+    {outcome, _decided_at_us} = execute_attempt(state, attempt)
 
-    _dispatched_at_us = receive_stamp!(:routing_kernel_dispatch, reference)
     task = receive_checkpoint!(:routing_kernel_task_checkpoint, reference)
-    lifecycle = receive_checkpoint!(:routing_kernel_lifecycle_checkpoint, reference)
-    assert_success!(result)
-    %{task: task, lifecycle: lifecycle}
+    assert_success!(outcome)
+    %{task: task}
   end
 
   def run_once(state, :structural) do
-    owner = self()
-    reference = make_ref()
-
-    result =
-      CircuitBreaker.call(state.breaker_id, &prepared_success/0, @timeout_ms,
-        on_dispatch: fn dispatched_at_us ->
-          send(owner, {:routing_kernel_dispatch, reference, dispatched_at_us})
-        end,
-        on_terminal: fn terminal_result, elapsed_ms ->
-          enqueue_projection(state, terminal_result, elapsed_ms)
-        end
-      )
-
-    _dispatched_at_us = receive_stamp!(:routing_kernel_dispatch, reference)
-    assert_success!(result)
+    {outcome, _decided_at_us} = execute_attempt(state, &prepared_success/0)
+    assert_success!(outcome)
     :ok
   end
 
@@ -389,19 +363,33 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
     )
   end
 
-  defp prepared_success, do: {:ok, @prepared_response, 0}
+  defp execute_attempt(state, attempt) do
+    deadline_us = System.monotonic_time(:microsecond) + @timeout_ms * 1_000
+    {:ok, receipt} = CircuitBreaker.admit(state.breaker_id, deadline_us)
+    :ok = CircuitBreaker.activate_attempt(receipt, self())
+    outcome = RequestOwner.execute(state.identity, deadline_us, attempt)
+    decided_at_us = System.monotonic_time(:microsecond)
+    :ok = CircuitBreaker.report_canonical(receipt, outcome.fact, outcome.projection)
+    enqueue_projection(state, outcome)
+    {outcome, decided_at_us}
+  end
 
-  defp enqueue_projection(state, {:ok, @prepared_response, _io_ms}, elapsed_ms) do
-    terminal =
-      AttemptTerminal.Response.new(
-        state.identity,
-        :success,
-        elapsed_ms |> Kernel.*(1_000) |> round()
-      )
+  defp prepared_success do
+    result = {:ok, @prepared_response, 0}
 
-    %ExecutionProjector{recommended_action: :return_response} =
-      ExecutionProjector.project(terminal)
+    :ok =
+      AttemptProtocol.terminal(AttemptProtocol.context(), :response, %{
+        response_kind: :success,
+        io_duration_us: 0
+      })
 
+    result
+  end
+
+  defp enqueue_projection(state, %RequestOwner.Outcome{
+         fact: terminal,
+         projection: %ExecutionProjector{recommended_action: :return_response}
+       }) do
     case ProjectionLane.enqueue_fact(state.lane_metadata, @scope, terminal) do
       {:ok, _token} -> :atomics.add(state.handoffs, 1, 1)
       {:coalesced, _token, _degradation} -> :atomics.add(state.handoffs, 1, 1)
@@ -411,8 +399,8 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
     :ok
   end
 
-  defp enqueue_projection(_state, result, _elapsed_ms),
-    do: raise("unexpected terminal result: #{inspect(result)}")
+  defp enqueue_projection(_state, outcome),
+    do: raise("unexpected terminal outcome: #{inspect(outcome)}")
 
   defp receive_stamp!(tag, reference) do
     receive do
@@ -445,8 +433,14 @@ defmodule Lasso.Bench.RoutingKernel.ClosedBreakerSuccess do
     }
   end
 
-  defp assert_success!({:executed, {:ok, @prepared_response, 0}}), do: :ok
-  defp assert_success!(result), do: raise("unexpected routing-kernel result: #{inspect(result)}")
+  defp assert_success!(%RequestOwner.Outcome{
+         result: {:ok, @prepared_response, 0},
+         committed?: true
+       }),
+       do: :ok
+
+  defp assert_success!(outcome),
+    do: raise("unexpected routing-kernel outcome: #{inspect(outcome)}")
 
   defp await_projection_idle!(state, deadline_ms) do
     case ProjectionLane.stats(state.lane) do
@@ -674,9 +668,9 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
         projection: projection,
         instrumentation: %{
           dispatch_stamp_message_per_success: 1,
-          decision_stamp_message_per_success: 1,
+          decision_stamp_message_per_success: 0,
           timestamp_unit: "microsecond",
-          disclosed_effect: "timing includes both instrumentation messages"
+          disclosed_effect: "timing includes the synthetic transport-start stamp message"
         },
         local_timing_us: summarize_timings(samples)
       }
@@ -768,6 +762,10 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
           sent_by_tag_raw: raw.sends_by_tag,
           received_by_tag_raw: raw.receives_by_tag
         },
+        scheduling: %{
+          receive_timeouts: raw.receive_timeouts,
+          receive_timeouts_per_success: per_iteration(raw.receive_timeouts, iterations)
+        },
         process_spawns: %{
           total: raw.process_spawns,
           per_success: per_iteration(raw.process_spawns, iterations),
@@ -834,14 +832,11 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
 
   defp empty_child_totals do
     empty = %{reductions: 0, total_heap_words: 0, heap_words: 0, memory_bytes: 0, minor_gcs: 0}
-    %{task: empty, lifecycle: empty}
+    %{task: empty}
   end
 
-  defp add_child_checkpoints(%{task: task, lifecycle: lifecycle}, totals) do
-    %{
-      task: sum_checkpoint(totals.task, task),
-      lifecycle: sum_checkpoint(totals.lifecycle, lifecycle)
-    }
+  defp add_child_checkpoints(%{task: task}, totals) do
+    %{task: sum_checkpoint(totals.task, task)}
   end
 
   defp sum_checkpoint(total, checkpoint) do
@@ -850,7 +845,7 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
 
   defp reduction_counters(owner_before, owner_after, children, iterations) do
     owner = owner_after.reductions - owner_before.reductions
-    checkpointed_total = owner + children.lifecycle.reductions + children.task.reductions
+    checkpointed_total = owner + children.task.reductions
 
     %{
       measurement: "synchronous_process_info_checkpoints",
@@ -858,17 +853,14 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
       checkpointed_per_success: per_iteration(checkpointed_total, iterations),
       components: %{
         request_owner: owner,
-        compatibility_lifecycle: children.lifecycle.reductions,
         transport_task: children.task.reductions
       },
       checkpoint_boundaries: %{
         request_owner: "after warmup through all measured completions",
-        compatibility_lifecycle: "after terminal projection, before final owner reply and exit",
         transport_task: "after prepared result construction, before result handoff and exit"
       },
       instrumentation: %{
         task_checkpoint_message_per_success: 1,
-        lifecycle_checkpoint_message_per_success: 1,
         disclosed_effect: "checkpoint collection is included in request-owner reductions"
       }
     }
@@ -876,7 +868,7 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
 
   defp garbage_collection_counters(owner_before, owner_after, children, iterations) do
     owner_minor_gcs = owner_after.minor_gcs - owner_before.minor_gcs
-    total_minor_gcs = owner_minor_gcs + children.lifecycle.minor_gcs + children.task.minor_gcs
+    total_minor_gcs = owner_minor_gcs + children.task.minor_gcs
 
     %{
       measurement: "process_info_minor_gc_checkpoints",
@@ -886,7 +878,6 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
         per_success: per_iteration(total_minor_gcs, iterations),
         components: %{
           request_owner: owner_minor_gcs,
-          compatibility_lifecycle: children.lifecycle.minor_gcs,
           transport_task: children.task.minor_gcs
         }
       },
@@ -915,7 +906,6 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
           memory_bytes_delta: owner_after.memory_bytes - owner_before.memory_bytes,
           final_message_queue_len: owner_after.message_queue_len
         },
-        compatibility_lifecycle: live_checkpoint_summary(children.lifecycle, iterations),
         transport_task: live_checkpoint_summary(children.task, iterations)
       }
     }
@@ -1009,7 +999,7 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
       response_value: "prepared_response",
       included: [
         "closed-breaker admission",
-        "compatibility lifecycle ownership",
+        "request-owned attempt reduction",
         "one synthetic transport task",
         "breaker success reporting",
         "terminal fact construction and canonical projection",
@@ -1034,7 +1024,7 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
         distributed_operations: 0
       },
       known_compatibility_deviations: [
-        "one additional lifecycle process between the request owner and transport task"
+        "synthetic prepared response bypasses transport encoding and validation"
       ]
     }
   end
@@ -1055,7 +1045,7 @@ defmodule Lasso.Bench.RoutingKernel.Runner do
         asynchronous_consumers: "excluded after bounded handoff",
         forced_gc_in_measured_windows: false,
         timing_clock: "System.monotonic_time(:microsecond)",
-        timing_instrumentation_messages_per_success: 2,
+        timing_instrumentation_messages_per_success: 1,
         structural_trace: StructuralTrace.configuration(),
         worker_timeout_ms: @worker_timeout_ms,
         structural_timeout_ms: @structural_timeout_ms,

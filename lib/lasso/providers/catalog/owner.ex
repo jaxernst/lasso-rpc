@@ -17,7 +17,9 @@ defmodule Lasso.Providers.Catalog.Owner do
   use GenServer
   require Logger
 
+  alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, RestartCounter}
+  alias Lasso.RPC.AttemptProjection
 
   @grace_period_ms 2_000
 
@@ -55,13 +57,11 @@ defmodule Lasso.Providers.Catalog.Owner do
   # afterwards on first boot.
   @impl true
   def handle_continue(:self_heal_catalog, state) do
-    key = Catalog.persistent_term_key()
-
-    case :persistent_term.get(key, nil) do
+    case Catalog.snapshot() do
       nil ->
         :ok
 
-      tid ->
+      %{table: tid} ->
         try do
           _ = :ets.info(tid, :size)
           :ok
@@ -100,11 +100,15 @@ defmodule Lasso.Providers.Catalog.Owner do
     {:noreply, state}
   end
 
+  def handle_info({:catalog_publication_continue, _ref, _phase}, state), do: {:noreply, state}
+
   defp do_rebuild do
     new_table = :ets.new(:lasso_provider_catalog, [:public, :set, read_concurrency: true])
+    generation = ConfigStore.route_generation()
 
     try do
-      Catalog.populate(new_table)
+      Catalog.populate(new_table, generation)
+      publication_barrier(:after_catalog_populate, generation)
     rescue
       e ->
         # Drop the half-built table so it doesn't leak; `:persistent_term`
@@ -113,11 +117,72 @@ defmodule Lasso.Providers.Catalog.Owner do
         reraise e, __STACKTRACE__
     end
 
+    continue_rebuild(new_table, generation)
+  end
+
+  defp continue_rebuild(new_table, generation) do
+    if ConfigStore.route_generation() == generation do
+      routes = Catalog.routing_control_routes(new_table)
+      AttemptProjection.reconcile_routes(generation, routes)
+
+      if ConfigStore.route_generation() == generation do
+        finish_rebuild(new_table, generation, routes)
+      else
+        retry_rebuild(new_table)
+      end
+    else
+      retry_rebuild(new_table)
+    end
+  end
+
+  defp finish_rebuild(new_table, generation, routes) do
+    unless AttemptProjection.routes_ready?(generation, routes) do
+      :ets.delete(new_table)
+      raise "routing control publication was incomplete"
+    end
+
+    publication_barrier(:after_control_populate, generation)
+
+    if ConfigStore.route_generation() != generation do
+      :ets.delete(new_table)
+      do_rebuild()
+    else
+      publication_barrier(:before_pointer_swap, generation)
+
+      if ConfigStore.route_generation() != generation do
+        :ets.delete(new_table)
+        do_rebuild()
+      else
+        publish(new_table, generation)
+      end
+    end
+  end
+
+  defp retry_rebuild(new_table) do
+    :ets.delete(new_table)
+    do_rebuild()
+  end
+
+  defp publish(new_table, generation) do
     key = Catalog.persistent_term_key()
-    old_table = :persistent_term.get(key, nil)
-    :persistent_term.put(key, new_table)
+    old_table = Catalog.table()
+    :persistent_term.put(key, {new_table, generation})
 
     if old_table, do: Process.send_after(self(), {:delete_table, old_table}, @grace_period_ms)
     :ok
+  end
+
+  defp publication_barrier(phase, generation) do
+    case Application.get_env(:lasso, :catalog_publication_barrier) do
+      {observer, ref} when is_pid(observer) and is_reference(ref) ->
+        send(observer, {:catalog_publication_phase, self(), ref, phase, generation})
+
+        receive do
+          {:catalog_publication_continue, ^ref, ^phase} -> :ok
+        end
+
+      _other ->
+        :ok
+    end
   end
 end

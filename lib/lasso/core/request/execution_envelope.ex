@@ -29,6 +29,7 @@ defmodule Lasso.RPC.ExecutionEnvelope do
           deadline_us: integer(),
           original_timeout_ms: non_neg_integer(),
           execution_safety: execution_safety(),
+          execution_nonce: binary(),
           dispatch_limit: 1..3,
           dispatch_count: 0..3,
           candidate_admission_limit: 16,
@@ -42,6 +43,7 @@ defmodule Lasso.RPC.ExecutionEnvelope do
     :deadline_us,
     :original_timeout_ms,
     :execution_safety,
+    :execution_nonce,
     :dispatch_limit
   ]
   defstruct @enforce_keys ++
@@ -64,12 +66,22 @@ defmodule Lasso.RPC.ExecutionEnvelope do
 
     safety = classify(method)
 
+    timeout_deadline_us = started_at_us + timeout_ms * 1_000
+
+    deadline_us =
+      case Keyword.get(opts, :deadline_us) do
+        value when is_integer(value) -> min(timeout_deadline_us, value)
+        nil -> timeout_deadline_us
+        _ -> raise ArgumentError, "deadline_us must be an absolute monotonic integer"
+      end
+
     %__MODULE__{
       request_id: request_id,
       started_at_us: started_at_us,
-      deadline_us: started_at_us + timeout_ms * 1_000,
+      deadline_us: deadline_us,
       original_timeout_ms: timeout_ms,
       execution_safety: safety,
+      execution_nonce: Base.url_encode64(:erlang.term_to_binary(make_ref()), padding: false),
       dispatch_limit: dispatch_limit(safety)
     }
   end
@@ -103,6 +115,14 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   @spec remaining_ms(t(), integer()) :: non_neg_integer()
   def remaining_ms(%__MODULE__{} = envelope, now_us \\ System.monotonic_time(:microsecond)) do
     max(0, div(envelope.deadline_us - now_us, 1_000))
+  end
+
+  @doc false
+  @spec cap_deadline(t(), integer() | nil) :: t()
+  def cap_deadline(%__MODULE__{} = envelope, nil), do: envelope
+
+  def cap_deadline(%__MODULE__{} = envelope, deadline_us) when is_integer(deadline_us) do
+    %{envelope | deadline_us: min(envelope.deadline_us, deadline_us)}
   end
 
   @spec admit_candidate(t(), integer()) ::

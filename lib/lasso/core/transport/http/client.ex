@@ -15,6 +15,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
   @type json_map :: map()
   @type method :: String.t()
   @type params :: list()
+  @type prepared_request :: Lasso.RPC.PreparedRequest.t()
 
   @type opts :: keyword()
   @type error_payload :: String.t() | map()
@@ -32,9 +33,12 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
   @callback request(provider_config, method, params, opts) ::
               {:ok, raw_response()} | {:error, error_reason}
 
+  @callback request_prepared(provider_config, prepared_request, opts) ::
+              {:ok, raw_response()} | {:error, error_reason}
+
   @callback deferred_dispatch?() :: boolean()
 
-  @optional_callbacks deferred_dispatch?: 0
+  @optional_callbacks deferred_dispatch?: 0, request_prepared: 3
 
   @doc false
   @spec deferred_dispatch?() :: boolean()
@@ -43,11 +47,45 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
     function_exported?(adapter, :deferred_dispatch?, 0) and adapter.deferred_dispatch?()
   end
 
+  @doc false
+  @spec prepare_provider(provider_config) :: provider_config
+  def prepare_provider(provider_config) do
+    adapter = adapter()
+
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :prepare_provider, 1),
+      do: adapter.prepare_provider(provider_config),
+      else: provider_config
+  end
+
   # Facade to configured adapter
   @spec request(provider_config, method, params, opts) ::
           {:ok, raw_response()} | {:error, error_reason}
   def request(provider_config, method, params, opts \\ []) do
     adapter().request(provider_config, method, params, opts)
+  end
+
+  @doc false
+  @spec request_prepared(provider_config, prepared_request, opts) ::
+          {:ok, raw_response()} | {:error, error_reason}
+  def request_prepared(provider_config, %Lasso.RPC.PreparedRequest{} = prepared, opts \\ []) do
+    adapter = adapter()
+
+    if Code.ensure_loaded?(adapter) and function_exported?(adapter, :request_prepared, 3) do
+      adapter.request_prepared(provider_config, prepared, opts)
+    else
+      case Lasso.RPC.PreparedRequest.to_legacy_map(prepared) do
+        {:ok, rpc_request} ->
+          adapter.request(
+            provider_config,
+            Map.get(rpc_request, "method"),
+            Map.get(rpc_request, "params", []),
+            Keyword.put(opts, :request_id, prepared.transport_id)
+          )
+
+        {:error, reason} ->
+          {:error, {:encode_error, inspect(reason)}}
+      end
+    end
   end
 
   @doc """

@@ -47,9 +47,7 @@ defmodule Lasso.RPC.ParamLimitFailOpenTest do
       refute match?({:error, %{code: -32_000, message: "No channels available"}, _}, result)
       assert elem(result, 2).attempted_channels != []
 
-      assert_receive {[:lasso, :capabilities, :safety_override], ^ref, _measurements,
-                      %{reason: :all_param_rejected}},
-                     2_000
+      refute_receive {[:lasso, :capabilities, :safety_override], ^ref, _, _}, 50
     after
       :telemetry.detach(ref)
     end

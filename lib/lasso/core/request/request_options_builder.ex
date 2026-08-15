@@ -23,6 +23,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
           timeout_ms: non_neg_integer(),
           request_id: String.t(),
           jsonrpc_id: integer() | String.t() | nil,
+          jsonrpc_id_present?: boolean(),
+          request_origin: RequestOptions.request_origin(),
           request_context: any()
         ]
 
@@ -55,6 +57,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
         timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
         request_id: overrides[:request_id] || Logger.metadata()[:request_id],
         jsonrpc_id: overrides[:jsonrpc_id],
+        jsonrpc_id_present?: jsonrpc_id_present?(overrides),
+        request_origin: overrides[:request_origin] || :client,
         plug_start_time: RequestTimingPlug.get_start_time(conn)
       },
       overrides[:request_context],
@@ -106,7 +110,9 @@ defmodule Lasso.RPC.RequestOptions.Builder do
         failover_on_override: overrides[:failover_on_override] || false,
         timeout_ms: overrides[:timeout_ms] || MethodPolicy.timeout_for(method),
         request_id: overrides[:request_id],
-        jsonrpc_id: overrides[:jsonrpc_id]
+        jsonrpc_id: overrides[:jsonrpc_id],
+        jsonrpc_id_present?: jsonrpc_id_present?(overrides),
+        request_origin: overrides[:request_origin] || :client
       },
       overrides[:request_context],
       method
@@ -139,10 +145,13 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   # Provider resolution
 
   defp resolve_provider_from_conn(conn, overrides) do
-    overrides[:provider_override] ||
+    if Keyword.has_key?(overrides, :provider_override) do
+      overrides[:provider_override]
+    else
       header(conn, "x-lasso-provider") ||
-      conn.params["provider_override"] ||
-      conn.params["provider_id"]
+        conn.params["provider_override"] ||
+        conn.params["provider_id"]
+    end
   end
 
   defp resolve_provider_from_map(params, overrides) do
@@ -152,9 +161,12 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   # Transport resolution
 
   defp resolve_transport_preference_from_conn(conn, overrides) do
-    overrides[:transport] ||
+    if Keyword.has_key?(overrides, :transport) do
+      overrides[:transport]
+    else
       parse_transport(header(conn, "x-lasso-transport")) ||
-      parse_transport(conn.params["transport"])
+        parse_transport(conn.params["transport"])
+    end
   end
 
   defp resolve_transport_preference_from_map(params, overrides) do
@@ -205,4 +217,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   @spec put_request_context(RequestOptions.t(), any()) :: RequestOptions.t()
   defp put_request_context(%RequestOptions{} = o, nil), do: o
   defp put_request_context(%RequestOptions{} = o, ctx), do: Map.put(o, :request_context, ctx)
+
+  defp jsonrpc_id_present?(overrides) do
+    Keyword.get(overrides, :jsonrpc_id_present?, Keyword.has_key?(overrides, :jsonrpc_id))
+  end
 end

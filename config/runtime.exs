@@ -43,6 +43,23 @@ vm_metrics_enabled =
 
 config :lasso, :vm_metrics_enabled, vm_metrics_enabled
 
+positive_integer_env = fn name, default ->
+  case System.get_env(name) do
+    nil ->
+      default
+
+    value ->
+      case Integer.parse(value) do
+        {parsed, ""} when parsed > 0 -> parsed
+        _other -> raise "#{name} must be a positive integer"
+      end
+  end
+end
+
+config :lasso, :http_pool,
+  size: positive_integer_env.("LASSO_HTTP_POOL_SIZE", 256),
+  count: positive_integer_env.("LASSO_HTTP_POOL_COUNT", 1)
+
 # Port configuration (runtime override for all environments)
 # Allows running multiple instances locally: PORT=4001 iex -S mix phx.server
 if port = System.get_env("PORT") do

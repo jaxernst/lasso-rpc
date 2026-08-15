@@ -9,9 +9,10 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   @behaviour Lasso.RPC.Transport
 
-  alias Lasso.Core.Support.{AttemptLifecycle, ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
 
   # Channel is the provider configuration for HTTP (stateless)
@@ -35,7 +36,8 @@ defmodule Lasso.RPC.Transports.HTTP do
         channel = %{
           url: url,
           provider_id: provider_id,
-          config: provider_config
+          config: provider_config,
+          request_config: HttpClient.prepare_provider(provider_config)
         }
 
         {:ok, channel}
@@ -61,26 +63,51 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   @impl true
   def request(channel, rpc_request, timeout \\ 30_000) do
-    %{provider_id: provider_id, config: provider_config} = channel
-
     method = Map.get(rpc_request, "method")
     params = Map.get(rpc_request, "params", [])
     request_id = Map.get(rpc_request, "id")
 
+    perform_request(channel, request_id, request_id, timeout, fn provider_config, options ->
+      HttpClient.request(provider_config, method, params, options)
+    end)
+  end
+
+  @impl true
+  def request_prepared(channel, %PreparedRequest{} = prepared, timeout) do
+    perform_request(
+      channel,
+      prepared.transport_id,
+      prepared.client_id,
+      timeout,
+      fn provider_config, options ->
+        HttpClient.request_prepared(provider_config, prepared, options)
+      end
+    )
+  end
+
+  defp perform_request(
+         %{provider_id: provider_id, config: provider_config} = channel,
+         upstream_id,
+         client_id,
+         timeout,
+         request_fun
+       ) do
     io_start_us = System.monotonic_time(:microsecond)
-    dispatch_context = AttemptLifecycle.dispatch_context()
+    dispatch_context = AttemptProtocol.context()
     deadline_us = request_deadline_us(io_start_us, timeout, AttemptProtocol.deadline_us())
 
+    request_config = Map.get(channel, :request_config, provider_config)
+
     result =
-      case HttpClient.request(provider_config, method, params,
-             request_id: request_id,
+      case request_fun.(request_config,
+             request_id: upstream_id,
              timeout: timeout,
              deadline_us: deadline_us,
              attempt_dispatch: dispatch_context
            ) do
         {:ok, {:raw, raw_bytes}} ->
           received_at_us = System.monotonic_time(:microsecond)
-          validation = UpstreamResponse.validate_unary(raw_bytes, request_id, request_id)
+          validation = UpstreamResponse.validate_unary(raw_bytes, upstream_id, client_id)
           validated_at_us = System.monotonic_time(:microsecond)
 
           settle_raw_response(%{

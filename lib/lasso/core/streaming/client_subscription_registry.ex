@@ -33,10 +33,58 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
     GenServer.call(via(profile, chain_id), {:add, subscription_id, client_pid, key})
   end
 
+  @spec add_client_owned(
+          String.t(),
+          pos_integer(),
+          String.t(),
+          pid(),
+          key,
+          pid(),
+          integer()
+        ) :: :ok | {:error, :owner_down | :client_down | :deadline_expired}
+  def add_client_owned(
+        profile,
+        chain_id,
+        subscription_id,
+        client_pid,
+        key,
+        request_owner_pid,
+        deadline_us
+      )
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.call(
+      via(profile, chain_id),
+      {:add_owned, subscription_id, client_pid, key, request_owner_pid, deadline_us}
+    )
+  end
+
   @spec remove_client(String.t(), pos_integer(), String.t()) :: {:ok, key | nil}
   def remove_client(profile, chain_id, subscription_id)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
     GenServer.call(via(profile, chain_id), {:remove, subscription_id})
+  end
+
+  @spec remove_client_owned(
+          String.t(),
+          pos_integer(),
+          String.t(),
+          pid(),
+          pid(),
+          integer()
+        ) :: {:ok, key | nil} | {:error, :owner_down | :client_down | :deadline_expired}
+  def remove_client_owned(
+        profile,
+        chain_id,
+        subscription_id,
+        request_owner_pid,
+        client_pid,
+        deadline_us
+      )
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.call(
+      via(profile, chain_id),
+      {:remove_owned, subscription_id, request_owner_pid, client_pid, deadline_us}
+    )
   end
 
   @spec list_by_key(String.t(), pos_integer(), key) :: [String.t()]
@@ -59,7 +107,8 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
       profile: profile,
       chain_id: chain_id,
       by_id: %{},
-      by_key: %{}
+      by_key: %{},
+      client_monitors: %{}
     }
 
     {:ok, state}
@@ -67,42 +116,43 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
 
   @impl true
   def handle_call({:add, subscription_id, client_pid, key}, _from, state) do
-    Process.monitor(client_pid)
+    {:reply, :ok, add_client_to_state(state, subscription_id, client_pid, key)}
+  end
 
-    by_id = Map.put(state.by_id, subscription_id, %{client_pid: client_pid, key: key})
+  @impl true
+  def handle_call(
+        {:add_owned, subscription_id, client_pid, key, request_owner_pid, deadline_us},
+        _from,
+        state
+      ) do
+    case authorize_mutation(request_owner_pid, client_pid, deadline_us) do
+      :ok ->
+        {:reply, :ok, add_client_to_state(state, subscription_id, client_pid, key)}
 
-    by_key =
-      Map.update(state.by_key, key, [subscription_id], fn ids -> [subscription_id | ids] end)
-
-    :telemetry.execute([:lasso, :subs, :client_subscribe], %{count: 1}, %{
-      chain_id: state.chain_id,
-      subscription_id: subscription_id
-    })
-
-    {:reply, :ok, %{state | by_id: by_id, by_key: by_key}}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   @impl true
   def handle_call({:remove, subscription_id}, _from, state) do
-    case Map.pop(state.by_id, subscription_id) do
-      {nil, _} ->
-        {:reply, {:ok, nil}, state}
+    {key, state} = remove_client_from_state(state, subscription_id)
+    {:reply, {:ok, key}, state}
+  end
 
-      {%{key: key}, new_by_id} ->
-        ids = Map.get(state.by_key, key, [])
-        new_ids = Enum.reject(ids, &(&1 == subscription_id))
+  @impl true
+  def handle_call(
+        {:remove_owned, subscription_id, request_owner_pid, client_pid, deadline_us},
+        _from,
+        state
+      ) do
+    case authorize_mutation(request_owner_pid, client_pid, deadline_us) do
+      :ok ->
+        {key, state} = remove_client_from_state(state, subscription_id)
+        {:reply, {:ok, key}, state}
 
-        new_by_key =
-          if new_ids == [],
-            do: Map.delete(state.by_key, key),
-            else: Map.put(state.by_key, key, new_ids)
-
-        :telemetry.execute([:lasso, :subs, :client_unsubscribe], %{count: 1}, %{
-          chain_id: state.chain_id,
-          subscription_id: subscription_id
-        })
-
-        {:reply, {:ok, key}, %{state | by_id: new_by_id, by_key: new_by_key}}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -142,20 +192,26 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
   end
 
   @impl true
-  def handle_info({:DOWN, _mref, :process, pid, _reason}, state) do
-    {removed_by_key, new_state} = remove_by_pid(state, pid)
-    removed = removed_by_key |> Map.values() |> Enum.sum()
+  def handle_info({:DOWN, monitor, :process, pid, _reason}, state) do
+    case state.client_monitors do
+      %{^pid => ^monitor} ->
+        {removed_by_key, new_state} = remove_by_pid(state, pid)
+        removed = removed_by_key |> Map.values() |> Enum.sum()
 
-    if removed > 0 do
-      GenServer.cast(
-        UpstreamSubscriptionPool.via(state.profile, state.chain_id),
-        {:clients_removed, removed_by_key}
-      )
+        if removed > 0 do
+          GenServer.cast(
+            UpstreamSubscriptionPool.via(state.profile, state.chain_id),
+            {:clients_removed, removed_by_key}
+          )
 
-      Logger.debug("Cleaned up #{removed} subscriptions for dead client pid")
+          Logger.debug("Cleaned up #{removed} subscriptions for dead client pid")
+        end
+
+        {:noreply, %{new_state | client_monitors: Map.delete(new_state.client_monitors, pid)}}
+
+      _stale ->
+        {:noreply, state}
     end
-
-    {:noreply, new_state}
   end
 
   defp remove_by_pid(state, pid) do
@@ -176,5 +232,69 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
       end)
 
     {removed_by_key, %{state | by_id: new_by_id, by_key: new_by_key}}
+  end
+
+  defp add_client_to_state(state, subscription_id, client_pid, key) do
+    client_monitors =
+      Map.put_new_lazy(state.client_monitors, client_pid, fn -> Process.monitor(client_pid) end)
+
+    by_id = Map.put(state.by_id, subscription_id, %{client_pid: client_pid, key: key})
+
+    by_key =
+      Map.update(state.by_key, key, [subscription_id], fn ids -> [subscription_id | ids] end)
+
+    %{state | by_id: by_id, by_key: by_key, client_monitors: client_monitors}
+  end
+
+  defp remove_client_from_state(state, subscription_id) do
+    case Map.pop(state.by_id, subscription_id) do
+      {nil, _} ->
+        {nil, state}
+
+      {%{client_pid: client_pid, key: key}, new_by_id} ->
+        ids = Map.get(state.by_key, key, [])
+        new_ids = Enum.reject(ids, &(&1 == subscription_id))
+
+        new_by_key =
+          if new_ids == [],
+            do: Map.delete(state.by_key, key),
+            else: Map.put(state.by_key, key, new_ids)
+
+        client_monitors =
+          maybe_release_client_monitor(state.client_monitors, new_by_id, client_pid)
+
+        {key, %{state | by_id: new_by_id, by_key: new_by_key, client_monitors: client_monitors}}
+    end
+  end
+
+  defp maybe_release_client_monitor(client_monitors, by_id, client_pid) do
+    if Enum.any?(by_id, fn {_id, subscription} -> subscription.client_pid == client_pid end) do
+      client_monitors
+    else
+      case Map.pop(client_monitors, client_pid) do
+        {nil, remaining} ->
+          remaining
+
+        {monitor, remaining} ->
+          Process.demonitor(monitor, [:flush])
+          remaining
+      end
+    end
+  end
+
+  defp authorize_mutation(request_owner_pid, client_pid, deadline_us) do
+    cond do
+      not is_pid(request_owner_pid) or not Process.alive?(request_owner_pid) ->
+        {:error, :owner_down}
+
+      not is_pid(client_pid) or not Process.alive?(client_pid) ->
+        {:error, :client_down}
+
+      not is_integer(deadline_us) or System.monotonic_time(:microsecond) >= deadline_us ->
+        {:error, :deadline_expired}
+
+      true ->
+        :ok
+    end
   end
 end

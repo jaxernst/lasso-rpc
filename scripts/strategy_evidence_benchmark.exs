@@ -100,34 +100,28 @@ record_runs =
     microseconds / 20_000
   end
 
-lifecycle_id = {"strategy-evidence-lifecycle-benchmark", :http}
+breaker_id = {"strategy-evidence-breaker-benchmark", :http}
 
 {:ok, _breaker_pid} =
   CircuitBreaker.start_link(
-    {lifecycle_id, %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 1}}
+    {breaker_id, %{failure_threshold: 5, recovery_timeout: 60_000, success_threshold: 1}}
   )
-
-terminal_callback = fn _result, _elapsed_ms -> :ok end
 
 for _ <- 1..500 do
-  CircuitBreaker.call(lifecycle_id, fn -> {:ok, :result, 25} end, 5_000,
-    on_terminal: terminal_callback
-  )
+  CircuitBreaker.call(breaker_id, fn -> {:ok, :result, 25} end, 5_000)
 end
 
-:sys.get_state(CircuitBreaker.via_name(lifecycle_id))
+:sys.get_state(CircuitBreaker.via_name(breaker_id))
 
-lifecycle_runs =
+breaker_runs =
   for _ <- 1..5 do
     {microseconds, _result} =
       :timer.tc(fn ->
         for _ <- 1..10_000 do
-          CircuitBreaker.call(lifecycle_id, fn -> {:ok, :result, 25} end, 5_000,
-            on_terminal: terminal_callback
-          )
+          CircuitBreaker.call(breaker_id, fn -> {:ok, :result, 25} end, 5_000)
         end
 
-        :sys.get_state(CircuitBreaker.via_name(lifecycle_id))
+        :sys.get_state(CircuitBreaker.via_name(breaker_id))
       end)
 
     microseconds / 10_000
@@ -141,7 +135,7 @@ IO.inspect(
     cardinality: %{ranking_channels: 32, evidence_keys: 1},
     rank_32_us_per_call: rank_runs,
     record_us_per_event: record_runs,
-    lifecycle_us_per_call: lifecycle_runs
+    breaker_us_per_call: breaker_runs
   },
   label: "STRATEGY_EVIDENCE"
 )

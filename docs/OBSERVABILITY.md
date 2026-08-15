@@ -56,9 +56,9 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 │ 4. EXECUTION & RETRY                                                │
 │    RequestPipeline.attempt_request_on_channels/4                    │
 │    • Mark upstream start time                                       │
-│    • Capture circuit_breaker_state before call                      │
-│    • Execute request via CircuitBreaker.call/3                      │
-│    • On retry: increment retries counter                            │
+│    • Admit through the circuit breaker and reserve dispatch         │
+│    • Execute through the request owner and one transport task       │
+│    • Commit one canonical attempt terminal before fallback          │
 │    • Mark upstream end, compute latency                             │
 └─────────────────────────────────────────────────────────────────────┘
                                     ↓
@@ -627,8 +627,6 @@ Metrics defined in `Lasso.Telemetry.metrics/0` for LiveDashboard and reporters.
 
 | Metric | Type | Tags | Description |
 |--------|------|------|-------------|
-| `lasso.circuit_breaker.admit.latency` | Distribution | chain, provider_id, transport, decision | Admission call latency |
-| `lasso.circuit_breaker.admit.count` | Counter | chain, provider_id, transport, decision | Admission decisions |
 | `lasso.circuit_breaker.open.count` | Counter | chain, provider_id, transport, reason | Circuit openings |
 | `lasso.circuit_breaker.close.count` | Counter | chain, provider_id, transport, reason | Circuit closings |
 | `lasso.circuit_breaker.half_open.count` | Counter | chain, provider_id, transport, reason | Half-open transitions |

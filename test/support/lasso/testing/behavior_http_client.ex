@@ -32,7 +32,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
 
   require Logger
 
-  alias Lasso.Core.Support.AttemptLifecycle
+  alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.Testing.MockHTTPProvider
 
   @doc """
@@ -52,7 +52,7 @@ defmodule Lasso.Testing.BehaviorHttpClient do
       # Route to mock provider
       Logger.debug("Routing request to mock HTTP provider: #{provider_id}")
 
-      with :ok <- AttemptLifecycle.mark_dispatched(Keyword.get(opts, :attempt_dispatch)) do
+      with :ok <- AttemptProtocol.send_confirmed(Keyword.get(opts, :attempt_dispatch)) do
         MockHTTPProvider.execute_request(provider_id, method, params)
       end
       |> case do

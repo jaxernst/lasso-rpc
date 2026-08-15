@@ -1,7 +1,7 @@
 defmodule Lasso.Core.Transport.AttemptProtocol do
   @moduledoc false
 
-  alias Lasso.Core.Support.{AttemptLifecycle, ErrorClassification}
+  alias Lasso.Core.Support.ErrorClassification
 
   @dispatch_context_key :lasso_attempt_dispatch_context
   @deadline_key :lasso_attempt_deadline_us
@@ -29,8 +29,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
           }
   end
 
-  @type legacy_context :: {pid(), reference()}
-  @type context :: legacy_context() | Context.t()
+  @type context :: Context.t()
   @type certainty :: :not_dispatched | :indeterminate | :dispatched
   @type send_start_error :: :deadline_expired | :owner_down
   @type terminal_candidate ::
@@ -116,8 +115,6 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
 
   def authorized?(%Context{owner: owner, gate: gate}, deadline_us),
     do: Process.alive?(owner) and gate_open?(gate) and before_deadline?(deadline_us)
-
-  def authorized?(_context, deadline_us), do: before_deadline?(deadline_us)
 
   @spec send_started(context() | nil) :: :ok | {:error, send_start_error()}
   def send_started(context) do
@@ -219,23 +216,11 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     :ok
   end
 
-  defp deliver_terminal(context, kind, event_us, fields),
-    do: deliver_observation(context, kind, event_us, fields)
+  defp deliver_terminal(nil, _kind, _event_us, _fields), do: :ok
 
   defp deliver_observation(nil, _kind, _event_us, _fields), do: :ok
 
   defp deliver_observation(%Context{}, _kind, _event_us, _fields), do: :ok
-
-  defp deliver_observation({owner, attempt_ref}, kind, event_us, fields)
-       when is_pid(owner) and is_reference(attempt_ref) and is_atom(kind) and is_integer(event_us) and
-              is_map(fields) do
-    send(owner, {:transport_observation, attempt_ref, build_observation(kind, event_us, fields)})
-    :ok
-  end
-
-  defp build_observation(kind, event_us, fields) do
-    build_observation(System.unique_integer([:positive, :monotonic]), kind, event_us, fields)
-  end
 
   defp build_context_observation(kind, event_us, fields) do
     build_observation(context_observation_id(kind), kind, event_us, fields)
@@ -276,22 +261,6 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     end
   end
 
-  defp validate_send_start({owner, _attempt_ref}, event_us) do
-    cond do
-      not Process.alive?(owner) ->
-        {:error, :owner_down}
-
-      not AttemptLifecycle.dispatch_owner_alive?() ->
-        {:error, :owner_down}
-
-      deadline = deadline_us() ->
-        if(event_us < deadline, do: :ok, else: {:error, :deadline_expired})
-
-      true ->
-        :ok
-    end
-  end
-
   defp record_dispatch_state(%Context{gate: gate, deadline_us: deadline_us}, certainty, event_us)
        when event_us < deadline_us do
     if System.monotonic_time(:microsecond) < deadline_us do
@@ -303,8 +272,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
 
   defp record_dispatch_state(%Context{}, _certainty, _event_us), do: :ok
 
-  defp record_dispatch_state(_context, certainty, event_us),
-    do: AttemptLifecycle.record_dispatch_state(certainty, event_us)
+  defp record_dispatch_state(nil, _certainty, _event_us), do: :ok
 
   defp late_dispatch_state_result(:ambiguous), do: {:error, :deadline_expired}
   defp late_dispatch_state_result(_certainty), do: :ok
@@ -420,7 +388,6 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
   end
 
   defp context_deadline(%Context{deadline_us: deadline_us}), do: deadline_us
-  defp context_deadline(_legacy_context), do: Process.get(@deadline_key)
 
   defp normalize_terminal(:response, %{response_kind: :error} = fields) do
     fields

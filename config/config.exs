@@ -18,6 +18,13 @@ config :lasso, :provider_selection_strategy, :load_balanced
 
 config :lasso, :profile_aliases, %{"default" => "public"}
 
+config :lasso,
+  inflight_request_byte_limit: 128 * 1_024 * 1_024,
+  inflight_request_byte_budget_buckets: 256,
+  inflight_request_minimum_charge_bytes: 4_096,
+  ws_connection_inflight_byte_limit: 32 * 1_024 * 1_024,
+  http_pool: [size: 256, count: 1]
+
 # Default HTTP client adapter
 config :lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch
 

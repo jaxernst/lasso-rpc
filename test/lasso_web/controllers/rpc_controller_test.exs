@@ -3,8 +3,6 @@ defmodule LassoWeb.RPCControllerTest do
   Integration tests for the RPC controller endpoints.
   """
 
-  # TODO: Expand cases to test that RPC requests can be made for chains configured in ChainConfig
-
   use ExUnit.Case, async: true
 
   # Deleted meaningless test that only validates test data
@@ -27,6 +25,108 @@ defmodule LassoWeb.RPCControllerWireContractTest do
   @endpoint LassoWeb.Endpoint
 
   describe "JSON-RPC wire contract" do
+    test "empty batch returns Invalid Request", %{chain: chain} do
+      setup_providers([%{id: "batch-local", behavior: :healthy, profile: "public"}])
+      conn = post_json("/rpc/#{chain}", [])
+
+      assert conn.status == 200
+
+      assert %{
+               "jsonrpc" => "2.0",
+               "id" => nil,
+               "error" => %{"code" => -32_600, "message" => "Invalid Request"}
+             } = json_response(conn, 200)
+    end
+
+    test "notification-only batch executes without a response body", %{chain: chain} do
+      setup_providers([%{id: "batch-local", behavior: :healthy, profile: "public"}])
+
+      notification = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_chainId",
+        "params" => []
+      }
+
+      conn = post_json("/rpc/#{chain}", [notification, notification])
+
+      assert conn.status == 204
+      assert conn.resp_body == ""
+    end
+
+    test "single notification executes without a response body", %{chain: chain} do
+      setup_providers([%{id: "single-notification", behavior: :healthy, profile: "public"}])
+
+      notification = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_blockNumber",
+        "params" => []
+      }
+
+      conn = post_json("/rpc/#{chain}", notification)
+
+      assert conn.status == 204
+      assert conn.resp_body == ""
+    end
+
+    test "single explicit null ID receives a response", %{chain: chain} do
+      setup_providers([%{id: "single-null", behavior: :healthy, profile: "public"}])
+
+      request = %{
+        "jsonrpc" => "2.0",
+        "method" => "eth_blockNumber",
+        "params" => [],
+        "id" => nil
+      }
+
+      conn = post_json("/rpc/#{chain}", request)
+
+      assert conn.status == 200
+      assert %{"jsonrpc" => "2.0", "id" => nil, "result" => result} = json_response(conn, 200)
+      assert is_binary(result)
+    end
+
+    test "missing IDs are omitted while an explicit null ID receives a response", %{chain: chain} do
+      setup_providers([%{id: "batch-local", behavior: :healthy, profile: "public"}])
+
+      batch = [
+        %{"jsonrpc" => "2.0", "method" => "eth_chainId", "params" => []},
+        %{"jsonrpc" => "2.0", "method" => "eth_chainId", "params" => [], "id" => nil}
+      ]
+
+      conn = post_json("/rpc/#{chain}", batch)
+
+      assert conn.status == 200
+      assert [%{"jsonrpc" => "2.0", "id" => nil, "result" => result}] = json_response(conn, 200)
+      assert is_binary(result)
+    end
+
+    test "forwarded notification and explicit null ID remain distinct", %{chain: chain} do
+      setup_providers([%{id: "batch-forwarded", behavior: :healthy, profile: "public"}])
+
+      batch = [
+        %{"jsonrpc" => "2.0", "method" => "eth_blockNumber", "params" => []},
+        %{"jsonrpc" => "2.0", "method" => "eth_blockNumber", "params" => [], "id" => nil}
+      ]
+
+      conn = post_json("/rpc/#{chain}", batch)
+
+      assert conn.status == 200
+      assert [%{"jsonrpc" => "2.0", "id" => nil, "result" => result}] = json_response(conn, 200)
+      assert is_binary(result)
+    end
+
+    test "invalid batch members receive null-ID errors", %{chain: chain} do
+      setup_providers([%{id: "batch-local", behavior: :healthy, profile: "public"}])
+      conn = post_json("/rpc/#{chain}", [%{}, 42])
+
+      assert conn.status == 200
+
+      assert [
+               %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32_600}},
+               %{"jsonrpc" => "2.0", "id" => nil, "error" => %{"code" => -32_600}}
+             ] = json_response(conn, 200)
+    end
+
     test "provider exhaustion returns an HTTP 200 JSON-RPC error with the client ID", %{
       chain: chain
     } do
@@ -70,5 +170,11 @@ defmodule LassoWeb.RPCControllerWireContractTest do
                "No available channels for method: eth_blockNumber. All circuits open, " <>
                  "retry after #{div(retry_after_ms, 1_000)}s"
     end
+  end
+
+  defp post_json(path, body) do
+    build_conn()
+    |> Plug.Conn.put_req_header("content-type", "application/json")
+    |> post(path, Jason.encode!(body))
   end
 end

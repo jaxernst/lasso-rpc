@@ -4,9 +4,11 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag :integration
   @moduletag timeout: 10_000
 
+  alias Lasso.Events.RoutingDecision
   alias Lasso.RPC.{RequestPipeline, RequestOptions, Response}
   alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
+  alias LassoWeb.Dashboard.EventStream
 
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do
@@ -36,7 +38,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
+          %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
       # Verify request succeeded (using backup)
@@ -167,8 +169,9 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           }
         )
 
-      # Should get actual error, not circuit breaker error
-      assert result != {:error, :circuit_open}
+      # Should get an actual provider result, not a circuit breaker rejection.
+      assert {_status, value, _ctx} = result
+      refute match?(%Lasso.JSONRPC.Error{category: :circuit_breaker_open}, value)
     end
   end
 
@@ -182,15 +185,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         %{id: "high_priority", priority: 10, behavior: :healthy, profile: profile}
       ])
 
-      # Attach telemetry collector BEFORE executing request
-      {:ok, collector} =
-        Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :stop],
-          match: [method: "eth_blockNumber"]
-        )
-
-      # Execute request
-      {:ok, _result, _ctx} =
+      {:ok, _result, ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
@@ -198,14 +193,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
-      # Wait for telemetry event
-      {:ok, measurements, _metadata} =
-        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
-
-      # Duration should be non-negative (can be 0 for very fast requests)
-      assert measurements.duration >= 0
-      # Note: We can't easily assert which provider was used without additional telemetry
-      # but the request succeeding shows provider selection worked
+      assert ctx.executed_channel.provider_id == "high_priority"
     end
 
     test "fails over to backup provider on retriable error", %{chain: chain} do
@@ -217,31 +205,21 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         %{id: "backup", priority: 20, behavior: :healthy, profile: profile}
       ])
 
-      # Attach telemetry collector BEFORE executing request
-      # We expect one start event for the entire request
-      {:ok, collector} =
-        Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :start],
-          match: [method: "eth_blockNumber"]
-        )
-
       # Execute request - should failover to backup
-      {:ok, result, _ctx} =
+      {:ok, result, ctx} =
         RequestPipeline.execute_via_channels(
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
+          %RequestOptions{strategy: :priority, timeout_ms: 30_000}
         )
 
       # Request should succeed via backup - now returns Response.Success
       assert %Response.Success{} = result
       {:ok, block_number} = Response.Success.decode_result(result)
       assert String.starts_with?(block_number, "0x")
-
-      # Verify start event was captured
-      {:ok, _measurements, _metadata} =
-        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      assert ctx.executed_channel.provider_id == "backup"
+      assert Enum.map(ctx.attempted_channels, & &1.channel.provider_id) == ["primary", "backup"]
     end
 
     test "respects provider override without failover", %{chain: chain} do
@@ -478,70 +456,176 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end
   end
 
-  describe "telemetry and observability" do
-    test "emits request start and stop events", %{chain: chain} do
+  describe "bounded request diagnostics" do
+    test "canonical request projection reaches the dashboard event stream", %{chain: chain} do
       profile = "public"
+      request_id = "dashboard-routing-#{System.unique_integer([:positive])}"
 
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
+        %{id: "dashboard-route", priority: 10, behavior: :healthy, profile: profile}
       ])
 
-      # Attach telemetry collectors BEFORE executing request
-      {:ok, start_collector} =
-        Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :start],
-          match: [method: "eth_blockNumber"]
-        )
+      :ok = EventStream.subscribe(profile)
+      on_exit(fn -> EventStream.unsubscribe(profile) end)
+      assert_receive {:dashboard_snapshot, _snapshot}, 1_000
+      :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.routing_decision(profile))
 
-      {:ok, stop_collector} =
-        Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :stop],
-          match: [method: "eth_blockNumber"]
-        )
+      assert {:ok, _result, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   strategy: :load_balanced,
+                   timeout_ms: 30_000,
+                   request_id: request_id
+                 }
+               )
 
-      # Execute request
-      {:ok, _result, _ctx} =
-        RequestPipeline.execute_via_channels(
-          chain,
-          "eth_blockNumber",
-          [],
-          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
-        )
+      assert_receive %RoutingDecision{request_id: ^request_id}, 1_000
 
-      # Wait for start event
-      {:ok, _measurements, metadata} =
-        Lasso.Testing.TelemetrySync.await_event(
-          start_collector,
-          timeout: 1000
-        )
+      assert %{
+               request_id: ^request_id,
+               chain_id: ^chain,
+               method: "eth_blockNumber",
+               provider_id: "dashboard-route",
+               instance_id: instance_id,
+               transport: :http,
+               request_origin: :client,
+               result: :success,
+               failover_count: 0
+             } = await_dashboard_routing_event(request_id)
 
-      assert metadata.chain_id == chain
-      assert metadata.method == "eth_blockNumber"
-
-      # Wait for stop event
-      {:ok, measurements, _metadata} =
-        Lasso.Testing.TelemetrySync.await_event(
-          stop_collector,
-          timeout: 2000
-        )
-
-      # Duration should be non-negative (can be 0 for very fast requests)
-      assert measurements.duration >= 0
+      assert is_binary(instance_id)
     end
 
-    test "records metrics for successful requests", %{chain: chain} do
+    test "fallback publishes only the final routed request decision", %{chain: chain} do
       profile = "public"
+      request_id = "dashboard-fallback-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "dashboard-failing", priority: 10, behavior: :always_fail, profile: profile},
+        %{id: "dashboard-backup", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      topic = Lasso.Topics.routing_decision(profile)
+      :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, topic)
+
+      assert {:ok, _result, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   strategy: :priority,
+                   timeout_ms: 30_000,
+                   request_id: request_id
+                 }
+               )
+
+      assert_receive %RoutingDecision{
+                       request_id: ^request_id,
+                       provider_id: "dashboard-backup",
+                       result: :success,
+                       failover_count: 1
+                     },
+                     1_000
+
+      refute_receive %RoutingDecision{request_id: ^request_id}, 100
+    end
+
+    test "terminal upstream errors publish one truthful routed decision", %{chain: chain} do
+      profile = "public"
+      request_id = "dashboard-error-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "dashboard-error", priority: 10, behavior: :always_fail, profile: profile}
+      ])
+
+      :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.routing_decision(profile))
+
+      assert {:error, _error, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   provider_override: "dashboard-error",
+                   failover_on_override: false,
+                   strategy: :load_balanced,
+                   timeout_ms: 30_000,
+                   request_id: request_id
+                 }
+               )
+
+      assert_receive %RoutingDecision{
+                       request_id: ^request_id,
+                       provider_id: "dashboard-error",
+                       result: :error,
+                       failover_count: 0
+                     },
+                     1_000
+
+      refute_receive %RoutingDecision{request_id: ^request_id}, 100
+    end
+
+    test "blocking telemetry cannot delay the request response", %{chain: chain} do
+      profile = "public"
+      request_id = "blocked-terminal-sink-#{System.unique_integer([:positive])}"
+
+      setup_providers([
+        %{id: "sink-isolated", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      test_pid = self()
+      handler_id = {__MODULE__, make_ref()}
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lasso, :rpc, :request, :terminal],
+          fn _event, _measurements, metadata, _config ->
+            if metadata.request_id == request_id do
+              send(test_pid, {:terminal_sink_blocked, self()})
+              receive do: (:release_terminal_sink -> :ok)
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      request =
+        Task.async(fn ->
+          RequestPipeline.execute_via_channels(
+            chain,
+            "eth_blockNumber",
+            [],
+            %RequestOptions{
+              strategy: :load_balanced,
+              timeout_ms: 30_000,
+              request_id: request_id
+            }
+          )
+        end)
+
+      assert_receive {:terminal_sink_blocked, sink_pid}, 1_000
+      assert {:ok, _result, _ctx} = Task.await(request, 1_000)
+      send(sink_pid, :release_terminal_sink)
+    end
+
+    test "emits one asynchronous request terminal", %{chain: chain} do
+      profile = "public"
+      request_id = "request-terminal-once"
 
       setup_providers([
         %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
-      # Attach telemetry collector BEFORE executing request
-      # Note: telemetry metadata uses 'result' not 'status' for success/error indicator
       {:ok, collector} =
         Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :stop],
-          match: [method: "eth_blockNumber", result: :success]
+          [:lasso, :rpc, :request, :terminal],
+          match: [request_id: request_id]
         )
 
       # Execute request
@@ -550,29 +634,69 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
+          %RequestOptions{
+            strategy: :load_balanced,
+            timeout_ms: 30_000,
+            request_id: request_id
+          }
         )
 
-      # Verify telemetry shows success
-      {:ok, measurements, _metadata} =
-        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+      {:ok, measurements, metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2_000)
 
-      # Duration should be non-negative (can be 0 for very fast requests)
-      assert measurements.duration >= 0
+      assert measurements.count == 1
+      assert measurements.elapsed_us >= 0
+      assert metadata.chain_id == chain
+      assert metadata.diagnostic == :request_returned
+      assert metadata.dispatch_count == 1
     end
 
-    test "records metrics for failed requests", %{chain: chain} do
+    test "classifies successful request terminals", %{chain: chain} do
       profile = "public"
+      request_id = "successful-request-terminal"
+
+      setup_providers([
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      {:ok, collector} =
+        Lasso.Testing.TelemetrySync.attach_collector(
+          [:lasso, :rpc, :request, :terminal],
+          match: [request_id: request_id]
+        )
+
+      # Execute request
+      {:ok, _result, _ctx} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{
+            strategy: :load_balanced,
+            timeout_ms: 30_000,
+            request_id: request_id
+          }
+        )
+
+      {:ok, measurements, metadata} =
+        Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+
+      assert measurements.elapsed_us >= 0
+      assert metadata.diagnostic == :request_returned
+    end
+
+    test "classifies failed request terminals", %{chain: chain} do
+      profile = "public"
+      request_id = "failed-request-terminal"
 
       setup_providers([
         %{id: "failing", priority: 10, behavior: :always_fail, profile: profile}
       ])
 
-      # Attach telemetry collector BEFORE executing request
       {:ok, collector} =
         Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :stop],
-          match: [method: "eth_blockNumber"]
+          [:lasso, :rpc, :request, :terminal],
+          match: [request_id: request_id]
         )
 
       # Execute request that will fail
@@ -585,22 +709,23 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
             provider_override: "failing",
             failover_on_override: false,
             timeout_ms: 30_000,
-            strategy: :load_balanced
+            strategy: :load_balanced,
+            request_id: request_id
           }
         )
 
-      # Should still emit stop event with error status
-      {:ok, measurements, _metadata} =
+      {:ok, measurements, metadata} =
         Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
 
-      # Duration should be non-negative (can be 0 for very fast requests)
-      assert measurements.duration >= 0
+      assert measurements.elapsed_us >= 0
+      assert metadata.diagnostic == :request_returned
     end
   end
 
   describe "retry and resilience" do
     test "gives up after max retries", %{chain: chain} do
       profile = "public"
+      request_id = "request-retries-exhausted"
 
       # Setup only failing providers
       setup_providers([
@@ -608,11 +733,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         %{id: "fail2", priority: 20, behavior: :always_fail, profile: profile}
       ])
 
-      # Attach telemetry collector BEFORE executing request
       {:ok, collector} =
         Lasso.Testing.TelemetrySync.attach_collector(
-          [:lasso, :rpc, :request, :start],
-          match: [method: "eth_blockNumber"]
+          [:lasso, :rpc, :request, :terminal],
+          match: [request_id: request_id]
         )
 
       # Execute request
@@ -621,12 +745,18 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           chain,
           "eth_blockNumber",
           [],
-          %RequestOptions{strategy: :load_balanced, timeout_ms: 30_000}
+          %RequestOptions{
+            strategy: :load_balanced,
+            timeout_ms: 30_000,
+            request_id: request_id
+          }
         )
 
-      # Should have emitted at least one start event
-      {:ok, _measurements, _metadata} =
+      {:ok, _measurements, metadata} =
         Lasso.Testing.TelemetrySync.await_event(collector, timeout: 2000)
+
+      assert metadata.diagnostic == :request_returned
+      assert metadata.dispatch_count == 2
     end
   end
 
@@ -1047,5 +1177,20 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         Lasso.Providers.Catalog.build_from_config()
       end
     )
+  end
+
+  defp await_dashboard_routing_event(request_id, deadline_ms \\ nil) do
+    deadline_ms = deadline_ms || System.monotonic_time(:millisecond) + 2_000
+    remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      {:dashboard_batch, %{routing_events: events}} ->
+        case Enum.find(events, &(Map.get(&1, :request_id) == request_id)) do
+          nil -> await_dashboard_routing_event(request_id, deadline_ms)
+          event -> event
+        end
+    after
+      remaining_ms -> flunk("dashboard did not receive routing event #{request_id}")
+    end
   end
 end

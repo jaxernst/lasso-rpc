@@ -17,7 +17,21 @@ defmodule Lasso.RPC.SelectionTest do
   use Lasso.Test.LassoIntegrationCase
 
   alias Lasso.RPC.Selection
-  alias Lasso.Test.TelemetrySync
+
+  defmodule CatalogSwapStrategy do
+    @behaviour Lasso.RPC.Strategy
+
+    @impl true
+    def prepare_context(_profile, chain_id, _method, timeout) do
+      Lasso.RPC.StrategyContext.new(chain_id, timeout)
+    end
+
+    @impl true
+    def rank_channels(channels, _method, _context, _profile, _chain_id) do
+      :ok = Lasso.Providers.Catalog.build_from_config()
+      channels
+    end
+  end
 
   describe "select_provider/3 - filter handling" do
     test "respects exclude filter", %{chain: chain} do
@@ -156,31 +170,87 @@ defmodule Lasso.RPC.SelectionTest do
     end
   end
 
-  describe "select_provider/3 - telemetry" do
-    test "emits telemetry on successful selection", %{chain: chain} do
+  describe "select_provider/3 - observer isolation" do
+    test "selects successfully without synchronous selection telemetry", %{chain: chain} do
       profile = "public"
 
       setup_providers([
         %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
       ])
 
-      # Attach telemetry collector
-      {:ok, collector} =
-        TelemetrySync.attach_collector(
-          [:lasso, :selection, :success],
-          match: [chain_id: chain, method: "eth_blockNumber"]
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:lasso, :selection, :success]])
+
+      try do
+        assert {:ok, "provider_1"} =
+                 Selection.select_provider(profile, chain, "eth_blockNumber")
+
+        refute_receive {[:lasso, :selection, :success], ^ref, _, _}, 50
+      after
+        :telemetry.detach(ref)
+      end
+    end
+
+    test "same-generation catalog swaps during ranking fail both entrypoints closed", %{
+      chain: chain
+    } do
+      profile = "public"
+
+      setup_providers([
+        %{id: "snapshot_provider", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      previous_registry = Application.get_env(:lasso, :strategy_registry)
+
+      Application.put_env(
+        :lasso,
+        :strategy_registry,
+        Map.put(
+          Lasso.RPC.Strategies.Registry.default_registry(),
+          :snapshot_swap,
+          CatalogSwapStrategy
         )
+      )
 
-      # Perform selection
-      {:ok, _selected} = Selection.select_provider(profile, chain, "eth_blockNumber")
+      on_exit(fn ->
+        if previous_registry,
+          do: Application.put_env(:lasso, :strategy_registry, previous_registry),
+          else: Application.delete_env(:lasso, :strategy_registry)
+      end)
 
-      # Verify telemetry emitted
-      {:ok, measurements, metadata} = TelemetrySync.await_event(collector, timeout: 1000)
+      provider_snapshot = Lasso.Providers.Catalog.snapshot()
 
-      assert measurements.count == 1
-      assert metadata.chain_id == chain
-      assert metadata.method == "eth_blockNumber"
-      assert metadata.provider_id in ["provider_1"]
+      assert {:error, :no_providers_available} =
+               Selection.select_provider(profile, chain, "eth_blockNumber",
+                 strategy: :snapshot_swap,
+                 protocol: :http
+               )
+
+      after_provider = Lasso.Providers.Catalog.snapshot()
+      assert after_provider.generation == provider_snapshot.generation
+      refute after_provider.table == provider_snapshot.table
+
+      assert [] ==
+               Selection.select_channels(profile, chain, "eth_blockNumber",
+                 strategy: :snapshot_swap,
+                 transport: :http
+               )
+
+      after_channels = Lasso.Providers.Catalog.snapshot()
+      assert after_channels.generation == after_provider.generation
+      refute after_channels.table == after_provider.table
+
+      assert {:ok, "snapshot_provider"} =
+               Selection.select_provider(profile, chain, "eth_blockNumber",
+                 strategy: :priority,
+                 protocol: :http
+               )
+
+      assert [%{provider_id: "snapshot_provider"}] =
+               Selection.select_channels(profile, chain, "eth_blockNumber",
+                 strategy: :priority,
+                 transport: :http
+               )
     end
   end
 

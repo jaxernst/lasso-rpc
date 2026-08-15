@@ -286,6 +286,8 @@ Set in `config/runtime.exs` or via environment variables:
 | `PORT` | HTTP port | `4000` |
 | `SECRET_KEY_BASE` | Phoenix secret key (required in production) | - |
 | `DATABASE_URL` | PostgreSQL connection URL (cloud only) | - |
+| `LASSO_HTTP_POOL_SIZE` | Maximum HTTP/1 connections per upstream host and pool | `256` |
+| `LASSO_HTTP_POOL_COUNT` | Independent Finch pools per upstream host | `1` |
 
 ### Circuit Breaker Defaults
 

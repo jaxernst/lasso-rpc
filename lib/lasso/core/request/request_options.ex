@@ -10,6 +10,7 @@ defmodule Lasso.RPC.RequestOptions do
 
   @type strategy :: :fastest | :priority | :load_balanced | :latency_weighted
   @type transport :: :http | :ws | :both | nil
+  @type request_origin :: :client | :system
 
   @default_profile Lasso.Config.ProfileValidator.default_profile()
 
@@ -22,6 +23,8 @@ defmodule Lasso.RPC.RequestOptions do
             timeout_ms: 30_000,
             request_id: nil,
             jsonrpc_id: nil,
+            jsonrpc_id_present?: false,
+            request_origin: :client,
             request_context: nil,
             # Plug-level start time for accurate E2E measurement (microseconds)
             plug_start_time: nil
@@ -35,6 +38,8 @@ defmodule Lasso.RPC.RequestOptions do
           timeout_ms: non_neg_integer,
           request_id: String.t() | nil,
           jsonrpc_id: integer() | String.t() | nil,
+          jsonrpc_id_present?: boolean(),
+          request_origin: request_origin(),
           request_context: any() | nil,
           plug_start_time: integer() | nil
         }
@@ -52,8 +57,10 @@ defmodule Lasso.RPC.RequestOptions do
   @spec validate(t, String.t()) :: :ok | {:error, String.t()}
   def validate(%__MODULE__{} = opts, method) when is_binary(method) do
     with :ok <- validate_strategy(opts.strategy),
-         :ok <- validate_transport(opts, method) do
-      validate_timeout(opts.timeout_ms)
+         :ok <- validate_transport(opts, method),
+         :ok <- validate_timeout(opts.timeout_ms),
+         :ok <- validate_jsonrpc_id_presence(opts.jsonrpc_id_present?) do
+      validate_request_origin(opts.request_origin)
     end
   end
 
@@ -86,6 +93,16 @@ defmodule Lasso.RPC.RequestOptions do
   defp validate_timeout(timeout_ms),
     do: {:error, "timeout_ms must be a positive integer, got: #{inspect(timeout_ms)}"}
 
+  defp validate_jsonrpc_id_presence(value) when is_boolean(value), do: :ok
+
+  defp validate_jsonrpc_id_presence(value),
+    do: {:error, "jsonrpc_id_present? must be a boolean, got: #{inspect(value)}"}
+
+  defp validate_request_origin(value) when value in [:client, :system], do: :ok
+
+  defp validate_request_origin(value),
+    do: {:error, "request_origin must be :client or :system, got: #{inspect(value)}"}
+
   @doc """
   Convert to legacy keyword options for backward compatibility.
 
@@ -102,6 +119,8 @@ defmodule Lasso.RPC.RequestOptions do
       timeout_ms: o.timeout_ms,
       request_id: o.request_id,
       jsonrpc_id: o.jsonrpc_id,
+      jsonrpc_id_present?: o.jsonrpc_id_present?,
+      request_origin: o.request_origin,
       request_context: o.request_context,
       plug_start_time: o.plug_start_time
     ]

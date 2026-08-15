@@ -49,6 +49,27 @@ defmodule Lasso.Core.ProjectionDispatcherTest do
     assert lane_operations + 1 <= 4
   end
 
+  test "lazy enqueue resolves the lane without crossing the dispatcher" do
+    parent = self()
+    name = unique_name(:lazy)
+
+    dispatcher =
+      start_dispatcher(name,
+        diagnostics: lane_opts(fn _scope, payload -> send(parent, {:diagnostic, payload}) end)
+      )
+
+    :erlang.suspend_process(dispatcher)
+
+    assert {:ok, _token} =
+             ProjectionDispatcher.enqueue_lazy(name, :diagnostics, @scope, fn ->
+               {:ok, "lazy"}
+             end)
+
+    assert_receive {:diagnostic, "lazy"}
+    assert {:message_queue_len, 0} = Process.info(dispatcher, :message_queue_len)
+    :erlang.resume_process(dispatcher)
+  end
+
   test "hung sinks and saturation stay isolated between fixed sink classes" do
     parent = self()
     name = unique_name(:isolation)
