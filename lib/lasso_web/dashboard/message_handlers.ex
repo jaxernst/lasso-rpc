@@ -128,6 +128,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
         ts: format_time(field(e, :ts)),
         ts_ms: normalize_timestamp(field(e, :ts)),
         chain_id: chain_id,
+        chain: to_string(chain_id),
         method: method,
         strategy: field(e, :strategy),
         provider_id: field(e, :provider_id),

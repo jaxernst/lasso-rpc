@@ -1337,13 +1337,19 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     {:messages, queued_messages} = Process.info(context.breaker_pid, :messages)
 
-    assert Enum.all?(queued_messages, fn
-             {:breaker_control_ready, _breaker_id, _generation, _epoch} -> true
-             :breaker_control_audit -> true
-             _other -> false
-           end)
+    {control_messages, other_messages} =
+      Enum.split_with(queued_messages, fn
+        {:breaker_control_ready, _breaker_id, _generation, _epoch} -> true
+        :breaker_control_audit -> true
+        _other -> false
+      end)
 
-    assert length(queued_messages) <= 2
+    # Disconnect schedules an immediate reconnect, whose connect path issues one
+    # bounded, timeout-guarded state query. That is not control-ring traffic.
+    assert Enum.all?(other_messages, &match?({:"$gen_call", _from, :get_state}, &1))
+    assert length(other_messages) <= 1
+
+    assert length(control_messages) <= 2
 
     assert {:ok, %Snapshot{control_health: :degraded}} =
              Snapshot.lookup({context.instance_id, :ws})
