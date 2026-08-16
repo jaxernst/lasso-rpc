@@ -90,7 +90,7 @@ defmodule Lasso.RPC.Selection do
         requires_subscribe_new_heads: selection_opts.requires_subscribe_new_heads
       )
 
-    candidates = CandidateListing.list_candidates_from_plan(plan, filters)
+    candidates = CandidateListing.list_routing_candidates_from_plan(plan, filters)
 
     case candidates do
       [] ->
@@ -217,7 +217,7 @@ defmodule Lasso.RPC.Selection do
         requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
       )
 
-    provider_candidates = CandidateListing.list_candidates_from_plan(plan, pool_filters)
+    provider_candidates = CandidateListing.list_routing_candidates_from_plan(plan, pool_filters)
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed

@@ -68,6 +68,18 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert Map.has_key?(c.rate_limited, :ws)
     end
 
+    test "routing candidates omit diagnostic-only availability reads" do
+      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
+
+      [candidate | _] = CandidateListing.list_routing_candidates_from_plan(plan, %{})
+
+      refute Map.has_key?(candidate, :availability)
+      refute Map.has_key?(candidate, :transport_availability)
+      assert Map.has_key?(candidate, :routing_states)
+      assert Map.has_key?(candidate, :circuit_state)
+      assert Map.has_key?(candidate, :rate_limited)
+    end
+
     test "does not read or expose a disconnected WebSocket route" do
       candidate =
         @profile
