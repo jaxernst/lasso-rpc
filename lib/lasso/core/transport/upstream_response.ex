@@ -37,10 +37,12 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
 
   @spec parse_unary(binary()) :: parsed()
   def parse_unary(raw_bytes) when is_binary(raw_bytes) do
-    case decode(raw_bytes, response_mode(raw_bytes)) do
+    {mode, id_span} = response_metadata(raw_bytes)
+
+    case decode(raw_bytes, mode) do
       {{:container, :object}, {:root, fields}, rest} ->
         if only_json_whitespace?(rest) do
-          classify_fields(fields)
+          attach_id_span(classify_fields(fields), id_span)
         else
           {:invalid, :invalid_json, candidate_id(fields)}
         end
@@ -434,17 +436,22 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
-  defp response_mode(raw_bytes) do
+  defp attach_id_span({:ok, %Validated{} = validated}, id_span),
+    do: {:ok, %{validated | id_span: id_span}}
+
+  defp attach_id_span(parsed, _id_span), do: parsed
+
+  defp response_metadata(raw_bytes) do
     start = skip_whitespace(raw_bytes, 0)
 
     if byte_at(raw_bytes, start) == ?{ do
-      scan_response_mode(raw_bytes, skip_whitespace(raw_bytes, start + 1))
+      scan_response_metadata(raw_bytes, skip_whitespace(raw_bytes, start + 1), nil)
     else
-      :discard
+      {:discard, nil}
     end
   end
 
-  defp scan_response_mode(raw_bytes, index) do
+  defp scan_response_metadata(raw_bytes, index, id_span) do
     with ?" <- byte_at(raw_bytes, index),
          {:ok, key_end} <- skip_string(raw_bytes, index),
          {:ok, key} <- decode_key(raw_bytes, index, key_end) do
@@ -454,30 +461,39 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
         value_start = skip_whitespace(raw_bytes, colon_index + 1)
 
         case key do
-          "error" -> :retain_error
-          "result" -> :discard
-          _other -> continue_response_mode(raw_bytes, value_start)
+          "error" -> {:retain_error, id_span}
+          "result" -> {:discard, id_span}
+          "id" -> continue_response_metadata(raw_bytes, value_start, value_start)
+          _other -> continue_response_metadata(raw_bytes, value_start, id_span)
         end
       else
-        :discard
+        {:discard, id_span}
       end
     else
-      _invalid -> :discard
+      _invalid -> {:discard, id_span}
     end
   end
 
-  defp continue_response_mode(raw_bytes, value_start) do
+  defp continue_response_metadata(raw_bytes, value_start, id_start_or_span) do
     case skip_value(raw_bytes, value_start) do
       {:ok, value_end} ->
+        id_span =
+          if is_integer(id_start_or_span),
+            do: {id_start_or_span, value_end - id_start_or_span},
+            else: id_start_or_span
+
         next = skip_whitespace(raw_bytes, value_end)
 
         case byte_at(raw_bytes, next) do
-          ?, -> scan_response_mode(raw_bytes, skip_whitespace(raw_bytes, next + 1))
-          _end_or_invalid -> :discard
+          ?, ->
+            scan_response_metadata(raw_bytes, skip_whitespace(raw_bytes, next + 1), id_span)
+
+          _end_or_invalid ->
+            {:discard, id_span}
         end
 
       :error ->
-        :discard
+        {:discard, nil}
     end
   end
 
@@ -528,8 +544,14 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   end
 
   defp decode_key(raw_bytes, start, finish) do
-    token = binary_part(raw_bytes, start, finish - start)
-    {:ok, :json.decode(token)}
+    case binary_part(raw_bytes, start, finish - start) do
+      ~s("id") -> {:ok, "id"}
+      ~s("jsonrpc") -> {:ok, "jsonrpc"}
+      ~s("result") -> {:ok, "result"}
+      ~s("error") -> {:ok, "error"}
+      ~s("method") -> {:ok, "method"}
+      token -> {:ok, :json.decode(token)}
+    end
   rescue
     _error -> :error
   end

@@ -11,6 +11,8 @@ defmodule Lasso.RPC.RequestProjectionTest do
     RequestTerminal
   }
 
+  alias Lasso.RPC.ExecutionFact.Codec
+
   setup do
     Application.ensure_all_started(:lasso)
     :ok
@@ -63,6 +65,36 @@ defmodule Lasso.RPC.RequestProjectionTest do
     assert {:ok, payload} = RequestProjection.encode(event)
     assert byte_size(payload) <= 4_096
     assert {:ok, ^event} = RequestProjection.decode(payload)
+  end
+
+  test "native facts avoid a JSON round trip while queued JSON facts remain compatible" do
+    event = request_projection()
+
+    assert {:ok, native_payload} = RequestProjection.encode(event)
+
+    assert {:lasso_request_projection, 1, %RequestTerminal.UpstreamResponse{}, _method,
+            _provider_id, _instance_id, _transport, _origin, _failovers,
+            _emitted_at_ms} =
+             :erlang.binary_to_term(native_payload, [:safe])
+
+    legacy_payload =
+      :erlang.term_to_binary(
+        {
+          :lasso_request_projection,
+          1,
+          Codec.encode!(event.fact),
+          event.method,
+          event.provider_id,
+          event.instance_id,
+          event.transport,
+          event.request_origin,
+          event.failover_count,
+          event.emitted_at_ms
+        },
+        [:deterministic]
+      )
+
+    assert {:ok, ^event} = RequestProjection.decode(legacy_payload)
   end
 
   test "routing decision preserves canonical request and final route identity" do

@@ -15,6 +15,25 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
     assert {:ok, %{"id" => 7, "result" => "0x1"}} = Jason.decode(response.raw_bytes)
   end
 
+  test "captures a top-level id span during the mode scan and falls back when result comes first" do
+    canonical = ~s({"jsonrpc":"2.0","id":"internal","result":"0x1"})
+
+    assert {:ok, %Validated{id: "internal", id_span: {start, length}}} =
+             UpstreamResponse.parse_unary(canonical)
+
+    assert binary_part(canonical, start, length) == ~s("internal")
+
+    result_first = ~s({"result":"0x1","id":"internal","jsonrpc":"2.0"})
+
+    assert {:ok, %Validated{id: "internal", id_span: nil}} =
+             UpstreamResponse.parse_unary(result_first)
+
+    assert {:ok, %Response.Success{raw_bytes: restored}} =
+             UpstreamResponse.validate_unary(result_first, "internal", 9)
+
+    assert {:ok, %{"id" => 9, "result" => "0x1"}} = Jason.decode(restored)
+  end
+
   test "rejects invalid unary envelopes with bounded reasons" do
     vectors = [
       {"not-json", :invalid_json},
@@ -45,10 +64,9 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
       {~s({"jsonrpc":"2.0","id":"internal","error":{"code":-32000,"message":"busy","data":{"secret":"discarded"}}}),
        {:ok, :error, "internal"}},
       {~s({"jsonrpc":"2.0","id":"internal","result":[1,]}), {:invalid, :invalid_json}},
-      {<<"{\"jsonrpc\":\"2.0\",\"id\":\"internal\",\"result\":\"", 0xFF, "\"}">>,
+      {~s({"jsonrpc":"2.0","id":"internal","result":") <> <<0xFF>> <> ~s("}),
        {:invalid, :invalid_json}},
-      {"{\"jsonrpc\":\"2.0\",\"id\":\"internal\",\"result\":\"" <>
-         "\\u" <> "D800\"}", {:invalid, :invalid_json}},
+      {~S({"jsonrpc":"2.0","id":"internal","result":"\uD800"}), {:invalid, :invalid_json}},
       {~s({"jsonrpc":"2.0","result":{"id":"internal"}}), {:invalid, :invalid_envelope}},
       {~s({"jsonrpc":"2.0","id":"internal","id":"internal","result":1}),
        {:invalid, :invalid_envelope}},

@@ -32,6 +32,23 @@ defmodule Lasso.RPC.PreparedRequestTest do
     assert {:ok, %{"id" => nil}} = PreparedRequest.to_legacy_map(prepared)
   end
 
+  test "preserves nested JSON values through the prepared binary" do
+    params = [
+      %{
+        "unicode" => "route → upstream",
+        "decimal" => 1.25,
+        "nested" => [nil, true, %{"quantity" => "0x01"}]
+      }
+    ]
+
+    request = %{"jsonrpc" => "2.0", "method" => "eth_call", "params" => params, "id" => 7}
+
+    assert {:ok, prepared} = PreparedRequest.new(request, "lasso-json-values")
+
+    assert {:ok, %{"id" => "lasso-json-values", "params" => ^params}} =
+             Jason.decode(prepared.encoded)
+  end
+
   test "rejects invalid transport ids and unencodable request values" do
     request = %{"jsonrpc" => "2.0", "method" => "eth_call", "params" => [], "id" => 1}
 

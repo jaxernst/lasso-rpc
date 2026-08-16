@@ -74,28 +74,26 @@ defmodule Lasso.RPC.RequestProjection do
   def encode(%__MODULE__{} = event) do
     event = validate!(event)
 
-    with {:ok, fact_payload} <- Codec.encode(event.fact) do
-      payload =
-        :erlang.term_to_binary(
-          {
-            @schema,
-            @version,
-            fact_payload,
-            event.method,
-            event.provider_id,
-            event.instance_id,
-            event.transport,
-            event.request_origin,
-            event.failover_count,
-            event.emitted_at_ms
-          },
-          [:deterministic]
-        )
+    payload =
+      :erlang.term_to_binary(
+        {
+          @schema,
+          @version,
+          event.fact,
+          event.method,
+          event.provider_id,
+          event.instance_id,
+          event.transport,
+          event.request_origin,
+          event.failover_count,
+          event.emitted_at_ms
+        },
+        [:deterministic]
+      )
 
-      if byte_size(payload) <= @max_bytes,
-        do: {:ok, payload},
-        else: {:error, :event_too_large}
-    end
+    if byte_size(payload) <= @max_bytes,
+      do: {:ok, payload},
+      else: {:error, :event_too_large}
   rescue
     ArgumentError -> {:error, :invalid_event}
   end
@@ -115,7 +113,7 @@ defmodule Lasso.RPC.RequestProjection do
         failover_count,
         emitted_at_ms
       } ->
-        case Codec.decode(fact_payload) do
+        case decode_fact_payload(fact_payload) do
           {:ok, fact} ->
             event = %__MODULE__{
               version: @version,
@@ -148,6 +146,13 @@ defmodule Lasso.RPC.RequestProjection do
   end
 
   def decode(payload) when is_binary(payload), do: {:error, :event_too_large}
+
+  defp decode_fact_payload(fact_payload) when is_binary(fact_payload),
+    do: Codec.decode(fact_payload)
+
+  defp decode_fact_payload(%_module{} = fact), do: {:ok, fact}
+
+  defp decode_fact_payload(_fact_payload), do: {:error, :invalid_fact}
 
   @spec routing_decision(t()) :: {:ok, RoutingDecision.t()} | :not_routed
   def routing_decision(%__MODULE__{provider_id: provider_id, transport: transport} = event)

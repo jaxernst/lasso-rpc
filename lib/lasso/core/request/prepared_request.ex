@@ -31,7 +31,7 @@ defmodule Lasso.RPC.PreparedRequest do
         {:error, :invalid_client_id}
 
       true ->
-        case Jason.encode(Map.put(rpc_request, "id", transport_id)) do
+        case encode_request(Map.put(rpc_request, "id", transport_id)) do
           {:ok, encoded} ->
             {:ok,
              %__MODULE__{
@@ -56,4 +56,15 @@ defmodule Lasso.RPC.PreparedRequest do
 
   defp valid_client_id?(client_id),
     do: is_binary(client_id) or is_integer(client_id) or is_nil(client_id)
+
+  defp encode_request(rpc_request) do
+    {:ok, rpc_request |> :json.encode(&encode_json_value/2) |> IO.iodata_to_binary()}
+  rescue
+    _error -> Jason.encode(rpc_request)
+  catch
+    _kind, _reason -> Jason.encode(rpc_request)
+  end
+
+  defp encode_json_value(nil, _encoder), do: "null"
+  defp encode_json_value(value, encoder), do: :json.encode_value(value, encoder)
 end
