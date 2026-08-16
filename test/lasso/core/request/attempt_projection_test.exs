@@ -287,6 +287,127 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.successful_p95_latency_ms == nil
   end
 
+  test "client and system evidence stay isolated while system latency seeds a client prior" do
+    generation = publish_routes(["projection-instance"])
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+
+    key = route_key("projection-instance")
+    assert [{^key, _row}] = :ets.lookup(:lasso_instance_state, key)
+
+    for stamp <- 100..102 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for(stamp, 20_000, "projection-instance", generation, "system")
+               )
+    end
+
+    client = AttemptProjection.route_state(scope, "projection-instance", :http, "client")
+    system = AttemptProjection.route_state(scope, "projection-instance", :http, "system")
+
+    assert is_nil(client)
+    assert system.usable_successes == 3
+
+    row = AttemptProjection.route_record(scope, "projection-instance", :http)
+
+    prior =
+      AttemptProjection.summarize_route(row, "projection-instance", :http, @chain_id, :client)
+
+    assert prior.state == :unqualified
+    assert prior.support_source == :system_prior
+    assert prior.comparable_attempts == 0
+    assert prior.successful_mean_latency_ms == 20.0
+
+    for stamp <- 200..202 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for(stamp, 80_000, "projection-instance", generation, "client")
+               )
+    end
+
+    client = AttemptProjection.route_state(scope, "projection-instance", :http, "client")
+    system = AttemptProjection.route_state(scope, "projection-instance", :http, "system")
+
+    row = AttemptProjection.route_record(scope, "projection-instance", :http)
+
+    authoritative =
+      AttemptProjection.summarize_route(row, "projection-instance", :http, @chain_id, :client)
+
+    assert authoritative.state == :qualified
+    assert authoritative.support_source == :client_attempt
+    assert authoritative.successful_mean_latency_ms == 80.0
+    assert client.usable_successes == 3
+    assert system.usable_successes == 3
+    assert system.successful_mean_latency_ms == 20.0
+  end
+
+  test "unknown workload keys cannot grow the fixed routing table" do
+    generation = publish_routes(["projection-instance"])
+    before_size = :ets.info(:lasso_instance_state, :size)
+
+    assert :stale =
+             AttemptProjection.apply_control(
+               success_event_for(100, 10_000, "projection-instance", generation, "unknown")
+             )
+
+    assert :ets.info(:lasso_instance_state, :size) == before_size
+  end
+
+  test "system quota updates shared admission without becoming client reliability evidence" do
+    generation = publish_routes(["projection-instance"])
+
+    fact =
+      AttemptTerminal.Response.new(
+        identity("projection-instance", generation, "system"),
+        :application_error,
+        10,
+        error_code: -32_005,
+        error_category: :quota,
+        retry_after_ms: 500
+      )
+
+    event = %{AttemptProjection.new(fact, "provider", "eth_call") | emitted_at_us: 2_000_000}
+    assert :ok = AttemptProjection.apply_control(event)
+
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    row = AttemptProjection.route_record(scope, "projection-instance", :http)
+    system = AttemptProjection.route_state(scope, "projection-instance", :http, "system")
+
+    assert row.total_rate_limits == 0
+    assert row.comparable_attempts == 0
+    assert row.rate_limit_expiry_ms == 2_500
+    assert system.total_rate_limits == 1
+    assert system.comparable_attempts == 1
+  end
+
+  test "stale system evidence cannot seed client ordering" do
+    generation = publish_routes(["projection-instance"])
+    stale_us = System.monotonic_time(:microsecond) - 300_000_010
+
+    for offset <- 0..2 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for(
+                   stale_us + offset,
+                   10_000,
+                   "projection-instance",
+                   generation,
+                   "system"
+                 )
+               )
+    end
+
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    row = AttemptProjection.route_record(scope, "projection-instance", :http)
+
+    refute AttemptProjection.summarize_route(
+             row,
+             "projection-instance",
+             :http,
+             @chain_id,
+             :client
+           )
+  end
+
   test "qualified routing evidence becomes stale after five minutes without an observation" do
     generation = publish_routes(["stale-instance", "fresh-instance"])
     now_us = System.monotonic_time(:microsecond)
@@ -459,7 +580,20 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     %{AttemptProjection.new(fact, "provider", "eth_call") | emitted_at_us: emitted_at_us}
   end
 
-  defp identity(instance_id, generation) do
+  defp success_event_for(emitted_at_us, io_duration_us, instance_id, generation, workload_key) do
+    fact =
+      AttemptTerminal.Response.new(
+        identity(instance_id, generation, workload_key),
+        :success,
+        io_duration_us
+      )
+
+    %{AttemptProjection.new(fact, "provider", "eth_call") | emitted_at_us: emitted_at_us}
+  end
+
+  defp identity(instance_id, generation), do: identity(instance_id, generation, "client")
+
+  defp identity(instance_id, generation, workload_key) do
     AttemptIdentity.new(
       request_id: "projection-request",
       attempt_id: "projection-attempt-#{instance_id}",
@@ -472,16 +606,15 @@ defmodule Lasso.RPC.AttemptProjectionTest do
       circuit_epoch: 1,
       execution_safety: :replay_safe,
       routing_intent: "default",
-      workload_key: "default",
+      workload_key: workload_key,
       request_budget_ms: 100,
       candidate_admission_count: 1,
       dispatch_count: 1
     )
   end
 
-  defp route_key(instance_id) do
-    {:routing_control, @profile, @chain_id, instance_id, :http, "default"}
-  end
+  defp route_key(instance_id),
+    do: {:routing_control, @profile, @chain_id, instance_id, :http, "client"}
 
   defp clear_control_rows do
     :ets.match_delete(:lasso_instance_state, {{:routing_control_scope, @profile, :_}, :_})

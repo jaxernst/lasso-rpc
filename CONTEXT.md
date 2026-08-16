@@ -48,3 +48,9 @@ A bounded, node-local summary of attempt evidence used to qualify or rank an ups
 Evidence qualification is separate from live admission, and another profile may reuse evidence
 only when it explicitly references the same upstream instance.
 _Avoid_: Lifetime average, health score
+
+**Evidence partition**:
+One of the fixed workload keys that isolates client attempt evidence from system-probe evidence.
+Client evidence is authoritative for adaptive client routing. Fresh system evidence may order an
+otherwise unqualified client fallback, but it cannot qualify the route.
+_Avoid_: Dynamic method bucket, shared default workload

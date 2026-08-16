@@ -25,9 +25,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
     {qualified, remaining} =
       Enum.split_with(channels, fn channel ->
-        summaries
-        |> RoutingEvidence.summary_for_channel(channel)
-        |> RoutingEvidence.qualified?()
+        summaries |> RoutingEvidence.summary_for_channel(channel) |> RoutingEvidence.qualified?()
       end)
 
     case qualified do
@@ -40,22 +38,41 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
           length(channels)
         )
 
-        Enum.shuffle(channels)
+        weighted_available(channels, summaries)
 
       _ ->
-        latencies =
-          Enum.map(qualified, fn channel ->
-            RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms
-          end)
-
-        beta = Application.get_env(:lasso, :lw_beta, @default_beta)
-
-        qualified
-        |> Enum.zip(relative_weights(latencies, beta))
-        |> weighted_permutation()
-        |> Kernel.++(Enum.shuffle(remaining))
+        weighted_available(qualified, summaries) ++ weighted_available(remaining, summaries)
     end
   end
+
+  defp weighted_available([], _summaries), do: []
+
+  defp weighted_available(channels, summaries) do
+    {measured, unmeasured} =
+      Enum.split_with(channels, fn channel ->
+        summary = RoutingEvidence.summary_for_channel(summaries, channel)
+        summary && summary.state != :stale && is_number(summary.successful_mean_latency_ms)
+      end)
+
+    weighted =
+      case measured do
+        [] ->
+          []
+
+        _ ->
+          latencies = Enum.map(measured, &mean_latency(&1, summaries))
+          beta = Application.get_env(:lasso, :lw_beta, @default_beta)
+
+          measured
+          |> Enum.zip(relative_weights(latencies, beta))
+          |> weighted_permutation()
+      end
+
+    weighted ++ Enum.shuffle(unmeasured)
+  end
+
+  defp mean_latency(channel, summaries),
+    do: RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms
 
   @doc false
   @spec relative_weights([number()], number()) :: [float()]

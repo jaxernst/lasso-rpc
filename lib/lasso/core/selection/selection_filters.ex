@@ -9,6 +9,8 @@ defmodule Lasso.RPC.SelectionFilters do
   @type protocol :: :http | :ws | :both | nil
   @type circuit_state_filter :: :closed | :half_open | :open
 
+  alias Lasso.RPC.RoutingEvidence.Workload
+
   @type t :: %__MODULE__{
           protocol: protocol(),
           exclude: [String.t()],
@@ -17,7 +19,8 @@ defmodule Lasso.RPC.SelectionFilters do
           max_lag_blocks: non_neg_integer() | nil,
           min_block: non_neg_integer() | nil,
           requires_archival: boolean(),
-          requires_subscribe_new_heads: boolean()
+          requires_subscribe_new_heads: boolean(),
+          workload_key: :client | :system
         }
 
   defstruct protocol: nil,
@@ -27,7 +30,8 @@ defmodule Lasso.RPC.SelectionFilters do
             max_lag_blocks: nil,
             min_block: nil,
             requires_archival: false,
-            requires_subscribe_new_heads: false
+            requires_subscribe_new_heads: false,
+            workload_key: :client
 
   @doc """
   Creates a new SelectionFilters struct with validated defaults.
@@ -62,7 +66,8 @@ defmodule Lasso.RPC.SelectionFilters do
       max_lag_blocks: Keyword.get(opts, :max_lag_blocks),
       min_block: Keyword.get(opts, :min_block),
       requires_archival: Keyword.get(opts, :requires_archival, false),
-      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
+      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
+      workload_key: Workload.normalize(Keyword.get(opts, :workload_key, :client))
     }
   end
 
@@ -85,7 +90,8 @@ defmodule Lasso.RPC.SelectionFilters do
       requires_subscribe_new_heads:
         to_boolean(
           map[:requires_subscribe_new_heads] || Map.get(map, "requires_subscribe_new_heads")
-        )
+        ),
+      workload_key: Workload.normalize(map[:workload_key] || Map.get(map, "workload_key"))
     }
   end
 
@@ -102,7 +108,8 @@ defmodule Lasso.RPC.SelectionFilters do
       max_lag_blocks: filters.max_lag_blocks,
       min_block: filters.min_block,
       requires_archival: filters.requires_archival,
-      requires_subscribe_new_heads: filters.requires_subscribe_new_heads
+      requires_subscribe_new_heads: filters.requires_subscribe_new_heads,
+      workload_key: filters.workload_key
     }
   end
 

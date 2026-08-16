@@ -68,6 +68,42 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     assert degradation_count(:fastest) == before_count + 1
   end
 
+  test "system priors order cold routes but never outrank client-qualified evidence" do
+    channels = channels(["slow-client", "fast-prior"])
+
+    prior =
+      summary("fast-prior", :unqualified, 10.0, nil)
+      |> Map.merge(%{comparable_attempts: 0, usable_successes: 0, support_source: :system_prior})
+
+    put_summaries(%{
+      {"slow-client-instance", :http} => summary("slow-client", :qualified, 100.0, nil),
+      {"fast-prior-instance", :http} => prior
+    })
+
+    ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
+
+    assert ["slow-client", "fast-prior"] ==
+             channels
+             |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
+             |> Enum.map(& &1.provider_id)
+
+    cold_ctx = %{
+      ctx
+      | routing_summaries: %{
+          {"slow-client-instance", :http} => %{
+            summary("slow-client", :unqualified, 80.0, nil)
+            | comparable_attempts: 0
+          },
+          {"fast-prior-instance", :http} => prior
+        }
+    }
+
+    assert ["fast-prior", "slow-client"] ==
+             channels
+             |> Fastest.rank_channels("eth_getBalance", cold_ctx, "public", 1)
+             |> Enum.map(& &1.provider_id)
+  end
+
   test "missing direct control rows preserve live candidates through degradation" do
     channels = channels(["b", "a"])
     ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
@@ -154,7 +190,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
       upstream_instance_id: "#{provider_id}-instance",
       chain_id: 1,
       transport: :http,
-      workload_key: :default,
+      workload_key: :client,
       state: state,
       successful_mean_latency_ms: mean,
       successful_p95_latency_ms: p95,
@@ -180,7 +216,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
         :ok
 
       {{instance_id, transport}, %Summary{} = summary} ->
-        key = {:routing_control, "public", 1, instance_id, transport, "default"}
+        key = {:routing_control, "public", 1, instance_id, transport, "client"}
         [{^key, row}] = :ets.lookup(:lasso_instance_state, key)
         observed_at_us = System.monotonic_time(:microsecond)
 
@@ -204,7 +240,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
   end
 
   defp degradation_count(strategy),
-    do: AttemptProjection.availability_degradation_count("public", 1, strategy, :default)
+    do: AttemptProjection.availability_degradation_count("public", 1, strategy, :client)
 
   defp clear_test_control do
     :ets.match_delete(:lasso_instance_state, {{:routing_control_scope, "public", 1}, :_})

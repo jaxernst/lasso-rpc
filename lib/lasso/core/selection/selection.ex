@@ -60,7 +60,8 @@ defmodule Lasso.RPC.Selection do
       exclude: Keyword.get(opts, :exclude, []),
       include_half_open: Keyword.get(opts, :include_half_open, false),
       timeout: Keyword.get(opts, :timeout, 30_000),
-      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
+      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
+      request_origin: Keyword.get(opts, :request_origin, :client)
     }
 
     select_provider_from_plan(profile, chain_id, method, params, selection_opts)
@@ -87,7 +88,8 @@ defmodule Lasso.RPC.Selection do
         selection_opts.exclude,
         selection_opts.protocol,
         include_half_open: selection_opts.include_half_open,
-        requires_subscribe_new_heads: selection_opts.requires_subscribe_new_heads
+        requires_subscribe_new_heads: selection_opts.requires_subscribe_new_heads,
+        workload_key: workload_for_origin(selection_opts.request_origin)
       )
 
     candidates = CandidateListing.list_routing_candidates_from_plan(plan, filters)
@@ -106,6 +108,7 @@ defmodule Lasso.RPC.Selection do
             method,
             selection_opts.timeout
           )
+          |> Map.put(:workload_key, workload_for_origin(selection_opts.request_origin))
           |> enrich_strategy_context(candidates, plan)
 
         channels =
@@ -188,6 +191,7 @@ defmodule Lasso.RPC.Selection do
     limit = Keyword.get(opts, :limit, 1000)
     include_half_open = Keyword.get(opts, :include_half_open, true)
     params = Keyword.get(opts, :params, [])
+    workload_key = workload_for_origin(Keyword.get(opts, :request_origin, :client))
 
     pool_protocol =
       case transport do
@@ -214,7 +218,8 @@ defmodule Lasso.RPC.Selection do
         max_lag_blocks: plan.max_lag_blocks,
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
-        requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false)
+        requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
+        workload_key: workload_key
       )
 
     provider_candidates = CandidateListing.list_routing_candidates_from_plan(plan, pool_filters)
@@ -248,7 +253,8 @@ defmodule Lasso.RPC.Selection do
         strategy,
         method,
         plan,
-        Keyword.get(opts, :timeout, 30_000)
+        Keyword.get(opts, :timeout, 30_000),
+        workload_key
       )
 
     selected = final_channels |> Enum.take(limit)
@@ -258,13 +264,21 @@ defmodule Lasso.RPC.Selection do
       else: []
   end
 
-  defp order_capable_channels([channel], candidates, strategy, _method, plan, _timeout)
+  defp order_capable_channels(
+         [channel],
+         candidates,
+         strategy,
+         _method,
+         plan,
+         _timeout,
+         workload_key
+       )
        when strategy in [:fastest, :priority, :load_balanced, :latency_weighted] do
-    maybe_record_single_channel_degradation(channel, candidates, strategy, plan)
+    maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
     [channel]
   end
 
-  defp order_capable_channels(channels, candidates, strategy, method, plan, timeout) do
+  defp order_capable_channels(channels, candidates, strategy, method, plan, timeout, workload_key) do
     circuit_state_map =
       candidates
       |> Enum.flat_map(fn %{id: provider_id} = candidate ->
@@ -286,6 +300,7 @@ defmodule Lasso.RPC.Selection do
 
     prepared_ctx =
       strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
+      |> Map.put(:workload_key, workload_key)
       |> enrich_strategy_context(candidates, plan)
 
     ordered_channels =
@@ -305,18 +320,30 @@ defmodule Lasso.RPC.Selection do
     tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
   end
 
-  defp maybe_record_single_channel_degradation(_channel, _candidates, strategy, _plan)
+  defp maybe_record_single_channel_degradation(
+         _channel,
+         _candidates,
+         strategy,
+         _plan,
+         _workload_key
+       )
        when strategy in [:priority, :load_balanced],
        do: :ok
 
-  defp maybe_record_single_channel_degradation(channel, candidates, strategy, plan) do
+  defp maybe_record_single_channel_degradation(
+         channel,
+         candidates,
+         strategy,
+         plan,
+         workload_key
+       ) do
     if Enum.any?(candidates, & &1.learned_feedback_degraded?) do
       :ok
     else
       summary =
         candidates
         |> Enum.find(&(&1.instance_id == channel.instance_id))
-        |> single_channel_summary(channel, plan)
+        |> single_channel_summary(channel, plan, workload_key)
 
       if RoutingEvidence.qualified?(summary) do
         :ok
@@ -325,23 +352,22 @@ defmodule Lasso.RPC.Selection do
           plan.profile,
           strategy,
           plan.chain_id,
-          :default,
+          workload_key,
           1
         )
       end
     end
   end
 
-  defp single_channel_summary(nil, _channel, _plan), do: nil
+  defp single_channel_summary(nil, _channel, _plan, _workload_key), do: nil
 
-  defp single_channel_summary(candidate, channel, plan) do
-    candidate.routing_states
-    |> Map.get(channel.transport)
-    |> AttemptProjection.summarize_route(
+  defp single_channel_summary(candidate, channel, plan, workload_key) do
+    AttemptProjection.summarize_route(
+      Map.get(candidate.routing_states, channel.transport),
       candidate.instance_id,
       channel.transport,
       plan.chain_id,
-      :default
+      workload_key
     )
   end
 
@@ -477,6 +503,7 @@ defmodule Lasso.RPC.Selection do
     consensus_height = get_consensus_height(plan.chain_id)
     include_half_open = Keyword.get(opts, :include_half_open, false)
     requires_subscribe_new_heads = Keyword.get(opts, :requires_subscribe_new_heads, false)
+    workload_key = Keyword.get(opts, :workload_key, :client)
 
     requirements =
       RequestAnalysis.analyze(
@@ -493,7 +520,8 @@ defmodule Lasso.RPC.Selection do
       max_lag_blocks: plan.max_lag_blocks,
       min_block: requirements.requested_block,
       requires_archival: requirements.requires_archival,
-      requires_subscribe_new_heads: requires_subscribe_new_heads
+      requires_subscribe_new_heads: requires_subscribe_new_heads,
+      workload_key: workload_key
     )
   end
 
@@ -518,4 +546,7 @@ defmodule Lasso.RPC.Selection do
 
     %{ctx | routing_summaries: summaries, provider_priorities: plan.provider_priorities}
   end
+
+  defp workload_for_origin(:system), do: :system
+  defp workload_for_origin(_origin), do: :client
 end

@@ -24,9 +24,7 @@ defmodule Lasso.RPC.Strategies.Fastest do
 
     {qualified, remaining} =
       Enum.split_with(channels, fn channel ->
-        summaries
-        |> RoutingEvidence.summary_for_channel(channel)
-        |> RoutingEvidence.qualified?()
+        summaries |> RoutingEvidence.summary_for_channel(channel) |> RoutingEvidence.qualified?()
       end)
 
     case qualified do
@@ -39,12 +37,26 @@ defmodule Lasso.RPC.Strategies.Fastest do
           length(channels)
         )
 
-        deterministic_order(channels)
+        Enum.sort_by(channels, &prior_key(&1, summaries))
 
       _ ->
-        Enum.sort_by(qualified, &ranking_key(&1, summaries)) ++ deterministic_order(remaining)
+        Enum.sort_by(qualified, &ranking_key(&1, summaries)) ++
+          Enum.sort_by(remaining, &prior_key(&1, summaries))
     end
   end
+
+  defp prior_key(channel, summaries) do
+    summary = RoutingEvidence.summary_for_channel(summaries, channel)
+
+    {
+      prior_latency(summary),
+      channel.provider_id,
+      channel.transport
+    }
+  end
+
+  defp prior_latency(%{state: :stale}), do: :infinity
+  defp prior_latency(summary), do: (summary && summary.successful_mean_latency_ms) || :infinity
 
   defp ranking_key(channel, summaries) do
     summary = RoutingEvidence.summary_for_channel(summaries, channel)
@@ -55,9 +67,5 @@ defmodule Lasso.RPC.Strategies.Fastest do
       channel.provider_id,
       channel.transport
     }
-  end
-
-  defp deterministic_order(channels) do
-    Enum.sort_by(channels, &{&1.provider_id, &1.transport})
   end
 end

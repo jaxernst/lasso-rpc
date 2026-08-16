@@ -14,7 +14,7 @@ defmodule Lasso.RPC.AttemptProjection do
   }
 
   alias Lasso.RPC.ExecutionFact.Codec
-  alias Lasso.RPC.RoutingEvidence.{AttemptEvent, Summary}
+  alias Lasso.RPC.RoutingEvidence.{AttemptEvent, Summary, Workload}
 
   @dispatcher Lasso.ExecutionProjectionDispatcher
   @schema :lasso_attempt_projection
@@ -24,10 +24,12 @@ defmodule Lasso.RPC.AttemptProjection do
   @probation_deliveries 32
   @routing_evidence_max_age_us 300_000_000
   @max_count 9_223_372_036_854_775_807
-  @default_workload "default"
+  @default_workload "client"
   @availability_dimensions [
-    {:fastest, :default},
-    {:latency_weighted, :default}
+    {:fastest, :client},
+    {:latency_weighted, :client},
+    {:fastest, :system},
+    {:latency_weighted, :system}
   ]
 
   @enforce_keys [:version, :fact, :provider_id, :method, :emitted_at_us]
@@ -92,10 +94,14 @@ defmodule Lasso.RPC.AttemptProjection do
   defp apply_control(event, barrier) do
     identity = identity(event.fact)
     generation = ConfigStore.route_generation()
+    workload = Workload.decode(identity.workload_key)
 
     cond do
       identity.route_generation != generation ->
         record_stale(identity, generation, event.emitted_at_us)
+        :stale
+
+      workload == :unknown ->
         :stale
 
       match?(%AttemptTerminal.PredispatchFailure{}, event.fact) ->
@@ -216,14 +222,29 @@ defmodule Lasso.RPC.AttemptProjection do
   @spec route_state(scope_state(), binary(), :http | :ws, binary()) :: map() | nil
   def route_state(scope, instance_id, transport, workload_key \\ @default_workload)
       when is_binary(instance_id) and transport in [:http, :ws] and is_binary(workload_key) do
+    with row when not is_nil(row) <- route_record(scope, instance_id, transport),
+         observed_at_us when is_integer(observed_at_us) <-
+           partition_observed_at(row, Workload.decode(workload_key)),
+         true <- visible_after_floor?(scope, observed_at_us) do
+      partition_state(row, Workload.decode(workload_key))
+    else
+      _other -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc false
+  @spec route_record(scope_state(), binary(), :http | :ws) :: map() | nil
+  def route_record(scope, instance_id, transport)
+      when is_binary(instance_id) and transport in [:http, :ws] do
     key =
       {:routing_control, scope.profile, scope.chain_id, BoundedIdentifier.encode(instance_id),
-       transport, BoundedIdentifier.encode(workload_key)}
+       transport, @default_workload}
 
     case :ets.lookup(:lasso_instance_state, key) do
-      [{^key, %{generation: generation, observed_at_us: observed_at_us} = row}]
-      when generation == scope.generation and is_integer(observed_at_us) ->
-        if visible_after_floor?(scope, observed_at_us), do: row
+      [{^key, %{generation: generation} = row}] when generation == scope.generation ->
+        visible_route_record(scope, row)
 
       _other ->
         nil
@@ -235,14 +256,22 @@ defmodule Lasso.RPC.AttemptProjection do
   @spec batch_summaries(binary(), [Channel.t() | map()], pos_integer(), atom()) :: map()
   def batch_summaries(profile, channels, chain_id, workload_key) do
     scope = scope_state(profile, chain_id)
-    workload = workload_key |> Atom.to_string() |> BoundedIdentifier.encode()
+    workload_key = normalize_workload(workload_key)
     now_us = System.monotonic_time(:microsecond)
 
     Map.new(channels, fn channel ->
       key = {channel.instance_id, channel.transport}
-      row = route_state(scope, channel.instance_id, channel.transport, workload)
+      row = route_record(scope, channel.instance_id, channel.transport)
 
-      {key, summary(row, channel.instance_id, channel.transport, chain_id, workload_key, now_us)}
+      {key,
+       summary_for_workload(
+         row,
+         channel.instance_id,
+         channel.transport,
+         chain_id,
+         workload_key,
+         now_us
+       )}
     end)
   end
 
@@ -252,7 +281,7 @@ defmodule Lasso.RPC.AttemptProjection do
   def summarize_route(row, instance_id, transport, chain_id, workload_key)
       when is_binary(instance_id) and transport in [:http, :ws] and is_integer(chain_id) and
              chain_id > 0 and is_atom(workload_key) do
-    summary(
+    summary_for_workload(
       row,
       instance_id,
       transport,
@@ -318,7 +347,7 @@ defmodule Lasso.RPC.AttemptProjection do
   def record_availability_degradation(profile, chain_id, strategy, workload_key)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_atom(strategy) and
              is_atom(workload_key) do
-    dimension = {strategy, workload_key}
+    dimension = {strategy, normalize_workload(workload_key)}
 
     if dimension in @availability_dimensions do
       generation = ConfigStore.route_generation()
@@ -340,7 +369,7 @@ defmodule Lasso.RPC.AttemptProjection do
           non_neg_integer()
   def availability_degradation_count(profile, chain_id, strategy, workload_key) do
     scope = scope_state(profile, chain_id)
-    Map.get(scope.availability_degradations, {strategy, workload_key}, 0)
+    Map.get(scope.availability_degradations, {strategy, normalize_workload(workload_key)}, 0)
   end
 
   @doc false
@@ -370,7 +399,7 @@ defmodule Lasso.RPC.AttemptProjection do
        chain_id: identity.chain_id,
        provider_id: event.provider_id,
        transport: identity.transport,
-       workload_key: :default,
+       workload_key: Workload.decode(identity.workload_key),
        observed_at_ms: div(event.emitted_at_us, 1_000),
        outcome: fields.outcome,
        elapsed_io_ms: Map.get(fields, :elapsed_io_ms),
@@ -397,7 +426,8 @@ defmodule Lasso.RPC.AttemptProjection do
   defp do_update_route(key, generation, event, delta, retries, barrier) do
     case :ets.lookup(:lasso_instance_state, key) do
       [{^key, %{generation: ^generation} = current}] ->
-        updated = apply_delta(current, event, delta)
+        workload = event.fact |> identity() |> Map.fetch!(:workload_key) |> Workload.decode()
+        updated = apply_delta(current, event, delta, workload)
         await_control_barrier(barrier)
 
         case replace_exact(key, current, updated) do
@@ -438,7 +468,7 @@ defmodule Lasso.RPC.AttemptProjection do
     end
   end
 
-  defp apply_delta(current, event, delta) do
+  defp apply_delta(current, event, delta, :client) do
     delta = Map.put(delta, :observed_at_us, event.emitted_at_us)
 
     current
@@ -452,6 +482,44 @@ defmodule Lasso.RPC.AttemptProjection do
     |> apply_aggregate(delta)
     |> apply_latest_state(event.emitted_at_us, delta)
   end
+
+  defp apply_delta(current, event, delta, :system) do
+    delta = Map.put(delta, :observed_at_us, event.emitted_at_us)
+
+    system =
+      current.system
+      |> Map.put(:observed_at_us, max_floor(current.system.observed_at_us, event.emitted_at_us))
+      |> Map.put(
+        :oldest_observed_at_us,
+        min_observation(current.system.oldest_observed_at_us, event.emitted_at_us)
+      )
+      |> Map.put(:comparable_attempts, increment(current.system.comparable_attempts))
+      |> apply_aggregate(delta)
+      |> apply_latest_state(event.emitted_at_us, delta)
+
+    current
+    |> Map.put(:revision, increment(current.revision))
+    |> Map.put(:system, system)
+    |> apply_shared_admission(delta)
+  end
+
+  defp apply_delta(current, _event, _delta, _workload), do: current
+
+  defp apply_shared_admission(row, %{kind: :rate_limit, retry_after_ms: retry_after_ms} = delta) do
+    observed_at_us = Map.fetch!(delta, :observed_at_us)
+    expiry_ms = div(observed_at_us, 1_000) + retry_after_ms
+    replace_expiry? = expiry_ms >= row.rate_limit_expiry_ms
+
+    %{
+      row
+      | rate_limit_expiry_ms: max(row.rate_limit_expiry_ms, expiry_ms),
+        rate_limit_retry_after_ms:
+          if(replace_expiry?, do: retry_after_ms, else: row.rate_limit_retry_after_ms),
+        rate_limit_observed_at_us: max_floor(row.rate_limit_observed_at_us, observed_at_us)
+    }
+  end
+
+  defp apply_shared_admission(row, _delta), do: row
 
   defp apply_aggregate(row, %{kind: :success, latency_ms: latency_ms}) do
     successes = increment(row.usable_successes)
@@ -694,7 +762,7 @@ defmodule Lasso.RPC.AttemptProjection do
     case :ets.lookup(:lasso_instance_state, key) do
       [{^key, %{generation: ^generation} = current}] ->
         counts = Map.fetch!(current, :availability_degradations)
-        updated_counts = Map.update!(counts, dimension, &increment/1)
+        updated_counts = Map.update(counts, dimension, 1, &increment/1)
         updated = %{current | availability_degradations: updated_counts}
 
         case replace_exact(key, current, updated) do
@@ -734,8 +802,15 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp publish_route(key, generation) do
     case :ets.lookup(:lasso_instance_state, key) do
-      [{^key, %{generation: ^generation}}] ->
-        :ok
+      [{^key, %{generation: ^generation} = current}] ->
+        if Map.has_key?(current, :system) do
+          :ok
+        else
+          replacement = Map.put(current, :system, default_partition())
+
+          if replace_exact(key, current, replacement) == 0,
+            do: publish_route(key, generation)
+        end
 
       [{^key, current}] ->
         if replace_exact(key, current, default_route(generation)) == 0,
@@ -840,9 +915,18 @@ defmodule Lasso.RPC.AttemptProjection do
   end
 
   defp default_route(generation) do
-    %{
+    Map.merge(default_partition(), %{
       generation: generation,
       revision: 0,
+      stale_drops: 0,
+      missing_drops: 0,
+      contention_drops: 0,
+      system: default_partition()
+    })
+  end
+
+  defp default_partition do
+    %{
       observed_at_us: nil,
       oldest_observed_at_us: nil,
       state_observed_at_us: nil,
@@ -858,10 +942,7 @@ defmodule Lasso.RPC.AttemptProjection do
       total_failures: 0,
       total_rate_limits: 0,
       successful_mean_latency_ms: nil,
-      successful_p95_latency_ms: nil,
-      stale_drops: 0,
-      missing_drops: 0,
-      contention_drops: 0
+      successful_p95_latency_ms: nil
     }
   end
 
@@ -887,8 +968,10 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp route_key(identity) do
     {:routing_control, identity.profile, identity.chain_id, identity.upstream_instance_id,
-     identity.transport, identity.workload_key}
+     identity.transport, @default_workload}
   end
+
+  defp normalize_workload(workload), do: Workload.normalize(workload)
 
   defp replace_exact(key, current, updated) do
     :ets.select_replace(
@@ -903,7 +986,85 @@ defmodule Lasso.RPC.AttemptProjection do
   defp visible_after_floor?(%{recovery_floor_us: floor_us}, observed_at_us),
     do: observed_at_us > floor_us
 
+  defp visible_route_record(%{recovery_floor_us: nil}, row), do: row
+
+  defp visible_route_record(%{recovery_floor_us: floor_us}, row) do
+    visible =
+      row
+      |> maybe_clear_partition(:client, floor_us)
+      |> maybe_clear_partition(:system, floor_us)
+
+    preserve_shared_rate_limit(visible, row, floor_us)
+  end
+
+  defp maybe_clear_partition(row, workload, floor_us) do
+    observed_at_us = partition_observed_at(row, workload)
+
+    if is_integer(observed_at_us) and observed_at_us > floor_us do
+      row
+    else
+      case workload do
+        :client -> Map.merge(row, default_partition())
+        :system -> Map.put(row, :system, default_partition())
+      end
+    end
+  end
+
+  defp preserve_shared_rate_limit(visible, original, floor_us) do
+    if is_integer(original.rate_limit_observed_at_us) and
+         original.rate_limit_observed_at_us > floor_us do
+      %{
+        visible
+        | rate_limit_expiry_ms: original.rate_limit_expiry_ms,
+          rate_limit_retry_after_ms: original.rate_limit_retry_after_ms,
+          rate_limit_observed_at_us: original.rate_limit_observed_at_us
+      }
+    else
+      %{
+        visible
+        | rate_limit_expiry_ms: 0,
+          rate_limit_retry_after_ms: nil,
+          rate_limit_observed_at_us: nil
+      }
+    end
+  end
+
+  defp partition_observed_at(nil, _workload), do: nil
+  defp partition_observed_at(row, :system), do: row.system.observed_at_us
+  defp partition_observed_at(row, _workload), do: row.observed_at_us
+
+  defp partition_state(nil, _workload), do: nil
+  defp partition_state(row, :system), do: Map.put(row.system, :generation, row.generation)
+  defp partition_state(row, _workload), do: row
+
+  defp summary_for_workload(row, instance_id, transport, chain_id, :system, now_us) do
+    row
+    |> partition_state(:system)
+    |> summary(instance_id, transport, chain_id, :system, now_us)
+  end
+
+  defp summary_for_workload(row, instance_id, transport, chain_id, _workload, now_us) do
+    primary = summary(row, instance_id, transport, chain_id, :client, now_us)
+
+    prior =
+      row
+      |> partition_state(:system)
+      |> summary(instance_id, transport, chain_id, :system, now_us)
+
+    attach_system_prior(primary, prior)
+  end
+
   defp summary(nil, _instance_id, _transport, _chain_id, _workload_key, _now_us), do: nil
+
+  defp summary(
+         %{observed_at_us: nil},
+         _instance_id,
+         _transport,
+         _chain_id,
+         _workload_key,
+         _now_us
+       ),
+       do: nil
 
   defp summary(row, instance_id, transport, chain_id, workload_key, now_us) do
     state =
@@ -926,10 +1087,62 @@ defmodule Lasso.RPC.AttemptProjection do
       successful_p95_latency_ms: row.successful_p95_latency_ms,
       last_observed_at_ms: div(row.observed_at_us, 1_000),
       oldest_observed_at_ms: div(row.oldest_observed_at_us, 1_000),
-      support_source: :request_terminal,
+      support_source: workload_support_source(workload_key),
       generation: row.generation
     }
   end
+
+  defp attach_system_prior(nil, nil), do: nil
+  defp attach_system_prior(nil, %Summary{state: :stale}), do: nil
+
+  defp attach_system_prior(nil, %Summary{} = prior) do
+    %{
+      prior
+      | workload_key: :client,
+        state: :unqualified,
+        comparable_attempts: 0,
+        usable_successes: 0,
+        support_source: :system_prior
+    }
+  end
+
+  defp attach_system_prior(%Summary{state: :qualified} = primary, _prior), do: primary
+
+  defp attach_system_prior(%Summary{state: :stale} = primary, prior) do
+    attach_fresh_prior(
+      %{primary | successful_mean_latency_ms: nil, successful_p95_latency_ms: nil},
+      prior
+    )
+  end
+
+  defp attach_system_prior(%Summary{} = primary, nil), do: primary
+  defp attach_system_prior(%Summary{} = primary, %Summary{state: :stale}), do: primary
+
+  defp attach_system_prior(%Summary{} = primary, %Summary{} = prior),
+    do: attach_fresh_prior(primary, prior)
+
+  defp attach_fresh_prior(%Summary{} = primary, nil), do: primary
+  defp attach_fresh_prior(%Summary{} = primary, %Summary{state: :stale}), do: primary
+
+  defp attach_fresh_prior(%Summary{} = primary, %Summary{} = prior) do
+    if is_number(primary.successful_mean_latency_ms) do
+      primary
+    else
+      %{
+        primary
+        | state: if(primary.state == :stale, do: :unqualified, else: primary.state),
+          successful_mean_latency_ms: prior.successful_mean_latency_ms,
+          successful_p95_latency_ms: prior.successful_p95_latency_ms,
+          last_observed_at_ms: prior.last_observed_at_ms,
+          oldest_observed_at_ms: prior.oldest_observed_at_ms,
+          support_source: :system_prior
+      }
+    end
+  end
+
+  defp workload_support_source(:client), do: :client_attempt
+  defp workload_support_source(:system), do: :system_attempt
+  defp workload_support_source(_workload), do: :request_terminal
 
   defp routing_evidence_stale?(observed_at_us, now_us),
     do: now_us - observed_at_us >= @routing_evidence_max_age_us
