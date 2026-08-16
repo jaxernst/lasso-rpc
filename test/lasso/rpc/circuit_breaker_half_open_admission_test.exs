@@ -61,7 +61,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert owner == self()
 
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_if_alive(breaker_pid) end)
 
     assert :ok = CircuitBreaker.activate_attempt(receipt, self())
     assert [{^id, %{claimed?: true, owner_pid: owner}}] = :ets.lookup(Storage.lease_table(), id)
@@ -115,7 +115,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     :ok = GenServer.stop(breaker_pid)
     {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{success_threshold: 1}})
 
-    on_exit(fn -> if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid) end)
+    on_exit(fn -> stop_if_alive(restarted_pid) end)
 
     assert {:ok,
             %Snapshot{
@@ -299,7 +299,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{recovery_timeout: 60_000}})
 
     on_exit(fn ->
-      if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+      stop_if_alive(restarted_pid)
       :ets.delete(Storage.snapshot_table(), id)
       :ets.delete(Storage.lease_table(), id)
       ControlRing.delete(id)
@@ -321,7 +321,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{recovery_timeout: 20}})
 
     on_exit(fn ->
-      if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid)
+      stop_if_alive(restarted_pid)
       :ets.delete(Storage.snapshot_table(), id)
       :ets.delete(Storage.lease_table(), id)
       ControlRing.delete(id)
@@ -334,7 +334,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     {id, breaker_pid} = start_half_open_breaker()
     assert {:ok, receipt} = CircuitBreaker.admit(id, System.monotonic_time(:microsecond) + 25_000)
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_if_alive(breaker_pid) end)
     started_us = System.monotonic_time(:microsecond)
 
     assert :ok = CircuitBreaker.activate_attempt(receipt, self())
@@ -354,7 +354,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     assert [] = :ets.lookup(Storage.lease_table(), id)
 
     {:ok, restarted_pid} = CircuitBreaker.start_link({id, %{success_threshold: 1}})
-    on_exit(fn -> if Process.alive?(restarted_pid), do: GenServer.stop(restarted_pid) end)
+    on_exit(fn -> stop_if_alive(restarted_pid) end)
     assert %{inflight_count: 0} = :sys.get_state(restarted_pid)
   end
 
@@ -405,7 +405,7 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
     })
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      stop_if_alive(pid)
       :ets.delete(Storage.snapshot_table(), id)
       :ets.delete(Storage.lease_table(), id)
       :ets.delete(Storage.control_meta_table(), id)
@@ -415,4 +415,16 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
   end
 
   defp deadline_us, do: System.monotonic_time(:microsecond) + 100_000
+
+  defp stop_if_alive(pid) do
+    if Process.alive?(pid), do: GenServer.stop(pid)
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp resume_if_alive(pid) do
+    if Process.alive?(pid), do: :sys.resume(pid)
+  catch
+    :exit, _reason -> :ok
+  end
 end
