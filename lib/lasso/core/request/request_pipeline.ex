@@ -46,6 +46,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RequestOptions
+  alias Lasso.RPC.RoutingEvidence.Workload
 
   # Type definitions
   @type chain_id :: pos_integer()
@@ -261,7 +262,8 @@ defmodule Lasso.RPC.RequestPipeline do
         strategy: opts.strategy,
         transport: opts.transport || :both,
         limit: @max_channel_candidates,
-        params: params
+        params: params,
+        request_origin: opts.request_origin
       )
     end
   end
@@ -278,6 +280,7 @@ defmodule Lasso.RPC.RequestPipeline do
             strategy: opts.strategy,
             transport: :both,
             exclude: [provider_id],
+            request_origin: opts.request_origin,
             limit: @max_channel_candidates,
             params: params
           )
@@ -648,7 +651,7 @@ defmodule Lasso.RPC.RequestPipeline do
       circuit_epoch: receipt.epoch,
       execution_safety: envelope.execution_safety,
       routing_intent: Atom.to_string(ctx.opts.strategy),
-      workload_key: "default",
+      workload_key: origin_workload_key(ctx),
       request_budget_ms: envelope.original_timeout_ms,
       candidate_admission_count: envelope.candidate_admission_count,
       dispatch_count: envelope.dispatch_count
@@ -1099,7 +1102,7 @@ defmodule Lasso.RPC.RequestPipeline do
       chain_id: ctx.chain_id,
       execution_safety: envelope.execution_safety,
       routing_intent: Atom.to_string(ctx.opts.strategy),
-      workload_key: "default",
+      workload_key: request_workload_key(ctx),
       elapsed_us: max(System.monotonic_time(:microsecond) - envelope.started_at_us, 0),
       candidate_admission_count: envelope.candidate_admission_count,
       dispatch_count: envelope.dispatch_count,
@@ -1116,6 +1119,19 @@ defmodule Lasso.RPC.RequestPipeline do
        do: reason
 
   defp final_exhaustion_reason(_ctx), do: :providers_exhausted
+
+  defp request_workload_key(%RequestContext{public_response_attempt: fact})
+       when not is_nil(fact) do
+    fact.identity.workload_key
+  end
+
+  defp request_workload_key(%RequestContext{terminal_attempt_fact: fact}) when not is_nil(fact),
+    do: fact.identity.workload_key
+
+  defp request_workload_key(ctx), do: origin_workload_key(ctx)
+
+  defp origin_workload_key(ctx),
+    do: Workload.encode(Workload.for_origin(ctx.opts.request_origin))
 
   defp release_execution_payloads(ctx) do
     opts = bounded_return_options(ctx.opts)

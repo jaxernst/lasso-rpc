@@ -13,6 +13,7 @@ defmodule Lasso.RPC.SelectionFiltersTest do
       assert filters.exclude_rate_limited == false
       assert filters.max_lag_blocks == nil
       assert filters.requires_archival == false
+      assert filters.workload_key == :client
     end
 
     test "accepts all filter options" do
@@ -23,7 +24,8 @@ defmodule Lasso.RPC.SelectionFiltersTest do
           include_half_open: true,
           exclude_rate_limited: true,
           max_lag_blocks: 5,
-          requires_archival: true
+          requires_archival: true,
+          workload_key: :system
         )
 
       assert filters.protocol == :http
@@ -32,6 +34,7 @@ defmodule Lasso.RPC.SelectionFiltersTest do
       assert filters.exclude_rate_limited == true
       assert filters.max_lag_blocks == 5
       assert filters.requires_archival == true
+      assert filters.workload_key == :system
     end
 
     test "normalizes protocol strings" do
@@ -67,7 +70,8 @@ defmodule Lasso.RPC.SelectionFiltersTest do
       map = %{
         "protocol" => "http",
         "exclude" => ["p1"],
-        "requires_archival" => true
+        "requires_archival" => true,
+        "workload_key" => "system"
       }
 
       filters = SelectionFilters.from_map(map)
@@ -75,6 +79,7 @@ defmodule Lasso.RPC.SelectionFiltersTest do
       assert filters.protocol == :http
       assert filters.exclude == ["p1"]
       assert filters.requires_archival == true
+      assert filters.workload_key == :system
     end
 
     test "handles missing keys with defaults" do

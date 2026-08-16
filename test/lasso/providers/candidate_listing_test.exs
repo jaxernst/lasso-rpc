@@ -91,6 +91,27 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert candidate.routing_states.ws == nil
     end
 
+    test "preprovisions one fixed partitioned routing row per transport" do
+      instance_ids =
+        @profile
+        |> Catalog.get_profile_providers(@chain)
+        |> Enum.map(& &1.instance_id)
+        |> MapSet.new()
+
+      workloads =
+        :ets.match_object(
+          @instance_table,
+          {{:routing_control, @profile, @chain, :_, :http, :_}, :_}
+        )
+        |> Enum.filter(fn {{:routing_control, _, _, instance_id, _, _}, _} ->
+          MapSet.member?(instance_ids, instance_id)
+        end)
+        |> Enum.map(fn {{:routing_control, _, _, _, _, workload}, _} -> workload end)
+        |> MapSet.new()
+
+      assert workloads == MapSet.new(["client"])
+    end
+
     test "returns empty list for unknown profile" do
       assert CandidateListing.list_candidates("nonexistent", @chain, %{}) == []
     end
@@ -358,7 +379,7 @@ defmodule Lasso.Providers.CandidateListingTest do
       event = %{AttemptProjection.new(fact, "p1", "eth_call") | emitted_at_us: 100}
       assert :ok = AttemptProjection.apply_control(event)
 
-      key = {:routing_control, @profile, @chain, instance_id, :http, "default"}
+      key = {:routing_control, @profile, @chain, instance_id, :http, "client"}
       [{^key, before_row}] = :ets.lookup(:lasso_instance_state, key)
       assert before_row.revision == 1
 
@@ -404,7 +425,7 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert scope.degraded?
       assert scope.stale_drops >= 1
 
-      key = {:routing_control, @profile, @chain, instance_id, :http, "default"}
+      key = {:routing_control, @profile, @chain, instance_id, :http, "client"}
       [{^key, row}] = :ets.lookup(:lasso_instance_state, key)
       assert row.comparable_attempts == 0
     end
@@ -637,7 +658,7 @@ defmodule Lasso.Providers.CandidateListingTest do
           circuit_epoch: 1,
           execution_safety: :replay_safe,
           routing_intent: "default",
-          workload_key: "default",
+          workload_key: "client",
           request_budget_ms: 100,
           candidate_admission_count: 1,
           dispatch_count: 1
@@ -737,7 +758,7 @@ defmodule Lasso.Providers.CandidateListingTest do
       circuit_epoch: 1,
       execution_safety: :replay_safe,
       routing_intent: "default",
-      workload_key: "default",
+      workload_key: "client",
       request_budget_ms: 100,
       candidate_admission_count: 1,
       dispatch_count: 1

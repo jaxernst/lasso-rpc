@@ -299,6 +299,15 @@ defmodule Lasso.RPC.RequestPipelineTest do
                dispatch_count: 2
              } = RequestPipeline.build_request_terminal(:ok, %{"ok" => true}, ctx)
     end
+
+    test "system requests close in the fixed system evidence partition" do
+      ctx = terminal_context(0, 0, nil, :system)
+
+      error = JError.new(-32_000, "No channels", category: :provider_error, retriable?: true)
+
+      assert %RequestTerminal.OrdinaryExhaustion{workload_key: "system"} =
+               RequestPipeline.build_request_terminal(:error, error, ctx)
+    end
   end
 
   describe "execute_via_channels/4 - strategy support" do
@@ -879,11 +888,17 @@ defmodule Lasso.RPC.RequestPipelineTest do
     end
   end
 
-  defp terminal_context(candidate_count, dispatch_count, terminal_reason) do
+  defp terminal_context(
+         candidate_count,
+         dispatch_count,
+         terminal_reason,
+         request_origin \\ :client
+       ) do
     opts = %RequestOptions{
       profile: "public",
       strategy: :load_balanced,
-      timeout_ms: 100
+      timeout_ms: 100,
+      request_origin: request_origin
     }
 
     ctx =
@@ -917,7 +932,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
       circuit_epoch: 1,
       execution_safety: ctx.execution_envelope.execution_safety,
       routing_intent: Atom.to_string(ctx.opts.strategy),
-      workload_key: "default",
+      workload_key: "client",
       request_budget_ms: ctx.execution_envelope.original_timeout_ms,
       candidate_admission_count: candidate_count,
       dispatch_count: dispatch_count

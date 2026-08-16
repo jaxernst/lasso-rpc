@@ -22,6 +22,7 @@ defmodule Lasso.Providers.CandidateListing do
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
   alias Lasso.RPC.{AttemptProjection, RoutingPlan, SelectionFilters}
+  alias Lasso.RPC.RoutingEvidence.Workload
 
   @doc """
   Lists provider candidates for a (profile, chain_id) pair, filtered by selection criteria.
@@ -110,12 +111,13 @@ defmodule Lasso.Providers.CandidateListing do
 
   defp do_list_candidates(%RoutingPlan{} = plan, filters, mode) do
     protocol = Map.get(filters, :protocol)
+    workload_key = filters |> Map.get(:workload_key, :client) |> Workload.normalize()
     include_half_open = Map.get(filters, :include_half_open, false)
     learned_scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
     candidates =
       plan.providers
-      |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol, mode))
+      |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol, workload_key, mode))
       |> Enum.filter(fn c ->
         transport_available?(c, protocol) and
           circuit_breaker_ready?(c, protocol, include_half_open) and
@@ -168,13 +170,13 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp build_candidate(provider, learned_scope, plan, protocol, mode) do
+  defp build_candidate(provider, learned_scope, plan, protocol, workload_key, mode) do
     instance_id = provider.instance_id
     transports = live_transports(provider, protocol, plan.profile, plan.chain_id)
 
     include_learned? = not learned_scope.degraded?
-    http_routing = route_state(learned_scope, instance_id, :http, transports)
-    ws_routing = route_state(learned_scope, instance_id, :ws, transports)
+    http_routing = route_record(learned_scope, instance_id, :http, transports)
+    ws_routing = route_record(learned_scope, instance_id, :ws, transports)
 
     http_cb = circuit_state(instance_id, :http, transports)
     ws_cb = circuit_state(instance_id, :ws, transports)
@@ -189,6 +191,7 @@ defmodule Lasso.Providers.CandidateListing do
       config: provider.config,
       transports: transports,
       routing_states: %{http: http_routing, ws: ws_routing},
+      workload_key: workload_key,
       circuit_state: %{http: http_cb.state, ws: ws_cb.state},
       rate_limited: %{http: http_rl.rate_limited, ws: ws_rl.rate_limited},
       learned_feedback_degraded?: learned_scope.degraded?
@@ -236,9 +239,9 @@ defmodule Lasso.Providers.CandidateListing do
     end)
   end
 
-  defp route_state(scope, instance_id, transport, transports) do
+  defp route_record(scope, instance_id, transport, transports) do
     if transport in transports,
-      do: AttemptProjection.route_state(scope, instance_id, transport),
+      do: AttemptProjection.route_record(scope, instance_id, transport),
       else: nil
   end
 

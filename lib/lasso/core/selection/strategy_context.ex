@@ -23,7 +23,7 @@ defmodule Lasso.RPC.StrategyContext do
     :cold_start_baseline,
     :routing_summaries,
     :provider_priorities,
-    workload_key: :default
+    workload_key: :client
   ]
 
   @type t :: %__MODULE__{
