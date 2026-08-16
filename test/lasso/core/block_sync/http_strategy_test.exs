@@ -42,6 +42,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
+        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile-b", "provider-b"} end,
         poll_runner: runner
@@ -103,6 +104,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
+        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile-a", "provider-a"} end,
         poll_runner: fn _plan ->
@@ -139,6 +141,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
+        initial_delay_ms: 0,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile-a", "provider-a"} end,
         poll_runner: fn _plan ->
           send(test_pid, {:poll_blocked, self()})
@@ -163,6 +166,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, strategy} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
+        initial_delay_ms: 0,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile", "provider"} end,
         poll_runner: fn _plan ->
           send(test_pid, {:poll_blocked, self()})
@@ -219,6 +223,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
+        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: resolver,
         poll_runner: runner
@@ -250,5 +255,43 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
 
     HttpStrategy.stop(state)
     refute Process.alive?(second_owner)
+  end
+
+  test "initial polls are deterministically staggered without delaying a full interval" do
+    delays =
+      for index <- 1..256 do
+        HttpStrategy.initial_poll_delay_ms(1, "startup-instance-#{index}", 15_000)
+      end
+
+    assert Enum.all?(delays, &(&1 in 0..1_999))
+    assert length(Enum.uniq(delays)) > 220
+    assert Enum.min(delays) < 100
+    assert Enum.max(delays) > 1_900
+
+    assert HttpStrategy.initial_poll_delay_ms(1, "stable-instance", 15_000) ==
+             HttpStrategy.initial_poll_delay_ms(1, "stable-instance", 15_000)
+
+    assert HttpStrategy.initial_poll_delay_ms(1, "short-interval", 25) in 0..24
+  end
+
+  test "the production default schedules the first poll at its deterministic offset" do
+    instance_id =
+      Enum.find_value(1..1_000, fn index ->
+        candidate = "delayed-startup-instance-#{index}"
+
+        if HttpStrategy.initial_poll_delay_ms(1, candidate, 15_000) >= 500,
+          do: candidate
+      end)
+
+    expected_delay_ms = HttpStrategy.initial_poll_delay_ms(1, instance_id, 15_000)
+    {:ok, state} = HttpStrategy.start(1, instance_id, parent: self())
+    remaining_ms = Process.read_timer(state.timer_ref)
+
+    assert is_integer(remaining_ms)
+    assert remaining_ms > 0
+    assert remaining_ms <= expected_delay_ms
+    refute_receive {:http_strategy, :poll, ^instance_id, _generation}, 5
+
+    HttpStrategy.stop(state)
   end
 end
