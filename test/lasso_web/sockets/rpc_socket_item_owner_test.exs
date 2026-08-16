@@ -577,7 +577,12 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     :persistent_term.put(@test_control_key, %{mode: mode, test_pid: self()})
   end
 
-  defp await_byte_budget_idle!(deadline_ms \\ System.monotonic_time(:millisecond) + 1_000) do
+  defp await_byte_budget_idle! do
+    send(ByteBudget, :audit)
+    await_byte_budget_idle!(System.monotonic_time(:millisecond) + 1_000)
+  end
+
+  defp await_byte_budget_idle!(deadline_ms) do
     if ByteBudget.stats().reservations == 0 do
       :ok
     else
