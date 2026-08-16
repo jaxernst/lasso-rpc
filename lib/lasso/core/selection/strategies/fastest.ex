@@ -10,7 +10,6 @@ defmodule Lasso.RPC.Strategies.Fastest do
   @behaviour Lasso.RPC.Strategy
 
   alias Lasso.RPC.{RoutingEvidence, StrategyContext}
-  alias Lasso.RPC.RoutingEvidence.Summary
 
   @impl true
   def prepare_context(_profile, chain_id, _method, timeout) do
@@ -27,7 +26,7 @@ defmodule Lasso.RPC.Strategies.Fastest do
       Enum.split_with(channels, fn channel ->
         summaries
         |> RoutingEvidence.summary_for_channel(channel)
-        |> qualified?()
+        |> RoutingEvidence.qualified?()
       end)
 
     case qualified do
@@ -46,15 +45,6 @@ defmodule Lasso.RPC.Strategies.Fastest do
         Enum.sort_by(qualified, &ranking_key(&1, summaries)) ++ deterministic_order(remaining)
     end
   end
-
-  defp qualified?(%Summary{
-         state: :qualified,
-         successful_mean_latency_ms: mean
-       })
-       when is_number(mean) and mean > 0,
-       do: true
-
-  defp qualified?(_summary), do: false
 
   defp ranking_key(channel, summaries) do
     summary = RoutingEvidence.summary_for_channel(summaries, channel)

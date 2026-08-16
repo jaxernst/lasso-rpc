@@ -9,7 +9,6 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   @behaviour Lasso.RPC.Strategy
 
   alias Lasso.RPC.{RoutingEvidence, StrategyContext}
-  alias Lasso.RPC.RoutingEvidence.Summary
 
   @default_beta 3.0
 
@@ -28,7 +27,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
       Enum.split_with(channels, fn channel ->
         summaries
         |> RoutingEvidence.summary_for_channel(channel)
-        |> qualified?()
+        |> RoutingEvidence.qualified?()
       end)
 
     case qualified do
@@ -80,13 +79,4 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
     |> Enum.sort_by(&elem(&1, 1))
     |> Enum.map(&elem(&1, 0))
   end
-
-  defp qualified?(%Summary{
-         state: :qualified,
-         successful_mean_latency_ms: mean
-       })
-       when is_number(mean) and mean > 0,
-       do: true
-
-  defp qualified?(_summary), do: false
 end

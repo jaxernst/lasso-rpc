@@ -16,7 +16,7 @@ defmodule Lasso.RPC.SelectionTest do
 
   use Lasso.Test.LassoIntegrationCase
 
-  alias Lasso.RPC.Selection
+  alias Lasso.RPC.{AttemptProjection, Selection}
 
   defmodule CatalogSwapStrategy do
     @behaviour Lasso.RPC.Strategy
@@ -189,6 +189,37 @@ defmodule Lasso.RPC.SelectionTest do
       after
         :telemetry.detach(ref)
       end
+    end
+
+    test "single-channel fastest selection records unqualified evidence degradation", %{
+      chain: chain
+    } do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      before_count =
+        AttemptProjection.availability_degradation_count(
+          profile,
+          chain,
+          :fastest,
+          :default
+        )
+
+      assert [%{provider_id: "provider_1"}] =
+               Selection.select_channels(profile, chain, "eth_blockNumber",
+                 strategy: :fastest,
+                 transport: :http
+               )
+
+      assert AttemptProjection.availability_degradation_count(
+               profile,
+               chain,
+               :fastest,
+               :default
+             ) == before_count + 1
     end
 
     test "same-generation catalog swaps during ranking fail both entrypoints closed", %{
