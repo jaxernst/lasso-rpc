@@ -30,6 +30,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @default_poll_interval_ms 15_000
   @default_timeout_ms 3_000
+  @max_initial_stagger_ms 2_000
   @max_consecutive_failures 3
   @degraded_threshold 2
   @unhealthy_threshold 5
@@ -103,6 +104,17 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     parent = Keyword.get(opts, :parent, self())
     poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
 
+    initial_delay_ms =
+      case Keyword.get_lazy(opts, :initial_delay_ms, fn ->
+             initial_poll_delay_ms(chain_id, instance_id, poll_interval)
+           end) do
+        delay_ms when is_integer(delay_ms) and delay_ms >= 0 ->
+          delay_ms
+
+        invalid ->
+          raise ArgumentError, "initial_delay_ms must be non-negative, got: #{inspect(invalid)}"
+      end
+
     state = %__MODULE__{
       instance_id: instance_id,
       chain_id: chain_id,
@@ -121,7 +133,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       route_resolver: Keyword.get(opts, :route_resolver, &resolve_route/2)
     }
 
-    state = schedule_poll(state, 0)
+    state = schedule_poll(state, initial_delay_ms)
 
     {:ok, state}
   end
@@ -236,6 +248,15 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       )
 
     %{state | timer_ref: ref, poll_generation: generation}
+  end
+
+  @doc false
+  @spec initial_poll_delay_ms(pos_integer(), String.t(), pos_integer()) :: non_neg_integer()
+  def initial_poll_delay_ms(chain_id, instance_id, poll_interval_ms)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) and
+             is_integer(poll_interval_ms) and poll_interval_ms > 0 do
+    stagger_window_ms = min(poll_interval_ms, @max_initial_stagger_ms)
+    :erlang.phash2({chain_id, instance_id}, stagger_window_ms)
   end
 
   defp start_poll_owner(state) do
