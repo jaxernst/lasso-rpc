@@ -90,17 +90,32 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   def list_candidates_from_plan(%RoutingPlan{} = plan, filters) when is_map(filters) do
-    do_list_candidates(plan, filters)
+    do_list_candidates(plan, filters, :full)
   end
 
-  defp do_list_candidates(%RoutingPlan{} = plan, filters) do
+  @doc false
+  @spec list_routing_candidates_from_plan(RoutingPlan.t(), SelectionFilters.t() | map()) :: [
+          map()
+        ]
+  def list_routing_candidates_from_plan(%RoutingPlan{} = plan, %SelectionFilters{} = filters) do
+    list_routing_candidates_from_plan(plan, SelectionFilters.to_map(filters))
+  end
+
+  def list_routing_candidates_from_plan(%RoutingPlan{} = plan, filters) when is_map(filters) do
+    do_list_candidates(plan, filters, :routing)
+  end
+
+  defp do_list_candidates(%RoutingPlan{} = plan, filters),
+    do: do_list_candidates(plan, filters, :full)
+
+  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode) do
     protocol = Map.get(filters, :protocol)
     include_half_open = Map.get(filters, :include_half_open, false)
     learned_scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
     candidates =
       plan.providers
-      |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol))
+      |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol, mode))
       |> Enum.filter(fn c ->
         transport_available?(c, protocol) and
           circuit_breaker_ready?(c, protocol, include_half_open) and
@@ -153,7 +168,7 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp build_candidate(provider, learned_scope, plan, protocol) do
+  defp build_candidate(provider, learned_scope, plan, protocol, mode) do
     instance_id = provider.instance_id
     transports = live_transports(provider, protocol, plan.profile, plan.chain_id)
 
@@ -161,36 +176,47 @@ defmodule Lasso.Providers.CandidateListing do
     http_routing = route_state(learned_scope, instance_id, :http, transports)
     ws_routing = route_state(learned_scope, instance_id, :ws, transports)
 
-    health =
-      InstanceState.read_candidate_health(
-        instance_id,
-        http_routing,
-        ws_routing,
-        include_learned?
-      )
-
     http_cb = circuit_state(instance_id, :http, transports)
     ws_cb = circuit_state(instance_id, :ws, transports)
 
     http_rl = rate_limit(instance_id, :http, transports, include_learned?, http_routing)
     ws_rl = rate_limit(instance_id, :ws, transports, include_learned?, ws_routing)
 
-    %{
+    candidate = %{
       id: provider.id,
       instance_id: instance_id,
       route_generation: plan.generation,
       config: provider.config,
       transports: transports,
       routing_states: %{http: http_routing, ws: ws_routing},
-      availability: InstanceState.status_to_availability(health.base.status),
-      transport_availability: %{
-        http: InstanceState.status_to_availability(health.http.status),
-        ws: InstanceState.status_to_availability(health.ws.status)
-      },
       circuit_state: %{http: http_cb.state, ws: ws_cb.state},
       rate_limited: %{http: http_rl.rate_limited, ws: ws_rl.rate_limited},
       learned_feedback_degraded?: learned_scope.degraded?
     }
+
+    maybe_add_availability(
+      candidate,
+      mode,
+      instance_id,
+      http_routing,
+      ws_routing,
+      include_learned?
+    )
+  end
+
+  defp maybe_add_availability(candidate, :routing, _instance_id, _http, _ws, _include_learned?),
+    do: candidate
+
+  defp maybe_add_availability(candidate, :full, instance_id, http, ws, include_learned?) do
+    health = InstanceState.read_candidate_health(instance_id, http, ws, include_learned?)
+
+    Map.merge(candidate, %{
+      availability: InstanceState.status_to_availability(health.base.status),
+      transport_availability: %{
+        http: InstanceState.status_to_availability(health.http.status),
+        ws: InstanceState.status_to_availability(health.ws.status)
+      }
+    })
   end
 
   defp transport_available?(candidate, protocol) do
