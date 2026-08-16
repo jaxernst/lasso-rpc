@@ -22,6 +22,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @max_bytes 4_096
   @control_retries 4
   @probation_deliveries 32
+  @routing_evidence_max_age_us 300_000_000
   @max_count 9_223_372_036_854_775_807
   @default_workload "default"
   @availability_dimensions [
@@ -235,11 +236,13 @@ defmodule Lasso.RPC.AttemptProjection do
   def batch_summaries(profile, channels, chain_id, workload_key) do
     scope = scope_state(profile, chain_id)
     workload = workload_key |> Atom.to_string() |> BoundedIdentifier.encode()
+    now_us = System.monotonic_time(:microsecond)
 
     Map.new(channels, fn channel ->
       key = {channel.instance_id, channel.transport}
       row = route_state(scope, channel.instance_id, channel.transport, workload)
-      {key, summary(row, channel.instance_id, channel.transport, chain_id, workload_key)}
+
+      {key, summary(row, channel.instance_id, channel.transport, chain_id, workload_key, now_us)}
     end)
   end
 
@@ -249,7 +252,14 @@ defmodule Lasso.RPC.AttemptProjection do
   def summarize_route(row, instance_id, transport, chain_id, workload_key)
       when is_binary(instance_id) and transport in [:http, :ws] and is_integer(chain_id) and
              chain_id > 0 and is_atom(workload_key) do
-    summary(row, instance_id, transport, chain_id, workload_key)
+    summary(
+      row,
+      instance_id,
+      transport,
+      chain_id,
+      workload_key,
+      System.monotonic_time(:microsecond)
+    )
   end
 
   @spec prepare_routes(non_neg_integer(), [map()]) :: :ok
@@ -893,11 +903,12 @@ defmodule Lasso.RPC.AttemptProjection do
   defp visible_after_floor?(%{recovery_floor_us: floor_us}, observed_at_us),
     do: observed_at_us > floor_us
 
-  defp summary(nil, _instance_id, _transport, _chain_id, _workload_key), do: nil
+  defp summary(nil, _instance_id, _transport, _chain_id, _workload_key, _now_us), do: nil
 
-  defp summary(row, instance_id, transport, chain_id, workload_key) do
+  defp summary(row, instance_id, transport, chain_id, workload_key, now_us) do
     state =
       cond do
+        routing_evidence_stale?(row.observed_at_us, now_us) -> :stale
         row.usable_successes >= 3 and row.consecutive_failures < 3 -> :qualified
         row.comparable_attempts > 0 -> :provisional
         true -> :unqualified
@@ -919,6 +930,9 @@ defmodule Lasso.RPC.AttemptProjection do
       generation: row.generation
     }
   end
+
+  defp routing_evidence_stale?(observed_at_us, now_us),
+    do: now_us - observed_at_us >= @routing_evidence_max_age_us
 
   defp diagnostic_attempt?(%AttemptTerminal.Response{kind: :success}), do: false
   defp diagnostic_attempt?(_fact), do: true

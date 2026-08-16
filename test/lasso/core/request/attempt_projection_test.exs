@@ -287,6 +287,38 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.successful_p95_latency_ms == nil
   end
 
+  test "qualified routing evidence becomes stale after five minutes without an observation" do
+    generation = publish_routes(["stale-instance", "fresh-instance"])
+    now_us = System.monotonic_time(:microsecond)
+    stale_us = now_us - 300_000_001
+
+    for offset <- 0..2 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event(stale_us + offset, "stale-instance", generation)
+               )
+
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event(now_us - 2 + offset, "fresh-instance", generation)
+               )
+    end
+
+    summaries =
+      AttemptProjection.batch_summaries(
+        @profile,
+        [
+          %{instance_id: "stale-instance", transport: :http},
+          %{instance_id: "fresh-instance", transport: :http}
+        ],
+        @chain_id,
+        :default
+      )
+
+    assert summaries[{"stale-instance", :http}].state == :stale
+    assert summaries[{"fresh-instance", :http}].state == :qualified
+  end
+
   test "availability degradation counters are fixed, generation scoped, and profile isolated" do
     generation = ConfigStore.route_generation()
 
