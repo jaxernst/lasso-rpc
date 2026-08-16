@@ -48,6 +48,14 @@ defmodule Lasso.RPC.RoutingEvidence do
   end
 
   @doc false
+  @spec qualified?(Summary.t() | nil) :: boolean()
+  def qualified?(%Summary{state: :qualified, successful_mean_latency_ms: mean})
+      when is_number(mean) and mean > 0,
+      do: true
+
+  def qualified?(_summary), do: false
+
+  @doc false
   @spec emit_availability_degradation(
           binary(),
           atom(),

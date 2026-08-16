@@ -25,6 +25,7 @@ defmodule Lasso.RPC.Selection do
     ChainState,
     Channel,
     RequestAnalysis,
+    RoutingEvidence,
     RoutingPlan,
     SelectionFilters,
     TransportRegistry
@@ -218,25 +219,6 @@ defmodule Lasso.RPC.Selection do
 
     provider_candidates = CandidateListing.list_candidates_from_plan(plan, pool_filters)
 
-    # Build circuit state lookup map: {provider_id, transport} => :closed | :half_open
-    circuit_state_map =
-      provider_candidates
-      |> Enum.flat_map(fn %{id: provider_id} = candidate ->
-        cs = Map.get(candidate, :circuit_state, %{})
-
-        [
-          {{provider_id, :http}, Map.get(cs, :http, :closed)},
-          {{provider_id, :ws}, Map.get(cs, :ws, :closed)}
-        ]
-      end)
-      |> Map.new()
-
-    # Build rate limit lookup map: provider_id => %{http: bool, ws: bool}
-    rate_limit_map =
-      provider_candidates
-      |> Enum.map(fn %{id: id, rate_limited: rl} -> {id, rl} end)
-      |> Map.new()
-
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
     channels =
@@ -259,23 +241,60 @@ defmodule Lasso.RPC.Selection do
           capable
       end
 
-    # Strategy delegation: allow strategy modules to rank channels when available.
+    final_channels =
+      order_capable_channels(
+        capable_channels,
+        provider_candidates,
+        strategy,
+        method,
+        plan,
+        Keyword.get(opts, :timeout, 30_000)
+      )
+
+    selected = final_channels |> Enum.take(limit)
+
+    if selection_snapshot_current?(snapshot, provider_candidates),
+      do: selected,
+      else: []
+  end
+
+  defp order_capable_channels([channel], candidates, strategy, _method, plan, _timeout)
+       when strategy in [:fastest, :priority, :load_balanced, :latency_weighted] do
+    maybe_record_single_channel_degradation(channel, candidates, strategy, plan)
+    [channel]
+  end
+
+  defp order_capable_channels(channels, candidates, strategy, method, plan, timeout) do
+    circuit_state_map =
+      candidates
+      |> Enum.flat_map(fn %{id: provider_id} = candidate ->
+        circuit_state = Map.get(candidate, :circuit_state, %{})
+
+        [
+          {{provider_id, :http}, Map.get(circuit_state, :http, :closed)},
+          {{provider_id, :ws}, Map.get(circuit_state, :ws, :closed)}
+        ]
+      end)
+      |> Map.new()
+
+    rate_limit_map =
+      Map.new(candidates, fn %{id: id, rate_limited: rate_limited} ->
+        {id, rate_limited}
+      end)
+
     strategy_mod = StrategyRegistry.resolve(strategy)
-    timeout = Keyword.get(opts, :timeout, 30_000)
 
     prepared_ctx =
       strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
-      |> enrich_strategy_context(provider_candidates, plan)
-
-    learned_feedback_degraded? =
-      Enum.any?(provider_candidates, & &1.learned_feedback_degraded?)
+      |> enrich_strategy_context(candidates, plan)
 
     ordered_channels =
-      if learned_feedback_degraded? and strategy in [:fastest, :latency_weighted] do
-        Enum.sort_by(capable_channels, &{&1.provider_id, &1.transport})
+      if Enum.any?(candidates, & &1.learned_feedback_degraded?) and
+           strategy in [:fastest, :latency_weighted] do
+        Enum.sort_by(channels, &{&1.provider_id, &1.transport})
       else
         strategy_mod.rank_channels(
-          capable_channels,
+          channels,
           method,
           prepared_ctx,
           plan.profile,
@@ -283,33 +302,47 @@ defmodule Lasso.RPC.Selection do
         )
       end
 
-    # Health-based tiering: reorder providers by circuit breaker state and rate limit status.
-    #
-    # The 4-tier system ensures healthy providers receive traffic first while allowing
-    # recovering providers to gradually reintegrate:
-    #
-    # 1. Tier 1: Closed circuit + not rate-limited (preferred)
-    # 2. Tier 2: Half-open circuit + not rate-limited
-    # 3. Tier 3: Closed circuit + rate-limited
-    # 4. Tier 4: Half-open circuit + rate-limited
-    #
-    # Open-circuit providers are filtered out earlier in the pipeline.
-    #
-    # Within each tier, the strategy's ranking is preserved. For example, with
-    # load-balanced strategy, Tier 1 providers remain shuffled relative to each other,
-    # but all Tier 1 providers come before any Tier 2 providers.
-    #
-    # This tiering explains why traffic may be concentrated on certain providers even
-    # with load-balanced: if only one provider is in Tier 1, it receives all traffic
-    # that succeeds, with lower tiers acting as fallbacks.
+    tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
+  end
 
-    final_channels = tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
+  defp maybe_record_single_channel_degradation(_channel, _candidates, strategy, _plan)
+       when strategy in [:priority, :load_balanced],
+       do: :ok
 
-    selected = final_channels |> Enum.take(limit)
+  defp maybe_record_single_channel_degradation(channel, candidates, strategy, plan) do
+    if Enum.any?(candidates, & &1.learned_feedback_degraded?) do
+      :ok
+    else
+      summary =
+        candidates
+        |> Enum.find(&(&1.instance_id == channel.instance_id))
+        |> single_channel_summary(channel, plan)
 
-    if selection_snapshot_current?(snapshot, provider_candidates),
-      do: selected,
-      else: []
+      if RoutingEvidence.qualified?(summary) do
+        :ok
+      else
+        RoutingEvidence.emit_availability_degradation(
+          plan.profile,
+          strategy,
+          plan.chain_id,
+          :default,
+          1
+        )
+      end
+    end
+  end
+
+  defp single_channel_summary(nil, _channel, _plan), do: nil
+
+  defp single_channel_summary(candidate, channel, plan) do
+    candidate.routing_states
+    |> Map.get(channel.transport)
+    |> AttemptProjection.summarize_route(
+      candidate.instance_id,
+      channel.transport,
+      plan.chain_id,
+      :default
+    )
   end
 
   @doc """
