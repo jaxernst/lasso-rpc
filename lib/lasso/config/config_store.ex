@@ -66,7 +66,12 @@ defmodule Lasso.Config.ConfigStore do
   @type scope :: :system
   @type profile_meta :: ProfileMeta.t()
 
-  defp table, do: :persistent_term.get(@persistent_term_key)
+  defp table do
+    case :persistent_term.get(@persistent_term_key) do
+      {table, generation} when is_integer(generation) and generation >= 0 -> table
+      table -> table
+    end
+  end
 
   ## Public API - Profile Operations
 
@@ -110,13 +115,23 @@ defmodule Lasso.Config.ConfigStore do
   @doc "Returns the generation of the currently published routing configuration."
   @spec route_generation() :: non_neg_integer()
   def route_generation do
-    case safe_lookup({:route_generation}) do
+    case :persistent_term.get(@persistent_term_key, :unavailable) do
+      {_table, generation} when is_integer(generation) and generation >= 0 -> generation
+      :unavailable -> 0
+      table -> route_generation_from_table(table)
+    end
+  end
+
+  defp route_generation_from_table(table) do
+    case :ets.lookup(table, {:route_generation}) do
       [{{:route_generation}, generation}] when is_integer(generation) and generation >= 0 ->
         generation
 
-      _ ->
+      _other ->
         0
     end
+  rescue
+    ArgumentError -> 0
   end
 
   @doc "Returns one provider and the generation atomically published with its route data."
@@ -1442,8 +1457,8 @@ defmodule Lasso.Config.ConfigStore do
     :ets.insert(new_table, {{:route_generation}, route_generation})
     build_indices(profile_specs, new_table)
 
-    old_table = :persistent_term.get(@persistent_term_key, nil)
-    :persistent_term.put(@persistent_term_key, new_table)
+    old_table = active_table(nil)
+    publish_snapshot(new_table, route_generation)
 
     if old_table do
       Owner.schedule_delete(old_table, @grace_period_ms)
@@ -1454,6 +1469,18 @@ defmodule Lasso.Config.ConfigStore do
     :ets.lookup(table(), key)
   rescue
     ArgumentError -> []
+  end
+
+  defp active_table(default) do
+    case :persistent_term.get(@persistent_term_key, default) do
+      {table, generation} when is_integer(generation) and generation >= 0 -> table
+      table -> table
+    end
+  end
+
+  defp publish_snapshot(table, generation)
+       when is_integer(generation) and generation >= 0 do
+    :persistent_term.put(@persistent_term_key, {table, generation})
   end
 
   defp next_route_generation, do: route_generation() + 1
@@ -1532,7 +1559,7 @@ defmodule Lasso.Config.ConfigStore do
     :ets.insert(new_table, {{:route_generation}, route_generation})
     rebuild_indices_from_table(new_table)
 
-    :persistent_term.put(@persistent_term_key, new_table)
+    publish_snapshot(new_table, route_generation)
     Owner.schedule_delete(old_table, @grace_period_ms)
 
     :ok
@@ -1603,7 +1630,7 @@ defmodule Lasso.Config.ConfigStore do
     :ets.insert(new_table, {{:route_generation}, route_generation})
     rebuild_indices_from_table(new_table)
 
-    :persistent_term.put(@persistent_term_key, new_table)
+    publish_snapshot(new_table, route_generation)
     Owner.schedule_delete(old_table, @grace_period_ms)
 
     :ok
@@ -1706,33 +1733,41 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   defp add_chain_to_profile(profile_id, chain_id, chain_config) do
+    table = table()
+
     chains =
-      case :ets.lookup(table(), {:profile, profile_id, :chains}) do
+      case :ets.lookup(table, {:profile, profile_id, :chains}) do
         [{{:profile, ^profile_id, :chains}, existing}] -> existing
         [] -> %{}
       end
 
     updated_chains = Map.put(chains, chain_id, chain_config)
+    generation = next_route_generation()
 
-    :ets.insert(table(), [
+    :ets.insert(table, [
       {{:profile, profile_id, :chains}, updated_chains},
-      {{:route_generation}, next_route_generation()}
+      {{:route_generation}, generation}
     ])
 
     update_indices_for_chain_add(profile_id, chain_id)
+    publish_snapshot(table, generation)
   end
 
   defp remove_chain_from_profile(profile_id, chain_id) do
-    case :ets.lookup(table(), {:profile, profile_id, :chains}) do
+    table = table()
+
+    case :ets.lookup(table, {:profile, profile_id, :chains}) do
       [{{:profile, ^profile_id, :chains}, chains}] ->
         updated_chains = Map.delete(chains, chain_id)
+        generation = next_route_generation()
 
-        :ets.insert(table(), [
+        :ets.insert(table, [
           {{:profile, profile_id, :chains}, updated_chains},
-          {{:route_generation}, next_route_generation()}
+          {{:route_generation}, generation}
         ])
 
         update_indices_for_chain_remove(profile_id, chain_id)
+        publish_snapshot(table, generation)
 
       [] ->
         :ok
@@ -1740,14 +1775,19 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   defp update_chain_in_profile(profile_id, chain_id, chain_config) do
-    case :ets.lookup(table(), {:profile, profile_id, :chains}) do
+    table = table()
+
+    case :ets.lookup(table, {:profile, profile_id, :chains}) do
       [{{:profile, ^profile_id, :chains}, chains}] ->
         updated_chains = Map.put(chains, chain_id, chain_config)
+        generation = next_route_generation()
 
-        :ets.insert(table(), [
+        :ets.insert(table, [
           {{:profile, profile_id, :chains}, updated_chains},
-          {{:route_generation}, next_route_generation()}
+          {{:route_generation}, generation}
         ])
+
+        publish_snapshot(table, generation)
 
       [] ->
         :ok
