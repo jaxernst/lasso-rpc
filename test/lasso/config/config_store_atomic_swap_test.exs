@@ -7,11 +7,27 @@ defmodule Lasso.Config.ConfigStoreAtomicSwapTest do
 
   use ExUnit.Case, async: false
 
-  alias Lasso.Config.{ConfigStore, ProfileId}
-  alias Lasso.Config.ChainConfig
+  alias Lasso.Config.{ChainConfig, ConfigStore, ProfileId}
   alias Lasso.Config.ChainConfig.{Monitoring, Provider, Selection, Websocket, WebsocketFailover}
 
   @reads 200
+
+  test "route generation is read from the published snapshot without ETS" do
+    traced = :erlang.trace_pattern({:ets, :lookup, 2}, true, [:local])
+    assert traced > 0
+    assert :erlang.trace(self(), true, [:call]) == 1
+
+    try do
+      assert is_integer(ConfigStore.route_generation())
+      owner = self()
+      delivered = :erlang.trace_delivered(self())
+      assert_receive {:trace_delivered, ^owner, ^delivered}
+      refute_received {:trace, _, :call, {:ets, :lookup, _args}}
+    after
+      :erlang.trace(self(), false, [:all])
+      :erlang.trace_pattern({:ets, :lookup, 2}, false, [:local])
+    end
+  end
 
   defmodule BlockingBackend do
     def load_all({owner, specs}) do

@@ -63,11 +63,11 @@ defmodule Lasso.Bench.RoutingKernelDiagnosticTest do
     assert structural.messages.sent_by_tag_raw["tuple_5"] == 3
     assert structural.scheduling.receive_timeouts >= 0
     assert structural.scheduling.receive_timeouts_per_success >= 0
-    assert structural.ets.reads in [9, 15]
+    assert structural.ets.reads in [6, 9, 15]
     assert structural.ets.writes == 3
     assert structural.ets.other == 0
     assert structural.ets.by_operation["insert_new/2"] == 3
-    assert structural.ets.by_operation["lookup/2"] in [6, 9, 12]
+    assert structural.ets.by_operation["lookup/2"] in [3, 6, 9, 12]
     assert structural.ets.total == structural.ets.reads + structural.ets.writes
   end
 
