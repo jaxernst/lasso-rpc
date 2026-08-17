@@ -127,13 +127,12 @@ defmodule Lasso.RPC.AttemptProjection do
   def enqueue_diagnostic(%__MODULE__{} = event, dispatcher \\ @dispatcher)
       when is_atom(dispatcher) do
     if diagnostic_attempt?(event.fact) do
-      case encode(event) do
-        {:ok, payload} ->
-          ProjectionDispatcher.enqueue(dispatcher, :diagnostics, scope(event), payload)
-
-        {:error, reason} ->
-          {:drop, reason, :untracked}
-      end
+      ProjectionDispatcher.enqueue_lazy(
+        dispatcher,
+        :diagnostics,
+        scope(event),
+        fn -> encode(event) end
+      )
     else
       :not_required
     end

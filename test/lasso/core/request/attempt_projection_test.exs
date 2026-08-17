@@ -2,7 +2,7 @@ defmodule Lasso.RPC.AttemptProjectionTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Core.ProjectionDispatcher
+  alias Lasso.Core.{ProjectionDispatcher, ProjectionLane}
   alias Lasso.Providers.Catalog
 
   alias Lasso.RPC.{
@@ -124,7 +124,55 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert {:ok, _token} =
              AttemptProjection.enqueue_diagnostic(event, @predispatch_dispatcher)
 
-    assert_receive {:diagnostic, _payload}
+    assert_receive {:diagnostic, payload}
+    assert {:ok, ^event} = AttemptProjection.decode(payload)
+  end
+
+  test "saturated diagnostics reject before encoding an attempt event" do
+    dispatcher =
+      Module.concat(__MODULE__, "Saturated#{System.unique_integer([:positive])}")
+
+    start_supervised!({
+      ProjectionDispatcher,
+      name: dispatcher,
+      lanes: [
+        diagnostics:
+          Keyword.merge(diagnostic_lane(fn _scope, _payload -> :ok end),
+            capacity: 1,
+            scope_capacity: 1
+          )
+      ]
+    })
+
+    {:ok, lane} = ProjectionDispatcher.lane(dispatcher, :diagnostics)
+    {worker, _generation} = ProjectionLane.workers(lane)[0]
+    :erlang.suspend_process(worker)
+    on_exit(fn -> if Process.alive?(worker), do: :erlang.resume_process(worker) end)
+
+    generation = ConfigStore.route_generation()
+
+    fact =
+      AttemptTerminal.PredispatchFailure.new(
+        identity("projection-instance", generation),
+        :encode,
+        3
+      )
+
+    event = AttemptProjection.new(fact, "provider", "eth_call")
+    assert {:ok, occupied} = AttemptProjection.enqueue_diagnostic(event, dispatcher)
+
+    oversized = %{event | provider_id: :binary.copy("x", 5_000)}
+    assert {:error, :event_too_large} = AttemptProjection.encode(oversized)
+
+    assert {:drop, :bucket_contended, %ProjectionLane.Degradation{}} =
+             AttemptProjection.enqueue_diagnostic(oversized, dispatcher)
+
+    assert :cancelled = ProjectionDispatcher.cancel(dispatcher, :diagnostics, occupied)
+
+    assert {:drop, :invalid_payload, :untracked} =
+             AttemptProjection.enqueue_diagnostic(oversized, dispatcher)
+
+    assert ProjectionLane.stats(lane).retained_items == 0
   end
 
   test "request completion never recreates a route removed after publication" do
