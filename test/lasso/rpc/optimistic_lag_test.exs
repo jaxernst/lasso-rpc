@@ -16,6 +16,7 @@ defmodule Lasso.RPC.OptimisticLagTest do
   use ExUnit.Case, async: true
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.Providers.LagCalculation
   alias Lasso.RPC.ChainState
 
   @chain 9_999_001
@@ -142,6 +143,19 @@ defmodule Lasso.RPC.OptimisticLagTest do
   end
 
   describe "integration with BlockSyncRegistry" do
+    test "uses a captured consensus without rescanning chain state" do
+      provider_id = "captured_consensus_#{System.unique_integer()}"
+      timestamp = System.system_time(:millisecond)
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, @chain, provider_id}, {995, timestamp, :http, %{}}}
+      )
+
+      assert {:ok, -5, -5} =
+               LagCalculation.calculate_optimistic_lag(@chain, provider_id, 12_000, 1_000)
+    end
+
     test "optimistic lag passes threshold when raw lag would fail" do
       provider_id = "test_http_provider_#{System.unique_integer()}"
 
