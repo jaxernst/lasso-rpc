@@ -136,6 +136,35 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
   end
 
   @tag timeout: 10_000
+  test "large ignored fields retain bounded scan cost" do
+    padding = String.duplicate("x", 100 * 1_024)
+    raw = ~s({"jsonrpc":"2.0","id":"internal","padding":"#{padding}","result":"0x1"})
+
+    nested =
+      ~s({"jsonrpc":"2.0","id":"internal","padding":{"items":["#{padding}"]},"result":"0x1"})
+
+    assert {:ok, %Validated{kind: :result, id: "internal"}} =
+             UpstreamResponse.parse_unary(nested)
+
+    parent = self()
+
+    {worker, monitor} =
+      spawn_monitor(fn ->
+        {:reductions, before_reductions} = Process.info(self(), :reductions)
+        result = UpstreamResponse.parse_unary(raw)
+        {:reductions, after_reductions} = Process.info(self(), :reductions)
+        send(parent, {:large_ignored_field, result, after_reductions - before_reductions})
+      end)
+
+    assert_receive {:large_ignored_field, {:ok, %Validated{kind: :result, id: "internal"}},
+                    reductions},
+                   5_000
+
+    assert reductions < 50_000
+    assert_receive {:DOWN, ^monitor, :process, ^worker, :normal}
+  end
+
+  @tag timeout: 10_000
   test "100 KiB errors avoid the legacy second parse with bounded parser overhead" do
     error_data = "0x" <> String.duplicate("d", 100 * 1_024)
 

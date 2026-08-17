@@ -5,6 +5,10 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   alias Lasso.RPC.Response
 
   @max_transport_id_bytes 128
+  @string_specials ["\"", "\\"]
+  @scalar_delimiters [" ", "\t", "\r", "\n", ",", "}", "]"]
+  @container_specials ["\"", "{", "[", "}", "]"]
+  @linear_scan_threshold 256
 
   defmodule Validated do
     @moduledoc false
@@ -576,41 +580,101 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   end
 
   defp skip_container(raw_bytes, index, [expected | rest] = stack) do
+    if byte_size(raw_bytes) - index <= @linear_scan_threshold do
+      skip_container_linear(raw_bytes, index, stack)
+    else
+      skip_container_matched(raw_bytes, index, expected, rest, stack)
+    end
+  end
+
+  defp skip_container_matched(raw_bytes, index, expected, rest, stack) do
+    case binary_match_from(raw_bytes, @container_specials, index) do
+      :nomatch ->
+        :error
+
+      {special_index, _length} ->
+        case byte_at(raw_bytes, special_index) do
+          ?" ->
+            case skip_string(raw_bytes, special_index) do
+              {:ok, next} -> skip_container(raw_bytes, next, stack)
+              :error -> :error
+            end
+
+          ?{ ->
+            skip_container(raw_bytes, special_index + 1, [?} | stack])
+
+          ?[ ->
+            skip_container(raw_bytes, special_index + 1, [?] | stack])
+
+          ^expected when rest == [] ->
+            {:ok, special_index + 1}
+
+          ^expected ->
+            skip_container(raw_bytes, special_index + 1, rest)
+
+          _other_closer ->
+            skip_container(raw_bytes, special_index + 1, stack)
+        end
+    end
+  end
+
+  defp skip_container_linear(raw_bytes, index, [expected | rest] = stack) do
     case byte_at(raw_bytes, index) do
       nil ->
         :error
 
       ?" ->
         case skip_string(raw_bytes, index) do
-          {:ok, next} -> skip_container(raw_bytes, next, stack)
+          {:ok, next} -> skip_container_linear(raw_bytes, next, stack)
           :error -> :error
         end
 
       ?{ ->
-        skip_container(raw_bytes, index + 1, [?} | stack])
+        skip_container_linear(raw_bytes, index + 1, [?} | stack])
 
       ?[ ->
-        skip_container(raw_bytes, index + 1, [?] | stack])
+        skip_container_linear(raw_bytes, index + 1, [?] | stack])
 
       ^expected when rest == [] ->
         {:ok, index + 1}
 
       ^expected ->
-        skip_container(raw_bytes, index + 1, rest)
+        skip_container_linear(raw_bytes, index + 1, rest)
 
       _byte ->
-        skip_container(raw_bytes, index + 1, stack)
+        skip_container_linear(raw_bytes, index + 1, stack)
     end
   end
 
   defp skip_string(raw_bytes, index), do: do_skip_string(raw_bytes, index + 1)
 
   defp do_skip_string(raw_bytes, index) do
+    if byte_size(raw_bytes) - index <= @linear_scan_threshold do
+      do_skip_string_linear(raw_bytes, index)
+    else
+      do_skip_string_matched(raw_bytes, index)
+    end
+  end
+
+  defp do_skip_string_matched(raw_bytes, index) do
+    case binary_match_from(raw_bytes, @string_specials, index) do
+      :nomatch ->
+        :error
+
+      {special_index, _length} ->
+        case byte_at(raw_bytes, special_index) do
+          ?" -> {:ok, special_index + 1}
+          ?\\ -> skip_escape(raw_bytes, special_index)
+        end
+    end
+  end
+
+  defp do_skip_string_linear(raw_bytes, index) do
     case byte_at(raw_bytes, index) do
       nil -> :error
       ?" -> {:ok, index + 1}
       ?\\ -> skip_escape(raw_bytes, index)
-      _byte -> do_skip_string(raw_bytes, index + 1)
+      _byte -> do_skip_string_linear(raw_bytes, index + 1)
     end
   end
 
@@ -623,11 +687,28 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   end
 
   defp skip_scalar(raw_bytes, index) do
-    case byte_at(raw_bytes, index) do
-      byte when byte in [nil, ?\s, ?\t, ?\r, ?\n, ?,, ?}, ?]] -> {:ok, index}
-      _byte -> skip_scalar(raw_bytes, index + 1)
+    if byte_size(raw_bytes) - index <= @linear_scan_threshold do
+      skip_scalar_linear(raw_bytes, index)
+    else
+      case binary_match_from(raw_bytes, @scalar_delimiters, index) do
+        :nomatch -> {:ok, byte_size(raw_bytes)}
+        {delimiter_index, _length} -> {:ok, delimiter_index}
+      end
     end
   end
+
+  defp skip_scalar_linear(raw_bytes, index) do
+    case byte_at(raw_bytes, index) do
+      byte when byte in [nil, ?\s, ?\t, ?\r, ?\n, ?,, ?}, ?]] -> {:ok, index}
+      _byte -> skip_scalar_linear(raw_bytes, index + 1)
+    end
+  end
+
+  defp binary_match_from(raw_bytes, pattern, index) when index < byte_size(raw_bytes) do
+    :binary.match(raw_bytes, pattern, scope: {index, byte_size(raw_bytes) - index})
+  end
+
+  defp binary_match_from(_raw_bytes, _pattern, _index), do: :nomatch
 
   defp skip_whitespace(raw_bytes, index) do
     case byte_at(raw_bytes, index) do
