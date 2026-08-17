@@ -184,6 +184,37 @@ defmodule Lasso.Providers.InstanceStateTest do
              )
   end
 
+  describe "read_rate_limit/3 direct routing state" do
+    test "ignores an expiry without a rate-limit observation" do
+      routing_state = %{
+        rate_limit_expiry_ms: System.monotonic_time(:millisecond) + 10_000,
+        rate_limit_observed_at_us: nil
+      }
+
+      assert %{rate_limited: false, expiry_ms: nil} =
+               InstanceState.read_rate_limit(@instance_id, :http, routing_state: routing_state)
+    end
+
+    test "does not treat the unobserved zero sentinel as a future monotonic expiry" do
+      routing_state = %{rate_limit_expiry_ms: 0, rate_limit_observed_at_us: nil}
+
+      assert %{rate_limited: false, expiry_ms: nil} =
+               InstanceState.read_rate_limit(@instance_id, :http, routing_state: routing_state)
+    end
+
+    test "retains an observed future monotonic expiry regardless of epoch origin" do
+      expiry_ms = System.monotonic_time(:millisecond) + 10_000
+
+      routing_state = %{
+        rate_limit_expiry_ms: expiry_ms,
+        rate_limit_observed_at_us: System.monotonic_time(:microsecond)
+      }
+
+      assert %{rate_limited: true, expiry_ms: ^expiry_ms} =
+               InstanceState.read_rate_limit(@instance_id, :http, routing_state: routing_state)
+    end
+  end
+
   test "clear removes every application-owned breaker row for the instance" do
     id = {@instance_id, :http}
     {:ok, pid} = CircuitBreaker.start_link({id, %{control_ring_capacity: 4}})

@@ -215,8 +215,15 @@ defmodule Lasso.Providers.InstanceState do
 
     direct_expiries =
       case Keyword.get(opts, :routing_state) do
-        %{rate_limit_expiry_ms: expiry} when include_learned? and expiry > now_ms -> [expiry]
-        _other -> []
+        %{
+          rate_limit_expiry_ms: expiry,
+          rate_limit_observed_at_us: observed_at_us
+        }
+        when include_learned? and is_integer(observed_at_us) and expiry > now_ms ->
+          [expiry]
+
+        _other ->
+          []
       end
 
     expiries =
