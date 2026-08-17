@@ -985,8 +985,8 @@ defmodule Lasso.RPC.RequestPipeline do
        when status in [:ok, :error] do
     request_terminal = build_request_terminal(status, value, ctx)
 
-    request_projection =
-      RequestProjection.new(
+    _enqueue_result =
+      RequestProjection.new_and_enqueue(
         request_terminal,
         ctx.method,
         request_projection_route(ctx),
@@ -994,7 +994,6 @@ defmodule Lasso.RPC.RequestPipeline do
         ctx.opts.request_origin
       )
 
-    _enqueue_result = RequestProjection.enqueue(request_projection)
     {status, value, release_execution_payloads(ctx)}
   end
 

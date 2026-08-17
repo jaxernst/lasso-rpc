@@ -1,6 +1,7 @@
 defmodule Lasso.RPC.RequestProjectionTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Core.ProjectionDispatcher
   alias Lasso.Events.RoutingDecision
 
   alias Lasso.RPC.{
@@ -12,6 +13,8 @@ defmodule Lasso.RPC.RequestProjectionTest do
   }
 
   alias Lasso.RPC.ExecutionFact.Codec
+
+  @fast_dispatcher Lasso.TestRequestProjectionFastDispatcher
 
   setup do
     Application.ensure_all_started(:lasso)
@@ -223,6 +226,42 @@ defmodule Lasso.RPC.RequestProjectionTest do
   test "a terminal without an upstream route remains telemetry-only" do
     event = RequestProjection.new(local_failure(), "eth_call", nil, 0)
     assert :not_routed = RequestProjection.routing_decision(event)
+  end
+
+  test "constructing and enqueueing preserves the bounded event" do
+    parent = self()
+
+    start_supervised!({
+      ProjectionDispatcher,
+      name: @fast_dispatcher,
+      lanes: [
+        diagnostics: [
+          capacity: 8,
+          byte_capacity: 32_768,
+          scope_capacity: 8,
+          scope_byte_capacity: 32_768,
+          shards: 1,
+          max_age_ms: 1_000,
+          audit_interval_ms: 1_000,
+          sink: fn _scope, payload -> send(parent, {:diagnostic, payload}) end
+        ]
+      ]
+    })
+
+    assert {:ok, _token} =
+             RequestProjection.new_and_enqueue(
+               terminal(),
+               "eth_blockNumber",
+               %{provider_id: "provider-a", instance_id: "instance-a", transport: :http},
+               2,
+               :client,
+               @fast_dispatcher
+             )
+
+    assert_receive {:diagnostic, payload}
+
+    assert {:ok, %{method: "eth_blockNumber", provider_id: "provider-a"}} =
+             RequestProjection.decode(payload)
   end
 
   defp request_projection do

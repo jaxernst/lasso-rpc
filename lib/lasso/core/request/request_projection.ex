@@ -62,18 +62,46 @@ defmodule Lasso.RPC.RequestProjection do
 
   @spec enqueue(t(), atom()) :: term()
   def enqueue(%__MODULE__{} = event, dispatcher \\ @dispatcher) when is_atom(dispatcher) do
+    enqueue_lazy(event, dispatcher, fn -> encode(event) end)
+  end
+
+  @doc false
+  @spec new_and_enqueue(
+          RequestTerminal.t(),
+          binary(),
+          route_identity() | nil,
+          non_neg_integer(),
+          :client | :system,
+          atom()
+        ) :: term()
+  def new_and_enqueue(
+        fact,
+        method,
+        route_identity,
+        failover_count,
+        request_origin \\ :client,
+        dispatcher \\ @dispatcher
+      )
+      when is_atom(dispatcher) do
+    event = new(fact, method, route_identity, failover_count, request_origin)
+    enqueue_lazy(event, dispatcher, fn -> encode_validated(event) end)
+  end
+
+  defp enqueue_lazy(event, dispatcher, encoder) do
     ProjectionDispatcher.enqueue_lazy(
       dispatcher,
       :diagnostics,
       {Map.fetch!(event.fact, :profile), Map.fetch!(event.fact, :chain_id)},
-      fn -> encode(event) end
+      encoder
     )
   end
 
   @spec encode(t()) :: {:ok, binary()} | {:error, atom()}
   def encode(%__MODULE__{} = event) do
-    event = validate!(event)
+    event |> validate!() |> encode_validated()
+  end
 
+  defp encode_validated(event) do
     payload =
       :erlang.term_to_binary(
         {
