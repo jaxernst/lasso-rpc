@@ -89,6 +89,40 @@ defmodule Lasso.Core.ProjectionLaneTest do
     resume(worker)
   end
 
+  test "fact enqueue reserves capacity before encoding and releases invalid facts" do
+    {lane, metadata} = start_lane(capacity: 1, scope_capacity: 1)
+    worker = worker(lane)
+    suspend(worker)
+
+    fact =
+      AdmissionTerminal.new(
+        request_id: "request-1",
+        profile: "profile-a",
+        chain_id: 1,
+        routing_intent: "default",
+        workload_key: "read",
+        reason: :local_capacity,
+        candidate_admission_count: 1,
+        dispatch_count: 0,
+        elapsed_us: 2
+      )
+
+    assert {:ok, occupied} = ProjectionLane.enqueue_fact(metadata, @scope_a, fact)
+
+    assert {:drop, :bucket_contended, %ProjectionLane.Degradation{}} =
+             ProjectionLane.enqueue_fact(metadata, @scope_a, %URI{})
+
+    assert ProjectionLane.stats(lane).counters.invalid_payload == 0
+    assert :cancelled = ProjectionLane.cancel(metadata, occupied)
+
+    assert {:drop, :invalid_payload, :untracked} =
+             ProjectionLane.enqueue_fact(metadata, @scope_a, %URI{})
+
+    assert %{retained_items: 0, queued_items: 0, bytes: 0} = ProjectionLane.stats(lane)
+    assert ProjectionLane.stats(lane).counters.invalid_payload == 1
+    resume(worker)
+  end
+
   test "lazy enqueue publishes the encoded payload and repairs a lost ready entry" do
     parent = self()
 
