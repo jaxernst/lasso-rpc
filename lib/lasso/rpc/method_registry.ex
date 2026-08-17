@@ -147,6 +147,11 @@ defmodule Lasso.RPC.MethodRegistry do
     ]
   }
 
+  @method_categories for {category, methods} <- @standard_methods,
+                         method <- methods,
+                         into: %{},
+                         do: {method, category}
+
   @doc "Returns all standard method categories"
   @spec categories() :: %{atom() => [String.t()]}
   def categories, do: @standard_methods
@@ -166,11 +171,7 @@ defmodule Lasso.RPC.MethodRegistry do
 
   @doc "Returns the category for a given method"
   @spec method_category(String.t()) :: atom()
-  def method_category(method) do
-    Enum.find_value(@standard_methods, :unknown, fn {cat, methods} ->
-      if method in methods, do: cat
-    end)
-  end
+  def method_category(method), do: Map.get(@method_categories, method, :unknown)
 
   @doc """
   Returns default support assumption for unknown methods.

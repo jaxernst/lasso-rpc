@@ -53,9 +53,18 @@ defmodule Lasso.RPC.Providers.Capabilities do
   Returns `:ok` if supported, `{:error, :method_unsupported}` if not.
   """
   @spec supports_method?(String.t(), map() | nil) :: :ok | {:error, :method_unsupported}
-  def supports_method?(method, nil), do: supports_method?(method, default_capabilities())
+  def supports_method?(method, capabilities) when is_binary(method) do
+    supports_method?(method, MethodRegistry.method_category(method), capabilities)
+  end
 
-  def supports_method?(method, capabilities) when is_map(capabilities) do
+  @doc false
+  @spec supports_method?(String.t(), atom(), map() | nil) ::
+          :ok | {:error, :method_unsupported}
+  def supports_method?(_method, :local_only, nil), do: {:error, :method_unsupported}
+  def supports_method?(_method, _category, nil), do: :ok
+
+  def supports_method?(method, category, capabilities)
+      when is_binary(method) and is_atom(category) and is_map(capabilities) do
     unsupported_categories =
       Map.get(capabilities, :unsupported_categories, @default_unsupported_categories)
 
@@ -65,7 +74,7 @@ defmodule Lasso.RPC.Providers.Capabilities do
       method in unsupported_methods ->
         {:error, :method_unsupported}
 
-      MethodRegistry.method_category(method) in unsupported_categories ->
+      category in unsupported_categories ->
         {:error, :method_unsupported}
 
       true ->

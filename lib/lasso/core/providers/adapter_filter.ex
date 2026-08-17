@@ -13,6 +13,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
 
   require Logger
   alias Lasso.RPC.Channel
+  alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Providers.Capabilities
 
   @doc """
@@ -51,12 +52,14 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   # Private Implementation
 
   defp do_filter_channels(channels, method) do
+    category = MethodRegistry.method_category(method)
+
     {capable, filtered} =
       Enum.split_with(channels, fn %{provider_id: id} = channel ->
         caps = provider_capabilities(channel)
 
         try do
-          :ok == Capabilities.supports_method?(method, caps)
+          :ok == Capabilities.supports_method?(method, category, caps)
         rescue
           e ->
             Logger.error("Capabilities crash in supports_method?: #{id}, #{Exception.message(e)}")
