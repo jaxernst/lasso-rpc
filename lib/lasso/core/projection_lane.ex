@@ -122,10 +122,13 @@ defmodule Lasso.Core.ProjectionLane do
     end
   end
 
-  @doc "Reserves bounded capacity before encoding a canonical tagged execution fact."
+  @doc "Encodes a canonical tagged execution fact before bounded enqueue."
   @spec enqueue_fact(Metadata.t(), scope(), struct()) :: enqueue_result()
   def enqueue_fact(%Metadata{} = metadata, scope, fact) do
-    enqueue_lazy(metadata, scope, fn -> Codec.encode(fact) end)
+    case Codec.encode(fact) do
+      {:ok, payload} -> enqueue(metadata, scope, payload)
+      {:error, _reason} -> untracked_drop(metadata, :invalid_payload)
+    end
   end
 
   @doc "Cancels an item if and only if its exact token is still queued."
