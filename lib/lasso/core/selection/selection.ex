@@ -80,7 +80,7 @@ defmodule Lasso.RPC.Selection do
   end
 
   defp do_select_provider(snapshot, plan, method, params, selection_opts) do
-    filters =
+    {filters, consensus_height} =
       build_selection_filters(
         plan,
         method,
@@ -92,7 +92,8 @@ defmodule Lasso.RPC.Selection do
         workload_key: workload_for_origin(selection_opts.request_origin)
       )
 
-    candidates = CandidateListing.list_routing_candidates_from_plan(plan, filters)
+    candidates =
+      CandidateListing.list_routing_candidates_from_plan(plan, filters, consensus_height)
 
     case candidates do
       [] ->
@@ -222,7 +223,12 @@ defmodule Lasso.RPC.Selection do
         workload_key: workload_key
       )
 
-    provider_candidates = CandidateListing.list_routing_candidates_from_plan(plan, pool_filters)
+    provider_candidates =
+      CandidateListing.list_routing_candidates_from_plan(
+        plan,
+        pool_filters,
+        consensus_height || :unavailable
+      )
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
@@ -513,16 +519,19 @@ defmodule Lasso.RPC.Selection do
         archival_threshold: plan.archival_threshold
       )
 
-    SelectionFilters.new(
-      exclude: exclude,
-      protocol: protocol,
-      include_half_open: include_half_open,
-      max_lag_blocks: plan.max_lag_blocks,
-      min_block: requirements.requested_block,
-      requires_archival: requirements.requires_archival,
-      requires_subscribe_new_heads: requires_subscribe_new_heads,
-      workload_key: workload_key
-    )
+    filters =
+      SelectionFilters.new(
+        exclude: exclude,
+        protocol: protocol,
+        include_half_open: include_half_open,
+        max_lag_blocks: plan.max_lag_blocks,
+        min_block: requirements.requested_block,
+        requires_archival: requirements.requires_archival,
+        requires_subscribe_new_heads: requires_subscribe_new_heads,
+        workload_key: workload_key
+      )
+
+    {filters, consensus_height || :unavailable}
   end
 
   defp enrich_strategy_context(ctx, candidates, %RoutingPlan{} = plan) do

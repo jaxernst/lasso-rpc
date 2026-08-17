@@ -21,7 +21,7 @@ defmodule Lasso.Providers.CandidateListing do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
-  alias Lasso.RPC.{AttemptProjection, RoutingPlan, SelectionFilters}
+  alias Lasso.RPC.{AttemptProjection, ChainState, RoutingPlan, SelectionFilters}
   alias Lasso.RPC.RoutingEvidence.Workload
 
   @doc """
@@ -106,10 +106,32 @@ defmodule Lasso.Providers.CandidateListing do
     do_list_candidates(plan, filters, :routing)
   end
 
+  @doc false
+  @spec list_routing_candidates_from_plan(
+          RoutingPlan.t(),
+          SelectionFilters.t() | map(),
+          non_neg_integer() | :unavailable
+        ) :: [map()]
+  def list_routing_candidates_from_plan(
+        %RoutingPlan{} = plan,
+        %SelectionFilters{} = filters,
+        consensus_height
+      ) do
+    list_routing_candidates_from_plan(plan, SelectionFilters.to_map(filters), consensus_height)
+  end
+
+  def list_routing_candidates_from_plan(%RoutingPlan{} = plan, filters, consensus_height)
+      when is_map(filters) do
+    do_list_candidates(plan, filters, :routing, consensus_height)
+  end
+
   defp do_list_candidates(%RoutingPlan{} = plan, filters),
     do: do_list_candidates(plan, filters, :full)
 
-  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode) do
+  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode),
+    do: do_list_candidates(plan, filters, mode, capture_consensus_height(plan.chain_id))
+
+  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode, consensus_height) do
     protocol = Map.get(filters, :protocol)
     workload_key = filters |> Map.get(:workload_key, :client) |> Workload.normalize()
     include_half_open = Map.get(filters, :include_half_open, false)
@@ -123,7 +145,12 @@ defmodule Lasso.Providers.CandidateListing do
           circuit_breaker_ready?(c, protocol, include_half_open) and
           rate_limit_ok?(c, protocol, filters)
       end)
-      |> filter_by_lag(plan.profile, plan.chain_id, Map.get(filters, :max_lag_blocks))
+      |> filter_by_lag(
+        plan.profile,
+        plan.chain_id,
+        Map.get(filters, :max_lag_blocks),
+        consensus_height
+      )
       |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
       |> filter_by_archival(Map.get(filters, :requires_archival))
       |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
@@ -310,10 +337,32 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp filter_by_lag(candidates, _profile, _chain_id, nil), do: candidates
+  defp filter_by_lag(candidates, _profile, _chain_id, nil, _consensus_height), do: candidates
 
-  defp filter_by_lag(candidates, profile, chain_id, max_lag_blocks)
+  defp filter_by_lag(candidates, profile, chain_id, max_lag_blocks, consensus_height)
        when is_integer(max_lag_blocks) do
+    case resolve_consensus_height(chain_id, consensus_height) do
+      {:ok, consensus_height} ->
+        filter_by_lag_with_consensus(
+          candidates,
+          profile,
+          chain_id,
+          max_lag_blocks,
+          consensus_height
+        )
+
+      :unavailable ->
+        candidates
+    end
+  end
+
+  defp filter_by_lag_with_consensus(
+         candidates,
+         profile,
+         chain_id,
+         max_lag_blocks,
+         consensus_height
+       ) do
     block_time_ms = LagCalculation.get_block_time_ms(chain_id, profile)
 
     filtered =
@@ -321,7 +370,8 @@ defmodule Lasso.Providers.CandidateListing do
         case LagCalculation.calculate_optimistic_lag(
                chain_id,
                candidate.instance_id,
-               block_time_ms
+               block_time_ms,
+               consensus_height
              ) do
           {:ok, optimistic_lag, _raw_lag} -> optimistic_lag >= -max_lag_blocks
           {:error, _} -> true
@@ -335,6 +385,19 @@ defmodule Lasso.Providers.CandidateListing do
     end
 
     filtered
+  end
+
+  defp resolve_consensus_height(_chain_id, height)
+       when is_integer(height) and height >= 0,
+       do: {:ok, height}
+
+  defp resolve_consensus_height(_chain_id, :unavailable), do: :unavailable
+
+  defp capture_consensus_height(chain_id) do
+    case ChainState.consensus_height(chain_id) do
+      {:ok, height} -> height
+      {:error, _reason} -> :unavailable
+    end
   end
 
   defp filter_by_min_block(candidates, _profile, _chain_id, nil), do: candidates

@@ -830,12 +830,6 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec handle_success(any(), number(), Channel.t(), RequestContext.t()) :: result()
   defp handle_success(result, io_ms, channel, ctx) do
-    Logger.debug("Request succeeded",
-      channel: Channel.to_string(channel),
-      request_id: ctx.request_id,
-      io_latency_ms: io_ms
-    )
-
     log_slow_request_if_needed(io_ms, ctx.method, channel, ctx)
 
     # Update context with success info

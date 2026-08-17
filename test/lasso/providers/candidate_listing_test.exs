@@ -1,9 +1,10 @@
 defmodule Lasso.Providers.CandidateListingTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.{Snapshot, Storage}
-  alias Lasso.Providers.{Catalog, CandidateListing}
+  alias Lasso.Providers.{CandidateListing, Catalog}
   alias Lasso.RPC.{AttemptIdentity, AttemptProjection, AttemptTerminal}
 
   @profile "cl_test"
@@ -35,6 +36,7 @@ defmodule Lasso.Providers.CandidateListingTest do
 
     on_exit(fn ->
       clean_instance_state()
+      BlockSyncRegistry.clear_chain(@chain)
       ConfigStore.unregister_chain_runtime(@profile, @chain)
       Catalog.build_from_config()
     end)
@@ -78,6 +80,41 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert Map.has_key?(candidate, :routing_states)
       assert Map.has_key?(candidate, :circuit_state)
       assert Map.has_key?(candidate, :rate_limited)
+    end
+
+    test "lag filtering uses the request's captured consensus" do
+      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
+      providers = Map.new(plan.providers, &{&1.id, &1.instance_id})
+
+      :ok = BlockSyncRegistry.put_height(@chain, providers["p1"], 100, :http)
+      :ok = BlockSyncRegistry.put_height(@chain, providers["p2"], 90, :http)
+      :ok = BlockSyncRegistry.put_height(@chain, providers["p3"], 80, :http)
+
+      candidates =
+        CandidateListing.list_routing_candidates_from_plan(
+          plan,
+          %{protocol: :http, max_lag_blocks: 5},
+          90
+        )
+
+      assert Enum.map(candidates, & &1.id) == ["p1", "p2"]
+    end
+
+    test "lag filtering fails open when the request captured no consensus" do
+      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
+      providers = Map.new(plan.providers, &{&1.id, &1.instance_id})
+
+      :ok = BlockSyncRegistry.put_height(@chain, providers["p1"], 100, :http)
+      :ok = BlockSyncRegistry.put_height(@chain, providers["p2"], 90, :http)
+
+      candidates =
+        CandidateListing.list_routing_candidates_from_plan(
+          plan,
+          %{protocol: :http, max_lag_blocks: 0},
+          :unavailable
+        )
+
+      assert Enum.map(candidates, & &1.id) == ["p1", "p2", "p3"]
     end
 
     test "does not read or expose a disconnected WebSocket route" do
