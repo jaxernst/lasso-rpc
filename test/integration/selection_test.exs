@@ -33,6 +33,27 @@ defmodule Lasso.RPC.SelectionTest do
     end
   end
 
+  defmodule ContextCaptureStrategy do
+    @behaviour Lasso.RPC.Strategy
+
+    alias Lasso.RPC.StrategyContext
+
+    @impl true
+    def prepare_context(_profile, chain_id, _method, timeout) do
+      StrategyContext.new(chain_id, timeout)
+    end
+
+    @impl true
+    def rank_channels(channels, _method, context, _profile, _chain_id) do
+      send(
+        Application.fetch_env!(:lasso, :selection_context_test_pid),
+        {:strategy_context, context}
+      )
+
+      channels
+    end
+  end
+
   describe "select_provider/3 - filter handling" do
     test "respects exclude filter", %{chain: chain} do
       profile = "public"
@@ -283,6 +304,46 @@ defmodule Lasso.RPC.SelectionTest do
                  transport: :http
                )
     end
+
+    test "custom strategies retain the complete routing context", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "context_provider", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      previous_registry = Application.get_env(:lasso, :strategy_registry)
+      previous_pid = Application.get_env(:lasso, :selection_context_test_pid)
+
+      Application.put_env(
+        :lasso,
+        :strategy_registry,
+        Map.put(
+          Lasso.RPC.Strategies.Registry.default_registry(),
+          :context_capture,
+          ContextCaptureStrategy
+        )
+      )
+
+      Application.put_env(:lasso, :selection_context_test_pid, self())
+
+      on_exit(fn ->
+        restore_env(:strategy_registry, previous_registry)
+        restore_env(:selection_context_test_pid, previous_pid)
+      end)
+
+      assert {:ok, "context_provider"} =
+               Selection.select_provider(profile, chain, "eth_blockNumber",
+                 strategy: :context_capture,
+                 protocol: :http
+               )
+
+      assert_receive {:strategy_context,
+                      %{routing_summaries: summaries, provider_priorities: priorities}}
+
+      assert map_size(summaries) == 1
+      assert priorities == %{"context_provider" => 10}
+    end
   end
 
   describe "select_channels/4 - archival filtering" do
@@ -349,4 +410,7 @@ defmodule Lasso.RPC.SelectionTest do
     {:ok, current} = Snapshot.lookup({instance_id, :http})
     Snapshot.put(%{current | state: state, control_health: :healthy})
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:lasso, key)
+  defp restore_env(key, value), do: Application.put_env(:lasso, key, value)
 end

@@ -110,7 +110,7 @@ defmodule Lasso.RPC.Selection do
             selection_opts.timeout
           )
           |> Map.put(:workload_key, workload_for_origin(selection_opts.request_origin))
-          |> enrich_strategy_context(candidates, plan)
+          |> enrich_strategy_context(candidates, plan, strategy_mod)
 
         channels =
           candidates
@@ -307,7 +307,7 @@ defmodule Lasso.RPC.Selection do
     prepared_ctx =
       strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
       |> Map.put(:workload_key, workload_key)
-      |> enrich_strategy_context(candidates, plan)
+      |> enrich_strategy_context(candidates, plan, strategy_mod)
 
     ordered_channels =
       if Enum.any?(candidates, & &1.learned_feedback_degraded?) and
@@ -534,7 +534,24 @@ defmodule Lasso.RPC.Selection do
     {filters, consensus_height || :unavailable}
   end
 
-  defp enrich_strategy_context(ctx, candidates, %RoutingPlan{} = plan) do
+  defp enrich_strategy_context(
+         ctx,
+         _candidates,
+         %RoutingPlan{} = plan,
+         Lasso.RPC.Strategies.Priority
+       ) do
+    %{ctx | provider_priorities: plan.provider_priorities}
+  end
+
+  defp enrich_strategy_context(
+         ctx,
+         _candidates,
+         %RoutingPlan{},
+         Lasso.RPC.Strategies.LoadBalanced
+       ),
+       do: ctx
+
+  defp enrich_strategy_context(ctx, candidates, %RoutingPlan{} = plan, _strategy_mod) do
     summaries =
       Enum.reduce(candidates, %{}, fn candidate, acc ->
         Enum.reduce(candidate.transports, acc, fn transport, route_acc ->
