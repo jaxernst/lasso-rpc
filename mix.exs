@@ -15,8 +15,9 @@ defmodule Lasso.MixProject do
       dialyzer: dialyzer(),
       hex: [
         # Cowlib has no patched release for these encoder-only advisories. Lasso and its
-        # Cowboy/Plug stack do not call cow_cookie:cookie/1 or Cowlib's structured-header encoders.
-        ignore_advisories: ["CVE-2026-43966", "CVE-2026-43969"]
+        # Cowboy/Plug stack do not call cow_cookie:cookie/1, cow_link:link/1, or Cowlib's
+        # structured-header encoders.
+        ignore_advisories: ["CVE-2026-43966", "CVE-2026-43969", "CVE-2026-43971"]
       ]
     ]
   end
