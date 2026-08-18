@@ -1105,7 +1105,7 @@ defmodule Lasso.RPC.RequestPipeline do
           public_response_attempt: %AttemptTerminal.Response{} = attempt
         } = ctx
       ) do
-    RequestTerminal.UpstreamResponse.new(request_terminal_attrs(ctx), attempt)
+    build_upstream_request_terminal(ctx, attempt)
   end
 
   def build_request_terminal(
@@ -1115,7 +1115,7 @@ defmodule Lasso.RPC.RequestPipeline do
           public_response_attempt: %AttemptTerminal.Response{} = attempt
         } = ctx
       ) do
-    RequestTerminal.UpstreamResponse.new(request_terminal_attrs(ctx), attempt)
+    build_upstream_request_terminal(ctx, attempt)
   end
 
   def build_request_terminal(
@@ -1145,6 +1145,18 @@ defmodule Lasso.RPC.RequestPipeline do
     RequestTerminal.LocalFailure.new(request_terminal_attrs(ctx), :internal)
   end
 
+  defp build_upstream_request_terminal(ctx, attempt) do
+    envelope = ctx.execution_envelope
+
+    RequestTerminal.UpstreamResponse.new_runtime(
+      attempt,
+      request_elapsed_us(envelope),
+      envelope.candidate_admission_count,
+      envelope.dispatch_count,
+      nil
+    )
+  end
+
   defp request_terminal_attrs(ctx) do
     envelope = ctx.execution_envelope
 
@@ -1156,11 +1168,15 @@ defmodule Lasso.RPC.RequestPipeline do
       execution_safety: envelope.execution_safety,
       routing_intent: Atom.to_string(ctx.opts.strategy),
       workload_key: request_workload_key(ctx),
-      elapsed_us: max(System.monotonic_time(:microsecond) - envelope.started_at_us, 0),
+      elapsed_us: request_elapsed_us(envelope),
       candidate_admission_count: envelope.candidate_admission_count,
       dispatch_count: envelope.dispatch_count,
       observed_at: nil
     ]
+  end
+
+  defp request_elapsed_us(envelope) do
+    max(System.monotonic_time(:microsecond) - envelope.started_at_us, 0)
   end
 
   defp final_exhaustion_reason(%RequestContext{terminal_reason: reason})
