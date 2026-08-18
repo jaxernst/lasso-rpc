@@ -26,13 +26,7 @@ defmodule Lasso.RPC.ExecutionFact do
   @type dispatch_certainty :: :not_dispatched | :indeterminate | :dispatched
 
   @spec bounded!(term(), atom()) :: binary()
-  def bounded!(value, field) when is_binary(value) do
-    encoded = BoundedIdentifier.encode(value)
-
-    if BoundedIdentifier.valid?(encoded),
-      do: encoded,
-      else: raise(ArgumentError, "invalid #{field}")
-  end
+  def bounded!(value, _field) when is_binary(value), do: BoundedIdentifier.encode(value)
 
   def bounded!(_value, field), do: raise(ArgumentError, "#{field} must be a string")
 
