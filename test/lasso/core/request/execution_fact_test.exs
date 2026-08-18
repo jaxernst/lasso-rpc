@@ -181,6 +181,22 @@ defmodule Lasso.RPC.ExecutionFactTest do
     refute id.request_id =~ "sensitive"
   end
 
+  test "invalid UTF-8 identifiers normalize to valid bounded hashes" do
+    invalid = <<0xFF, 0xFE, 0xFD>>
+    id = AttemptIdentity.new(Keyword.merge(Map.to_list(identity()), request_id: invalid))
+
+    assert id.request_id == Lasso.RPC.BoundedIdentifier.encode(invalid)
+    assert String.valid?(id.request_id)
+    assert byte_size(id.request_id) <= 128
+  end
+
+  test "bounded identifiers preserve valid multibyte UTF-8 at the byte limit" do
+    identifier = String.duplicate("é", 64)
+
+    assert Lasso.RPC.BoundedIdentifier.encode(identifier) == identifier
+    assert Lasso.RPC.BoundedIdentifier.valid?(identifier)
+  end
+
   test "execution plans and composite leases remain narrow and ordered" do
     plan =
       ExecutionPlan.new(
