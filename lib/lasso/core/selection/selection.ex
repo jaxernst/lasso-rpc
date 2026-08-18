@@ -27,6 +27,7 @@ defmodule Lasso.RPC.Selection do
     RequestAnalysis,
     RoutingEvidence,
     RoutingPlan,
+    Selection.CandidateCursor,
     SelectionFilters,
     TransportRegistry
   }
@@ -182,6 +183,21 @@ defmodule Lasso.RPC.Selection do
     case capture_selection_snapshot(profile, chain_id) do
       {:ok, snapshot, plan} -> select_channels_from_plan(snapshot, plan, method, opts)
       :unavailable -> []
+    end
+  end
+
+  @doc false
+  @spec select_channel_candidates(String.t(), pos_integer(), String.t(), keyword()) ::
+          [Channel.t()] | CandidateCursor.t()
+  def select_channel_candidates(profile, chain_id, method, opts)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_binary(method) do
+    if Keyword.get(opts, :strategy, :load_balanced) in [:priority, :load_balanced] do
+      case capture_selection_snapshot(profile, chain_id) do
+        {:ok, snapshot, plan} -> CandidateCursor.new(snapshot, plan, method, opts)
+        :unavailable -> []
+      end
+    else
+      select_channels(profile, chain_id, method, opts)
     end
   end
 

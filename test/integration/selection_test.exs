@@ -16,7 +16,9 @@ defmodule Lasso.RPC.SelectionTest do
 
   use Lasso.Test.LassoIntegrationCase
 
+  alias Lasso.Providers.Catalog
   alias Lasso.RPC.{AttemptProjection, Selection}
+  alias Lasso.RPC.Selection.CandidateCursor
 
   defmodule CatalogSwapStrategy do
     @behaviour Lasso.RPC.Strategy
@@ -401,6 +403,105 @@ defmodule Lasso.RPC.SelectionTest do
       provider_ids = Enum.map(channels, & &1.provider_id)
       assert "provider_1" in provider_ids
       assert "provider_2" in provider_ids
+    end
+  end
+
+  describe "lazy execution candidates" do
+    test "priority materializes later candidates only when requested", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "first", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "second", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :priority,
+          transport: :http,
+          limit: 10
+        )
+
+      assert {:ok, %{provider_id: "first"}, cursor} = CandidateCursor.next(cursor)
+
+      second_instance = Catalog.lookup_instance_id(profile, chain, "second")
+      set_circuit_snapshot(second_instance, :open)
+
+      assert :done = CandidateCursor.next(cursor)
+    end
+
+    test "closed candidates remain ahead of earlier half-open candidates", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "half_open", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "closed", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      half_open_instance = Catalog.lookup_instance_id(profile, chain, "half_open")
+      set_circuit_snapshot(half_open_instance, :half_open)
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :priority,
+          transport: :http,
+          include_half_open: true
+        )
+
+      assert {:ok, %{provider_id: "closed"}, cursor} = CandidateCursor.next(cursor)
+      assert {:ok, %{provider_id: "half_open"}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+    end
+
+    test "catalog pointer changes invalidate a cursor", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :priority,
+          transport: :http
+        )
+
+      :ok = Catalog.build_from_config()
+
+      assert :stale = CandidateCursor.next(cursor)
+    end
+
+    test "candidate limits bound incremental fallback", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "first", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "second", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :priority,
+          transport: :http,
+          limit: 1
+        )
+
+      assert {:ok, %{provider_id: "first"}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+    end
+
+    test "evidence-driven strategies retain the eager channel list", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
+      ])
+
+      assert [%Lasso.RPC.Channel{}] =
+               Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+                 strategy: :fastest,
+                 transport: :http
+               )
     end
   end
 

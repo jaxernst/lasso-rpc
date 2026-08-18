@@ -41,6 +41,7 @@ defmodule Lasso.RPC.RequestPipeline do
     RequestProjection,
     RequestTerminal,
     Selection,
+    Selection.CandidateCursor,
     TransportRegistry
   }
 
@@ -55,7 +56,8 @@ defmodule Lasso.RPC.RequestPipeline do
   @type result :: {:ok, any(), RequestContext.t()} | {:error, JError.t(), RequestContext.t()}
 
   # A channel source is a function that returns channels to try
-  @type channel_source :: (RequestContext.t() -> [Channel.t()])
+  @type candidates :: [Channel.t()] | CandidateCursor.t()
+  @type channel_source :: (RequestContext.t() -> candidates())
 
   # Configuration
   @max_channel_candidates 10
@@ -223,23 +225,25 @@ defmodule Lasso.RPC.RequestPipeline do
     # Get channels from the source
     ctx = RequestContext.mark_selection_start(ctx)
 
-    channels = get_channels_from_source(channel_source, ctx)
+    candidates = get_channels_from_source(channel_source, ctx)
+
+    {selected, remaining} = pop_candidate(candidates)
 
     ctx =
       RequestContext.mark_selection_end(ctx,
-        candidates: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}"),
-        selected: List.first(channels)
+        candidates: candidate_labels(candidates, selected),
+        selected: selected
       )
 
     case request_open(ctx, caller_guard) do
       :ok ->
-        case channels do
-          [] ->
+        case selected do
+          nil ->
             handle_no_channels(ctx)
 
-          _ ->
+          %Channel{} = channel ->
             ctx = RequestContext.mark_upstream_start(ctx)
-            attempt_channels(channels, ctx, [], caller_guard)
+            attempt_channels({channel, remaining}, ctx, [], caller_guard)
         end
 
       {:error, :caller_abandoned} ->
@@ -250,7 +254,7 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  @spec get_channels_from_source(channel_source(), RequestContext.t()) :: [Channel.t()]
+  @spec get_channels_from_source(channel_source(), RequestContext.t()) :: candidates()
   defp get_channels_from_source(channel_source, ctx), do: channel_source.(ctx)
 
   # Builds a function that returns channels to try, unifying override vs normal selection
@@ -258,7 +262,7 @@ defmodule Lasso.RPC.RequestPipeline do
   @spec build_channel_source(RequestOptions.t()) :: channel_source()
   defp build_channel_source(%RequestOptions{provider_override: nil, profile: profile} = opts) do
     fn %RequestContext{chain_id: chain_id, method: method, params: params} = _ctx ->
-      Selection.select_channels(profile, chain_id, method,
+      Selection.select_channel_candidates(profile, chain_id, method,
         strategy: opts.strategy,
         transport: opts.transport || :both,
         limit: @max_channel_candidates,
@@ -293,7 +297,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   @spec attempt_channels(
-          [Channel.t()],
+          candidates() | {Channel.t(), candidates()},
           RequestContext.t(),
           [Channel.t()],
           ExecutionScope.CallerGuard.t() | nil
@@ -308,6 +312,20 @@ defmodule Lasso.RPC.RequestPipeline do
 
       {:error, :deadline_exhausted} ->
         finalize_bounded_error(ctx, :deadline_exhausted)
+    end
+  end
+
+  defp do_attempt_channels({%Channel{} = channel, rest}, ctx, param_rejected, caller_guard) do
+    do_attempt_channels([channel], ctx, param_rejected, caller_guard, rest)
+  end
+
+  defp do_attempt_channels(%CandidateCursor{} = cursor, ctx, param_rejected, caller_guard) do
+    case CandidateCursor.next(cursor) do
+      {:ok, channel, rest} ->
+        do_attempt_channels([channel], ctx, param_rejected, caller_guard, rest)
+
+      result when result in [:done, :stale] ->
+        do_attempt_channels([], ctx, param_rejected, caller_guard)
     end
   end
 
@@ -343,6 +361,26 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp do_attempt_channels([%Channel{} = channel | rest], ctx, param_rejected, caller_guard)
        when is_list(rest) do
+    do_attempt_channels([channel], ctx, param_rejected, caller_guard, rest)
+  end
+
+  defp do_attempt_channels(
+         [%Channel{} = channel],
+         %{bypass_param_limits: true} = ctx,
+         _acc,
+         caller_guard,
+         rest
+       ) do
+    case ExecutionEnvelope.admit_candidate(ctx.execution_envelope) do
+      {:ok, envelope} ->
+        execute_on_channel(channel, rest, %{ctx | execution_envelope: envelope}, caller_guard)
+
+      {:error, reason} ->
+        finalize_bounded_error(ctx, reason)
+    end
+  end
+
+  defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
     case ExecutionEnvelope.admit_candidate(ctx.execution_envelope) do
       {:ok, envelope} ->
         ctx = %{ctx | execution_envelope: envelope}
@@ -367,6 +405,24 @@ defmodule Lasso.RPC.RequestPipeline do
         finalize_bounded_error(ctx, reason)
     end
   end
+
+  defp pop_candidate([%Channel{} = channel | rest]), do: {channel, rest}
+  defp pop_candidate([]), do: {nil, []}
+
+  defp pop_candidate(%CandidateCursor{} = cursor) do
+    case CandidateCursor.next(cursor) do
+      {:ok, channel, remaining} -> {channel, remaining}
+      result when result in [:done, :stale] -> {nil, []}
+    end
+  end
+
+  defp candidate_labels(channels, _selected) when is_list(channels),
+    do: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}")
+
+  defp candidate_labels(%CandidateCursor{}, nil), do: []
+
+  defp candidate_labels(%CandidateCursor{}, %Channel{} = selected),
+    do: ["#{selected.provider_id}:#{selected.transport}"]
 
   defp retry_param_rejected(channels, ctx, caller_guard) do
     Logger.warning("All channels rejected by parameter limits, attempting anyway",
@@ -398,7 +454,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec execute_on_channel(
           Channel.t(),
-          [Channel.t()],
+          candidates(),
           RequestContext.t(),
           ExecutionScope.CallerGuard.t() | nil
         ) :: result()
@@ -692,30 +748,34 @@ defmodule Lasso.RPC.RequestPipeline do
        do: handle_success(result, fact_latency_ms(fact), channel, ctx)
 
   defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard) do
-    cond do
-      outcome.projection.fallback_eligible and rest_channels != [] ->
-        handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
-
-      outcome.projection.fallback_eligible and
-          match?(%AttemptTerminal.PredispatchFailure{}, outcome.fact) ->
-        attempt_channels([], ctx, [], caller_guard)
-
-      true ->
-        handle_owner_terminal(outcome, channel, ctx)
+    if outcome.projection.fallback_eligible do
+      handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
+    else
+      handle_owner_terminal(outcome, channel, ctx)
     end
   end
 
   defp handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard) do
     {reason, _latency_ms} = owner_error(outcome)
-    ctx = record_owner_failure(ctx, channel, outcome.fact, reason)
-
-    ctx =
-      ctx
-      |> RequestContext.increment_retries()
-      |> RequestContext.track_error_category(extract_error_category(reason))
-
     next_channels = maybe_exclude_provider_for_method_not_found(rest_channels, channel, reason)
-    attempt_channels(next_channels, ctx, [], caller_guard)
+
+    case pop_candidate(next_channels) do
+      {%Channel{} = next_channel, remaining} ->
+        ctx = record_owner_failure(ctx, channel, outcome.fact, reason)
+
+        ctx =
+          ctx
+          |> RequestContext.increment_retries()
+          |> RequestContext.track_error_category(extract_error_category(reason))
+
+        attempt_channels({next_channel, remaining}, ctx, [], caller_guard)
+
+      {nil, _remaining} when is_struct(outcome.fact, AttemptTerminal.PredispatchFailure) ->
+        attempt_channels([], ctx, [], caller_guard)
+
+      {nil, _remaining} ->
+        handle_owner_terminal(outcome, channel, ctx)
+    end
   end
 
   defp handle_owner_terminal(outcome, channel, ctx) do
@@ -847,7 +907,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   @spec handle_circuit_open(
           Channel.t(),
-          [Channel.t()],
+          candidates(),
           RequestContext.t(),
           ExecutionScope.CallerGuard.t() | nil
         ) :: result()
@@ -1297,13 +1357,15 @@ defmodule Lasso.RPC.RequestPipeline do
   defp extract_error_category(:circuit_open), do: :circuit_open
   defp extract_error_category(_), do: :unknown
 
-  @spec maybe_exclude_provider_for_method_not_found([Channel.t()], Channel.t(), any()) :: [
-          Channel.t()
-        ]
+  @spec maybe_exclude_provider_for_method_not_found(candidates(), Channel.t(), any()) ::
+          candidates()
   defp maybe_exclude_provider_for_method_not_found(rest_channels, channel, %JError{
          category: :method_not_found
        }) do
-    Enum.reject(rest_channels, &(&1.provider_id == channel.provider_id))
+    case rest_channels do
+      %CandidateCursor{} = cursor -> CandidateCursor.exclude_provider(cursor, channel.provider_id)
+      channels -> Enum.reject(channels, &(&1.provider_id == channel.provider_id))
+    end
   end
 
   defp maybe_exclude_provider_for_method_not_found(rest_channels, _channel, _reason),
