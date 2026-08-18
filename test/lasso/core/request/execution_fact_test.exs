@@ -190,6 +190,24 @@ defmodule Lasso.RPC.ExecutionFactTest do
     assert byte_size(id.request_id) <= 128
   end
 
+  test "runtime construction preserves validation without an intermediate struct" do
+    attrs = identity() |> Map.from_struct() |> Map.put(:request_id, String.duplicate("r", 1_000))
+
+    assert %AttemptIdentity{} = runtime = AttemptIdentity.new_runtime(attrs)
+    assert runtime.request_id == Lasso.RPC.BoundedIdentifier.encode(attrs.request_id)
+
+    assert_raise ArgumentError, ~r/invalid attempt identity attributes/, fn ->
+      attrs |> Map.delete(:dispatch_count) |> AttemptIdentity.new_runtime()
+    end
+
+    assert_raise ArgumentError, ~r/attempt counts are incoherent/, fn ->
+      attrs
+      |> Map.put(:candidate_admission_count, 1)
+      |> Map.put(:dispatch_count, 2)
+      |> AttemptIdentity.new_runtime()
+    end
+  end
+
   test "bounded identifiers preserve valid multibyte UTF-8 at the byte limit" do
     identifier = String.duplicate("é", 64)
 

@@ -694,7 +694,7 @@ defmodule Lasso.RPC.RequestPipeline do
   defp attempt_identity(channel, instance_id, ctx, receipt) do
     envelope = ctx.execution_envelope
 
-    AttemptIdentity.new(
+    AttemptIdentity.new_runtime(%{
       request_id: ctx.request_id,
       attempt_id: "#{envelope.execution_nonce}:#{envelope.candidate_admission_count}",
       profile: ctx.opts.profile,
@@ -711,7 +711,7 @@ defmodule Lasso.RPC.RequestPipeline do
       request_budget_ms: envelope.original_timeout_ms,
       candidate_admission_count: envelope.candidate_admission_count,
       dispatch_count: envelope.dispatch_count
-    )
+    })
   end
 
   defp commit_attempt_context(ctx, channel, instance_id, outcome) do

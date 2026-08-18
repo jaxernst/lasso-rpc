@@ -128,34 +128,61 @@ defmodule Lasso.RPC.AttemptIdentity do
 
   @spec new(keyword()) :: t()
   def new(attrs) when is_list(attrs) do
-    identity = struct!(__MODULE__, attrs)
+    normalize(struct!(__MODULE__, attrs))
+  end
 
-    normalized = %{
-      identity
-      | request_id: ExecutionFact.bounded!(identity.request_id, :request_id),
-        attempt_id: ExecutionFact.bounded!(identity.attempt_id, :attempt_id),
-        profile: ExecutionFact.bounded!(identity.profile, :profile),
-        subject_token: ExecutionFact.optional_bounded!(identity.subject_token, :subject_token),
-        chain_id: ExecutionFact.positive!(identity.chain_id, :chain_id),
-        upstream_instance_id:
-          ExecutionFact.bounded!(identity.upstream_instance_id, :upstream_instance_id),
-        transport: ExecutionFact.transport!(identity.transport),
-        route_generation:
-          ExecutionFact.non_negative!(identity.route_generation, :route_generation),
-        circuit_scope:
-          ExecutionFact.member!(identity.circuit_scope, :circuit_scope, @circuit_scopes),
-        circuit_epoch: ExecutionFact.non_negative!(identity.circuit_epoch, :circuit_epoch),
-        execution_safety: ExecutionFact.execution_safety!(identity.execution_safety),
-        routing_intent: ExecutionFact.bounded!(identity.routing_intent, :routing_intent),
-        workload_key: ExecutionFact.bounded!(identity.workload_key, :workload_key),
-        request_budget_ms:
-          ExecutionFact.non_negative!(identity.request_budget_ms, :request_budget_ms),
-        candidate_admission_count:
-          ExecutionFact.candidate_count!(identity.candidate_admission_count),
-        dispatch_count:
-          identity.dispatch_count
-          |> ExecutionFact.dispatch_count!()
-          |> ensure_positive_dispatch!()
+  @doc false
+  @spec new_runtime(map()) :: t()
+  def new_runtime(
+        %{
+          request_id: _,
+          attempt_id: _,
+          profile: _,
+          subject_token: _,
+          chain_id: _,
+          upstream_instance_id: _,
+          transport: _,
+          route_generation: _,
+          circuit_scope: _,
+          circuit_epoch: _,
+          execution_safety: _,
+          routing_intent: _,
+          workload_key: _,
+          request_budget_ms: _,
+          candidate_admission_count: _,
+          dispatch_count: _
+        } = attrs
+      )
+      when map_size(attrs) == 16,
+      do: normalize(attrs)
+
+  def new_runtime(_attrs), do: raise(ArgumentError, "invalid attempt identity attributes")
+
+  defp normalize(identity) do
+    normalized = %__MODULE__{
+      request_id: ExecutionFact.bounded!(identity.request_id, :request_id),
+      attempt_id: ExecutionFact.bounded!(identity.attempt_id, :attempt_id),
+      profile: ExecutionFact.bounded!(identity.profile, :profile),
+      subject_token: ExecutionFact.optional_bounded!(identity.subject_token, :subject_token),
+      chain_id: ExecutionFact.positive!(identity.chain_id, :chain_id),
+      upstream_instance_id:
+        ExecutionFact.bounded!(identity.upstream_instance_id, :upstream_instance_id),
+      transport: ExecutionFact.transport!(identity.transport),
+      route_generation: ExecutionFact.non_negative!(identity.route_generation, :route_generation),
+      circuit_scope:
+        ExecutionFact.member!(identity.circuit_scope, :circuit_scope, @circuit_scopes),
+      circuit_epoch: ExecutionFact.non_negative!(identity.circuit_epoch, :circuit_epoch),
+      execution_safety: ExecutionFact.execution_safety!(identity.execution_safety),
+      routing_intent: ExecutionFact.bounded!(identity.routing_intent, :routing_intent),
+      workload_key: ExecutionFact.bounded!(identity.workload_key, :workload_key),
+      request_budget_ms:
+        ExecutionFact.non_negative!(identity.request_budget_ms, :request_budget_ms),
+      candidate_admission_count:
+        ExecutionFact.candidate_count!(identity.candidate_admission_count),
+      dispatch_count:
+        identity.dispatch_count
+        |> ExecutionFact.dispatch_count!()
+        |> ensure_positive_dispatch!()
     }
 
     if normalized.candidate_admission_count == 0 or
