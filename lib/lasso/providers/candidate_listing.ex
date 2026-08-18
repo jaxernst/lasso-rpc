@@ -286,11 +286,11 @@ defmodule Lasso.Providers.CandidateListing do
     http_routing = route_record(learned_scope, instance_id, :http, transports)
     ws_routing = route_record(learned_scope, instance_id, :ws, transports)
 
-    http_cb = circuit_state(instance_id, :http, transports)
-    ws_cb = circuit_state(instance_id, :ws, transports)
+    {http_cb, http_rl} =
+      candidate_gate(instance_id, :http, transports, include_learned?, http_routing)
 
-    http_rl = rate_limit(instance_id, :http, transports, include_learned?, http_routing)
-    ws_rl = rate_limit(instance_id, :ws, transports, include_learned?, ws_routing)
+    {ws_cb, ws_rl} =
+      candidate_gate(instance_id, :ws, transports, include_learned?, ws_routing)
 
     candidate = %{
       id: provider.id,
@@ -300,8 +300,8 @@ defmodule Lasso.Providers.CandidateListing do
       transports: transports,
       routing_states: %{http: http_routing, ws: ws_routing},
       workload_key: workload_key,
-      circuit_state: %{http: http_cb.state, ws: ws_cb.state},
-      rate_limited: %{http: http_rl.rate_limited, ws: ws_rl.rate_limited},
+      circuit_state: %{http: http_cb, ws: ws_cb},
+      rate_limited: %{http: http_rl, ws: ws_rl},
       learned_feedback_degraded?: learned_scope.degraded?
     }
 
@@ -353,20 +353,11 @@ defmodule Lasso.Providers.CandidateListing do
       else: nil
   end
 
-  defp circuit_state(instance_id, transport, transports) do
-    if transport in transports,
-      do: InstanceState.read_circuit(instance_id, transport),
-      else: %{state: :unavailable}
-  end
-
-  defp rate_limit(instance_id, transport, transports, include_learned?, routing) do
+  defp candidate_gate(instance_id, transport, transports, include_learned?, routing) do
     if transport in transports do
-      InstanceState.read_rate_limit(instance_id, transport,
-        include_learned: include_learned?,
-        routing_state: routing
-      )
+      InstanceState.read_candidate_gate(instance_id, transport, routing, include_learned?)
     else
-      %{rate_limited: false}
+      {:unavailable, false}
     end
   end
 

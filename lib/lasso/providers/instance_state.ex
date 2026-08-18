@@ -179,29 +179,73 @@ defmodule Lasso.Providers.InstanceState do
   @spec read_circuit(String.t(), :http | :ws) :: map()
   def read_circuit(instance_id, transport)
       when is_binary(instance_id) and transport in [:http, :ws] do
-    case Snapshot.lookup({instance_id, transport}) do
-      {:ok, %{owner_pid: owner_pid, ready?: true} = snapshot} when is_pid(owner_pid) ->
-        if Process.alive?(owner_pid) do
-          state =
-            if snapshot.control_health == :degraded,
-              do: :half_open,
-              else: snapshot.state
+    case live_circuit_snapshot(instance_id, transport) do
+      {:ok, snapshot} ->
+        %{
+          state: effective_circuit_state(snapshot),
+          error: nil,
+          recovery_deadline_ms: recovery_deadline_ms(snapshot.recovery_deadline_us),
+          control_health: snapshot.control_health
+        }
 
-          %{
-            state: state,
-            error: nil,
-            recovery_deadline_ms: recovery_deadline_ms(snapshot.recovery_deadline_us),
-            control_health: snapshot.control_health
-          }
-        else
-          @default_circuit
-        end
-
-      _ ->
+      :unavailable ->
         @default_circuit
     end
   rescue
     ArgumentError -> @default_circuit
+  end
+
+  @doc false
+  @spec read_candidate_gate(String.t(), :http | :ws, map() | nil, boolean()) ::
+          {atom(), boolean()}
+  def read_candidate_gate(instance_id, transport, routing_state, include_learned?)
+      when is_binary(instance_id) and transport in [:http, :ws] and
+             is_boolean(include_learned?) do
+    circuit_state =
+      case live_circuit_snapshot(instance_id, transport) do
+        {:ok, snapshot} -> effective_circuit_state(snapshot)
+        :unavailable -> :unavailable
+      end
+
+    {circuit_state,
+     candidate_rate_limited?(instance_id, transport, routing_state, include_learned?)}
+  rescue
+    ArgumentError -> {:unavailable, false}
+  end
+
+  defp live_circuit_snapshot(instance_id, transport) do
+    case Snapshot.lookup({instance_id, transport}) do
+      {:ok, %{owner_pid: owner_pid, ready?: true} = snapshot} when is_pid(owner_pid) ->
+        if Process.alive?(owner_pid), do: {:ok, snapshot}, else: :unavailable
+
+      _other ->
+        :unavailable
+    end
+  end
+
+  defp effective_circuit_state(%{control_health: :degraded}), do: :half_open
+  defp effective_circuit_state(snapshot), do: snapshot.state
+
+  defp candidate_rate_limited?(instance_id, transport, routing_state, include_learned?) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    learned_limited? =
+      case routing_state do
+        %{rate_limit_expiry_ms: expiry, rate_limit_observed_at_us: observed_at_us}
+        when include_learned? and is_integer(observed_at_us) and expiry > now_ms ->
+          true
+
+        _other ->
+          false
+      end
+
+    local_limited? =
+      case safe_lookup({:rate_limit, instance_id, transport}) do
+        [{_, %{expiry_ms: expiry}}] when expiry > now_ms -> true
+        _other -> false
+      end
+
+    learned_limited? or local_limited?
   end
 
   defp recovery_deadline_ms(nil), do: nil
