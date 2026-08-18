@@ -2,7 +2,7 @@ defmodule Lasso.Providers.InstanceStateTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Storage}
+  alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Snapshot, Storage}
   alias Lasso.Providers.InstanceState
 
   @table :lasso_instance_state
@@ -14,6 +14,8 @@ defmodule Lasso.Providers.InstanceStateTest do
         :ets.delete(@table, {:health_probe, @instance_id})
         :ets.delete(@table, {:health_block_sync, @instance_id})
         :ets.delete(@table, {:health_routing, @instance_id})
+        :ets.delete(@table, {:rate_limit, @instance_id, :http})
+        :ets.delete(Storage.snapshot_table(), {@instance_id, :http})
       rescue
         ArgumentError -> :ok
       end
@@ -215,6 +217,77 @@ defmodule Lasso.Providers.InstanceStateTest do
     end
   end
 
+  describe "read_candidate_gate/4" do
+    test "matches unavailable circuit and inactive rate-limit defaults" do
+      routing_state = %{rate_limit_expiry_ms: 0, rate_limit_observed_at_us: nil}
+
+      assert {:unavailable, false} =
+               InstanceState.read_candidate_gate(@instance_id, :http, routing_state, true)
+    end
+
+    test "matches live circuit state and local rate-limit state" do
+      put_circuit_snapshot(:closed)
+      expiry_ms = System.monotonic_time(:millisecond) + 10_000
+
+      :ets.insert(
+        @table,
+        {{:rate_limit, @instance_id, :http}, %{expiry_ms: expiry_ms}}
+      )
+
+      routing_state = %{rate_limit_expiry_ms: 0, rate_limit_observed_at_us: nil}
+
+      assert {:closed, true} =
+               InstanceState.read_candidate_gate(@instance_id, :http, routing_state, true)
+
+      assert %{state: :closed} = InstanceState.read_circuit(@instance_id, :http)
+
+      assert %{rate_limited: true} =
+               InstanceState.read_rate_limit(@instance_id, :http,
+                 include_learned: true,
+                 routing_state: routing_state
+               )
+    end
+
+    test "maps degraded circuit control to half-open" do
+      put_circuit_snapshot(:closed, :degraded)
+
+      assert {:half_open, false} =
+               InstanceState.read_candidate_gate(@instance_id, :http, nil, true)
+    end
+
+    test "uses only observed active learned rate limits when enabled" do
+      put_circuit_snapshot(:closed)
+      expiry_ms = System.monotonic_time(:millisecond) + 10_000
+
+      observed = %{
+        rate_limit_expiry_ms: expiry_ms,
+        rate_limit_observed_at_us: System.monotonic_time(:microsecond)
+      }
+
+      unobserved = %{rate_limit_expiry_ms: expiry_ms, rate_limit_observed_at_us: nil}
+
+      assert {:closed, true} =
+               InstanceState.read_candidate_gate(@instance_id, :http, observed, true)
+
+      assert {:closed, false} =
+               InstanceState.read_candidate_gate(@instance_id, :http, observed, false)
+
+      assert {:closed, false} =
+               InstanceState.read_candidate_gate(@instance_id, :http, unobserved, true)
+    end
+
+    test "treats a dead circuit owner as unavailable" do
+      owner = spawn(fn -> receive do: (:stop -> :ok) end)
+      put_circuit_snapshot(:closed, :healthy, owner)
+      Process.exit(owner, :kill)
+
+      refute Process.alive?(owner)
+
+      assert {:unavailable, false} =
+               InstanceState.read_candidate_gate(@instance_id, :http, nil, true)
+    end
+  end
+
   test "clear removes every application-owned breaker row for the instance" do
     id = {@instance_id, :http}
     {:ok, pid} = CircuitBreaker.start_link({id, %{control_ring_capacity: 4}})
@@ -260,5 +333,20 @@ defmodule Lasso.Providers.InstanceStateTest do
       )
 
     :ets.insert(@table, {{:health_routing, @instance_id}, data})
+  end
+
+  defp put_circuit_snapshot(state, control_health \\ :healthy, owner_pid \\ self()) do
+    Snapshot.put(%Snapshot{
+      breaker_id: {@instance_id, :http},
+      state: state,
+      generation: 1,
+      epoch: 1,
+      owner_pid: owner_pid,
+      ready?: true,
+      recovery_deadline_us: nil,
+      half_open_capacity: 1,
+      half_open_inflight: 0,
+      control_health: control_health
+    })
   end
 end
