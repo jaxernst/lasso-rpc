@@ -224,10 +224,8 @@ defmodule Lasso.BlockSync.Registry do
   ## Private Functions
 
   defp calculate_consensus(chain_id, provider_ids, freshness_ms) do
-    now = System.system_time(:millisecond)
-    cutoff = now - freshness_ms
-
-    fresh_heights = fresh_heights(chain_id, provider_ids, cutoff)
+    cutoff = System.system_time(:millisecond) - freshness_ms
+    fresh_heights = select_fresh_heights(chain_id, provider_ids, cutoff)
 
     case fresh_heights do
       [] ->
@@ -243,7 +241,8 @@ defmodule Lasso.BlockSync.Registry do
     end
   end
 
-  defp fresh_heights(chain_id, provider_ids, cutoff) when provider_ids in [nil, []] do
+  defp select_fresh_heights(chain_id, provider_ids, cutoff)
+       when provider_ids in [nil, []] do
     :ets.select(@table, [
       {
         {{:height, chain_id, :_}, {:"$1", :"$2", :_, :_}},
@@ -253,18 +252,18 @@ defmodule Lasso.BlockSync.Registry do
     ])
   end
 
-  defp fresh_heights(chain_id, provider_ids, cutoff) do
-    provider_ids
-    |> MapSet.new()
-    |> Enum.reduce([], fn provider_id, heights ->
-      case :ets.lookup(@table, {:height, chain_id, provider_id}) do
-        [{{:height, ^chain_id, ^provider_id}, {height, timestamp, _source, _metadata}}]
-        when timestamp >= cutoff ->
-          [height | heights]
+  defp select_fresh_heights(chain_id, provider_ids, cutoff) when is_list(provider_ids) do
+    provider_set = MapSet.new(provider_ids)
 
-        _missing_or_stale ->
-          heights
-      end
+    :ets.select(@table, [
+      {
+        {{:height, chain_id, :"$1"}, {:"$2", :"$3", :_, :_}},
+        [{:>=, :"$3", cutoff}],
+        [{{:"$1", :"$2"}}]
+      }
+    ])
+    |> Enum.reduce([], fn {provider_id, height}, heights ->
+      if MapSet.member?(provider_set, provider_id), do: [height | heights], else: heights
     end)
   end
 end

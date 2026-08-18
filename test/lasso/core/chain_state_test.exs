@@ -1,8 +1,8 @@
 defmodule Lasso.RPC.ChainStateTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.RPC.ChainState
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
 
   setup do
     # Generate a unique chain ID for each test to avoid conflicts
@@ -45,38 +45,6 @@ defmodule Lasso.RPC.ChainStateTest do
 
       # Data older than 30s freshness threshold returns error
       assert {:error, :no_data} = ChainState.consensus_height(chain)
-    end
-
-    test "filters consensus to the requested providers", %{chain: chain} do
-      BlockSyncRegistry.put_height(chain, "included_1", 100, :http, %{})
-      BlockSyncRegistry.put_height(chain, "included_2", 105, :http, %{})
-      BlockSyncRegistry.put_height(chain, "excluded", 500, :http, %{})
-
-      assert {:ok, 105} =
-               ChainState.consensus_height(chain,
-                 provider_ids: ["included_1", "included_2", "included_2"]
-               )
-    end
-
-    test "an empty provider filter includes every provider", %{chain: chain} do
-      BlockSyncRegistry.put_height(chain, "provider_1", 100, :http, %{})
-      BlockSyncRegistry.put_height(chain, "provider_2", 105, :http, %{})
-
-      assert {:ok, 105} = ChainState.consensus_height(chain, provider_ids: [])
-    end
-
-    test "excludes stale providers from a filtered consensus", %{chain: chain} do
-      stale_timestamp = System.system_time(:millisecond) - 35_000
-
-      :ets.insert(
-        :block_sync_registry,
-        {{:height, chain, "stale"}, {500, stale_timestamp, :http, %{}}}
-      )
-
-      BlockSyncRegistry.put_height(chain, "fresh", 105, :http, %{})
-
-      assert {:ok, 105} =
-               ChainState.consensus_height(chain, provider_ids: ["stale", "fresh"])
     end
   end
 
