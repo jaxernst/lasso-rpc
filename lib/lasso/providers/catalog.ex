@@ -26,8 +26,10 @@ defmodule Lasso.Providers.Catalog do
   ## Concurrency
 
   `build_from_config/0` builds a fresh ETS table and atomically swaps the
-  persistent_term reference. Concurrent readers always see a consistent snapshot.
-  The old table is deleted after a grace period to cover in-flight reads.
+  persistent_term snapshot. The snapshot shares immutable routing plans across
+  request processes while the table retains live catalog indexes. Concurrent
+  readers always see a consistent generation. The old table is deleted after a
+  grace period to cover in-flight reads.
   """
 
   require Logger
@@ -38,7 +40,11 @@ defmodule Lasso.Providers.Catalog do
 
   @persistent_term_key :lasso_catalog_active
 
-  @type snapshot :: %{table: :ets.tid(), generation: non_neg_integer()}
+  @type snapshot :: %{
+          required(:table) => :ets.tid(),
+          required(:generation) => non_neg_integer(),
+          optional(:routing_plans) => %{{String.t(), pos_integer()} => RoutingPlan.t()}
+        }
 
   @doc """
   Atomically rebuilds the catalog from ConfigStore.
@@ -95,11 +101,28 @@ defmodule Lasso.Providers.Catalog do
   @doc false
   @spec get_routing_plan(snapshot(), String.t(), pos_integer()) ::
           {:ok, RoutingPlan.t()} | {:error, :not_found}
+  def get_routing_plan(%{table: table, routing_plans: routing_plans}, profile, chain_id) do
+    if table_available?(table),
+      do: Map.fetch(routing_plans, {profile, chain_id}),
+      else: {:error, :not_found}
+  end
+
   def get_routing_plan(%{table: table}, profile, chain_id) do
     case safe_lookup(table, {:routing_plan, profile, chain_id}) do
       [{_, %RoutingPlan{} = plan}] -> {:ok, plan}
       _other -> {:error, :not_found}
     end
+  end
+
+  @doc false
+  @spec routing_plans(:ets.tid()) :: %{{String.t(), pos_integer()} => RoutingPlan.t()}
+  def routing_plans(table) do
+    Map.new(
+      :ets.match_object(table, {{:routing_plan, :_, :_}, :_}),
+      fn {{:routing_plan, profile, chain_id}, %RoutingPlan{} = plan} ->
+        {{profile, chain_id}, plan}
+      end
+    )
   end
 
   @doc false
@@ -257,6 +280,15 @@ defmodule Lasso.Providers.Catalog do
   @spec snapshot() :: snapshot() | nil
   def snapshot do
     case :persistent_term.get(@persistent_term_key, nil) do
+      %{table: table, generation: generation, routing_plans: routing_plans} = snapshot
+      when not is_nil(table) and is_integer(generation) and generation >= 0 and
+             is_map(routing_plans) ->
+        snapshot
+
+      %{table: table, generation: generation} = snapshot
+      when not is_nil(table) and is_integer(generation) and generation >= 0 ->
+        snapshot
+
       {table, generation} when is_integer(generation) and generation >= 0 ->
         %{table: table, generation: generation}
 
@@ -293,6 +325,8 @@ defmodule Lasso.Providers.Catalog do
   rescue
     ArgumentError -> []
   end
+
+  defp table_available?(table), do: :ets.info(table, :size) != :undefined
 
   defp build_chain_entries(
          ets_table,
