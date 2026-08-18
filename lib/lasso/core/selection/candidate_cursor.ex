@@ -213,20 +213,16 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp build_descriptors(plan, strategy, transport, filters) do
     exclude = MapSet.new(filters.exclude)
+    transports = transports_to_check(transport)
 
     descriptors =
-      plan.providers
-      |> Enum.reject(&MapSet.member?(exclude, &1.id))
-      |> Enum.filter(fn provider ->
-        (not filters.requires_archival or provider.archival) and
-          (not filters.requires_subscribe_new_heads or provider.subscribe_new_heads)
-      end)
-      |> Enum.flat_map(fn provider ->
-        transport
-        |> transports_to_check()
-        |> Enum.filter(&(&1 in provider.transports))
-        |> Enum.map(&{provider, &1})
-      end)
+      for provider <- plan.providers,
+          not MapSet.member?(exclude, provider.id),
+          not filters.requires_archival or provider.archival,
+          not filters.requires_subscribe_new_heads or provider.subscribe_new_heads,
+          protocol <- transports,
+          protocol in provider.transports,
+          do: {provider, protocol}
 
     case strategy do
       :priority ->
