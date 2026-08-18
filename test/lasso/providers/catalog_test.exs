@@ -257,6 +257,75 @@ defmodule Lasso.Providers.CatalogTest do
       assert provider.config.capabilities == %{methods: ["eth_blockNumber"]}
       assert {"authorization", "Bearer secret"} in provider.config.headers
     end
+
+    test "reads a captured routing plan without copying it through ETS" do
+      register_chain(@profile_a, @chain_id, [
+        %{
+          id: "shared-plan",
+          name: "Shared Plan",
+          url: "https://shared-plan.example.com",
+          priority: 1
+        }
+      ])
+
+      Catalog.build_from_config()
+      snapshot = Catalog.snapshot()
+
+      :erlang.trace_pattern({:ets, :lookup, 2}, true, [:local])
+      :erlang.trace(self(), true, [:call])
+
+      on_exit(fn ->
+        :erlang.trace(self(), false, [:all])
+        :erlang.trace_pattern({:ets, :lookup, 2}, false, [:local])
+      end)
+
+      assert {:ok, %Lasso.RPC.RoutingPlan{}} =
+               Catalog.get_routing_plan(snapshot, @profile_a, @chain_id)
+
+      refute_receive {:trace, _pid, :call, {:ets, :lookup, _args}}
+
+      :erlang.trace(self(), false, [:all])
+      :erlang.trace_pattern({:ets, :lookup, 2}, false, [:local])
+    end
+
+    test "rejects a shared plan after its catalog table owner exits" do
+      register_chain(@profile_a, @chain_id, [
+        %{
+          id: "owner-bound-plan",
+          name: "Owner Bound Plan",
+          url: "https://owner-bound-plan.example.com",
+          priority: 1
+        }
+      ])
+
+      Catalog.build_from_config()
+      active = Catalog.snapshot()
+      assert {:ok, plan} = Catalog.get_routing_plan(active, @profile_a, @chain_id)
+
+      parent = self()
+
+      {owner, monitor} =
+        spawn_monitor(fn ->
+          table = :ets.new(:expired_catalog, [:set, :public])
+          send(parent, {:expired_catalog, self(), table})
+
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      assert_receive {:expired_catalog, ^owner, table}
+      send(owner, :stop)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+
+      expired = %{
+        table: table,
+        generation: active.generation,
+        routing_plans: %{{@profile_a, @chain_id} => plan}
+      }
+
+      assert {:error, :not_found} = Catalog.get_routing_plan(expired, @profile_a, @chain_id)
+    end
   end
 
   describe "lookup_instance_id/3" do

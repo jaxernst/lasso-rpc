@@ -147,13 +147,14 @@ defmodule Lasso.Providers.Catalog.Owner do
       :ets.delete(new_table)
       do_rebuild()
     else
+      routing_plans = Catalog.routing_plans(new_table)
       publication_barrier(:before_pointer_swap, generation)
 
       if ConfigStore.route_generation() != generation do
         :ets.delete(new_table)
         do_rebuild()
       else
-        publish(new_table, generation)
+        publish(new_table, generation, routing_plans)
       end
     end
   end
@@ -163,10 +164,17 @@ defmodule Lasso.Providers.Catalog.Owner do
     do_rebuild()
   end
 
-  defp publish(new_table, generation) do
+  defp publish(new_table, generation, routing_plans) do
     key = Catalog.persistent_term_key()
     old_table = Catalog.table()
-    :persistent_term.put(key, {new_table, generation})
+
+    snapshot = %{
+      table: new_table,
+      generation: generation,
+      routing_plans: routing_plans
+    }
+
+    :persistent_term.put(key, snapshot)
 
     if old_table, do: Process.send_after(self(), {:delete_table, old_table}, @grace_period_ms)
     :ok
