@@ -224,34 +224,8 @@ defmodule Lasso.BlockSync.Registry do
   ## Private Functions
 
   defp calculate_consensus(chain_id, provider_ids, freshness_ms) do
-    now = System.system_time(:millisecond)
-    cutoff = now - freshness_ms
-
-    heights = get_all_heights(chain_id)
-
-    # Filter by provider_ids if specified
-    heights_filtered =
-      case provider_ids do
-        nil ->
-          heights
-
-        [] ->
-          heights
-
-        ids when is_list(ids) ->
-          provider_set = MapSet.new(ids)
-
-          Enum.filter(heights, fn {provider_id, _data} ->
-            MapSet.member?(provider_set, provider_id)
-          end)
-      end
-
-    fresh_heights =
-      heights_filtered
-      |> Enum.filter(fn {_provider_id, {_height, timestamp, _source, _meta}} ->
-        timestamp >= cutoff
-      end)
-      |> Enum.map(fn {_provider_id, {height, _ts, _source, _meta}} -> height end)
+    cutoff = System.system_time(:millisecond) - freshness_ms
+    fresh_heights = select_fresh_heights(chain_id, provider_ids, cutoff)
 
     case fresh_heights do
       [] ->
@@ -265,5 +239,31 @@ defmodule Lasso.BlockSync.Registry do
         idx = max(0, floor(length(sorted) * 0.25))
         {:ok, Enum.at(sorted, idx)}
     end
+  end
+
+  defp select_fresh_heights(chain_id, provider_ids, cutoff)
+       when provider_ids in [nil, []] do
+    :ets.select(@table, [
+      {
+        {{:height, chain_id, :_}, {:"$1", :"$2", :_, :_}},
+        [{:>=, :"$2", cutoff}],
+        [:"$1"]
+      }
+    ])
+  end
+
+  defp select_fresh_heights(chain_id, provider_ids, cutoff) when is_list(provider_ids) do
+    provider_set = MapSet.new(provider_ids)
+
+    :ets.select(@table, [
+      {
+        {{:height, chain_id, :"$1"}, {:"$2", :"$3", :_, :_}},
+        [{:>=, :"$3", cutoff}],
+        [{{:"$1", :"$2"}}]
+      }
+    ])
+    |> Enum.reduce([], fn {provider_id, height}, heights ->
+      if MapSet.member?(provider_set, provider_id), do: [height | heights], else: heights
+    end)
   end
 end

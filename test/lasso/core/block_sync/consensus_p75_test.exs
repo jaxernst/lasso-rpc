@@ -84,5 +84,39 @@ defmodule Lasso.BlockSync.ConsensusP75Test do
     test "no providers: returns error", %{chain: chain} do
       assert {:error, :no_data} = BlockSyncRegistry.get_consensus_height(chain)
     end
+
+    test "ignores stale heights without changing stored metadata", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "fresh", 105, :http, %{payload: "fresh"})
+      BlockSyncRegistry.put_height(chain, "stale", 999, :ws, %{payload: "stale"})
+
+      stale_timestamp = System.system_time(:millisecond) - 31_000
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "stale"}, {999, stale_timestamp, :ws, %{payload: "stale"}}}
+      )
+
+      assert {:ok, 105} = BlockSyncRegistry.get_consensus_height(chain, 30_000)
+
+      assert {999, ^stale_timestamp, :ws, %{payload: "stale"}} =
+               BlockSyncRegistry.get_all_heights(chain)["stale"]
+    end
+
+    test "filtered consensus preserves provider and empty-list semantics", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "p1", 100, :http, %{payload: "one"})
+      BlockSyncRegistry.put_height(chain, "p2", 105, :http, %{payload: "two"})
+      BlockSyncRegistry.put_height(chain, "p3", 110, :ws, %{payload: "three"})
+
+      assert {:ok, 105} =
+               BlockSyncRegistry.get_consensus_height_filtered(chain, ["p1", "p2"])
+
+      assert {:ok, 110} =
+               BlockSyncRegistry.get_consensus_height_filtered(chain, ["p3", "p3"])
+
+      assert {:error, :no_data} =
+               BlockSyncRegistry.get_consensus_height_filtered(chain, ["missing"])
+
+      assert {:ok, 110} = BlockSyncRegistry.get_consensus_height_filtered(chain, [])
+    end
   end
 end
