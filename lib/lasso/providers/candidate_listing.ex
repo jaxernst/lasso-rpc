@@ -125,17 +125,97 @@ defmodule Lasso.Providers.CandidateListing do
     do_list_candidates(plan, filters, :routing, consensus_height)
   end
 
+  @doc false
+  @spec routing_candidate_from_plan(
+          RoutingPlan.t(),
+          RoutingPlan.provider(),
+          SelectionFilters.t() | map(),
+          non_neg_integer() | :unavailable
+        ) :: map() | nil
+  def routing_candidate_from_plan(
+        %RoutingPlan{} = plan,
+        provider,
+        %SelectionFilters{} = filters,
+        consensus_height
+      ) do
+    routing_candidate_from_plan(
+      plan,
+      provider,
+      SelectionFilters.to_map(filters),
+      consensus_height
+    )
+  end
+
+  def routing_candidate_from_plan(%RoutingPlan{} = plan, provider, filters, consensus_height)
+      when is_map(provider) and is_map(filters) do
+    routing_candidate_from_plan(plan, provider, filters, consensus_height, nil)
+  end
+
+  @doc false
+  @spec routing_candidate_from_plan(
+          RoutingPlan.t(),
+          RoutingPlan.provider(),
+          SelectionFilters.t() | map(),
+          non_neg_integer() | :unavailable,
+          map() | nil
+        ) :: map() | nil
+  def routing_candidate_from_plan(
+        %RoutingPlan{} = plan,
+        provider,
+        %SelectionFilters{} = filters,
+        consensus_height,
+        learned_scope
+      ) do
+    routing_candidate_from_plan(
+      plan,
+      provider,
+      SelectionFilters.to_map(filters),
+      consensus_height,
+      learned_scope
+    )
+  end
+
+  def routing_candidate_from_plan(
+        %RoutingPlan{} = plan,
+        provider,
+        filters,
+        consensus_height,
+        learned_scope
+      )
+      when is_map(provider) and is_map(filters) and
+             (is_map(learned_scope) or is_nil(learned_scope)) do
+    plan
+    |> Map.put(:providers, [provider])
+    |> do_list_candidates(filters, :routing, consensus_height, false, learned_scope)
+    |> List.first()
+  end
+
   defp do_list_candidates(%RoutingPlan{} = plan, filters),
     do: do_list_candidates(plan, filters, :full)
 
   defp do_list_candidates(%RoutingPlan{} = plan, filters, mode),
     do: do_list_candidates(plan, filters, mode, capture_consensus_height(plan.chain_id))
 
-  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode, consensus_height) do
+  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode, consensus_height),
+    do: do_list_candidates(plan, filters, mode, consensus_height, true)
+
+  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode, consensus_height, warn_on_lag?),
+    do: do_list_candidates(plan, filters, mode, consensus_height, warn_on_lag?, nil)
+
+  defp do_list_candidates(
+         %RoutingPlan{} = plan,
+         filters,
+         mode,
+         consensus_height,
+         warn_on_lag?,
+         learned_scope
+       ) do
     protocol = Map.get(filters, :protocol)
     workload_key = filters |> Map.get(:workload_key, :client) |> Workload.normalize()
     include_half_open = Map.get(filters, :include_half_open, false)
-    learned_scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
+
+    learned_scope =
+      learned_scope || AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
     candidates =
       plan.providers
@@ -149,7 +229,8 @@ defmodule Lasso.Providers.CandidateListing do
         plan.profile,
         plan.chain_id,
         Map.get(filters, :max_lag_blocks),
-        consensus_height
+        consensus_height,
+        warn_on_lag?
       )
       |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
       |> filter_by_archival(Map.get(filters, :requires_archival))
@@ -337,9 +418,17 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp filter_by_lag(candidates, _profile, _chain_id, nil, _consensus_height), do: candidates
+  defp filter_by_lag(candidates, _profile, _chain_id, nil, _consensus_height, _warn_on_lag?),
+    do: candidates
 
-  defp filter_by_lag(candidates, profile, chain_id, max_lag_blocks, consensus_height)
+  defp filter_by_lag(
+         candidates,
+         profile,
+         chain_id,
+         max_lag_blocks,
+         consensus_height,
+         warn_on_lag?
+       )
        when is_integer(max_lag_blocks) do
     case resolve_consensus_height(chain_id, consensus_height) do
       {:ok, consensus_height} ->
@@ -348,7 +437,8 @@ defmodule Lasso.Providers.CandidateListing do
           profile,
           chain_id,
           max_lag_blocks,
-          consensus_height
+          consensus_height,
+          warn_on_lag?
         )
 
       :unavailable ->
@@ -361,7 +451,8 @@ defmodule Lasso.Providers.CandidateListing do
          profile,
          chain_id,
          max_lag_blocks,
-         consensus_height
+         consensus_height,
+         warn_on_lag?
        ) do
     block_time_ms = LagCalculation.get_block_time_ms(chain_id, profile)
 
@@ -378,7 +469,7 @@ defmodule Lasso.Providers.CandidateListing do
         end
       end)
 
-    if candidates != [] and filtered == [] do
+    if warn_on_lag? and candidates != [] and filtered == [] do
       Logger.warning(
         "All providers for chain_id #{chain_id} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
       )
