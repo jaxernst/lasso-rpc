@@ -95,6 +95,47 @@ defmodule Lasso.RPC.ExecutionFactTest do
              RequestTerminal.OrdinaryExhaustion.new(request_attrs(), :providers_exhausted)
   end
 
+  test "runtime upstream response construction preserves the validated public shape" do
+    response = AttemptTerminal.Response.new(identity(), :success, 20)
+
+    assert RequestTerminal.UpstreamResponse.new_runtime(
+             response,
+             50_000,
+             2,
+             1,
+             "2026-08-13T20:00:00Z"
+           ) == RequestTerminal.UpstreamResponse.new(request_attrs(), response)
+  end
+
+  test "runtime upstream response construction retains boundary validation" do
+    response = AttemptTerminal.Response.new(identity(), :success, 20)
+
+    assert_raise ArgumentError, ~r/identity disagree/, fn ->
+      RequestTerminal.UpstreamResponse.new_runtime(response, 50_000, 3, 1, nil)
+    end
+
+    assert_raise ArgumentError, ~r/identity disagree/, fn ->
+      RequestTerminal.UpstreamResponse.new_runtime(response, 50_000, 2, 2, nil)
+    end
+
+    assert_raise ArgumentError, ~r/elapsed_us must be non-negative/, fn ->
+      RequestTerminal.UpstreamResponse.new_runtime(response, -1, 2, 1, nil)
+    end
+
+    long_observed_at = String.duplicate("observed-at/", 1_000)
+
+    assert %{observed_at: observed_at} =
+             RequestTerminal.UpstreamResponse.new_runtime(
+               response,
+               50_000,
+               2,
+               1,
+               long_observed_at
+             )
+
+    assert byte_size(observed_at) <= 128
+  end
+
   test "illegal combinations are rejected by tagged constructors" do
     assert_raise ArgumentError, ~r/successful responses/, fn ->
       AttemptTerminal.Response.new(identity(), :success, 20, error_code: -1)

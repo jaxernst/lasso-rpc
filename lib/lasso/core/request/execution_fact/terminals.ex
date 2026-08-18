@@ -289,7 +289,12 @@ end
 
 defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
   @moduledoc false
-  alias Lasso.RPC.{AttemptTerminal.Response, RequestTerminal.Common}
+  alias Lasso.RPC.{
+    AttemptIdentity,
+    AttemptTerminal.Response,
+    ExecutionFact,
+    RequestTerminal.Common
+  }
 
   @enforce_keys [
     :request_id,
@@ -324,6 +329,46 @@ defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
 
     unless coherent?, do: raise(ArgumentError, "request terminal and attempt identity disagree")
     struct!(__MODULE__, Map.put(normalized, :attempt, attempt))
+  end
+
+  @doc false
+  @spec new_runtime(
+          Response.t(),
+          non_neg_integer(),
+          non_neg_integer(),
+          non_neg_integer(),
+          binary() | nil
+        ) :: t()
+  def new_runtime(
+        %Response{identity: %AttemptIdentity{} = identity} = attempt,
+        elapsed_us,
+        candidate_admission_count,
+        dispatch_count,
+        observed_at
+      ) do
+    elapsed_us = ExecutionFact.non_negative!(elapsed_us, :elapsed_us)
+    candidate_admission_count = ExecutionFact.candidate_count!(candidate_admission_count)
+    dispatch_count = ExecutionFact.dispatch_count!(dispatch_count)
+    observed_at = ExecutionFact.optional_bounded!(observed_at, :observed_at)
+
+    unless candidate_admission_count == identity.candidate_admission_count and
+             dispatch_count == identity.dispatch_count,
+           do: raise(ArgumentError, "request terminal and attempt identity disagree")
+
+    %__MODULE__{
+      request_id: identity.request_id,
+      profile: identity.profile,
+      subject_token: identity.subject_token,
+      chain_id: identity.chain_id,
+      execution_safety: identity.execution_safety,
+      routing_intent: identity.routing_intent,
+      workload_key: identity.workload_key,
+      elapsed_us: elapsed_us,
+      candidate_admission_count: candidate_admission_count,
+      dispatch_count: dispatch_count,
+      observed_at: observed_at,
+      attempt: attempt
+    }
   end
 end
 
