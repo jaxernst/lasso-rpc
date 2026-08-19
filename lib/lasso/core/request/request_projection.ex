@@ -18,6 +18,8 @@ defmodule Lasso.RPC.RequestProjection do
   @version 1
   @max_bytes 4_096
   @dispatcher Lasso.ExecutionProjectionDispatcher
+  @routing_decisions_per_second 256
+  @routing_budget_buckets 256
 
   @enforce_keys [:version, :fact, :method, :request_origin, :failover_count, :emitted_at_ms]
   defstruct @enforce_keys ++ [:provider_id, :instance_id, :transport]
@@ -306,12 +308,51 @@ defmodule Lasso.RPC.RequestProjection do
   end
 
   defp publish_routing_decision(event) do
-    with {:ok, decision} <- routing_decision(event) do
+    with {:ok, decision} <- routing_decision(event),
+         true <- publish_routing_decision?(event, decision) do
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
         Lasso.Topics.routing_decision(decision.profile),
         decision
       )
+    end
+  end
+
+  defp publish_routing_decision?(event, decision) do
+    if result(event.fact) == :error do
+      true
+    else
+      bucket =
+        :erlang.phash2(
+          {decision.profile, decision.chain_id, decision.request_origin},
+          @routing_budget_buckets
+        )
+
+      key = {__MODULE__, :routing_budget, bucket}
+      second = div(decision.ts, 1_000)
+
+      case Process.get(key) do
+        {^second, count} when count >= @routing_decisions_per_second ->
+          :telemetry.execute(
+            [:lasso, :rpc, :routing_decision, :sampled_out],
+            %{count: 1},
+            %{
+              profile: decision.profile,
+              chain_id: decision.chain_id,
+              request_origin: decision.request_origin
+            }
+          )
+
+          false
+
+        {^second, count} ->
+          Process.put(key, {second, count + 1})
+          true
+
+        _previous_window ->
+          Process.put(key, {second, 1})
+          true
+      end
     end
   end
 

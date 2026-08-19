@@ -188,6 +188,7 @@ defmodule Lasso.Observability.TelemetryContractTest do
           [:lasso, :http, :request, :io],
           [:lasso, :ws, :request, :io],
           [:lasso, :rpc, :request, :stop],
+          [:lasso, :rpc, :routing_decision, :sampled_out],
           [:lasso, :websocket, :connected],
           [:lasso, :websocket, :disconnected],
           [:lasso, :websocket, :request, :completed],

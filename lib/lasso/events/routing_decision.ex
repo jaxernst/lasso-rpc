@@ -2,7 +2,9 @@ defmodule Lasso.Events.RoutingDecision do
   @moduledoc """
   Typed struct for routing decision events.
 
-  Published to profile-scoped PubSub topics for the read-only dashboard.
+  Published to profile-scoped PubSub topics for the read-only dashboard. Successful
+  detail is rate-bounded per profile, chain, and request origin. Error decisions are
+  always published by this delivery stage; request terminal telemetry is not sampled.
 
   ## Event Source Fields
 

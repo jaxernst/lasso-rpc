@@ -123,6 +123,55 @@ defmodule Lasso.RPC.RequestProjectionTest do
     assert {:ok, ^event} = RequestProjection.decode(legacy_payload)
   end
 
+  test "successful routing detail is bounded without sampling terminal telemetry" do
+    topic = Lasso.Topics.routing_decision("public")
+    :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, topic)
+
+    handler_id = "routing-sampled-out-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:lasso, :rpc, :routing_decision, :sampled_out],
+          [:lasso, :rpc, :request, :terminal]
+        ],
+        fn event_name, measurements, metadata, _config ->
+          send(test_pid, {event_name, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    event = request_projection()
+
+    for _index <- 1..258 do
+      assert :ok = RequestProjection.deliver(event)
+    end
+
+    decisions =
+      for _index <- 1..256 do
+        assert_receive %RoutingDecision{}
+      end
+
+    assert length(decisions) == 256
+    refute_receive %RoutingDecision{}
+
+    for _index <- 1..258 do
+      assert_receive {[:lasso, :rpc, :request, :terminal], %{count: 1, elapsed_us: _}, _}
+    end
+
+    for _index <- 1..2 do
+      assert_receive {
+        [:lasso, :rpc, :routing_decision, :sampled_out],
+        %{count: 1},
+        %{profile: "public", chain_id: 1, request_origin: :client}
+      }
+    end
+  end
+
   test "application errors retain their complete native classification" do
     attempt =
       AttemptTerminal.Response.new(identity(), :application_error, 7_000,
