@@ -21,7 +21,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {other_id, _other_pid} = start_breaker(control_ring_capacity: 4)
     {:ok, receipt} = Admission.check(id, deadline_us())
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     results =
       Enum.map(1..12, fn _index -> CircuitBreaker.report_closed(receipt, {:error, :timeout}) end)
@@ -41,7 +41,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 4)
     {:ok, receipt} = Admission.check(id, deadline_us())
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     Enum.each(1..3, fn _index ->
       assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
@@ -56,7 +56,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 2)
     {:ok, receipt} = Admission.check(id, deadline_us())
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     huge = String.duplicate("sensitive-body", 100_000)
 
@@ -89,7 +89,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 4)
     {:ok, receipt} = Admission.check(id, deadline_us())
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
@@ -103,7 +103,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 2)
     {:ok, receipt} = Admission.check(id, deadline_us())
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     stale = invalid_fact(id, receipt, ConfigStore.route_generation() + 1)
     current = invalid_fact(id, receipt, ConfigStore.route_generation())
@@ -132,7 +132,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     await_failure_count(id, 1)
 
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
@@ -155,7 +155,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
     await_failure_count(id, 1)
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     1..100
     |> Task.async_stream(fn _index -> CircuitBreaker.report_closed(receipt, :ok) end,
@@ -176,7 +176,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
     await_failure_count(id, 1)
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
@@ -194,7 +194,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
     await_failure_count(id, 1)
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
@@ -227,7 +227,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
     await_failure_count(id, 1)
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
 
@@ -243,7 +243,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 4)
     {:ok, receipt} = Admission.check(id, deadline_us())
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     Enum.each(1..100_000, fn _index ->
       assert :ok = CircuitBreaker.report_closed(receipt, :ok)
@@ -264,7 +264,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     assert :ok = CircuitBreaker.report_closed(receipt, {:error, :timeout})
     await_failure_count(id, 1)
     :sys.suspend(breaker_pid)
-    on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
 
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
     assert :ok = CircuitBreaker.report_closed(receipt, :ok)
@@ -498,7 +498,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     for concurrency <- [96, 128] do
       {id, breaker_pid} = start_breaker(control_ring_capacity: 4)
       :sys.suspend(breaker_pid)
-      on_exit(fn -> if Process.alive?(breaker_pid), do: :sys.resume(breaker_pid) end)
+      on_exit(fn -> resume_breaker(breaker_pid) end)
 
       results =
         1..(concurrency * 4)
@@ -563,7 +563,7 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
     {:ok, pid} = CircuitBreaker.start_link({id, Map.new(config)})
 
     on_exit(fn ->
-      if Process.alive?(pid), do: GenServer.stop(pid)
+      stop_breaker(pid)
       :ets.delete(Storage.snapshot_table(), id)
       :ets.delete(Storage.lease_table(), id)
       ControlRing.delete(id)
@@ -635,6 +635,18 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
       )
 
     AttemptTerminal.InvalidResponse.new(identity, :invalid_json, 10)
+  end
+
+  defp resume_breaker(pid) do
+    :sys.resume(pid)
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp stop_breaker(pid) do
+    GenServer.stop(pid)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp deadline_us, do: System.monotonic_time(:microsecond) + 1_000_000
