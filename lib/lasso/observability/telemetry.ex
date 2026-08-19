@@ -79,6 +79,11 @@ defmodule Lasso.Telemetry do
         description: "RPC request count",
         tags: [:chain, :method, :provider_id, :transport, :status]
       ),
+      counter("lasso.rpc.routing_decision.sampled_out.count",
+        event_name: [:lasso, :rpc, :routing_decision, :sampled_out],
+        description: "Successful routing details omitted from the bounded live feed",
+        tags: [:profile, :chain_id, :request_origin]
+      ),
 
       # Circuit breaker state changes (individual events for each transition type)
       counter("lasso.circuit_breaker.open.count",
