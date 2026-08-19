@@ -5,6 +5,8 @@ defmodule Lasso.RPC.RequestProjection do
   alias Lasso.Events.RoutingDecision
 
   alias Lasso.RPC.{
+    AttemptIdentity,
+    AttemptTerminal,
     ExecutionFact,
     ExecutionProjector,
     RequestTerminal
@@ -106,7 +108,7 @@ defmodule Lasso.RPC.RequestProjection do
       :erlang.term_to_binary({
         @schema,
         @version,
-        event.fact,
+        encode_fact_payload(event.fact),
         event.method,
         event.provider_id,
         event.instance_id,
@@ -175,9 +177,100 @@ defmodule Lasso.RPC.RequestProjection do
   defp decode_fact_payload(fact_payload) when is_binary(fact_payload),
     do: Codec.decode(fact_payload)
 
+  defp decode_fact_payload({
+         :compact_success_v1,
+         request_id,
+         attempt_id,
+         profile,
+         subject_token,
+         chain_id,
+         upstream_instance_id,
+         transport,
+         route_generation,
+         circuit_scope,
+         circuit_epoch,
+         execution_safety,
+         routing_intent,
+         workload_key,
+         request_budget_ms,
+         candidate_admission_count,
+         dispatch_count,
+         elapsed_us,
+         io_duration_us,
+         observed_at
+       }) do
+    identity =
+      AttemptIdentity.new_runtime(%{
+        request_id: request_id,
+        attempt_id: attempt_id,
+        profile: profile,
+        subject_token: subject_token,
+        chain_id: chain_id,
+        upstream_instance_id: upstream_instance_id,
+        transport: transport,
+        route_generation: route_generation,
+        circuit_scope: circuit_scope,
+        circuit_epoch: circuit_epoch,
+        execution_safety: execution_safety,
+        routing_intent: routing_intent,
+        workload_key: workload_key,
+        request_budget_ms: request_budget_ms,
+        candidate_admission_count: candidate_admission_count,
+        dispatch_count: dispatch_count
+      })
+
+    attempt = AttemptTerminal.Response.new(identity, :success, io_duration_us)
+
+    {:ok,
+     RequestTerminal.UpstreamResponse.new_runtime(
+       attempt,
+       elapsed_us,
+       candidate_admission_count,
+       dispatch_count,
+       observed_at
+     )}
+  rescue
+    ArgumentError -> {:error, :invalid_fact}
+  end
+
   defp decode_fact_payload(%_module{} = fact), do: {:ok, fact}
 
   defp decode_fact_payload(_fact_payload), do: {:error, :invalid_fact}
+
+  defp encode_fact_payload(
+         %RequestTerminal.UpstreamResponse{
+           attempt: %AttemptTerminal.Response{
+             kind: :success,
+             identity: %AttemptIdentity{} = identity,
+             io_duration_us: io_duration_us
+           }
+         } = fact
+       ) do
+    {
+      :compact_success_v1,
+      identity.request_id,
+      identity.attempt_id,
+      identity.profile,
+      identity.subject_token,
+      identity.chain_id,
+      identity.upstream_instance_id,
+      identity.transport,
+      identity.route_generation,
+      identity.circuit_scope,
+      identity.circuit_epoch,
+      identity.execution_safety,
+      identity.routing_intent,
+      identity.workload_key,
+      identity.request_budget_ms,
+      identity.candidate_admission_count,
+      identity.dispatch_count,
+      fact.elapsed_us,
+      io_duration_us,
+      fact.observed_at
+    }
+  end
+
+  defp encode_fact_payload(fact), do: fact
 
   @spec routing_decision(t()) :: {:ok, RoutingDecision.t()} | :not_routed
   def routing_decision(%__MODULE__{provider_id: provider_id, transport: transport} = event)

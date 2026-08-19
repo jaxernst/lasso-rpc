@@ -70,15 +70,38 @@ defmodule Lasso.RPC.RequestProjectionTest do
     assert {:ok, ^event} = RequestProjection.decode(payload)
   end
 
-  test "native facts avoid a JSON round trip while queued JSON facts remain compatible" do
+  test "successful facts use the compact envelope while legacy facts remain compatible" do
     event = request_projection()
 
     assert {:ok, native_payload} = RequestProjection.encode(event)
 
-    assert {:lasso_request_projection, 1, %RequestTerminal.UpstreamResponse{}, _method,
-            _provider_id, _instance_id, _transport, _origin, _failovers,
+    assert {:lasso_request_projection, 1, compact_fact, _method, _provider_id, _instance_id,
+            _transport, _origin, _failovers,
             _emitted_at_ms} =
              :erlang.binary_to_term(native_payload, [:safe])
+
+    assert elem(compact_fact, 0) == :compact_success_v1
+    assert tuple_size(compact_fact) == 20
+    assert byte_size(native_payload) <= 384
+
+    native_fact_payload =
+      :erlang.term_to_binary(
+        {
+          :lasso_request_projection,
+          1,
+          event.fact,
+          event.method,
+          event.provider_id,
+          event.instance_id,
+          event.transport,
+          event.request_origin,
+          event.failover_count,
+          event.emitted_at_ms
+        },
+        [:deterministic]
+      )
+
+    assert {:ok, ^event} = RequestProjection.decode(native_fact_payload)
 
     legacy_payload =
       :erlang.term_to_binary(
@@ -98,6 +121,76 @@ defmodule Lasso.RPC.RequestProjectionTest do
       )
 
     assert {:ok, ^event} = RequestProjection.decode(legacy_payload)
+  end
+
+  test "application errors retain their complete native classification" do
+    attempt =
+      AttemptTerminal.Response.new(identity(), :application_error, 7_000,
+        error_code: -32_005,
+        error_category: :provider_failure,
+        retry_after_ms: 250
+      )
+
+    fact =
+      RequestTerminal.UpstreamResponse.new(
+        [
+          request_id: attempt.identity.request_id,
+          profile: attempt.identity.profile,
+          subject_token: nil,
+          chain_id: attempt.identity.chain_id,
+          execution_safety: attempt.identity.execution_safety,
+          routing_intent: attempt.identity.routing_intent,
+          workload_key: attempt.identity.workload_key,
+          elapsed_us: 12_345,
+          candidate_admission_count: attempt.identity.candidate_admission_count,
+          dispatch_count: attempt.identity.dispatch_count,
+          observed_at: nil
+        ],
+        attempt
+      )
+
+    event =
+      RequestProjection.new(
+        fact,
+        "eth_blockNumber",
+        %{provider_id: "provider-a", instance_id: "instance-a", transport: :http},
+        2
+      )
+
+    assert {:ok, payload} = RequestProjection.encode(event)
+
+    assert {:lasso_request_projection, 1, %RequestTerminal.UpstreamResponse{}, _, _, _, _, _, _,
+            _} =
+             :erlang.binary_to_term(payload, [:safe])
+
+    assert {:ok, ^event} = RequestProjection.decode(payload)
+  end
+
+  test "malformed compact success facts fail closed" do
+    event = request_projection()
+    assert {:ok, payload} = RequestProjection.encode(event)
+
+    {:lasso_request_projection, 1, compact_fact, method, provider_id, instance_id, transport,
+     origin, failovers, emitted_at_ms} = :erlang.binary_to_term(payload, [:safe])
+
+    payload =
+      :erlang.term_to_binary(
+        {
+          :lasso_request_projection,
+          1,
+          put_elem(compact_fact, 5, 0),
+          method,
+          provider_id,
+          instance_id,
+          transport,
+          origin,
+          failovers,
+          emitted_at_ms
+        },
+        [:deterministic]
+      )
+
+    assert {:error, :invalid_fact} = RequestProjection.decode(payload)
   end
 
   test "routing decision preserves canonical request and final route identity" do
