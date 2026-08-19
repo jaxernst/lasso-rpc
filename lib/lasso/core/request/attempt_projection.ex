@@ -110,14 +110,29 @@ defmodule Lasso.RPC.AttemptProjection do
       true ->
         key = route_key(identity)
 
-        update_route(
-          key,
-          generation,
-          event,
-          control_delta(event.fact),
-          @control_retries,
-          barrier
-        )
+        delta = control_delta(event.fact)
+
+        result =
+          update_route(
+            key,
+            generation,
+            event,
+            delta,
+            @control_retries,
+            barrier
+          )
+
+        if result == :ok and workload == :system and delta.kind in [:success, :failure] do
+          update_system_prior(
+            system_prior_key(identity),
+            generation,
+            event,
+            delta,
+            @control_retries
+          )
+        end
+
+        result
     end
   rescue
     ArgumentError -> :degraded
@@ -262,9 +277,13 @@ defmodule Lasso.RPC.AttemptProjection do
       key = {channel.instance_id, channel.transport}
       row = route_record(scope, channel.instance_id, channel.transport)
 
+      shared_prior =
+        shared_system_prior(scope, row, channel.instance_id, channel.transport, now_us)
+
       {key,
        summary_for_workload(
          row,
+         shared_prior,
          channel.instance_id,
          channel.transport,
          chain_id,
@@ -282,6 +301,7 @@ defmodule Lasso.RPC.AttemptProjection do
              chain_id > 0 and is_atom(workload_key) do
     summary_for_workload(
       row,
+      nil,
       instance_id,
       transport,
       chain_id,
@@ -294,10 +314,11 @@ defmodule Lasso.RPC.AttemptProjection do
   def prepare_routes(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
     if ConfigStore.route_generation() == generation do
-      {scope_keys, route_keys} = route_keys(routes)
+      {scope_keys, route_keys, system_prior_keys} = route_keys(routes)
 
       Enum.each(scope_keys, &publish_scope(&1, generation))
       Enum.each(route_keys, &publish_route(&1, generation))
+      Enum.each(system_prior_keys, &publish_system_prior(&1, generation))
     end
 
     :ok
@@ -309,8 +330,8 @@ defmodule Lasso.RPC.AttemptProjection do
   def commit_routes(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
     if ConfigStore.route_generation() == generation do
-      {scope_keys, route_keys} = route_keys(routes)
-      delete_unpublished_control_rows(scope_keys, route_keys)
+      {scope_keys, route_keys, system_prior_keys} = route_keys(routes)
+      delete_unpublished_control_rows(scope_keys, route_keys, system_prior_keys)
     end
 
     :ok
@@ -329,9 +350,12 @@ defmodule Lasso.RPC.AttemptProjection do
   @spec routes_ready?(non_neg_integer(), [map()]) :: boolean()
   def routes_ready?(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
-    {scope_keys, route_keys} = route_keys(routes)
+    {scope_keys, route_keys, system_prior_keys} = route_keys(routes)
 
-    Enum.all?(MapSet.union(scope_keys, route_keys), fn key ->
+    scope_keys
+    |> MapSet.union(route_keys)
+    |> MapSet.union(system_prior_keys)
+    |> Enum.all?(fn key ->
       case :ets.lookup(:lasso_instance_state, key) do
         [{^key, %{generation: ^generation}}] -> true
         _other -> false
@@ -455,6 +479,44 @@ defmodule Lasso.RPC.AttemptProjection do
         record_missing(identity(event.fact), generation, event.emitted_at_us)
         :stale
     end
+  end
+
+  defp update_system_prior(key, generation, event, delta, retries) when retries > 0 do
+    if ConfigStore.route_generation() == generation do
+      case :ets.lookup(:lasso_instance_state, key) do
+        [{^key, %{generation: ^generation} = current}] ->
+          updated = apply_system_prior_delta(current, event, delta)
+
+          case replace_exact(key, current, updated) do
+            1 -> :ok
+            0 -> update_system_prior(key, generation, event, delta, retries - 1)
+          end
+
+        _other ->
+          :stale
+      end
+    else
+      :stale
+    end
+  rescue
+    ArgumentError -> :stale
+  end
+
+  defp update_system_prior(_key, _generation, _event, _delta, 0), do: :contended
+
+  defp apply_system_prior_delta(current, event, delta) do
+    delta = Map.put(delta, :observed_at_us, event.emitted_at_us)
+
+    current
+    |> Map.put(:revision, increment(current.revision))
+    |> Map.put(:observed_at_us, max_floor(current.observed_at_us, event.emitted_at_us))
+    |> Map.put(
+      :oldest_observed_at_us,
+      min_observation(current.oldest_observed_at_us, event.emitted_at_us)
+    )
+    |> Map.put(:comparable_attempts, increment(current.comparable_attempts))
+    |> apply_aggregate(delta)
+    |> apply_latest_state(event.emitted_at_us, delta)
   end
 
   defp await_control_barrier(nil), do: :ok
@@ -821,6 +883,24 @@ defmodule Lasso.RPC.AttemptProjection do
     end
   end
 
+  defp publish_system_prior(key, generation) do
+    case :ets.lookup(:lasso_instance_state, key) do
+      [{^key, %{generation: ^generation}}] ->
+        :ok
+
+      [{^key, current}] ->
+        if replace_exact(key, current, default_system_prior(generation)) == 0,
+          do: publish_system_prior(key, generation)
+
+      [] ->
+        if not :ets.insert_new(
+             :lasso_instance_state,
+             {key, default_system_prior(generation)}
+           ),
+           do: publish_system_prior(key, generation)
+    end
+  end
+
   defp published_scope(profile, chain_id, generation, current) do
     scope = default_scope(profile, chain_id, generation)
 
@@ -843,7 +923,7 @@ defmodule Lasso.RPC.AttemptProjection do
     end
   end
 
-  defp delete_unpublished_control_rows(scope_keys, route_keys) do
+  defp delete_unpublished_control_rows(scope_keys, route_keys, system_prior_keys) do
     scope_rows =
       :ets.match_object(:lasso_instance_state, {{:routing_control_scope, :_, :_}, :_})
 
@@ -859,6 +939,16 @@ defmodule Lasso.RPC.AttemptProjection do
 
     Enum.each(route_rows, fn {key, _state} ->
       unless MapSet.member?(route_keys, key), do: :ets.delete(:lasso_instance_state, key)
+    end)
+
+    system_prior_rows =
+      :ets.match_object(
+        :lasso_instance_state,
+        {{:routing_system_prior, :_, :_, :_}, :_}
+      )
+
+    Enum.each(system_prior_rows, fn {key, _state} ->
+      unless MapSet.member?(system_prior_keys, key), do: :ets.delete(:lasso_instance_state, key)
     end)
   end
 
@@ -924,6 +1014,10 @@ defmodule Lasso.RPC.AttemptProjection do
     })
   end
 
+  defp default_system_prior(generation) do
+    Map.merge(default_partition(), %{generation: generation, revision: 0})
+  end
+
   defp default_partition do
     %{
       observed_at_us: nil,
@@ -959,7 +1053,15 @@ defmodule Lasso.RPC.AttemptProjection do
       end)
       |> MapSet.new()
 
-    {scope_keys, route_keys}
+    system_prior_keys =
+      routes
+      |> Enum.map(fn route ->
+        {:routing_system_prior, route.chain_id, BoundedIdentifier.encode(route.instance_id),
+         route.transport}
+      end)
+      |> MapSet.new()
+
+    {scope_keys, route_keys, system_prior_keys}
   end
 
   defp scope_key(profile, chain_id),
@@ -968,6 +1070,10 @@ defmodule Lasso.RPC.AttemptProjection do
   defp route_key(identity) do
     {:routing_control, identity.profile, identity.chain_id, identity.upstream_instance_id,
      identity.transport, @default_workload}
+  end
+
+  defp system_prior_key(identity) do
+    {:routing_system_prior, identity.chain_id, identity.upstream_instance_id, identity.transport}
   end
 
   defp normalize_workload(workload), do: Workload.normalize(workload)
@@ -1036,21 +1142,74 @@ defmodule Lasso.RPC.AttemptProjection do
   defp partition_state(row, :system), do: Map.put(row.system, :generation, row.generation)
   defp partition_state(row, _workload), do: row
 
-  defp summary_for_workload(row, instance_id, transport, chain_id, :system, now_us) do
-    row
-    |> partition_state(:system)
-    |> summary(instance_id, transport, chain_id, :system, now_us)
-  end
-
-  defp summary_for_workload(row, instance_id, transport, chain_id, _workload, now_us) do
-    primary = summary(row, instance_id, transport, chain_id, :client, now_us)
-
-    prior =
+  defp summary_for_workload(
+         row,
+         shared_prior,
+         instance_id,
+         transport,
+         chain_id,
+         :system,
+         now_us
+       ) do
+    local =
       row
       |> partition_state(:system)
       |> summary(instance_id, transport, chain_id, :system, now_us)
 
+    shared = summary(shared_prior, instance_id, transport, chain_id, :system, now_us)
+    prefer_fresh_local(local, shared)
+  end
+
+  defp summary_for_workload(
+         row,
+         shared_prior,
+         instance_id,
+         transport,
+         chain_id,
+         _workload,
+         now_us
+       ) do
+    primary = summary(row, instance_id, transport, chain_id, :client, now_us)
+
+    local_prior =
+      row
+      |> partition_state(:system)
+      |> summary(instance_id, transport, chain_id, :system, now_us)
+
+    shared = summary(shared_prior, instance_id, transport, chain_id, :system, now_us)
+    prior = prefer_fresh_local(local_prior, shared)
+
     attach_system_prior(primary, prior)
+  end
+
+  defp prefer_fresh_local(nil, shared), do: shared
+  defp prefer_fresh_local(%Summary{state: :stale}, shared), do: shared
+  defp prefer_fresh_local(local, _shared), do: local
+
+  defp shared_system_prior(%{degraded?: true}, _row, _instance_id, _transport, _now_us),
+    do: nil
+
+  defp shared_system_prior(scope, row, instance_id, transport, now_us) do
+    local_observed_at_us = partition_observed_at(row, :system)
+
+    if is_integer(local_observed_at_us) and
+         not routing_evidence_stale?(local_observed_at_us, now_us) do
+      nil
+    else
+      key =
+        {:routing_system_prior, scope.chain_id, BoundedIdentifier.encode(instance_id), transport}
+
+      case :ets.lookup(:lasso_instance_state, key) do
+        [{^key, %{generation: generation, observed_at_us: observed_at_us} = prior}]
+        when generation == scope.generation and is_integer(observed_at_us) ->
+          if visible_after_floor?(scope, observed_at_us), do: prior
+
+        _other ->
+          nil
+      end
+    end
+  rescue
+    ArgumentError -> nil
   end
 
   defp summary(nil, _instance_id, _transport, _chain_id, _workload_key, _now_us), do: nil
