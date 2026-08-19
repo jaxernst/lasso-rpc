@@ -388,6 +388,231 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert system.successful_mean_latency_ms == 20.0
   end
 
+  test "one physical system prior serves every profile that references the route" do
+    generation = publish_shared_routes([@profile, "projection-peer"], "shared-instance", :http)
+    now_us = System.monotonic_time(:microsecond)
+
+    for offset <- 0..2 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for_profile(
+                   now_us + offset,
+                   20_000,
+                   "shared-instance",
+                   generation,
+                   "system",
+                   @profile,
+                   :http
+                 )
+               )
+    end
+
+    peer_scope = AttemptProjection.scope_state("projection-peer", @chain_id)
+    assert is_nil(AttemptProjection.route_state(peer_scope, "shared-instance", :http, "system"))
+
+    system_summary =
+      AttemptProjection.batch_summaries(
+        "projection-peer",
+        [%{instance_id: "shared-instance", transport: :http}],
+        @chain_id,
+        :system
+      )
+      |> Map.fetch!({"shared-instance", :http})
+
+    assert system_summary.state == :qualified
+    assert system_summary.support_source == :system_attempt
+    assert system_summary.usable_successes == 3
+    assert system_summary.successful_mean_latency_ms == 20.0
+
+    client_summary =
+      AttemptProjection.batch_summaries(
+        "projection-peer",
+        [%{instance_id: "shared-instance", transport: :http}],
+        @chain_id,
+        :client
+      )
+      |> Map.fetch!({"shared-instance", :http})
+
+    assert client_summary.state == :unqualified
+    assert client_summary.support_source == :system_prior
+    assert client_summary.comparable_attempts == 0
+    assert client_summary.usable_successes == 0
+    assert client_summary.successful_mean_latency_ms == 20.0
+  end
+
+  test "client evidence remains profile scoped and local system evidence overrides the shared prior" do
+    generation = publish_shared_routes([@profile, "projection-peer"], "shared-instance", :http)
+    now_us = System.monotonic_time(:microsecond)
+
+    for offset <- 0..2 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for_profile(
+                   now_us + offset,
+                   10_000,
+                   "shared-instance",
+                   generation,
+                   "client",
+                   @profile,
+                   :http
+                 )
+               )
+    end
+
+    assert is_nil(
+             AttemptProjection.batch_summaries(
+               "projection-peer",
+               [%{instance_id: "shared-instance", transport: :http}],
+               @chain_id,
+               :client
+             )[{"shared-instance", :http}]
+           )
+
+    for offset <- 10..12 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for_profile(
+                   now_us + offset,
+                   80_000,
+                   "shared-instance",
+                   generation,
+                   "system",
+                   @profile,
+                   :http
+                 )
+               )
+
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for_profile(
+                   now_us + offset,
+                   40_000,
+                   "shared-instance",
+                   generation,
+                   "system",
+                   "projection-peer",
+                   :http
+                 )
+               )
+    end
+
+    peer_system =
+      AttemptProjection.batch_summaries(
+        "projection-peer",
+        [%{instance_id: "shared-instance", transport: :http}],
+        @chain_id,
+        :system
+      )
+      |> Map.fetch!({"shared-instance", :http})
+
+    assert peer_system.state == :qualified
+    assert peer_system.successful_mean_latency_ms == 40.0
+  end
+
+  test "shared system priors remain transport isolated and fixed cardinality" do
+    generation = ConfigStore.route_generation()
+
+    routes = [
+      %{profile: @profile, chain_id: @chain_id, instance_id: "shared-instance", transport: :http},
+      %{
+        profile: "projection-peer",
+        chain_id: @chain_id,
+        instance_id: "shared-instance",
+        transport: :http
+      },
+      %{
+        profile: "projection-peer",
+        chain_id: @chain_id,
+        instance_id: "shared-instance",
+        transport: :ws
+      }
+    ]
+
+    assert :ok = AttemptProjection.reconcile_routes(generation, routes)
+
+    assert 2 ==
+             :ets.match_object(
+               :lasso_instance_state,
+               {{:routing_system_prior, @chain_id, "shared-instance", :_}, :_}
+             )
+             |> length()
+
+    now_us = System.monotonic_time(:microsecond)
+
+    for offset <- 0..2 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for_profile(
+                   now_us + offset,
+                   20_000,
+                   "shared-instance",
+                   generation,
+                   "system",
+                   @profile,
+                   :http
+                 )
+               )
+    end
+
+    summaries =
+      AttemptProjection.batch_summaries(
+        "projection-peer",
+        [
+          %{instance_id: "shared-instance", transport: :http},
+          %{instance_id: "shared-instance", transport: :ws}
+        ],
+        @chain_id,
+        :system
+      )
+
+    assert summaries[{"shared-instance", :http}].state == :qualified
+    assert is_nil(summaries[{"shared-instance", :ws}])
+  end
+
+  test "a degraded profile cannot consume a shared system prior" do
+    generation = publish_shared_routes([@profile, "projection-peer"], "shared-instance", :http)
+    now_us = System.monotonic_time(:microsecond)
+
+    for offset <- 0..2 do
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_for_profile(
+                   now_us + offset,
+                   20_000,
+                   "shared-instance",
+                   generation,
+                   "system",
+                   @profile,
+                   :http
+                 )
+               )
+    end
+
+    assert :stale =
+             AttemptProjection.apply_control(
+               success_event_for_profile(
+                 now_us + 10,
+                 20_000,
+                 "missing-instance",
+                 generation,
+                 "client",
+                 "projection-peer",
+                 :http
+               )
+             )
+
+    assert AttemptProjection.scope_state("projection-peer", @chain_id).degraded?
+
+    assert is_nil(
+             AttemptProjection.batch_summaries(
+               "projection-peer",
+               [%{instance_id: "shared-instance", transport: :http}],
+               @chain_id,
+               :system
+             )[{"shared-instance", :http}]
+           )
+  end
+
   test "unknown workload keys cannot grow the fixed routing table" do
     generation = publish_routes(["projection-instance"])
     before_size = :ets.info(:lasso_instance_state, :size)
@@ -425,6 +650,9 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.rate_limit_expiry_ms == 2_500
     assert system.total_rate_limits == 1
     assert system.comparable_attempts == 1
+
+    prior_key = {:routing_system_prior, @chain_id, "projection-instance", :http}
+    assert [{^prior_key, %{observed_at_us: nil}}] = :ets.lookup(:lasso_instance_state, prior_key)
   end
 
   test "stale system evidence cannot seed client ordering" do
@@ -629,9 +857,29 @@ defmodule Lasso.RPC.AttemptProjectionTest do
   end
 
   defp success_event_for(emitted_at_us, io_duration_us, instance_id, generation, workload_key) do
+    success_event_for_profile(
+      emitted_at_us,
+      io_duration_us,
+      instance_id,
+      generation,
+      workload_key,
+      @profile,
+      :http
+    )
+  end
+
+  defp success_event_for_profile(
+         emitted_at_us,
+         io_duration_us,
+         instance_id,
+         generation,
+         workload_key,
+         profile,
+         transport
+       ) do
     fact =
       AttemptTerminal.Response.new(
-        identity(instance_id, generation, workload_key),
+        identity(instance_id, generation, workload_key, profile, transport),
         :success,
         io_duration_us
       )
@@ -642,13 +890,17 @@ defmodule Lasso.RPC.AttemptProjectionTest do
   defp identity(instance_id, generation), do: identity(instance_id, generation, "client")
 
   defp identity(instance_id, generation, workload_key) do
+    identity(instance_id, generation, workload_key, @profile, :http)
+  end
+
+  defp identity(instance_id, generation, workload_key, profile, transport) do
     AttemptIdentity.new(
       request_id: "projection-request",
       attempt_id: "projection-attempt-#{instance_id}",
-      profile: @profile,
+      profile: profile,
       chain_id: @chain_id,
       upstream_instance_id: instance_id,
-      transport: :http,
+      transport: transport,
       route_generation: generation,
       circuit_scope: :broad,
       circuit_epoch: 1,
@@ -664,9 +916,34 @@ defmodule Lasso.RPC.AttemptProjectionTest do
   defp route_key(instance_id),
     do: {:routing_control, @profile, @chain_id, instance_id, :http, "client"}
 
+  defp publish_shared_routes(profiles, instance_id, transport) do
+    generation = ConfigStore.route_generation()
+
+    routes =
+      Enum.map(profiles, fn profile ->
+        %{profile: profile, chain_id: @chain_id, instance_id: instance_id, transport: transport}
+      end)
+
+    assert :ok = AttemptProjection.reconcile_routes(generation, routes)
+    generation
+  end
+
   defp clear_control_rows do
     :ets.match_delete(:lasso_instance_state, {{:routing_control_scope, @profile, :_}, :_})
+
+    :ets.match_delete(
+      :lasso_instance_state,
+      {{:routing_control_scope, "projection-peer", :_}, :_}
+    )
+
     :ets.match_delete(:lasso_instance_state, {{:routing_control, @profile, :_, :_, :_, :_}, :_})
+
+    :ets.match_delete(
+      :lasso_instance_state,
+      {{:routing_control, "projection-peer", :_, :_, :_, :_}, :_}
+    )
+
+    :ets.match_delete(:lasso_instance_state, {{:routing_system_prior, :_, :_, :_}, :_})
   rescue
     ArgumentError -> :ok
   end
