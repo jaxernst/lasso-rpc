@@ -384,7 +384,10 @@ defmodule Lasso.RPC.Selection do
   defp single_channel_summary(nil, _channel, _plan, _workload_key), do: nil
 
   defp single_channel_summary(candidate, channel, plan, workload_key) do
+    scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
+
     AttemptProjection.summarize_route(
+      scope,
       Map.get(candidate.routing_states, channel.transport),
       candidate.instance_id,
       channel.transport,
@@ -568,6 +571,8 @@ defmodule Lasso.RPC.Selection do
        do: ctx
 
   defp enrich_strategy_context(ctx, candidates, %RoutingPlan{} = plan, _strategy_mod) do
+    scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
+
     summaries =
       Enum.reduce(candidates, %{}, fn candidate, acc ->
         Enum.reduce(candidate.transports, acc, fn transport, route_acc ->
@@ -575,6 +580,7 @@ defmodule Lasso.RPC.Selection do
 
           summary =
             AttemptProjection.summarize_route(
+              scope,
               row,
               candidate.instance_id,
               transport,
