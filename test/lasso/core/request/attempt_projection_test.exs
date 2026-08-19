@@ -37,8 +37,8 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     lanes = AttemptProjection.lane_configs()
 
     assert Keyword.keys(lanes) == [:diagnostics]
-    assert lanes[:diagnostics][:capacity] == 2_048
-    assert lanes[:diagnostics][:scope_capacity] == 64
+    assert lanes[:diagnostics][:capacity] == 128
+    assert lanes[:diagnostics][:scope_capacity] == 32
   end
 
   test "projection payload round trips as one bounded canonical fact" do

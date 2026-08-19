@@ -182,7 +182,7 @@ defmodule Lasso.RPC.AttemptProjection do
       diagnostics:
         lane_options(
           &__MODULE__.deliver_diagnostics/2,
-          [capacity: 2_048, scope_capacity: 64, max_age_ms: 2_000],
+          [capacity: 128, scope_capacity: 32, max_age_ms: 2_000],
           Keyword.get(configured, :diagnostics, [])
         )
     ]
