@@ -17,7 +17,7 @@ defmodule Lasso.RPC.SelectionTest do
   use Lasso.Test.LassoIntegrationCase
 
   alias Lasso.Providers.Catalog
-  alias Lasso.RPC.{AttemptProjection, Selection}
+  alias Lasso.RPC.{AttemptIdentity, AttemptProjection, AttemptTerminal, Selection}
   alias Lasso.RPC.Selection.CandidateCursor
 
   defmodule CatalogSwapStrategy do
@@ -243,6 +243,63 @@ defmodule Lasso.RPC.SelectionTest do
                :fastest,
                :default
              ) == before_count + 1
+    end
+
+    test "fastest selection consumes a shared physical system prior", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "a_slow", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "z_fast", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      instance_id = Catalog.lookup_instance_id(profile, chain, "z_fast")
+
+      source_route = %{
+        profile: "poller-profile",
+        chain_id: chain,
+        instance_id: instance_id,
+        transport: :http
+      }
+
+      :ok =
+        AttemptProjection.prepare_routes(
+          generation,
+          [source_route | Catalog.routing_control_routes()]
+        )
+
+      now_us = System.monotonic_time(:microsecond)
+
+      for offset <- 0..2 do
+        event =
+          system_success_event(
+            chain,
+            instance_id,
+            generation,
+            now_us + offset,
+            10_000
+          )
+
+        assert :ok = AttemptProjection.apply_control(event)
+      end
+
+      public_scope = AttemptProjection.scope_state(profile, chain, generation)
+      assert is_nil(AttemptProjection.route_state(public_scope, instance_id, :http, "system"))
+
+      assert {:ok, "z_fast"} =
+               Selection.select_provider(profile, chain, "eth_blockNumber",
+                 strategy: :fastest,
+                 protocol: :http,
+                 request_origin: :client
+               )
+
+      assert [%{provider_id: "z_fast"} | _rest] =
+               Selection.select_channels(profile, chain, "eth_blockNumber",
+                 strategy: :fastest,
+                 transport: :http,
+                 request_origin: :client
+               )
     end
 
     test "same-generation catalog swaps during ranking fail both entrypoints closed", %{
@@ -514,4 +571,28 @@ defmodule Lasso.RPC.SelectionTest do
 
   defp restore_env(key, nil), do: Application.delete_env(:lasso, key)
   defp restore_env(key, value), do: Application.put_env(:lasso, key, value)
+
+  defp system_success_event(chain, instance_id, generation, emitted_at_us, duration_us) do
+    identity =
+      AttemptIdentity.new(
+        request_id: "selection-system-request",
+        attempt_id: "selection-system-attempt-#{emitted_at_us}",
+        profile: "poller-profile",
+        chain_id: chain,
+        upstream_instance_id: instance_id,
+        transport: :http,
+        route_generation: generation,
+        circuit_scope: :broad,
+        circuit_epoch: 1,
+        execution_safety: :replay_safe,
+        routing_intent: "fastest",
+        workload_key: "system",
+        request_budget_ms: 100,
+        candidate_admission_count: 1,
+        dispatch_count: 1
+      )
+
+    fact = AttemptTerminal.Response.new(identity, :success, duration_us)
+    %{AttemptProjection.new(fact, "z_fast", "eth_blockNumber") | emitted_at_us: emitted_at_us}
+  end
 end

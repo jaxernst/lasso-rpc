@@ -310,6 +310,32 @@ defmodule Lasso.RPC.AttemptProjection do
     )
   end
 
+  @doc false
+  @spec summarize_route(
+          scope_state(),
+          map() | nil,
+          binary(),
+          :http | :ws,
+          pos_integer(),
+          atom()
+        ) :: Summary.t() | nil
+  def summarize_route(scope, row, instance_id, transport, chain_id, workload_key)
+      when is_map(scope) and is_binary(instance_id) and transport in [:http, :ws] and
+             is_integer(chain_id) and chain_id > 0 and is_atom(workload_key) do
+    now_us = System.monotonic_time(:microsecond)
+    shared_prior = shared_system_prior(scope, row, instance_id, transport, now_us)
+
+    summary_for_workload(
+      row,
+      shared_prior,
+      instance_id,
+      transport,
+      chain_id,
+      workload_key,
+      now_us
+    )
+  end
+
   @spec prepare_routes(non_neg_integer(), [map()]) :: :ok
   def prepare_routes(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
