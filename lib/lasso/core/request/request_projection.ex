@@ -103,21 +103,18 @@ defmodule Lasso.RPC.RequestProjection do
 
   defp encode_validated(event) do
     payload =
-      :erlang.term_to_binary(
-        {
-          @schema,
-          @version,
-          event.fact,
-          event.method,
-          event.provider_id,
-          event.instance_id,
-          event.transport,
-          event.request_origin,
-          event.failover_count,
-          event.emitted_at_ms
-        },
-        [:deterministic]
-      )
+      :erlang.term_to_binary({
+        @schema,
+        @version,
+        event.fact,
+        event.method,
+        event.provider_id,
+        event.instance_id,
+        event.transport,
+        event.request_origin,
+        event.failover_count,
+        event.emitted_at_ms
+      })
 
     if byte_size(payload) <= @max_bytes,
       do: {:ok, payload},

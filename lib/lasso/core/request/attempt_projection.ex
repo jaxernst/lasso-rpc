@@ -152,7 +152,7 @@ defmodule Lasso.RPC.AttemptProjection do
 
   @spec encode(t()) :: {:ok, binary()} | {:error, :invalid_event | :event_too_large}
   def encode(%__MODULE__{} = event) do
-    payload = :erlang.term_to_binary({@schema, @version, event}, [:deterministic])
+    payload = :erlang.term_to_binary({@schema, @version, event})
 
     if byte_size(payload) <= @max_bytes,
       do: {:ok, payload},
