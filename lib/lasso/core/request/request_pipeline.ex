@@ -131,13 +131,12 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp execute_owned_request(execution_scope, caller_guard, chain_id, method, params, opts) do
-    ctx =
-      chain_id |> initialize_context(method, params, opts) |> RequestContext.bound_request_id()
+    ctx = initialize_context(chain_id, method, params, opts)
 
     rpc_request = build_rpc_request(method, params, ctx, opts)
 
     ctx =
-      RequestContext.set_execution_params(
+      RequestContext.initialize_execution(
         ctx,
         rpc_request,
         opts.timeout_ms,
@@ -1249,13 +1248,10 @@ defmodule Lasso.RPC.RequestPipeline do
   @spec initialize_context(chain_id(), method(), params(), RequestOptions.t()) ::
           RequestContext.t()
   defp initialize_context(chain_id, method, params, opts) do
-    opts.request_context ||
-      RequestContext.new(chain_id, method, params,
-        transport: opts.transport || :http,
-        strategy: opts.strategy,
-        request_id: opts.request_id,
-        plug_start_time: opts.plug_start_time
-      )
+    case opts.request_context do
+      %RequestContext{} = ctx -> RequestContext.bound_request_id(ctx)
+      nil -> RequestContext.new(chain_id, method, params, opts)
+    end
   end
 
   @spec build_rpc_request(method(), params(), RequestContext.t(), RequestOptions.t()) :: map()

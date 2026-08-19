@@ -150,8 +150,10 @@ defmodule Lasso.RPC.RequestContext do
   If :request_id is provided in opts, it will be used (typically from Phoenix's Plug.RequestId).
   Otherwise, a new request_id will be generated.
   """
-  @spec new(pos_integer(), String.t(), list(), keyword()) :: t()
-  def new(chain_id, method, params, opts \\ []) do
+  @spec new(pos_integer(), String.t(), list(), keyword() | RequestOptions.t()) :: t()
+  def new(chain_id, method, params, opts \\ [])
+
+  def new(chain_id, method, params, opts) when is_list(opts) do
     request_id = bounded_request_id(Keyword.get(opts, :request_id))
 
     plug_start = Keyword.get(opts, :plug_start_time)
@@ -169,6 +171,21 @@ defmodule Lasso.RPC.RequestContext do
       user_agent: Keyword.get(opts, :user_agent),
       plug_start_time: plug_start,
       start_time: start_time
+    }
+  end
+
+  def new(chain_id, method, params, %RequestOptions{} = opts) do
+    plug_start = opts.plug_start_time
+
+    %__MODULE__{
+      request_id: bounded_request_id(opts.request_id),
+      chain_id: chain_id,
+      method: method,
+      params: params,
+      transport: opts.transport || :http,
+      strategy: opts.strategy,
+      plug_start_time: plug_start,
+      start_time: plug_start || System.monotonic_time(:microsecond)
     }
   end
 
@@ -207,8 +224,25 @@ defmodule Lasso.RPC.RequestContext do
         deadline_us
       )
       when is_map(rpc_request) and is_integer(timeout_ms) do
-    ctx = %{ctx | request_id: bounded_request_id(ctx.request_id)}
+    ctx
+    |> bound_request_id()
+    |> put_execution_params(rpc_request, timeout_ms, opts, deadline_us)
+  end
 
+  @doc false
+  @spec initialize_execution(t(), map(), integer(), RequestOptions.t(), integer() | nil) :: t()
+  def initialize_execution(
+        %__MODULE__{} = ctx,
+        rpc_request,
+        timeout_ms,
+        %RequestOptions{} = opts,
+        deadline_us
+      )
+      when is_map(rpc_request) and is_integer(timeout_ms) do
+    put_execution_params(ctx, rpc_request, timeout_ms, opts, deadline_us)
+  end
+
+  defp put_execution_params(ctx, rpc_request, timeout_ms, opts, deadline_us) do
     envelope =
       case ctx.execution_envelope do
         %ExecutionEnvelope{} = envelope ->

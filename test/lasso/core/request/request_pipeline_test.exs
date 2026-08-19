@@ -77,6 +77,22 @@ defmodule Lasso.RPC.RequestPipelineTest do
       assert returned_ctx.strategy == :fastest
     end
 
+    test "bounds a provided RequestContext before execution" do
+      request_id = String.duplicate("external-request", 100)
+      custom_ctx = %{RequestContext.new(1, "eth_call", []) | request_id: request_id}
+
+      result =
+        RequestPipeline.execute_via_channels(1, "eth_call", [], %RequestOptions{
+          profile: "public",
+          strategy: :fastest,
+          timeout_ms: 30_000,
+          request_context: custom_ctx
+        })
+
+      returned_ctx = extract_context(result)
+      assert returned_ctx.request_id == Lasso.RPC.BoundedIdentifier.encode(request_id)
+    end
+
     test "handles empty params" do
       result =
         RequestPipeline.execute_via_channels(1, "eth_blockNumber", [], %RequestOptions{
