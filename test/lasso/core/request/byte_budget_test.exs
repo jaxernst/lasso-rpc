@@ -47,7 +47,8 @@ defmodule Lasso.Core.Request.ByteBudgetTest do
 
     monitor = Process.monitor(owner)
     assert_receive {:reserved, _reservation}
-    assert_receive {:DOWN, ^monitor, :process, ^owner, :normal}
+    assert_receive {:DOWN, ^monitor, :process, ^owner, reason}
+    assert reason in [:normal, :noproc]
 
     send(ByteBudget, :audit)
     await_empty()
