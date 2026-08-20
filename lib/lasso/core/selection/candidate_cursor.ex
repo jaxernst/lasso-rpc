@@ -2,7 +2,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   @moduledoc false
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Providers.{CandidateListing, Catalog}
+  alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
 
   alias Lasso.RPC.{
     AttemptProjection,
@@ -231,9 +231,19 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   defp materialize(cursor, {:ranked, candidate, transport}) do
-    with {:ok, channel} <- channel(cursor, candidate, transport),
-         tier when tier in 1..4 <-
-           tier(candidate.circuit_state, candidate.rate_limited, transport) do
+    routing_state = Map.fetch!(candidate.routing_states, transport)
+
+    {circuit_state, rate_limited?} =
+      InstanceState.read_candidate_gate(
+        candidate.instance_id,
+        transport,
+        routing_state,
+        not candidate.learned_feedback_degraded?
+      )
+
+    with true <- gate_allowed?(cursor.filters, circuit_state, rate_limited?),
+         tier when tier in 1..4 <- tier(circuit_state, rate_limited?),
+         {:ok, channel} <- channel(cursor, candidate, transport) do
       {:ok, channel, tier, AdapterFilter.method_supported?(channel, cursor.method)}
     else
       _unavailable -> :skip
@@ -246,12 +256,24 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp tier(circuit_state, rate_limited, transport) do
     case {Map.fetch!(circuit_state, transport), Map.fetch!(rate_limited, transport)} do
-      {:closed, false} -> 1
-      {:half_open, false} -> 2
-      {:closed, true} -> 3
-      {:half_open, true} -> 4
-      _unavailable -> nil
+      {state, limited?} -> tier(state, limited?)
     end
+  end
+
+  defp tier(:closed, false), do: 1
+  defp tier(:half_open, false), do: 2
+  defp tier(:closed, true), do: 3
+  defp tier(:half_open, true), do: 4
+  defp tier(_state, _limited?), do: nil
+
+  defp gate_allowed?(filters, circuit_state, rate_limited?) do
+    circuit_allowed? =
+      circuit_state == :closed or
+        (circuit_state == :half_open and filters.include_half_open)
+
+    rate_limit_allowed? = not filters.exclude_rate_limited or not rate_limited?
+
+    circuit_allowed? and rate_limit_allowed?
   end
 
   defp defer(cursor, field, tier, channel) do

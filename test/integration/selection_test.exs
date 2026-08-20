@@ -636,6 +636,71 @@ defmodule Lasso.RPC.SelectionTest do
       assert :done = CandidateCursor.next(limited)
     end
 
+    test "ranked cursors apply live circuit state when candidates are requested", %{
+      chain: chain
+    } do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider_a", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_b", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      for strategy <- [:fastest, :latency_weighted] do
+        cursor =
+          Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+            strategy: strategy,
+            transport: :http,
+            include_half_open: false
+          )
+
+        [first_label, _second_label] = cursor.candidate_labels
+        first_provider = String.replace_suffix(first_label, ":http", "")
+        first_instance = Catalog.lookup_instance_id(profile, chain, first_provider)
+        set_circuit_snapshot(first_instance, :open)
+
+        assert {:ok, %{provider_id: selected_provider}, cursor} = CandidateCursor.next(cursor)
+        refute selected_provider == first_provider
+        assert :done = CandidateCursor.next(cursor)
+
+        set_circuit_snapshot(first_instance, :closed)
+      end
+    end
+
+    test "ranked cursors tier a provider rate-limited after ranking", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider_a", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_b", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http
+        )
+
+      [first_label, _second_label] = cursor.candidate_labels
+      first_provider = String.replace_suffix(first_label, ":http", "")
+      first_instance = Catalog.lookup_instance_id(profile, chain, first_provider)
+
+      :ets.insert(
+        :lasso_instance_state,
+        {{:rate_limit, first_instance, :http},
+         %{expiry_ms: System.monotonic_time(:millisecond) + 60_000}}
+      )
+
+      on_exit(fn ->
+        :ets.delete(:lasso_instance_state, {:rate_limit, first_instance, :http})
+      end)
+
+      assert {:ok, %{provider_id: selected_provider}, cursor} = CandidateCursor.next(cursor)
+      refute selected_provider == first_provider
+      assert {:ok, %{provider_id: ^first_provider}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+    end
+
     test "strategy overrides retain the eager channel contract", %{chain: chain} do
       profile = "public"
 

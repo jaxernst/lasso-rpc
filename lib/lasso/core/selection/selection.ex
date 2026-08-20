@@ -248,7 +248,9 @@ defmodule Lasso.RPC.Selection do
     case capture_selection_snapshot(profile, chain_id) do
       {:ok, snapshot, plan} ->
         strategy = Keyword.fetch!(opts, :strategy)
-        {candidates, _transport, workload_key} = routing_candidates(plan, method, opts)
+
+        {candidates, _transport, workload_key} =
+          routing_candidates(plan, method, opts, :deferred_gates)
 
         entries =
           for candidate <- candidates,
@@ -290,7 +292,7 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp routing_candidates(plan, method, opts) do
+  defp routing_candidates(plan, method, opts, gate_mode \\ :captured_gates) do
     transport = Keyword.get(opts, :transport, :both)
     workload_key = workload_for_origin(Keyword.get(opts, :request_origin, :client))
 
@@ -324,11 +326,21 @@ defmodule Lasso.RPC.Selection do
       )
 
     candidates =
-      CandidateListing.list_routing_candidates_from_plan(
-        plan,
-        pool_filters,
-        consensus_height || :unavailable
-      )
+      case gate_mode do
+        :deferred_gates ->
+          CandidateListing.list_rankable_candidates_from_plan(
+            plan,
+            pool_filters,
+            consensus_height || :unavailable
+          )
+
+        :captured_gates ->
+          CandidateListing.list_routing_candidates_from_plan(
+            plan,
+            pool_filters,
+            consensus_height || :unavailable
+          )
+      end
 
     {candidates, transport, workload_key}
   end
