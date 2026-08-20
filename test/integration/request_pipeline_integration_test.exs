@@ -5,7 +5,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag timeout: 10_000
 
   alias Lasso.Events.RoutingDecision
-  alias Lasso.RPC.{RequestPipeline, RequestOptions, Response}
+  alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
   alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
   alias LassoWeb.Dashboard.EventStream
@@ -220,6 +220,32 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       assert String.starts_with?(block_number, "0x")
       assert ctx.executed_channel.provider_id == "backup"
       assert Enum.map(ctx.attempted_channels, & &1.channel.provider_id) == ["primary", "backup"]
+    end
+
+    test "fastest preserves ranked fallback and full candidate metadata", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "a_failing", priority: 10, behavior: :always_fail, profile: profile},
+        %{id: "z_backup", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      assert {:ok, %Response.Success{}, ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{strategy: :fastest, timeout_ms: 30_000}
+               )
+
+      assert ctx.executed_channel.provider_id == "z_backup"
+
+      assert Enum.map(ctx.attempted_channels, & &1.channel.provider_id) == [
+               "a_failing",
+               "z_backup"
+             ]
+
+      assert ctx.candidate_providers == ["a_failing:http", "z_backup:http"]
     end
 
     test "respects provider override without failover", %{chain: chain} do

@@ -567,7 +567,8 @@ defmodule Lasso.RPC.SelectionTest do
       profile = "public"
 
       setup_providers([
-        %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
+        %{id: "provider_a", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_b", priority: 20, behavior: :healthy, profile: profile}
       ])
 
       cursor =
@@ -600,18 +601,80 @@ defmodule Lasso.RPC.SelectionTest do
       assert :done = CandidateCursor.next(cursor)
     end
 
-    test "evidence-driven strategies retain the eager channel list", %{chain: chain} do
+    test "built-in evidence strategies return lazily materialized ranked candidates", %{
+      chain: chain
+    } do
       profile = "public"
 
       setup_providers([
         %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
-      assert [%Lasso.RPC.Channel{}] =
+      for strategy <- [:fastest, :latency_weighted] do
+        cursor =
+          Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+            strategy: strategy,
+            transport: :http
+          )
+
+        assert %CandidateCursor{candidate_labels: ["provider:http"]} = cursor
+
+        assert {:ok, %Lasso.RPC.Channel{provider_id: "provider"}, cursor} =
+                 CandidateCursor.next(cursor)
+
+        assert :done = CandidateCursor.next(cursor)
+      end
+
+      limited =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          limit: 0
+        )
+
+      assert %CandidateCursor{candidate_labels: []} = limited
+      assert :done = CandidateCursor.next(limited)
+    end
+
+    test "strategy overrides retain the eager channel contract", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "provider_a", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "provider_b", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      previous_registry = Application.get_env(:lasso, :strategy_registry)
+
+      Application.put_env(
+        :lasso,
+        :strategy_registry,
+        Map.put(
+          Lasso.RPC.Strategies.Registry.default_registry(),
+          :fastest,
+          ContextCaptureStrategy
+        )
+      )
+
+      Application.put_env(:lasso, :selection_context_test_pid, self())
+
+      on_exit(fn ->
+        if previous_registry,
+          do: Application.put_env(:lasso, :strategy_registry, previous_registry),
+          else: Application.delete_env(:lasso, :strategy_registry)
+
+        Application.delete_env(:lasso, :selection_context_test_pid)
+      end)
+
+      assert [%Lasso.RPC.Channel{}, %Lasso.RPC.Channel{}] =
+               channels =
                Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
                  strategy: :fastest,
                  transport: :http
                )
+
+      assert Enum.sort(Enum.map(channels, & &1.provider_id)) == ["provider_a", "provider_b"]
+      assert_receive {:strategy_context, _context}
     end
   end
 

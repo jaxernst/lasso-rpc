@@ -180,60 +180,31 @@ defmodule Lasso.RPC.Selection do
           [Channel.t()] | CandidateCursor.t()
   def select_channel_candidates(profile, chain_id, method, opts)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_binary(method) do
-    if Keyword.get(opts, :strategy, :load_balanced) in [:priority, :load_balanced] do
-      case capture_selection_snapshot(profile, chain_id) do
-        {:ok, snapshot, plan} -> CandidateCursor.new(snapshot, plan, method, opts)
-        :unavailable -> []
-      end
-    else
-      select_channels(profile, chain_id, method, opts)
+    strategy = Keyword.get(opts, :strategy, :load_balanced)
+    strategy_mod = StrategyRegistry.resolve(strategy)
+
+    case {strategy, strategy_mod} do
+      {strategy, _module} when strategy in [:priority, :load_balanced] ->
+        case capture_selection_snapshot(profile, chain_id) do
+          {:ok, snapshot, plan} -> CandidateCursor.new(snapshot, plan, method, opts)
+          :unavailable -> []
+        end
+
+      {:fastest, Lasso.RPC.Strategies.Fastest} ->
+        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod)
+
+      {:latency_weighted, Lasso.RPC.Strategies.LatencyWeighted} ->
+        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod)
+
+      _custom_or_unknown ->
+        select_channels(profile, chain_id, method, opts)
     end
   end
 
   defp select_channels_from_plan(snapshot, plan, method, opts) do
     strategy = Keyword.get(opts, :strategy, :load_balanced)
-    transport = Keyword.get(opts, :transport, :both)
-    exclude = Keyword.get(opts, :exclude, [])
     limit = Keyword.get(opts, :limit, 1000)
-    include_half_open = Keyword.get(opts, :include_half_open, true)
-    params = Keyword.get(opts, :params, [])
-    workload_key = workload_for_origin(Keyword.get(opts, :request_origin, :client))
-
-    pool_protocol =
-      case transport do
-        :http -> :http
-        :ws -> :ws
-        _ -> nil
-      end
-
-    consensus_height = get_consensus_height(plan.chain_id)
-
-    requirements =
-      Lasso.RPC.RequestAnalysis.analyze(
-        method,
-        params,
-        consensus_height: consensus_height,
-        archival_threshold: plan.archival_threshold
-      )
-
-    pool_filters =
-      SelectionFilters.new(
-        protocol: pool_protocol,
-        exclude: exclude,
-        include_half_open: include_half_open,
-        max_lag_blocks: plan.max_lag_blocks,
-        min_block: requirements.requested_block,
-        requires_archival: requirements.requires_archival,
-        requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
-        workload_key: workload_key
-      )
-
-    provider_candidates =
-      CandidateListing.list_routing_candidates_from_plan(
-        plan,
-        pool_filters,
-        consensus_height || :unavailable
-      )
+    {provider_candidates, transport, workload_key} = routing_candidates(plan, method, opts)
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
@@ -273,6 +244,123 @@ defmodule Lasso.RPC.Selection do
       else: []
   end
 
+  defp select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod) do
+    case capture_selection_snapshot(profile, chain_id) do
+      {:ok, snapshot, plan} ->
+        strategy = Keyword.fetch!(opts, :strategy)
+        {candidates, _transport, workload_key} = routing_candidates(plan, method, opts)
+
+        entries =
+          for candidate <- candidates,
+              transport <- candidate.transports do
+            {ranking_channel(plan, candidate, transport), candidate, transport}
+          end
+
+        capable_channels =
+          entries
+          |> Enum.map(&elem(&1, 0))
+          |> filter_capable_channels(method)
+
+        entries_by_key =
+          Map.new(entries, fn {channel, candidate, transport} ->
+            {{channel.instance_id, transport}, {candidate, transport}}
+          end)
+
+        ranked_candidates =
+          capable_channels
+          |> rank_capable_channels(
+            candidates,
+            strategy,
+            method,
+            plan,
+            Keyword.get(opts, :timeout, 30_000),
+            workload_key,
+            strategy_mod
+          )
+          |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
+
+        if selection_snapshot_current?(snapshot, candidates) do
+          CandidateCursor.new_ranked(snapshot, plan, method, opts, ranked_candidates)
+        else
+          []
+        end
+
+      :unavailable ->
+        []
+    end
+  end
+
+  defp routing_candidates(plan, method, opts) do
+    transport = Keyword.get(opts, :transport, :both)
+    workload_key = workload_for_origin(Keyword.get(opts, :request_origin, :client))
+
+    pool_protocol =
+      case transport do
+        :http -> :http
+        :ws -> :ws
+        _ -> nil
+      end
+
+    consensus_height = get_consensus_height(plan.chain_id)
+
+    requirements =
+      Lasso.RPC.RequestAnalysis.analyze(
+        method,
+        Keyword.get(opts, :params, []),
+        consensus_height: consensus_height,
+        archival_threshold: plan.archival_threshold
+      )
+
+    pool_filters =
+      SelectionFilters.new(
+        protocol: pool_protocol,
+        exclude: Keyword.get(opts, :exclude, []),
+        include_half_open: Keyword.get(opts, :include_half_open, true),
+        max_lag_blocks: plan.max_lag_blocks,
+        min_block: requirements.requested_block,
+        requires_archival: requirements.requires_archival,
+        requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
+        workload_key: workload_key
+      )
+
+    candidates =
+      CandidateListing.list_routing_candidates_from_plan(
+        plan,
+        pool_filters,
+        consensus_height || :unavailable
+      )
+
+    {candidates, transport, workload_key}
+  end
+
+  defp ranking_channel(plan, candidate, transport) do
+    %Channel{
+      profile: plan.profile,
+      chain_id: plan.chain_id,
+      provider_id: candidate.id,
+      instance_id: candidate.instance_id,
+      route_generation: plan.generation,
+      transport: transport,
+      raw_channel: nil,
+      transport_module: nil,
+      capabilities: nil,
+      provider_capabilities: Map.get(candidate.config, :capabilities)
+    }
+  end
+
+  defp filter_capable_channels(channels, method) do
+    case Lasso.RPC.Providers.AdapterFilter.filter_channels(channels, method) do
+      {:ok, capable, filtered} ->
+        if filtered != [] do
+          Logger.debug(
+            "Filtered #{length(filtered)} channels for #{method}: #{inspect(Enum.map(filtered, & &1.provider_id))}"
+          )
+        end
+
+        capable
+    end
+  end
+
   defp order_capable_channels(
          [channel],
          candidates,
@@ -305,28 +393,63 @@ defmodule Lasso.RPC.Selection do
         {id, rate_limited}
       end)
 
-    strategy_mod = StrategyRegistry.resolve(strategy)
+    ordered_channels =
+      rank_capable_channels(
+        channels,
+        candidates,
+        strategy,
+        method,
+        plan,
+        timeout,
+        workload_key,
+        StrategyRegistry.resolve(strategy)
+      )
 
+    tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
+  end
+
+  defp rank_capable_channels(
+         [channel],
+         candidates,
+         strategy,
+         _method,
+         plan,
+         _timeout,
+         workload_key,
+         _strategy_mod
+       )
+       when strategy in [:fastest, :priority, :load_balanced, :latency_weighted] do
+    maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
+    [channel]
+  end
+
+  defp rank_capable_channels(
+         channels,
+         candidates,
+         strategy,
+         method,
+         plan,
+         timeout,
+         workload_key,
+         strategy_mod
+       ) do
     prepared_ctx =
       strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
       |> Map.put(:workload_key, workload_key)
       |> enrich_strategy_context(candidates, plan, strategy_mod)
 
-    ordered_channels =
-      if Enum.any?(candidates, & &1.learned_feedback_degraded?) and
-           strategy in [:fastest, :latency_weighted] do
-        Enum.sort_by(channels, &{&1.provider_id, &1.transport})
-      else
-        strategy_mod.rank_channels(
-          channels,
-          method,
-          prepared_ctx,
-          plan.profile,
-          plan.chain_id
-        )
-      end
-
-    tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
+    if Enum.any?(candidates, & &1.learned_feedback_degraded?) and
+         strategy in [:fastest, :latency_weighted] do
+      Enum.sort_by(channels, &{&1.provider_id, &1.transport})
+    else
+      strategy_mod.rank_channels(
+        channels,
+        method,
+        prepared_ctx,
+        plan.profile,
+        plan.chain_id
+      )
+    end
   end
 
   defp maybe_record_single_channel_degradation(
