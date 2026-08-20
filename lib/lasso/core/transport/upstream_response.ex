@@ -9,6 +9,8 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   @scalar_delimiters [" ", "\t", "\r", "\n", ",", "}", "]"]
   @container_specials ["\"", "{", "[", "}", "]"]
   @linear_scan_threshold 256
+  @mode_scan_bytes 512
+  @discarded_error_data :lasso_discarded_error_data
 
   defmodule Validated do
     @moduledoc false
@@ -41,12 +43,27 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
 
   @spec parse_unary(binary()) :: parsed()
   def parse_unary(raw_bytes) when is_binary(raw_bytes) do
-    {mode, id_span} = response_metadata(raw_bytes)
+    case response_mode(raw_bytes) do
+      {:found, mode, id_span} ->
+        raw_bytes
+        |> decode_response(mode)
+        |> attach_known_id_span(id_span)
 
+      :unknown ->
+        raw_bytes
+        |> decode_response(:discard)
+        |> retain_error_data(raw_bytes)
+        |> attach_id_span(raw_bytes)
+    end
+  end
+
+  def parse_unary(_raw_bytes), do: {:invalid, :invalid_json, nil}
+
+  defp decode_response(raw_bytes, mode) do
     case decode(raw_bytes, mode) do
       {{:container, :object}, {:root, fields}, rest} ->
         if only_json_whitespace?(rest) do
-          attach_id_span(classify_fields(fields), id_span)
+          classify_fields(fields)
         else
           {:invalid, :invalid_json, candidate_id(fields)}
         end
@@ -64,7 +81,27 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
-  def parse_unary(_raw_bytes), do: {:invalid, :invalid_json, nil}
+  defp retain_error_data(
+         {:ok, %Validated{kind: :error, error_data: @discarded_error_data}},
+         raw_bytes
+       ),
+       do: decode_response(raw_bytes, :retain_error)
+
+  defp retain_error_data(parsed, _raw_bytes), do: parsed
+
+  defp attach_id_span({:ok, %Validated{} = validated}, raw_bytes) do
+    case top_level_id_span(raw_bytes) do
+      {:ok, id_span} -> {:ok, %{validated | id_span: id_span}}
+      :error -> {:ok, validated}
+    end
+  end
+
+  defp attach_id_span(parsed, _raw_bytes), do: parsed
+
+  defp attach_known_id_span({:ok, %Validated{} = validated}, id_span),
+    do: {:ok, %{validated | id_span: id_span}}
+
+  defp attach_known_id_span(parsed, _id_span), do: parsed
 
   @spec parse_ws_frame(binary()) ::
           {:transport, Validated.t()}
@@ -202,7 +239,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   end
 
   defp initial_error_fields do
-    %{code: :missing, code_count: 0, message: :missing, message_count: 0}
+    %{code: :missing, code_count: 0, message: :missing, message_count: 0, data_seen?: false}
   end
 
   defp object_start({:root, _fields}, _mode), do: {:object, 0, initial_fields()}
@@ -319,6 +356,8 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     %{fields | message: message, message_count: fields.message_count + 1}
   end
 
+  defp capture_error_field(fields, "data", _value), do: %{fields | data_seen?: true}
+
   defp capture_error_field(fields, _key, _value), do: fields
 
   defp decode_integer(token), do: :erlang.binary_to_integer(token)
@@ -390,7 +429,8 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   end
 
   defp validate_error(
-         {:container, :object, %{code: code, code_count: 1, message: message, message_count: 1}},
+         {:container, :object,
+          %{code: code, code_count: 1, message: message, message_count: 1} = fields},
          id
        )
        when is_integer(code) and is_binary(message) do
@@ -399,11 +439,15 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
        kind: :error,
        id: id,
        error_code: code,
-       error_message: message
+       error_message: message,
+       error_data: discarded_error_data(fields)
      }}
   end
 
   defp validate_error(_error, id), do: {:invalid, :invalid_envelope, id}
+
+  defp discarded_error_data(%{data_seen?: true}), do: @discarded_error_data
+  defp discarded_error_data(_fields), do: nil
 
   defp candidate_id(%{id_count: 1, id: id}) when id != :invalid, do: id
   defp candidate_id(_fields), do: nil
@@ -440,22 +484,19 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
-  defp attach_id_span({:ok, %Validated{} = validated}, id_span),
-    do: {:ok, %{validated | id_span: id_span}}
+  defp response_mode(raw_bytes) do
+    prefix_size = min(byte_size(raw_bytes), @mode_scan_bytes)
+    prefix = binary_part(raw_bytes, 0, prefix_size)
+    start = skip_whitespace(prefix, 0)
 
-  defp attach_id_span(parsed, _id_span), do: parsed
-
-  defp response_metadata(raw_bytes) do
-    start = skip_whitespace(raw_bytes, 0)
-
-    if byte_at(raw_bytes, start) == ?{ do
-      scan_response_metadata(raw_bytes, skip_whitespace(raw_bytes, start + 1), nil)
+    if byte_at(prefix, start) == ?{ do
+      scan_response_mode(prefix, skip_whitespace(prefix, start + 1), nil)
     else
-      {:discard, nil}
+      :unknown
     end
   end
 
-  defp scan_response_metadata(raw_bytes, index, id_span) do
+  defp scan_response_mode(raw_bytes, index, id_span) do
     with ?" <- byte_at(raw_bytes, index),
          {:ok, key_end} <- skip_string(raw_bytes, index),
          {:ok, key} <- decode_key(raw_bytes, index, key_end) do
@@ -465,20 +506,20 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
         value_start = skip_whitespace(raw_bytes, colon_index + 1)
 
         case key do
-          "error" -> {:retain_error, id_span}
-          "result" -> {:discard, id_span}
-          "id" -> continue_response_metadata(raw_bytes, value_start, value_start)
-          _other -> continue_response_metadata(raw_bytes, value_start, id_span)
+          "error" -> {:found, :retain_error, id_span}
+          "result" -> {:found, :discard, id_span}
+          "id" -> continue_response_mode(raw_bytes, value_start, value_start)
+          _other -> continue_response_mode(raw_bytes, value_start, id_span)
         end
       else
-        {:discard, id_span}
+        :unknown
       end
     else
-      _invalid -> {:discard, id_span}
+      _invalid -> :unknown
     end
   end
 
-  defp continue_response_metadata(raw_bytes, value_start, id_start_or_span) do
+  defp continue_response_mode(raw_bytes, value_start, id_start_or_span) do
     case skip_value(raw_bytes, value_start) do
       {:ok, value_end} ->
         id_span =
@@ -488,16 +529,14 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
 
         next = skip_whitespace(raw_bytes, value_end)
 
-        case byte_at(raw_bytes, next) do
-          ?, ->
-            scan_response_metadata(raw_bytes, skip_whitespace(raw_bytes, next + 1), id_span)
-
-          _end_or_invalid ->
-            {:discard, id_span}
+        if byte_at(raw_bytes, next) == ?, do
+          scan_response_mode(raw_bytes, skip_whitespace(raw_bytes, next + 1), id_span)
+        else
+          :unknown
         end
 
       :error ->
-        {:discard, nil}
+        :unknown
     end
   end
 
