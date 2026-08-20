@@ -15,7 +15,7 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
     assert {:ok, %{"id" => 7, "result" => "0x1"}} = Jason.decode(response.raw_bytes)
   end
 
-  test "captures a top-level id span during the mode scan and falls back when result comes first" do
+  test "captures an early top-level id span and falls back when result comes first" do
     canonical = ~s({"jsonrpc":"2.0","id":"internal","result":"0x1"})
 
     assert {:ok, %Validated{id: "internal", id_span: {start, length}}} =
@@ -133,6 +133,31 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
     assert data["nested"] == [-2.5e-4, %{"value" => 6.02e23}]
     negative_zero = data["negative_zero"]
     assert <<1::1, _magnitude::63>> = <<negative_zero::float>>
+  end
+
+  test "preserves errors without data without requiring retained payload state" do
+    raw = ~s({"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"failed"}})
+
+    assert {:ok,
+            %Validated{
+              kind: :error,
+              error_code: -32_000,
+              error_message: "failed",
+              error_data: nil
+            }} = UpstreamResponse.parse_unary(raw)
+  end
+
+  test "preserves nested error data after an oversized unknown prefix" do
+    padding = String.duplicate("x", 2 * 1_024)
+
+    raw =
+      ~s({"jsonrpc":"2.0","id":7,"padding":"#{padding}","error":{"code":-32000,"message":"failed","data":{"ratio":1.5,"items":[null,true]}}})
+
+    assert {:ok,
+            %Validated{
+              kind: :error,
+              error_data: %{"ratio" => 1.5, "items" => [nil, true]}
+            }} = UpstreamResponse.parse_unary(raw)
   end
 
   @tag timeout: 10_000
