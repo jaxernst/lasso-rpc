@@ -418,6 +418,10 @@ defmodule Lasso.RPC.RequestPipeline do
   defp candidate_labels(channels, _selected) when is_list(channels),
     do: Enum.map(channels, &"#{&1.provider_id}:#{&1.transport}")
 
+  defp candidate_labels(%CandidateCursor{candidate_labels: labels}, _selected)
+       when labels != [],
+       do: labels
+
   defp candidate_labels(%CandidateCursor{}, nil), do: []
 
   defp candidate_labels(%CandidateCursor{}, %Channel{} = selected),

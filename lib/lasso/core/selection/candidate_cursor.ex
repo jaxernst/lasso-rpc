@@ -28,6 +28,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   ]
   defstruct @enforce_keys ++
               [
+                candidate_labels: [],
                 returned: 0,
                 supported?: false,
                 supported_deferred: %{2 => :queue.new(), 3 => :queue.new(), 4 => :queue.new()},
@@ -39,11 +40,54 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 }
               ]
 
-  @type descriptor :: {RoutingPlan.provider(), :http | :ws}
+  @type descriptor ::
+          {RoutingPlan.provider(), :http | :ws}
+          | {:ranked, map(), :http | :ws}
   @type t :: %__MODULE__{}
 
   @spec new(Catalog.snapshot(), RoutingPlan.t(), String.t(), keyword()) :: t()
   def new(snapshot, %RoutingPlan{} = plan, method, opts) do
+    build(
+      snapshot,
+      plan,
+      method,
+      opts,
+      &build_descriptors/4,
+      fn -> AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation) end,
+      false
+    )
+  end
+
+  @doc false
+  @spec new_ranked(Catalog.snapshot(), RoutingPlan.t(), String.t(), keyword(), [
+          {map(), :http | :ws}
+        ]) :: t()
+  def new_ranked(snapshot, %RoutingPlan{} = plan, method, opts, ranked_candidates)
+      when is_list(ranked_candidates) do
+    build(
+      snapshot,
+      plan,
+      method,
+      opts,
+      fn _plan, _strategy, _transport, _filters ->
+        Enum.map(ranked_candidates, fn {candidate, transport} ->
+          {:ranked, candidate, transport}
+        end)
+      end,
+      fn -> nil end,
+      true
+    )
+  end
+
+  defp build(
+         snapshot,
+         plan,
+         method,
+         opts,
+         descriptors_fun,
+         learned_scope_fun,
+         include_labels?
+       ) do
     transport = Keyword.get(opts, :transport, :both)
     strategy = Keyword.get(opts, :strategy, :load_balanced)
     consensus_height = consensus_height(plan.chain_id)
@@ -68,7 +112,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         workload_key: workload_for_origin(Keyword.get(opts, :request_origin, :client))
       )
 
-    descriptors = build_descriptors(plan, strategy, transport, filters)
+    descriptors = descriptors_fun.(plan, strategy, transport, filters)
+    limit = Keyword.get(opts, :limit, 1000)
 
     %__MODULE__{
       snapshot: snapshot,
@@ -76,9 +121,14 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       method: method,
       filters: filters,
       consensus_height: consensus_height,
-      learned_scope: AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation),
+      learned_scope: learned_scope_fun.(),
       descriptors: descriptors,
-      limit: Keyword.get(opts, :limit, 1000)
+      limit: limit,
+      candidate_labels:
+        if(include_labels?,
+          do: descriptors |> Enum.take(max(limit, 0)) |> Enum.map(&descriptor_label/1),
+          else: []
+        )
     }
   end
 
@@ -98,9 +148,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     %{
       cursor
       | descriptors:
-          Enum.reject(cursor.descriptors, fn {provider, _transport} ->
-            provider.id == provider_id
-          end),
+          Enum.reject(cursor.descriptors, &(descriptor_provider_id(&1) == provider_id)),
         supported_deferred: reject_queued_provider(cursor.supported_deferred, provider_id),
         unsupported_deferred: reject_queued_provider(cursor.unsupported_deferred, provider_id)
     }
@@ -182,6 +230,16 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
+  defp materialize(cursor, {:ranked, candidate, transport}) do
+    with {:ok, channel} <- channel(cursor, candidate, transport),
+         tier when tier in 1..4 <-
+           tier(candidate.circuit_state, candidate.rate_limited, transport) do
+      {:ok, channel, tier, AdapterFilter.method_supported?(channel, cursor.method)}
+    else
+      _unavailable -> :skip
+    end
+  end
+
   defp channel(cursor, candidate, transport) do
     TransportRegistry.get_channel_from_plan(cursor.plan, candidate, transport, cursor.method)
   end
@@ -247,6 +305,14 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp workload_for_origin(:system), do: Workload.normalize(:system)
   defp workload_for_origin(_origin), do: Workload.normalize(:client)
+
+  defp descriptor_provider_id({provider, _transport}), do: provider.id
+  defp descriptor_provider_id({:ranked, candidate, _transport}), do: candidate.id
+
+  defp descriptor_label(descriptor) do
+    transport = elem(descriptor, tuple_size(descriptor) - 1)
+    "#{descriptor_provider_id(descriptor)}:#{transport}"
+  end
 
   defp empty_unsupported do
     %{1 => :queue.new(), 2 => :queue.new(), 3 => :queue.new(), 4 => :queue.new()}
