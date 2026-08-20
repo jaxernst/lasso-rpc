@@ -115,13 +115,7 @@ defmodule Lasso.RPC.Selection do
 
         channels =
           candidates
-          |> Enum.flat_map(fn %{
-                                id: provider_id,
-                                instance_id: instance_id,
-                                config: provider_config,
-                                route_generation: route_generation,
-                                transports: available_transports
-                              } ->
+          |> Enum.flat_map(fn %{transports: available_transports} = candidate ->
             transports =
               Enum.filter(
                 available_transports,
@@ -129,12 +123,7 @@ defmodule Lasso.RPC.Selection do
               )
 
             Enum.flat_map(transports, fn t ->
-              case TransportRegistry.get_channel(plan.profile, plan.chain_id, provider_id, t,
-                     method: method,
-                     provider_config: provider_config,
-                     instance_id: instance_id,
-                     route_generation: route_generation
-                   ) do
+              case TransportRegistry.get_channel_from_plan(plan, candidate, t, method) do
                 {:ok, ch} -> [ch]
                 _ -> []
               end
@@ -250,9 +239,7 @@ defmodule Lasso.RPC.Selection do
     # Map provider list into channels, lazily opening as needed
     channels =
       provider_candidates
-      |> Enum.flat_map(
-        &build_provider_channels(&1, transport, plan.profile, plan.chain_id, method)
-      )
+      |> Enum.flat_map(&build_provider_channels(&1, transport, plan, method))
       |> Enum.reject(&is_nil/1)
 
     # Filter channels by method capability (adapter-based filtering)
@@ -439,32 +426,16 @@ defmodule Lasso.RPC.Selection do
   # Channel building helpers
 
   defp build_provider_channels(
-         %{
-           id: provider_id,
-           instance_id: instance_id,
-           config: config,
-           route_generation: route_generation,
-           transports: available_transports
-         },
+         %{transports: available_transports} = candidate,
          transport,
-         profile,
-         chain_id,
+         plan,
          method
        ) do
     transport
     |> transports_to_check()
     |> Enum.filter(&(&1 in available_transports))
     |> Enum.flat_map(fn t ->
-      fetch_channel(
-        profile,
-        chain_id,
-        provider_id,
-        t,
-        method,
-        config,
-        route_generation,
-        instance_id
-      )
+      fetch_channel(plan, candidate, t, method)
     end)
   end
 
@@ -472,22 +443,8 @@ defmodule Lasso.RPC.Selection do
   defp transports_to_check(:ws), do: [:ws]
   defp transports_to_check(_), do: [:http, :ws]
 
-  defp fetch_channel(
-         profile,
-         chain_id,
-         provider_id,
-         transport,
-         method,
-         provider_config,
-         route_generation,
-         instance_id
-       ) do
-    case TransportRegistry.get_channel(profile, chain_id, provider_id, transport,
-           method: method,
-           provider_config: provider_config,
-           instance_id: instance_id,
-           route_generation: route_generation
-         ) do
+  defp fetch_channel(plan, candidate, transport, method) do
+    case TransportRegistry.get_channel_from_plan(plan, candidate, transport, method) do
       {:ok, channel} -> [channel]
       _ -> []
     end

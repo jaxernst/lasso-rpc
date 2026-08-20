@@ -62,7 +62,7 @@ defmodule Lasso.RPC.TransportRegistry do
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.InstanceId
-  alias Lasso.RPC.Channel
+  alias Lasso.RPC.{Channel, RoutingPlan}
 
   # ETS table for lockless channel lookups in hot path
   @channel_cache_table :transport_channel_cache
@@ -152,6 +152,44 @@ defmodule Lasso.RPC.TransportRegistry do
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
              is_binary(provider_id) and is_atom(transport) do
     profile = canonical_profile(profile)
+    get_canonical_channel(profile, chain_id, provider_id, transport, opts)
+  end
+
+  def get_channel(profile, chain_identifier, provider_id, transport, opts)
+      when is_binary(profile) and is_binary(chain_identifier) and is_binary(provider_id) and
+             is_atom(transport) do
+    profile = canonical_profile(profile)
+
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      get_channel(profile, chain_id, provider_id, transport, opts)
+    end
+  end
+
+  @doc false
+  @spec get_channel_from_plan(RoutingPlan.t(), map(), transport(), binary()) ::
+          {:ok, Channel.t()} | {:error, term()}
+  def get_channel_from_plan(
+        %RoutingPlan{} = plan,
+        %{
+          id: provider_id,
+          instance_id: instance_id,
+          config: provider_config,
+          route_generation: generation
+        },
+        transport,
+        method
+      )
+      when is_binary(provider_id) and is_binary(instance_id) and is_map(provider_config) and
+             generation == plan.generation and transport in [:http, :ws] and is_binary(method) do
+    get_canonical_channel(plan.profile, plan.chain_id, provider_id, transport,
+      method: method,
+      provider_config: provider_config,
+      instance_id: instance_id,
+      route_generation: generation
+    )
+  end
+
+  defp get_canonical_channel(profile, chain_id, provider_id, transport, opts) do
     cache_key = {profile, chain_id, provider_id, transport}
 
     case :ets.lookup(@channel_cache_table, cache_key) do
@@ -165,18 +203,11 @@ defmodule Lasso.RPC.TransportRegistry do
     end
   end
 
-  def get_channel(profile, chain_identifier, provider_id, transport, opts)
-      when is_binary(profile) and is_binary(chain_identifier) and is_binary(provider_id) and
-             is_atom(transport) do
-    profile = canonical_profile(profile)
-
-    with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
-      get_channel(profile, chain_id, provider_id, transport, opts)
-    end
-  end
-
   defp do_get_channel(profile, chain_id, provider_id, transport, opts) do
-    GenServer.call(via_name(profile, chain_id), {:get_channel, provider_id, transport, opts})
+    GenServer.call(
+      canonical_via_name(profile, chain_id),
+      {:get_channel, provider_id, transport, opts}
+    )
   catch
     :exit, {:noproc, _} -> {:error, :registry_unavailable}
     :exit, {:timeout, _} -> {:error, :registry_timeout}
@@ -787,8 +818,7 @@ defmodule Lasso.RPC.TransportRegistry do
   @spec via_name(String.t(), pos_integer()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(profile, chain_id)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    {:via, Registry,
-     {Lasso.Registry, {:transport_registry, canonical_profile(profile), chain_id}}}
+    profile |> canonical_profile() |> canonical_via_name(chain_id)
   end
 
   @spec via_name(String.t(), String.t()) :: {:via, Registry, {atom(), tuple()}}
@@ -807,6 +837,10 @@ defmodule Lasso.RPC.TransportRegistry do
 
   @spec via_name(pos_integer() | String.t()) :: {:via, Registry, {atom(), tuple()}}
   def via_name(chain_identifier), do: via_name(@default_profile, chain_identifier)
+
+  defp canonical_via_name(profile, chain_id) do
+    {:via, Registry, {Lasso.Registry, {:transport_registry, profile, chain_id}}}
+  end
 
   defp canonical_profile(profile), do: Lasso.Config.ProfileValidator.resolve_alias(profile)
 

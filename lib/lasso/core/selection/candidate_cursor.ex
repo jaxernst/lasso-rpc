@@ -183,16 +183,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   defp channel(cursor, candidate, transport) do
-    TransportRegistry.get_channel(
-      cursor.plan.profile,
-      cursor.plan.chain_id,
-      candidate.id,
-      transport,
-      method: cursor.method,
-      provider_config: candidate.config,
-      instance_id: candidate.instance_id,
-      route_generation: candidate.route_generation
-    )
+    TransportRegistry.get_channel_from_plan(cursor.plan, candidate, transport, cursor.method)
   end
 
   defp tier(circuit_state, rate_limited, transport) do
