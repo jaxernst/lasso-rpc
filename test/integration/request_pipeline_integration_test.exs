@@ -5,7 +5,17 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag timeout: 10_000
 
   alias Lasso.Events.RoutingDecision
-  alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
+  alias Lasso.Providers.Catalog
+
+  alias Lasso.RPC.{
+    AttemptIdentity,
+    AttemptProjection,
+    AttemptTerminal,
+    RequestOptions,
+    RequestPipeline,
+    Response
+  }
+
   alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
   alias LassoWeb.Dashboard.EventStream
@@ -226,15 +236,23 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       profile = "public"
 
       setup_providers([
-        %{id: "a_failing", priority: 10, behavior: :always_fail, profile: profile},
+        %{
+          id: "a_failing",
+          priority: 10,
+          behavior: MockProviderBehavior.method_specific(%{"eth_getBalance" => :always_fail}),
+          profile: profile
+        },
         %{id: "z_backup", priority: 20, behavior: :healthy, profile: profile}
       ])
+
+      record_success_latency(profile, chain, "a_failing", 1_000)
+      record_success_latency(profile, chain, "z_backup", 1_000_000)
 
       assert {:ok, %Response.Success{}, ctx} =
                RequestPipeline.execute_via_channels(
                  chain,
-                 "eth_blockNumber",
-                 [],
+                 "eth_getBalance",
+                 ["0x0000000000000000000000000000000000000000", "latest"],
                  %RequestOptions{strategy: :fastest, timeout_ms: 30_000}
                )
 
@@ -1168,6 +1186,41 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
         | shared_mode: true,
           category_thresholds: updated_thresholds
       }
+    end)
+  end
+
+  defp record_success_latency(profile, chain, provider_id, duration_us) do
+    instance_id = Catalog.lookup_instance_id(profile, chain, provider_id)
+    generation = Catalog.active_generation()
+    now_us = System.monotonic_time(:microsecond)
+
+    Enum.each(0..2, fn offset ->
+      identity =
+        AttemptIdentity.new(
+          request_id: "fastest-fallback-request",
+          attempt_id: "fastest-fallback-#{provider_id}-#{offset}",
+          profile: profile,
+          chain_id: chain,
+          upstream_instance_id: instance_id,
+          transport: :http,
+          route_generation: generation,
+          circuit_scope: :broad,
+          circuit_epoch: 1,
+          execution_safety: :replay_safe,
+          routing_intent: "fastest",
+          workload_key: "client",
+          request_budget_ms: 100,
+          candidate_admission_count: 1,
+          dispatch_count: 1
+        )
+
+      fact = AttemptTerminal.Response.new(identity, :success, duration_us)
+
+      assert :ok =
+               AttemptProjection.apply_control(%{
+                 AttemptProjection.new(fact, provider_id, "eth_getBalance")
+                 | emitted_at_us: now_us + offset
+               })
     end)
   end
 
