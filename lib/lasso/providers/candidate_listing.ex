@@ -126,6 +126,29 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   @doc false
+  @spec list_rankable_candidates_from_plan(
+          RoutingPlan.t(),
+          SelectionFilters.t() | map(),
+          non_neg_integer() | :unavailable
+        ) :: [map()]
+  def list_rankable_candidates_from_plan(
+        %RoutingPlan{} = plan,
+        %SelectionFilters{} = filters,
+        consensus_height
+      ) do
+    list_rankable_candidates_from_plan(
+      plan,
+      SelectionFilters.to_map(filters),
+      consensus_height
+    )
+  end
+
+  def list_rankable_candidates_from_plan(%RoutingPlan{} = plan, filters, consensus_height)
+      when is_map(filters) do
+    do_list_candidates(plan, filters, :ranked, consensus_height)
+  end
+
+  @doc false
   @spec routing_candidate_from_plan(
           RoutingPlan.t(),
           RoutingPlan.provider(),
@@ -222,8 +245,7 @@ defmodule Lasso.Providers.CandidateListing do
       |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol, workload_key, mode))
       |> Enum.filter(fn c ->
         transport_available?(c, protocol) and
-          circuit_breaker_ready?(c, protocol, include_half_open) and
-          rate_limit_ok?(c, protocol, filters)
+          candidate_gate_ready?(c, protocol, include_half_open, filters, mode)
       end)
       |> filter_by_lag(
         plan.profile,
@@ -287,11 +309,15 @@ defmodule Lasso.Providers.CandidateListing do
     http_routing = route_record(learned_scope, routing_instance_id, :http, transports)
     ws_routing = route_record(learned_scope, routing_instance_id, :ws, transports)
 
-    {http_cb, http_rl} =
-      candidate_gate(instance_id, :http, transports, include_learned?, http_routing)
-
-    {ws_cb, ws_rl} =
-      candidate_gate(instance_id, :ws, transports, include_learned?, ws_routing)
+    {circuit_state, rate_limited} =
+      candidate_gates(
+        mode,
+        instance_id,
+        transports,
+        include_learned?,
+        http_routing,
+        ws_routing
+      )
 
     candidate = %{
       id: provider.id,
@@ -301,8 +327,8 @@ defmodule Lasso.Providers.CandidateListing do
       transports: transports,
       routing_states: %{http: http_routing, ws: ws_routing},
       workload_key: workload_key,
-      circuit_state: %{http: http_cb, ws: ws_cb},
-      rate_limited: %{http: http_rl, ws: ws_rl},
+      circuit_state: circuit_state,
+      rate_limited: rate_limited,
       learned_feedback_degraded?: learned_scope.degraded?
     }
 
@@ -317,13 +343,15 @@ defmodule Lasso.Providers.CandidateListing do
     )
   end
 
-  defp maybe_add_routing_identity(candidate, :routing, routing_instance_id),
-    do: Map.put(candidate, :routing_instance_id, routing_instance_id)
+  defp maybe_add_routing_identity(candidate, mode, routing_instance_id)
+       when mode in [:routing, :ranked],
+       do: Map.put(candidate, :routing_instance_id, routing_instance_id)
 
   defp maybe_add_routing_identity(candidate, :full, _routing_instance_id), do: candidate
 
-  defp maybe_add_availability(candidate, :routing, _instance_id, _http, _ws, _include_learned?),
-    do: candidate
+  defp maybe_add_availability(candidate, mode, _instance_id, _http, _ws, _include_learned?)
+       when mode in [:routing, :ranked],
+       do: candidate
 
   defp maybe_add_availability(candidate, :full, instance_id, http, ws, include_learned?) do
     health = InstanceState.read_candidate_health(instance_id, http, ws, include_learned?)
@@ -366,6 +394,42 @@ defmodule Lasso.Providers.CandidateListing do
     else
       {:unavailable, false}
     end
+  end
+
+  defp candidate_gates(
+         :ranked,
+         _instance_id,
+         _transports,
+         _include_learned?,
+         _http_routing,
+         _ws_routing
+       ) do
+    {%{http: :deferred, ws: :deferred}, %{http: false, ws: false}}
+  end
+
+  defp candidate_gates(
+         _mode,
+         instance_id,
+         transports,
+         include_learned?,
+         http_routing,
+         ws_routing
+       ) do
+    {http_cb, http_rl} =
+      candidate_gate(instance_id, :http, transports, include_learned?, http_routing)
+
+    {ws_cb, ws_rl} =
+      candidate_gate(instance_id, :ws, transports, include_learned?, ws_routing)
+
+    {%{http: http_cb, ws: ws_cb}, %{http: http_rl, ws: ws_rl}}
+  end
+
+  defp candidate_gate_ready?(_candidate, _protocol, _include_half_open, _filters, :ranked),
+    do: true
+
+  defp candidate_gate_ready?(candidate, protocol, include_half_open, filters, _mode) do
+    circuit_breaker_ready?(candidate, protocol, include_half_open) and
+      rate_limit_ok?(candidate, protocol, filters)
   end
 
   defp ws_channel_live?(profile, chain_id, provider_id) do
