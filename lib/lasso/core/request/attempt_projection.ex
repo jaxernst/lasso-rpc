@@ -252,9 +252,18 @@ defmodule Lasso.RPC.AttemptProjection do
   @spec route_record(scope_state(), binary(), :http | :ws) :: map() | nil
   def route_record(scope, instance_id, transport)
       when is_binary(instance_id) and transport in [:http, :ws] do
+    route_record_bounded(scope, BoundedIdentifier.encode(instance_id), transport)
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc false
+  @spec route_record_bounded(scope_state(), binary(), :http | :ws) :: map() | nil
+  def route_record_bounded(scope, routing_instance_id, transport)
+      when is_binary(routing_instance_id) and transport in [:http, :ws] do
     key =
-      {:routing_control, scope.profile, scope.chain_id, BoundedIdentifier.encode(instance_id),
-       transport, @default_workload}
+      {:routing_control, scope.profile, scope.chain_id, routing_instance_id, transport,
+       @default_workload}
 
     case :ets.lookup(:lasso_instance_state, key) do
       [{^key, %{generation: generation} = row}] when generation == scope.generation ->
@@ -322,8 +331,43 @@ defmodule Lasso.RPC.AttemptProjection do
   def summarize_route(scope, row, instance_id, transport, chain_id, workload_key)
       when is_map(scope) and is_binary(instance_id) and transport in [:http, :ws] and
              is_integer(chain_id) and chain_id > 0 and is_atom(workload_key) do
+    summarize_route_bounded(
+      scope,
+      row,
+      instance_id,
+      BoundedIdentifier.encode(instance_id),
+      transport,
+      chain_id,
+      workload_key
+    )
+  end
+
+  @doc false
+  @spec summarize_route_bounded(
+          scope_state(),
+          map() | nil,
+          binary(),
+          binary(),
+          :http | :ws,
+          pos_integer(),
+          atom()
+        ) :: Summary.t() | nil
+  def summarize_route_bounded(
+        scope,
+        row,
+        instance_id,
+        routing_instance_id,
+        transport,
+        chain_id,
+        workload_key
+      )
+      when is_map(scope) and is_binary(instance_id) and is_binary(routing_instance_id) and
+             transport in [:http, :ws] and is_integer(chain_id) and chain_id > 0 and
+             is_atom(workload_key) do
     now_us = System.monotonic_time(:microsecond)
-    shared_prior = shared_system_prior(scope, row, instance_id, transport, now_us)
+
+    shared_prior =
+      shared_system_prior_bounded(scope, row, routing_instance_id, transport, now_us)
 
     summary_for_workload(
       row,
@@ -1216,6 +1260,16 @@ defmodule Lasso.RPC.AttemptProjection do
     do: nil
 
   defp shared_system_prior(scope, row, instance_id, transport, now_us) do
+    shared_system_prior_bounded(
+      scope,
+      row,
+      BoundedIdentifier.encode(instance_id),
+      transport,
+      now_us
+    )
+  end
+
+  defp shared_system_prior_bounded(scope, row, routing_instance_id, transport, now_us) do
     local_observed_at_us = partition_observed_at(row, :system)
 
     if is_integer(local_observed_at_us) and
@@ -1223,7 +1277,7 @@ defmodule Lasso.RPC.AttemptProjection do
       nil
     else
       key =
-        {:routing_system_prior, scope.chain_id, BoundedIdentifier.encode(instance_id), transport}
+        {:routing_system_prior, scope.chain_id, routing_instance_id, transport}
 
       case :ets.lookup(:lasso_instance_state, key) do
         [{^key, %{generation: generation, observed_at_us: observed_at_us} = prior}]

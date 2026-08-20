@@ -78,6 +78,10 @@ defmodule Lasso.Providers.CandidateListingTest do
       refute Map.has_key?(candidate, :availability)
       refute Map.has_key?(candidate, :transport_availability)
       assert Map.has_key?(candidate, :routing_states)
+
+      assert candidate.routing_instance_id ==
+               Lasso.RPC.BoundedIdentifier.encode(candidate.instance_id)
+
       assert Map.has_key?(candidate, :circuit_state)
       assert Map.has_key?(candidate, :rate_limited)
     end

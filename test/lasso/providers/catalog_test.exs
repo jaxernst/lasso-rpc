@@ -3,6 +3,7 @@ defmodule Lasso.Providers.CatalogTest do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.Catalog
+  alias Lasso.RPC.BoundedIdentifier
 
   @profile_a "catalog_test_a"
   @profile_b "catalog_test_b"
@@ -252,6 +253,7 @@ defmodule Lasso.Providers.CatalogTest do
 
       assert [provider] = plan.providers
       assert provider.id == "compiled"
+      assert provider.routing_instance_id == BoundedIdentifier.encode(provider.instance_id)
       assert provider.priority == 3
       assert provider.transports == [:http]
       assert provider.config.capabilities == %{methods: ["eth_blockNumber"]}

@@ -386,10 +386,11 @@ defmodule Lasso.RPC.Selection do
   defp single_channel_summary(candidate, channel, plan, workload_key) do
     scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
-    AttemptProjection.summarize_route(
+    AttemptProjection.summarize_route_bounded(
       scope,
       Map.get(candidate.routing_states, channel.transport),
       candidate.instance_id,
+      candidate.routing_instance_id,
       channel.transport,
       plan.chain_id,
       workload_key
@@ -579,10 +580,11 @@ defmodule Lasso.RPC.Selection do
           row = Map.get(candidate.routing_states, transport)
 
           summary =
-            AttemptProjection.summarize_route(
+            AttemptProjection.summarize_route_bounded(
               scope,
               row,
               candidate.instance_id,
+              candidate.routing_instance_id,
               transport,
               plan.chain_id,
               ctx.workload_key

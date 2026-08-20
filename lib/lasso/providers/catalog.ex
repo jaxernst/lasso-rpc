@@ -36,7 +36,7 @@ defmodule Lasso.Providers.Catalog do
 
   alias Lasso.Config.{ChainConfig, ConfigStore}
   alias Lasso.Providers.{InstanceId, ProviderHeaders}
-  alias Lasso.RPC.RoutingPlan
+  alias Lasso.RPC.{BoundedIdentifier, RoutingPlan}
 
   @persistent_term_key :lasso_catalog_active
 
@@ -410,6 +410,7 @@ defmodule Lasso.Providers.Catalog do
         %{
           id: provider.provider_id,
           instance_id: provider.instance_id,
+          routing_instance_id: BoundedIdentifier.encode(provider.instance_id),
           config: config,
           priority: provider.priority,
           capabilities: provider.capabilities,
