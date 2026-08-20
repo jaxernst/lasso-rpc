@@ -280,11 +280,12 @@ defmodule Lasso.Providers.CandidateListing do
 
   defp build_candidate(provider, learned_scope, plan, protocol, workload_key, mode) do
     instance_id = provider.instance_id
+    routing_instance_id = provider.routing_instance_id
     transports = live_transports(provider, protocol, plan.profile, plan.chain_id)
 
     include_learned? = not learned_scope.degraded?
-    http_routing = route_record(learned_scope, instance_id, :http, transports)
-    ws_routing = route_record(learned_scope, instance_id, :ws, transports)
+    http_routing = route_record(learned_scope, routing_instance_id, :http, transports)
+    ws_routing = route_record(learned_scope, routing_instance_id, :ws, transports)
 
     {http_cb, http_rl} =
       candidate_gate(instance_id, :http, transports, include_learned?, http_routing)
@@ -305,8 +306,9 @@ defmodule Lasso.Providers.CandidateListing do
       learned_feedback_degraded?: learned_scope.degraded?
     }
 
-    maybe_add_availability(
-      candidate,
+    candidate
+    |> maybe_add_routing_identity(mode, routing_instance_id)
+    |> maybe_add_availability(
       mode,
       instance_id,
       http_routing,
@@ -314,6 +316,11 @@ defmodule Lasso.Providers.CandidateListing do
       include_learned?
     )
   end
+
+  defp maybe_add_routing_identity(candidate, :routing, routing_instance_id),
+    do: Map.put(candidate, :routing_instance_id, routing_instance_id)
+
+  defp maybe_add_routing_identity(candidate, :full, _routing_instance_id), do: candidate
 
   defp maybe_add_availability(candidate, :routing, _instance_id, _http, _ws, _include_learned?),
     do: candidate
@@ -347,9 +354,9 @@ defmodule Lasso.Providers.CandidateListing do
     end)
   end
 
-  defp route_record(scope, instance_id, transport, transports) do
+  defp route_record(scope, routing_instance_id, transport, transports) do
     if transport in transports,
-      do: AttemptProjection.route_record(scope, instance_id, transport),
+      do: AttemptProjection.route_record_bounded(scope, routing_instance_id, transport),
       else: nil
   end
 

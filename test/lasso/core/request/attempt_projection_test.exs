@@ -9,6 +9,7 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     AttemptIdentity,
     AttemptProjection,
     AttemptTerminal,
+    BoundedIdentifier,
     RequestTerminal
   }
 
@@ -357,8 +358,26 @@ defmodule Lasso.RPC.AttemptProjectionTest do
 
     row = AttemptProjection.route_record(scope, "projection-instance", :http)
 
+    assert row ==
+             AttemptProjection.route_record_bounded(
+               scope,
+               BoundedIdentifier.encode("projection-instance"),
+               :http
+             )
+
     prior =
       AttemptProjection.summarize_route(row, "projection-instance", :http, @chain_id, :client)
+
+    assert prior ==
+             AttemptProjection.summarize_route_bounded(
+               scope,
+               row,
+               "projection-instance",
+               BoundedIdentifier.encode("projection-instance"),
+               :http,
+               @chain_id,
+               :client
+             )
 
     assert prior.state == :unqualified
     assert prior.support_source == :system_prior

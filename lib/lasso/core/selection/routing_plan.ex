@@ -15,6 +15,7 @@ defmodule Lasso.RPC.RoutingPlan do
   @type provider :: %{
           required(:id) => String.t(),
           required(:instance_id) => String.t(),
+          required(:routing_instance_id) => String.t(),
           required(:config) => map(),
           required(:priority) => non_neg_integer(),
           required(:capabilities) => map() | nil,
