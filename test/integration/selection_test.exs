@@ -16,8 +16,16 @@ defmodule Lasso.RPC.SelectionTest do
 
   use Lasso.Test.LassoIntegrationCase
 
-  alias Lasso.Providers.Catalog
-  alias Lasso.RPC.{AttemptIdentity, AttemptProjection, AttemptTerminal, Selection}
+  alias Lasso.Providers.{CandidateListing, Catalog}
+
+  alias Lasso.RPC.{
+    AttemptIdentity,
+    AttemptProjection,
+    AttemptTerminal,
+    Selection,
+    TransportRegistry
+  }
+
   alias Lasso.RPC.Selection.CandidateCursor
 
   defmodule CatalogSwapStrategy do
@@ -402,6 +410,51 @@ defmodule Lasso.RPC.SelectionTest do
 
       assert map_size(summaries) == 1
       assert priorities == %{"context_provider" => 10}
+    end
+  end
+
+  describe "compiled channel resolution" do
+    test "uses the routing plan profile without reapplying mutable aliases", %{chain: chain} do
+      setup_providers([
+        %{id: "provider_1", priority: 10, behavior: :healthy, profile: "public"}
+      ])
+
+      snapshot = Catalog.snapshot()
+      assert {:ok, plan} = Catalog.get_routing_plan(snapshot, "public", chain)
+      assert [candidate] = CandidateListing.list_routing_candidates_from_plan(plan, %{})
+
+      assert {:ok, _channel} =
+               TransportRegistry.get_channel_from_plan(
+                 plan,
+                 candidate,
+                 :http,
+                 "eth_blockNumber"
+               )
+
+      previous_aliases = Application.get_env(:lasso, :profile_aliases)
+
+      on_exit(fn ->
+        if is_nil(previous_aliases) do
+          Application.delete_env(:lasso, :profile_aliases)
+        else
+          Application.put_env(:lasso, :profile_aliases, previous_aliases)
+        end
+      end)
+
+      Application.put_env(:lasso, :profile_aliases, %{"public" => "redirected"})
+
+      :ets.delete(
+        :transport_channel_cache,
+        {"public", chain, candidate.id, :http}
+      )
+
+      assert {:ok, %{profile: "public"}} =
+               TransportRegistry.get_channel_from_plan(
+                 plan,
+                 candidate,
+                 :http,
+                 "eth_blockNumber"
+               )
     end
   end
 
