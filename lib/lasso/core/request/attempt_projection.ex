@@ -23,6 +23,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @control_retries 4
   @probation_deliveries 32
   @routing_evidence_max_age_us 300_000_000
+  @latency_ewma_weight 8
   @max_count 9_223_372_036_854_775_807
   @default_workload "client"
   @availability_dimensions [
@@ -646,23 +647,28 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp apply_shared_admission(row, _delta), do: row
 
-  defp apply_aggregate(row, %{kind: :success, latency_ms: latency_ms}) do
+  defp apply_aggregate(
+         row,
+         %{kind: :success, latency_ms: latency_ms, observed_at_us: observed_at_us}
+       ) do
     successes = increment(row.usable_successes)
-    old_count = max(row.usable_successes, 0)
 
-    mean =
-      if old_count == 0,
-        do: latency_ms,
-        else:
-          row.successful_mean_latency_ms +
-            (latency_ms - row.successful_mean_latency_ms) / successes
+    if observed_at_us >= row.observed_at_us do
+      mean =
+        case row.successful_mean_latency_ms do
+          nil -> latency_ms
+          previous -> previous + (latency_ms - previous) / @latency_ewma_weight
+        end
 
-    %{
-      row
-      | usable_successes: successes,
-        successful_mean_latency_ms: mean,
-        successful_p95_latency_ms: nil
-    }
+      %{
+        row
+        | usable_successes: successes,
+          successful_mean_latency_ms: mean,
+          successful_p95_latency_ms: nil
+      }
+    else
+      %{row | usable_successes: successes}
+    end
   end
 
   defp apply_aggregate(row, %{kind: :failure}),
