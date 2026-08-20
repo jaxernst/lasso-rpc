@@ -53,30 +53,51 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       method,
       opts,
       &build_descriptors/4,
-      fn -> AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation) end,
-      false
+      fn -> AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation) end
     )
   end
 
   @doc false
-  @spec new_ranked(Catalog.snapshot(), RoutingPlan.t(), String.t(), keyword(), [
-          {map(), :http | :ws}
-        ]) :: t()
-  def new_ranked(snapshot, %RoutingPlan{} = plan, method, opts, ranked_candidates)
-      when is_list(ranked_candidates) do
-    build(
-      snapshot,
-      plan,
-      method,
-      opts,
-      fn _plan, _strategy, _transport, _filters ->
-        Enum.map(ranked_candidates, fn {candidate, transport} ->
-          {:ranked, candidate, transport}
-        end)
-      end,
-      fn -> nil end,
-      true
-    )
+  @spec new_ranked(
+          Catalog.snapshot(),
+          RoutingPlan.t(),
+          String.t(),
+          keyword(),
+          [
+            {map(), :http | :ws}
+          ],
+          SelectionFilters.t(),
+          non_neg_integer() | :unavailable
+        ) :: t()
+  def new_ranked(
+        snapshot,
+        %RoutingPlan{} = plan,
+        method,
+        opts,
+        ranked_candidates,
+        %SelectionFilters{} = filters,
+        consensus_height
+      )
+      when is_list(ranked_candidates) and
+             (is_integer(consensus_height) or consensus_height == :unavailable) do
+    descriptors =
+      Enum.map(ranked_candidates, fn {candidate, transport} ->
+        {:ranked, candidate, transport}
+      end)
+
+    limit = Keyword.get(opts, :limit, 1000)
+
+    %__MODULE__{
+      snapshot: snapshot,
+      plan: plan,
+      method: method,
+      filters: filters,
+      consensus_height: consensus_height,
+      learned_scope: nil,
+      descriptors: descriptors,
+      limit: limit,
+      candidate_labels: descriptors |> Enum.take(max(limit, 0)) |> Enum.map(&descriptor_label/1)
+    }
   end
 
   defp build(
@@ -85,8 +106,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
          method,
          opts,
          descriptors_fun,
-         learned_scope_fun,
-         include_labels?
+         learned_scope_fun
        ) do
     transport = Keyword.get(opts, :transport, :both)
     strategy = Keyword.get(opts, :strategy, :load_balanced)
@@ -124,11 +144,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       learned_scope: learned_scope_fun.(),
       descriptors: descriptors,
       limit: limit,
-      candidate_labels:
-        if(include_labels?,
-          do: descriptors |> Enum.take(max(limit, 0)) |> Enum.map(&descriptor_label/1),
-          else: []
-        )
+      candidate_labels: []
     }
   end
 
