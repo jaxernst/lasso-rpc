@@ -204,7 +204,9 @@ defmodule Lasso.RPC.Selection do
   defp select_channels_from_plan(snapshot, plan, method, opts) do
     strategy = Keyword.get(opts, :strategy, :load_balanced)
     limit = Keyword.get(opts, :limit, 1000)
-    {provider_candidates, transport, workload_key} = routing_candidates(plan, method, opts)
+
+    {provider_candidates, transport, workload_key, _filters, _consensus_height} =
+      routing_candidates(plan, method, opts)
 
     # Build channel candidates via TransportRegistry (enforces channel-level health/capabilities)
     # Map provider list into channels, lazily opening as needed
@@ -249,7 +251,7 @@ defmodule Lasso.RPC.Selection do
       {:ok, snapshot, plan} ->
         strategy = Keyword.fetch!(opts, :strategy)
 
-        {candidates, _transport, workload_key} =
+        {candidates, _transport, workload_key, filters, consensus_height} =
           routing_candidates(plan, method, opts, :deferred_gates)
 
         entries =
@@ -282,7 +284,15 @@ defmodule Lasso.RPC.Selection do
           |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
 
         if selection_snapshot_current?(snapshot, candidates) do
-          CandidateCursor.new_ranked(snapshot, plan, method, opts, ranked_candidates)
+          CandidateCursor.new_ranked(
+            snapshot,
+            plan,
+            method,
+            opts,
+            ranked_candidates,
+            filters,
+            consensus_height || :unavailable
+          )
         else
           []
         end
@@ -342,7 +352,7 @@ defmodule Lasso.RPC.Selection do
           )
       end
 
-    {candidates, transport, workload_key}
+    {candidates, transport, workload_key, pool_filters, consensus_height}
   end
 
   defp ranking_channel(plan, candidate, transport) do
