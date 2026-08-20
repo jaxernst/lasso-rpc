@@ -286,13 +286,10 @@ defmodule Lasso.RPC.AttemptProjection do
       key = {channel.instance_id, channel.transport}
       row = route_record(scope, channel.instance_id, channel.transport)
 
-      shared_prior =
-        shared_system_prior(scope, row, channel.instance_id, channel.transport, now_us)
-
       {key,
        summary_for_workload(
          row,
-         shared_prior,
+         {:lookup_unbounded, scope},
          channel.instance_id,
          channel.transport,
          chain_id,
@@ -366,12 +363,9 @@ defmodule Lasso.RPC.AttemptProjection do
              is_atom(workload_key) do
     now_us = System.monotonic_time(:microsecond)
 
-    shared_prior =
-      shared_system_prior_bounded(scope, row, routing_instance_id, transport, now_us)
-
     summary_for_workload(
       row,
-      shared_prior,
+      {:lookup_bounded, scope, routing_instance_id},
       instance_id,
       transport,
       chain_id,
@@ -1214,13 +1208,16 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp summary_for_workload(
          row,
-         shared_prior,
+         shared_prior_source,
          instance_id,
          transport,
          chain_id,
          :system,
          now_us
        ) do
+    shared_prior =
+      resolve_shared_prior(shared_prior_source, row, instance_id, transport, now_us)
+
     local =
       row
       |> partition_state(:system)
@@ -1232,7 +1229,7 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp summary_for_workload(
          row,
-         shared_prior,
+         shared_prior_source,
          instance_id,
          transport,
          chain_id,
@@ -1241,15 +1238,24 @@ defmodule Lasso.RPC.AttemptProjection do
        ) do
     primary = summary(row, instance_id, transport, chain_id, :client, now_us)
 
-    local_prior =
-      row
-      |> partition_state(:system)
-      |> summary(instance_id, transport, chain_id, :system, now_us)
+    case primary do
+      %Summary{state: :qualified} ->
+        primary
 
-    shared = summary(shared_prior, instance_id, transport, chain_id, :system, now_us)
-    prior = prefer_fresh_local(local_prior, shared)
+      _other ->
+        shared_prior =
+          resolve_shared_prior(shared_prior_source, row, instance_id, transport, now_us)
 
-    attach_system_prior(primary, prior)
+        local_prior =
+          row
+          |> partition_state(:system)
+          |> summary(instance_id, transport, chain_id, :system, now_us)
+
+        shared = summary(shared_prior, instance_id, transport, chain_id, :system, now_us)
+        prior = prefer_fresh_local(local_prior, shared)
+
+        attach_system_prior(primary, prior)
+    end
   end
 
   defp prefer_fresh_local(nil, shared), do: shared
@@ -1268,6 +1274,29 @@ defmodule Lasso.RPC.AttemptProjection do
       now_us
     )
   end
+
+  defp resolve_shared_prior(
+         {:lookup_unbounded, scope},
+         row,
+         instance_id,
+         transport,
+         now_us
+       ) do
+    shared_system_prior(scope, row, instance_id, transport, now_us)
+  end
+
+  defp resolve_shared_prior(
+         {:lookup_bounded, scope, routing_instance_id},
+         row,
+         _instance_id,
+         transport,
+         now_us
+       ) do
+    shared_system_prior_bounded(scope, row, routing_instance_id, transport, now_us)
+  end
+
+  defp resolve_shared_prior(shared_prior, _row, _instance_id, _transport, _now_us),
+    do: shared_prior
 
   defp shared_system_prior_bounded(scope, row, routing_instance_id, transport, now_us) do
     local_observed_at_us = partition_observed_at(row, :system)
@@ -1343,8 +1372,6 @@ defmodule Lasso.RPC.AttemptProjection do
         support_source: :system_prior
     }
   end
-
-  defp attach_system_prior(%Summary{state: :qualified} = primary, _prior), do: primary
 
   defp attach_system_prior(%Summary{state: :stale} = primary, prior) do
     attach_fresh_prior(
