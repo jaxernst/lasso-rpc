@@ -110,10 +110,9 @@ defmodule LassoWeb.Endpoint do
 
   # plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
-  plug(Plug.Parsers,
+  plug(LassoWeb.Plugs.RequestByteBudget,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    body_reader: {LassoWeb.Plugs.RequestByteBudget, :read_body, []},
     json_decoder: Lasso.JSON.Decoder
   )
 
