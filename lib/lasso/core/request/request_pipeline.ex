@@ -1065,7 +1065,7 @@ defmodule Lasso.RPC.RequestPipeline do
     request_terminal = build_request_terminal(status, value, ctx)
 
     _enqueue_result =
-      RequestProjection.new_and_enqueue(
+      RequestProjection.record_and_enqueue(
         request_terminal,
         ctx.method,
         request_projection_route(ctx),
