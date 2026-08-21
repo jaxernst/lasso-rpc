@@ -9,6 +9,7 @@ defmodule Lasso.RPC.RequestProjection do
     AttemptTerminal,
     ExecutionFact,
     ExecutionProjector,
+    RequestAggregate,
     RequestTerminal
   }
 
@@ -89,6 +90,49 @@ defmodule Lasso.RPC.RequestProjection do
       when is_atom(dispatcher) do
     event = new(fact, method, route_identity, failover_count, request_origin)
     enqueue_lazy(event, dispatcher, fn -> encode_validated(event) end)
+  end
+
+  @spec record_and_enqueue(
+          RequestTerminal.t(),
+          binary(),
+          route_identity() | nil,
+          non_neg_integer(),
+          :client | :system,
+          atom()
+        ) :: term()
+  def record_and_enqueue(
+        fact,
+        method,
+        route_identity,
+        failover_count,
+        request_origin \\ :client,
+        dispatcher \\ @dispatcher
+      )
+      when is_atom(dispatcher) do
+    case RequestAggregate.record_and_reserve_detail(fact, request_origin) do
+      :detail ->
+        new_and_enqueue(
+          fact,
+          method,
+          route_identity,
+          failover_count,
+          request_origin,
+          dispatcher
+        )
+
+      :aggregate_only ->
+        {:drop, :sampled_out, :untracked}
+
+      :untracked ->
+        new_and_enqueue(
+          fact,
+          method,
+          route_identity,
+          failover_count,
+          request_origin,
+          dispatcher
+        )
+    end
   end
 
   defp enqueue_lazy(event, dispatcher, encoder) do

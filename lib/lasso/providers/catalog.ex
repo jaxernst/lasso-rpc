@@ -43,7 +43,8 @@ defmodule Lasso.Providers.Catalog do
   @type snapshot :: %{
           required(:table) => :ets.tid(),
           required(:generation) => non_neg_integer(),
-          optional(:routing_plans) => %{{String.t(), pos_integer()} => RoutingPlan.t()}
+          optional(:routing_plans) => %{{String.t(), pos_integer()} => RoutingPlan.t()},
+          optional(:request_aggregates) => map()
         }
 
   @doc """

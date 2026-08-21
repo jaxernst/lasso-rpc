@@ -19,7 +19,7 @@ defmodule Lasso.Providers.Catalog.Owner do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, RestartCounter}
-  alias Lasso.RPC.AttemptProjection
+  alias Lasso.RPC.{AttemptProjection, RequestAggregate}
 
   @grace_period_ms 2_000
 
@@ -166,12 +166,15 @@ defmodule Lasso.Providers.Catalog.Owner do
 
   defp publish(new_table, generation, routing_plans) do
     key = Catalog.persistent_term_key()
+    previous_snapshot = Catalog.snapshot()
     old_table = Catalog.table()
+    request_aggregates = RequestAggregate.prepare(generation, routing_plans, previous_snapshot)
 
     snapshot = %{
       table: new_table,
       generation: generation,
-      routing_plans: routing_plans
+      routing_plans: routing_plans,
+      request_aggregates: request_aggregates
     }
 
     :persistent_term.put(key, snapshot)
