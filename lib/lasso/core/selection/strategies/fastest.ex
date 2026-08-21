@@ -45,6 +45,12 @@ defmodule Lasso.RPC.Strategies.Fastest do
     end
   end
 
+  @doc false
+  @spec rank_unqualified([map()], map()) :: [map()]
+  def rank_unqualified(channels, summaries) when is_list(channels) and is_map(summaries) do
+    Enum.sort_by(channels, &prior_key(&1, summaries))
+  end
+
   defp prior_key(channel, summaries) do
     summary = RoutingEvidence.summary_for_channel(summaries, channel)
 

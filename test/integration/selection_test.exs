@@ -701,6 +701,138 @@ defmodule Lasso.RPC.SelectionTest do
       assert :done = CandidateCursor.next(cursor)
     end
 
+    test "fastest defers cold-route priors until qualified candidates are exhausted", %{
+      chain: chain
+    } do
+      profile = "public"
+
+      setup_providers([
+        %{id: "qualified", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "cold_slow", priority: 20, behavior: :healthy, profile: profile},
+        %{id: "cold_fast", priority: 30, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      now_us = System.monotonic_time(:microsecond)
+
+      record_selection_successes(
+        chain,
+        profile,
+        "qualified",
+        generation,
+        now_us,
+        20_000,
+        "client"
+      )
+
+      record_selection_successes(
+        chain,
+        profile,
+        "cold_slow",
+        generation,
+        now_us + 10,
+        80_000,
+        "system"
+      )
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          request_origin: :client
+        )
+
+      assert cursor.candidate_labels == [
+               "qualified:http",
+               "cold_slow:http",
+               "cold_fast:http"
+             ]
+
+      assert {:ok, %{provider_id: "qualified"}, cursor} = CandidateCursor.next(cursor)
+
+      record_selection_successes(
+        chain,
+        profile,
+        "cold_fast",
+        generation,
+        now_us + 20,
+        10_000,
+        "system"
+      )
+
+      assert {:ok, %{provider_id: "cold_fast"}, cursor} = CandidateCursor.next(cursor)
+      assert {:ok, %{provider_id: "cold_slow"}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+
+      gated_cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          request_origin: :client
+        )
+
+      assert {:ok, %{provider_id: "qualified"}, gated_cursor} =
+               CandidateCursor.next(gated_cursor)
+
+      cold_fast_instance = Catalog.lookup_instance_id(profile, chain, "cold_fast")
+      set_circuit_snapshot(cold_fast_instance, :open)
+
+      assert {:ok, %{provider_id: "cold_slow"}, gated_cursor} =
+               CandidateCursor.next(gated_cursor)
+
+      assert :done = CandidateCursor.next(gated_cursor)
+      set_circuit_snapshot(cold_fast_instance, :closed)
+    end
+
+    test "fastest deferred routes retain exclusion and snapshot fences", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "qualified", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "excluded", priority: 20, behavior: :healthy, profile: profile},
+        %{id: "remaining", priority: 30, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      now_us = System.monotonic_time(:microsecond)
+
+      record_selection_successes(
+        chain,
+        profile,
+        "qualified",
+        generation,
+        now_us,
+        20_000,
+        "client"
+      )
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          request_origin: :client
+        )
+
+      assert {:ok, %{provider_id: "qualified"}, cursor} = CandidateCursor.next(cursor)
+
+      cursor = CandidateCursor.exclude_provider(cursor, "excluded")
+      assert {:ok, %{provider_id: "remaining"}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+
+      stale_cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          request_origin: :client
+        )
+
+      assert {:ok, %{provider_id: "qualified"}, stale_cursor} =
+               CandidateCursor.next(stale_cursor)
+
+      :ok = Catalog.build_from_config()
+      assert :stale = CandidateCursor.next(stale_cursor)
+    end
+
     test "strategy overrides retain the eager channel contract", %{chain: chain} do
       profile = "public"
 
@@ -754,11 +886,61 @@ defmodule Lasso.RPC.SelectionTest do
   defp restore_env(key, value), do: Application.put_env(:lasso, key, value)
 
   defp system_success_event(chain, instance_id, generation, emitted_at_us, duration_us) do
+    selection_success_event(
+      chain,
+      "poller-profile",
+      "z_fast",
+      instance_id,
+      generation,
+      emitted_at_us,
+      duration_us,
+      "system"
+    )
+  end
+
+  defp record_selection_successes(
+         chain,
+         profile,
+         provider_id,
+         generation,
+         emitted_at_us,
+         duration_us,
+         workload_key
+       ) do
+    instance_id = Catalog.lookup_instance_id(profile, chain, provider_id)
+
+    Enum.each(0..2, fn offset ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 selection_success_event(
+                   chain,
+                   profile,
+                   provider_id,
+                   instance_id,
+                   generation,
+                   emitted_at_us + offset,
+                   duration_us,
+                   workload_key
+                 )
+               )
+    end)
+  end
+
+  defp selection_success_event(
+         chain,
+         profile,
+         provider_id,
+         instance_id,
+         generation,
+         emitted_at_us,
+         duration_us,
+         workload_key
+       ) do
     identity =
       AttemptIdentity.new(
         request_id: "selection-system-request",
         attempt_id: "selection-system-attempt-#{emitted_at_us}",
-        profile: "poller-profile",
+        profile: profile,
         chain_id: chain,
         upstream_instance_id: instance_id,
         transport: :http,
@@ -767,13 +949,13 @@ defmodule Lasso.RPC.SelectionTest do
         circuit_epoch: 1,
         execution_safety: :replay_safe,
         routing_intent: "fastest",
-        workload_key: "system",
+        workload_key: workload_key,
         request_budget_ms: 100,
         candidate_admission_count: 1,
         dispatch_count: 1
       )
 
     fact = AttemptTerminal.Response.new(identity, :success, duration_us)
-    %{AttemptProjection.new(fact, "z_fast", "eth_blockNumber") | emitted_at_us: emitted_at_us}
+    %{AttemptProjection.new(fact, provider_id, "eth_blockNumber") | emitted_at_us: emitted_at_us}
   end
 end
