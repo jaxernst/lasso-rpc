@@ -172,6 +172,37 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   @doc false
+  @spec list_fastest_candidates_from_plan(
+          RoutingPlan.t(),
+          SelectionFilters.t() | map(),
+          non_neg_integer() | :unavailable,
+          AttemptProjection.scope_state()
+        ) :: [map()]
+  def list_fastest_candidates_from_plan(
+        %RoutingPlan{} = plan,
+        %SelectionFilters{} = filters,
+        consensus_height,
+        learned_scope
+      ) do
+    list_fastest_candidates_from_plan(
+      plan,
+      SelectionFilters.to_map(filters),
+      consensus_height,
+      learned_scope
+    )
+  end
+
+  def list_fastest_candidates_from_plan(
+        %RoutingPlan{} = plan,
+        filters,
+        consensus_height,
+        learned_scope
+      )
+      when is_map(filters) and is_map(learned_scope) do
+    do_list_candidates(plan, filters, :fastest_ranked, consensus_height, true, learned_scope)
+  end
+
+  @doc false
   @spec routing_candidate_from_plan(
           RoutingPlan.t(),
           RoutingPlan.provider(),

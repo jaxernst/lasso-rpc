@@ -265,7 +265,7 @@ defmodule Lasso.RPC.Selection do
     case capture_selection_snapshot(profile, chain_id) do
       {:ok, snapshot, plan} ->
         strategy = Keyword.fetch!(opts, :strategy)
-        fastest_winner = fastest_winner(ranking_mode, plan)
+        fastest_hint = fastest_hint(ranking_mode, plan)
         inputs = routing_inputs(plan, method, opts)
 
         case build_hinted_fastest_cursor(
@@ -274,7 +274,7 @@ defmodule Lasso.RPC.Selection do
                method,
                opts,
                strategy_mod,
-               fastest_winner,
+               fastest_hint,
                inputs
              ) do
           {:ok, cursor} ->
@@ -343,14 +343,23 @@ defmodule Lasso.RPC.Selection do
     {transport, workload_key, pool_filters, consensus_height}
   end
 
-  defp candidates_from_inputs(plan, filters, consensus_height, gate_mode) do
+  defp candidates_from_inputs(plan, filters, consensus_height, gate_mode, learned_scope \\ nil) do
     case gate_mode do
       :deferred_fastest ->
-        CandidateListing.list_fastest_candidates_from_plan(
-          plan,
-          filters,
-          consensus_height || :unavailable
-        )
+        if learned_scope do
+          CandidateListing.list_fastest_candidates_from_plan(
+            plan,
+            filters,
+            consensus_height || :unavailable,
+            learned_scope
+          )
+        else
+          CandidateListing.list_fastest_candidates_from_plan(
+            plan,
+            filters,
+            consensus_height || :unavailable
+          )
+        end
 
       :deferred_gates ->
         CandidateListing.list_rankable_candidates_from_plan(
@@ -459,7 +468,7 @@ defmodule Lasso.RPC.Selection do
          method,
          opts,
          strategy_mod,
-         %{route: {routing_instance_id, winner_transport}},
+         {%{route: {routing_instance_id, winner_transport}}, learned_scope},
          {requested_transport, workload_key, filters, consensus_height}
        ) do
     matching_providers =
@@ -479,7 +488,8 @@ defmodule Lasso.RPC.Selection do
                   candidate_plan,
                   filters,
                   consensus_height,
-                  :deferred_fastest
+                  :deferred_fastest,
+                  learned_scope
                 ),
               winner_transport in candidate.transports do
             {ranking_channel(plan, candidate, winner_transport), candidate, winner_transport}
@@ -518,7 +528,7 @@ defmodule Lasso.RPC.Selection do
 
         deferred = %DeferredRanking{
           entries: [],
-          scope: AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation),
+          scope: learned_scope,
           chain_id: plan.chain_id,
           workload_key: workload_key,
           resolver: resolver,
@@ -558,13 +568,16 @@ defmodule Lasso.RPC.Selection do
        ),
        do: :miss
 
-  defp fastest_winner(:fastest_winner, plan) do
-    plan.profile
-    |> AttemptProjection.scope_state(plan.chain_id, plan.generation)
-    |> AttemptProjection.fastest_winner()
+  defp fastest_hint(:fastest_winner, plan) do
+    scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
+
+    case AttemptProjection.fastest_winner(scope) do
+      nil -> nil
+      winner -> {winner, scope}
+    end
   end
 
-  defp fastest_winner(:full, _plan), do: nil
+  defp fastest_hint(:full, _plan), do: nil
 
   defp ranking_channel(plan, candidate, transport) do
     %Channel{

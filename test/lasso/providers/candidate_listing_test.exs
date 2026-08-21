@@ -103,6 +103,21 @@ defmodule Lasso.Providers.CandidateListingTest do
                  candidate.circuit_state == %{http: :deferred, ws: :deferred}
              end)
 
+      captured_scope =
+        plan.profile
+        |> AttemptProjection.scope_state(plan.chain_id, plan.generation)
+        |> Map.put(:degraded?, false)
+
+      captured =
+        CandidateListing.list_fastest_candidates_from_plan(
+          plan,
+          %{protocol: :http},
+          :unavailable,
+          captured_scope
+        )
+
+      assert Enum.all?(captured, &(not &1.learned_feedback_degraded?))
+
       [rankable | _] =
         CandidateListing.list_rankable_candidates_from_plan(
           plan,
