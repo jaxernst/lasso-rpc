@@ -316,7 +316,7 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert recovered.probation_remaining == 0
   end
 
-  test "success summaries do not mislabel a lifetime maximum as p95" do
+  test "success summaries track recent latency without mislabeling a p95" do
     generation = publish_routes(["projection-instance"])
 
     assert :ok =
@@ -332,8 +332,64 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     scope = AttemptProjection.scope_state(@profile, @chain_id)
     row = AttemptProjection.route_state(scope, "projection-instance", :http)
 
-    assert row.successful_mean_latency_ms == 505.0
+    assert row.successful_mean_latency_ms == 133.75
     assert row.successful_p95_latency_ms == nil
+  end
+
+  test "an older success delivered later cannot rewrite recent latency" do
+    generation = publish_routes(["projection-instance"])
+
+    assert :ok =
+             AttemptProjection.apply_control(
+               success_event_with_latency(200, 100_000, "projection-instance", generation)
+             )
+
+    assert :ok =
+             AttemptProjection.apply_control(
+               success_event_with_latency(199, 1_000_000, "projection-instance", generation)
+             )
+
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    row = AttemptProjection.route_state(scope, "projection-instance", :http)
+
+    assert row.usable_successes == 2
+    assert row.successful_mean_latency_ms == 100.0
+    assert row.observed_at_us == 200
+  end
+
+  test "recent sustained improvement replaces old latency without retaining samples" do
+    generation = publish_routes(["projection-instance"])
+
+    Enum.each(1..8, fn emitted_at_us ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   emitted_at_us,
+                   100_000,
+                   "projection-instance",
+                   generation
+                 )
+               )
+    end)
+
+    Enum.each(9..16, fn emitted_at_us ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   emitted_at_us,
+                   20_000,
+                   "projection-instance",
+                   generation
+                 )
+               )
+    end)
+
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    row = AttemptProjection.route_state(scope, "projection-instance", :http)
+
+    assert row.usable_successes == 16
+    assert_in_delta row.successful_mean_latency_ms, 47.488, 0.001
+    assert row.observed_at_us == 16
   end
 
   test "client and system evidence stay isolated while system latency seeds a client prior" do
