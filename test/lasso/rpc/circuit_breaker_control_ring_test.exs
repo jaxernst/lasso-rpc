@@ -99,6 +99,35 @@ defmodule Lasso.RPC.CircuitBreakerControlRingTest do
              ControlRing.drain(id, 4, receipt.generation, receipt.epoch)
   end
 
+  test "published recovery demand is generation fenced and controls success admission" do
+    {id, breaker_pid} = start_breaker(control_ring_capacity: 2)
+    {:ok, receipt} = Admission.check(id, deadline_us())
+    :sys.suspend(breaker_pid)
+    on_exit(fn -> resume_breaker(breaker_pid) end)
+
+    assert {:error, :stale} =
+             ControlRing.publish_success_requirement(
+               id,
+               receipt.generation + 1,
+               receipt.epoch,
+               true
+             )
+
+    assert :ok = CircuitBreaker.report_closed(receipt, :ok)
+    assert %{occupied: 0, success_marker?: false} = ControlRing.stats(id)
+
+    assert :ok =
+             ControlRing.publish_success_requirement(
+               id,
+               receipt.generation,
+               receipt.epoch,
+               true
+             )
+
+    assert :ok = CircuitBreaker.report_closed(receipt, :ok)
+    assert %{occupied: 1, success_marker?: true} = ControlRing.stats(id)
+  end
+
   test "canonical closed feedback is fenced by the captured route generation" do
     {id, breaker_pid} = start_breaker(control_ring_capacity: 2)
     {:ok, receipt} = Admission.check(id, deadline_us())

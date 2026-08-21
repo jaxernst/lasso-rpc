@@ -7,6 +7,8 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
   @maximum_capacity 1_024
   @success_refresh_retries 8
   @empty :empty
+  @wakeup_slot 1
+  @needs_success_slot 2
 
   @type base_signal :: :success | {:failure, atom(), boolean()} | :neutral
   @type signal :: base_signal() | {:route_generation, non_neg_integer(), base_signal()}
@@ -19,7 +21,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
           :ok
   def initialize(breaker_id, generation, epoch, owner_pid, opts \\ []) do
     capacity = capacity(Keyword.get(opts, :capacity, @default_capacity))
-    wakeup = :atomics.new(1, signed: false)
+    wakeup = :atomics.new(2, signed: false)
 
     {failure_drops, success_drops, acknowledged_failure_drops} =
       previous_drop_counts(breaker_id)
@@ -51,6 +53,27 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
     ArgumentError -> {:error, :stale}
   end
 
+  @doc false
+  @spec publish_success_requirement(
+          {String.t(), :http | :ws},
+          non_neg_integer(),
+          pos_integer(),
+          boolean()
+        ) :: :ok | {:error, :stale}
+  def publish_success_requirement(breaker_id, generation, epoch, required?)
+      when is_boolean(required?) do
+    case :ets.lookup(Storage.control_meta_table(), breaker_id) do
+      [{^breaker_id, ^generation, ^epoch, _owner_pid, _capacity, wakeup, _diagnostics, _ring_ref}] ->
+        :atomics.put(wakeup, @needs_success_slot, if(required?, do: 1, else: 0))
+        :ok
+
+      _other ->
+        {:error, :stale}
+    end
+  rescue
+    ArgumentError -> {:error, :stale}
+  end
+
   @spec drain({String.t(), :http | :ws}, non_neg_integer(), pos_integer(), pos_integer()) ::
           [signal()]
   def drain(breaker_id, limit, generation, epoch) do
@@ -60,7 +83,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
       ] ->
         signals = take_slots(breaker_id, min(limit, capacity), capacity, ring_ref)
 
-        :atomics.put(wakeup, 1, 0)
+        :atomics.put(wakeup, @wakeup_slot, 0)
         maybe_notify_remaining(breaker_id, generation, epoch, capacity, wakeup, ring_ref)
         signals
 
@@ -86,7 +109,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
           epoch: epoch,
           capacity: capacity,
           occupied: occupied_count(breaker_id, capacity, ring_ref),
-          wakeup_pending: :atomics.get(wakeup, 1),
+          wakeup_pending: :atomics.get(wakeup, @wakeup_slot),
           dropped: failure_drops + success_drops,
           failure_dropped: failure_drops,
           success_dropped: success_drops,
@@ -113,7 +136,6 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
           receipt,
           signal,
           owner_pid,
-          capacity,
           wakeup,
           diagnostics,
           ring_ref
@@ -133,19 +155,14 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
          receipt,
          signal,
          owner_pid,
-         capacity,
          wakeup,
          diagnostics,
          ring_ref
        ) do
-    if success_coalescing?() do
-      if success_required?(receipt) do
-        reserve_success(receipt, signal, owner_pid, wakeup, diagnostics, ring_ref)
-      else
-        :ok
-      end
+    if success_required?(wakeup) do
+      reserve_success(receipt, signal, owner_pid, wakeup, diagnostics, ring_ref)
     else
-      reserve_legacy_success(receipt, signal, owner_pid, capacity, wakeup, diagnostics, ring_ref)
+      :ok
     end
   end
 
@@ -186,41 +203,8 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
     end
   end
 
-  defp reserve_legacy_success(
-         receipt,
-         signal,
-         owner_pid,
-         capacity,
-         wakeup,
-         diagnostics,
-         ring_ref
-       ) do
-    case reserve(receipt, signal, capacity, ring_ref) do
-      :ok ->
-        notify_once(owner_pid, receipt, wakeup)
-        :ok
-
-      :full ->
-        :atomics.add(diagnostics, 2, 1)
-        degrade(receipt)
-        notify_once(owner_pid, receipt, wakeup)
-        {:error, :saturated}
-    end
-  end
-
-  defp success_required?(receipt) do
-    case Snapshot.lookup(receipt.breaker_id) do
-      {:ok, %Snapshot{generation: generation, epoch: epoch, needs_success?: true}} ->
-        generation == receipt.generation and epoch == receipt.epoch
-
-      _ ->
-        false
-    end
-  end
-
-  defp success_coalescing? do
-    Application.get_env(:lasso, :breaker_success_coalescing, true)
-  end
+  @spec success_required?(:atomics.atomics_ref()) :: boolean()
+  defp success_required?(wakeup), do: :atomics.get(wakeup, @needs_success_slot) == 1
 
   defp reserve(receipt, signal, capacity, ring_ref) do
     sequence = System.unique_integer([:positive, :monotonic])
@@ -296,11 +280,11 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
       ) do
     case :ets.lookup(Storage.control_meta_table(), receipt.breaker_id) do
       [
-        {^breaker_id, ^generation, ^epoch, _owner_pid, capacity, _wakeup, diagnostics, ring_ref}
+        {^breaker_id, ^generation, ^epoch, _owner_pid, capacity, wakeup, diagnostics, ring_ref}
       ] ->
         case signal_kind(signal) do
           :success ->
-            if success_required?(receipt) do
+            if success_required?(wakeup) do
               case reserve_success_slot(receipt, signal, ring_ref, @success_refresh_retries) do
                 result when result in [:ok, :refreshed, :covered] ->
                   :ok
@@ -444,7 +428,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
   end
 
   defp notify_once(owner_pid, receipt, wakeup) do
-    case :atomics.compare_exchange(wakeup, 1, 0, 1) do
+    case :atomics.compare_exchange(wakeup, @wakeup_slot, 0, 1) do
       value when value in [:ok, 0] ->
         send(
           owner_pid,

@@ -1815,6 +1815,14 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       Snapshot.put(%{snapshot | control_health: :degraded})
     end
 
+    _ =
+      ControlRing.publish_success_requirement(
+        breaker_id,
+        snapshot.generation,
+        snapshot.epoch,
+        snapshot.needs_success?
+      )
+
     snapshot_write_barrier(:after)
   end
 
