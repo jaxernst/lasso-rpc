@@ -315,13 +315,25 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_attempt_channels({%Channel{} = channel, rest}, ctx, param_rejected, caller_guard) do
-    do_attempt_channels([channel], ctx, param_rejected, caller_guard, rest)
+    do_attempt_channels(
+      [channel],
+      track_materialized_candidate(ctx, channel),
+      param_rejected,
+      caller_guard,
+      rest
+    )
   end
 
   defp do_attempt_channels(%CandidateCursor{} = cursor, ctx, param_rejected, caller_guard) do
     case CandidateCursor.next(cursor) do
       {:ok, channel, rest} ->
-        do_attempt_channels([channel], ctx, param_rejected, caller_guard, rest)
+        do_attempt_channels(
+          [channel],
+          track_materialized_candidate(ctx, channel),
+          param_rejected,
+          caller_guard,
+          rest
+        )
 
       result when result in [:done, :stale] ->
         do_attempt_channels([], ctx, param_rejected, caller_guard)
@@ -426,6 +438,16 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp candidate_labels(%CandidateCursor{}, %Channel{} = selected),
     do: ["#{selected.provider_id}:#{selected.transport}"]
+
+  defp track_materialized_candidate(ctx, channel) do
+    label = "#{channel.provider_id}:#{channel.transport}"
+
+    if label in ctx.candidate_providers do
+      ctx
+    else
+      %{ctx | candidate_providers: ctx.candidate_providers ++ [label]}
+    end
+  end
 
   defp retry_param_rejected(channels, ctx, caller_guard) do
     Logger.warning("All channels rejected by parameter limits, attempting anyway",

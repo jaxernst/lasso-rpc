@@ -5,13 +5,17 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     @moduledoc false
 
     @enforce_keys [:entries, :scope, :chain_id, :workload_key]
-    defstruct @enforce_keys
+    defstruct @enforce_keys ++
+                [resolver: nil, excluded_routes: MapSet.new(), candidate_labels: nil]
 
     @type t :: %__MODULE__{
             entries: [{Lasso.RPC.Channel.t(), map(), :http | :ws}],
             scope: map(),
             chain_id: pos_integer(),
-            workload_key: atom()
+            workload_key: atom(),
+            resolver: (-> {[{map(), :http | :ws}], t() | nil}) | nil,
+            excluded_routes: MapSet.t({String.t(), :http | :ws}),
+            candidate_labels: [String.t()] | nil
           }
   end
 
@@ -45,6 +49,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
               [
                 candidate_labels: [],
                 deferred_ranking: nil,
+                excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 supported?: false,
                 supported_deferred: %{2 => :queue.new(), 3 => :queue.new(), 4 => :queue.new()},
@@ -106,10 +111,11 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     limit = Keyword.get(opts, :limit, 1000)
 
     candidate_labels =
-      descriptors
-      |> Kernel.++(deferred_descriptors(deferred_ranking))
-      |> Enum.take(max(limit, 0))
-      |> Enum.map(&descriptor_label/1)
+      deferred_candidate_labels(deferred_ranking) ||
+        descriptors
+        |> Kernel.++(deferred_descriptors(deferred_ranking))
+        |> Enum.take(max(limit, 0))
+        |> Enum.map(&descriptor_label/1)
 
     %__MODULE__{
       snapshot: snapshot,
@@ -192,7 +198,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
           Enum.reject(cursor.descriptors, &(descriptor_provider_id(&1) == provider_id)),
         supported_deferred: reject_queued_provider(cursor.supported_deferred, provider_id),
         unsupported_deferred: reject_queued_provider(cursor.unsupported_deferred, provider_id),
-        deferred_ranking: reject_deferred_provider(cursor.deferred_ranking, provider_id)
+        deferred_ranking: reject_deferred_provider(cursor.deferred_ranking, provider_id),
+        excluded_provider_ids: MapSet.put(cursor.excluded_provider_ids, provider_id)
     }
   end
 
@@ -218,6 +225,33 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
       :skip ->
         scan(cursor)
+    end
+  end
+
+  defp scan(
+         %{
+           descriptors: [],
+           deferred_ranking: %DeferredRanking{resolver: resolver} = deferred
+         } = cursor
+       )
+       when is_function(resolver, 0) do
+    if current?(cursor) do
+      {ranked_candidates, next_deferred} = resolver.()
+
+      descriptors =
+        ranked_candidates
+        |> Enum.map(fn {candidate, transport} -> {:ranked, candidate, transport} end)
+        |> reject_resolved(cursor, deferred.excluded_routes)
+
+      next_deferred =
+        next_deferred
+        |> reject_deferred_routes(deferred.excluded_routes)
+        |> reject_deferred_providers(cursor.excluded_provider_ids)
+
+      cursor = append_resolved_labels(cursor, descriptors, next_deferred)
+      scan(%{cursor | descriptors: descriptors, deferred_ranking: next_deferred})
+    else
+      :stale
     end
   end
 
@@ -422,6 +456,24 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defp deferred_scope(%DeferredRanking{scope: scope}), do: scope
   defp deferred_scope(_deferred), do: nil
 
+  defp deferred_candidate_labels(%DeferredRanking{candidate_labels: labels}), do: labels
+  defp deferred_candidate_labels(_deferred), do: nil
+
+  defp append_resolved_labels(cursor, descriptors, deferred) do
+    labels =
+      descriptors
+      |> Kernel.++(deferred_descriptors(deferred))
+      |> Enum.map(&descriptor_label/1)
+
+    candidate_labels =
+      cursor.candidate_labels
+      |> Kernel.++(labels)
+      |> Enum.uniq()
+      |> Enum.take(max(cursor.limit, 0))
+
+    %{cursor | candidate_labels: candidate_labels}
+  end
+
   defp reject_deferred_provider(%DeferredRanking{entries: entries} = deferred, provider_id) do
     filtered =
       Enum.reject(entries, fn {_channel, candidate, _transport} -> candidate.id == provider_id end)
@@ -430,6 +482,37 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   defp reject_deferred_provider(_deferred, _provider_id), do: nil
+
+  defp reject_deferred_providers(deferred, provider_ids) do
+    Enum.reduce(provider_ids, deferred, &reject_deferred_provider(&2, &1))
+  end
+
+  defp reject_deferred_routes(%DeferredRanking{entries: entries} = deferred, routes) do
+    filtered =
+      Enum.reject(entries, fn {channel, _candidate, transport} ->
+        MapSet.member?(routes, {channel.instance_id, transport})
+      end)
+
+    %{deferred | entries: filtered}
+  end
+
+  defp reject_deferred_routes(nil, _routes), do: nil
+
+  defp reject_resolved(descriptors, cursor, routes) do
+    Enum.reject(descriptors, fn descriptor ->
+      provider_id = descriptor_provider_id(descriptor)
+      transport = elem(descriptor, tuple_size(descriptor) - 1)
+
+      MapSet.member?(cursor.excluded_provider_ids, provider_id) or
+        resolved_route_member?(descriptor, transport, routes)
+    end)
+  end
+
+  defp resolved_route_member?({:ranked, candidate, _transport}, transport, routes) do
+    MapSet.member?(routes, {candidate.instance_id, transport})
+  end
+
+  defp resolved_route_member?(_descriptor, _transport, _routes), do: false
 
   defp rank_deferred(%DeferredRanking{
          entries: entries,
