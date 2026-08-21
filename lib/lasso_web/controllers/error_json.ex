@@ -12,6 +12,13 @@ defmodule LassoWeb.ErrorJSON do
     JError.to_response(error_response, nil)
   end
 
+  def render("413.json", %{
+        conn: %Plug.Conn{method: "POST", request_path: "/rpc/" <> _rest}
+      }) do
+    error_response = JError.new(-32_600, "Invalid Request: request body too large")
+    JError.to_response(error_response, nil)
+  end
+
   def render("503.json", %{reason: %LassoWeb.Plugs.RequestByteBudget.CapacityError{}}) do
     error_response =
       JError.new(-32_008, "Local request byte capacity unavailable",
