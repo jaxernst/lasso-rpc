@@ -114,7 +114,7 @@ defmodule LassoWeb.Endpoint do
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     body_reader: {LassoWeb.Plugs.RequestByteBudget, :read_body, []},
-    json_decoder: Phoenix.json_library()
+    json_decoder: Lasso.JSON.Decoder
   )
 
   # JSON parse error handling is now handled by LassoWeb.ErrorJSON
