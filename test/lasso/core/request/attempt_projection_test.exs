@@ -211,6 +211,7 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.comparable_attempts == 2
     assert row.usable_successes == 1
     assert row.total_failures == 1
+    assert row.recent_success_probability == 1.0
     assert row.observed_at_us == 200
     assert row.oldest_observed_at_us == 100
     assert row.state_observed_at_us == 200
@@ -390,6 +391,58 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.usable_successes == 16
     assert_in_delta row.successful_mean_latency_ms, 47.488, 0.001
     assert row.observed_at_us == 16
+  end
+
+  test "intermittent failures cannot qualify on lifetime success count alone" do
+    generation = publish_routes(["projection-instance"])
+
+    events = [
+      success_event(1, "projection-instance", generation),
+      failure_event(2, "projection-instance", generation),
+      success_event(3, "projection-instance", generation),
+      failure_event(4, "projection-instance", generation),
+      success_event(5, "projection-instance", generation),
+      failure_event(6, "projection-instance", generation),
+      success_event(7, "projection-instance", generation)
+    ]
+
+    Enum.each(events, fn event -> assert :ok = AttemptProjection.apply_control(event) end)
+
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    row = AttemptProjection.route_state(scope, "projection-instance", :http)
+
+    summary =
+      AttemptProjection.summarize_route(
+        scope,
+        row,
+        "projection-instance",
+        :http,
+        @chain_id,
+        :client
+      )
+
+    assert row.usable_successes == 4
+    assert row.total_failures == 3
+    assert row.recent_success_probability < 0.75
+    assert summary.state == :provisional
+
+    assert :ok =
+             AttemptProjection.apply_control(success_event(8, "projection-instance", generation))
+
+    recovered_row = AttemptProjection.route_state(scope, "projection-instance", :http)
+
+    recovered_summary =
+      AttemptProjection.summarize_route(
+        scope,
+        recovered_row,
+        "projection-instance",
+        :http,
+        @chain_id,
+        :client
+      )
+
+    assert recovered_row.recent_success_probability >= 0.75
+    assert recovered_summary.state == :qualified
   end
 
   test "client and system evidence stay isolated while system latency seeds a client prior" do

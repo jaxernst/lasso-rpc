@@ -24,6 +24,8 @@ defmodule Lasso.RPC.AttemptProjection do
   @probation_deliveries 32
   @routing_evidence_max_age_us 300_000_000
   @latency_ewma_weight 8
+  @reliability_ewma_weight 8
+  @qualified_reliability 0.75
   @max_count 9_223_372_036_854_775_807
   @default_workload "client"
   @availability_dimensions [
@@ -664,22 +666,35 @@ defmodule Lasso.RPC.AttemptProjection do
         row
         | usable_successes: successes,
           successful_mean_latency_ms: mean,
-          successful_p95_latency_ms: nil
+          successful_p95_latency_ms: nil,
+          recent_success_probability:
+            recent_success_probability(row.recent_success_probability, 1.0)
       }
     else
       %{row | usable_successes: successes}
     end
   end
 
-  defp apply_aggregate(row, %{kind: :failure}),
-    do: %{row | total_failures: increment(row.total_failures)}
+  defp apply_aggregate(row, %{kind: :failure, observed_at_us: observed_at_us}) do
+    row = %{row | total_failures: increment(row.total_failures)}
+
+    if observed_at_us >= row.observed_at_us do
+      %{
+        row
+        | recent_success_probability:
+            recent_success_probability(row.recent_success_probability, 0.0)
+      }
+    else
+      row
+    end
+  end
 
   defp apply_aggregate(row, %{kind: :rate_limit, retry_after_ms: retry_after_ms} = delta) do
     observed_at_us = Map.fetch!(delta, :observed_at_us)
     expiry_ms = div(observed_at_us, 1_000) + retry_after_ms
     replace_expiry? = expiry_ms >= row.rate_limit_expiry_ms
 
-    %{
+    updated = %{
       row
       | rate_limit_expiry_ms: max(row.rate_limit_expiry_ms, expiry_ms),
         rate_limit_retry_after_ms:
@@ -687,9 +702,24 @@ defmodule Lasso.RPC.AttemptProjection do
         rate_limit_observed_at_us: max_floor(row.rate_limit_observed_at_us, observed_at_us),
         total_rate_limits: increment(row.total_rate_limits)
     }
+
+    if observed_at_us >= row.observed_at_us do
+      %{
+        updated
+        | recent_success_probability:
+            recent_success_probability(row.recent_success_probability, 0.0)
+      }
+    else
+      updated
+    end
   end
 
   defp apply_aggregate(row, %{kind: :neutral}), do: row
+
+  defp recent_success_probability(nil, outcome), do: outcome
+
+  defp recent_success_probability(previous, outcome),
+    do: previous + (outcome - previous) / @reliability_ewma_weight
 
   defp apply_latest_state(row, emitted_at_us, delta) do
     if is_nil(row.state_observed_at_us) or emitted_at_us >= row.state_observed_at_us do
@@ -1104,6 +1134,7 @@ defmodule Lasso.RPC.AttemptProjection do
       usable_successes: 0,
       total_failures: 0,
       total_rate_limits: 0,
+      recent_success_probability: nil,
       successful_mean_latency_ms: nil,
       successful_p95_latency_ms: nil
     }
@@ -1342,10 +1373,19 @@ defmodule Lasso.RPC.AttemptProjection do
   defp summary(row, instance_id, transport, chain_id, workload_key, now_us) do
     state =
       cond do
-        routing_evidence_stale?(row.observed_at_us, now_us) -> :stale
-        row.usable_successes >= 3 and row.consecutive_failures < 3 -> :qualified
-        row.comparable_attempts > 0 -> :provisional
-        true -> :unqualified
+        routing_evidence_stale?(row.observed_at_us, now_us) ->
+          :stale
+
+        row.usable_successes >= 3 and row.consecutive_failures < 3 and
+          is_number(row.recent_success_probability) and
+            row.recent_success_probability >= @qualified_reliability ->
+          :qualified
+
+        row.comparable_attempts > 0 ->
+          :provisional
+
+        true ->
+          :unqualified
       end
 
     %Summary{
