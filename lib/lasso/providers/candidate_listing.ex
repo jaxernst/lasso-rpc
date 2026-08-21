@@ -149,6 +149,29 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   @doc false
+  @spec list_fastest_candidates_from_plan(
+          RoutingPlan.t(),
+          SelectionFilters.t() | map(),
+          non_neg_integer() | :unavailable
+        ) :: [map()]
+  def list_fastest_candidates_from_plan(
+        %RoutingPlan{} = plan,
+        %SelectionFilters{} = filters,
+        consensus_height
+      ) do
+    list_fastest_candidates_from_plan(
+      plan,
+      SelectionFilters.to_map(filters),
+      consensus_height
+    )
+  end
+
+  def list_fastest_candidates_from_plan(%RoutingPlan{} = plan, filters, consensus_height)
+      when is_map(filters) do
+    do_list_candidates(plan, filters, :fastest_ranked, consensus_height)
+  end
+
+  @doc false
   @spec routing_candidate_from_plan(
           RoutingPlan.t(),
           RoutingPlan.provider(),
@@ -306,8 +329,16 @@ defmodule Lasso.Providers.CandidateListing do
     transports = live_transports(provider, protocol, plan.profile, plan.chain_id)
 
     include_learned? = not learned_scope.degraded?
-    http_routing = route_record(learned_scope, routing_instance_id, :http, transports)
-    ws_routing = route_record(learned_scope, routing_instance_id, :ws, transports)
+
+    {http_routing, ws_routing} =
+      if mode == :fastest_ranked do
+        {nil, nil}
+      else
+        {
+          route_record(learned_scope, routing_instance_id, :http, transports),
+          route_record(learned_scope, routing_instance_id, :ws, transports)
+        }
+      end
 
     {circuit_state, rate_limited} =
       candidate_gates(
@@ -344,13 +375,13 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   defp maybe_add_routing_identity(candidate, mode, routing_instance_id)
-       when mode in [:routing, :ranked],
+       when mode in [:routing, :ranked, :fastest_ranked],
        do: Map.put(candidate, :routing_instance_id, routing_instance_id)
 
   defp maybe_add_routing_identity(candidate, :full, _routing_instance_id), do: candidate
 
   defp maybe_add_availability(candidate, mode, _instance_id, _http, _ws, _include_learned?)
-       when mode in [:routing, :ranked],
+       when mode in [:routing, :ranked, :fastest_ranked],
        do: candidate
 
   defp maybe_add_availability(candidate, :full, instance_id, http, ws, include_learned?) do
@@ -397,13 +428,14 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   defp candidate_gates(
-         :ranked,
+         mode,
          _instance_id,
          _transports,
          _include_learned?,
          _http_routing,
          _ws_routing
-       ) do
+       )
+       when mode in [:ranked, :fastest_ranked] do
     {%{http: :deferred, ws: :deferred}, %{http: false, ws: false}}
   end
 
@@ -424,8 +456,9 @@ defmodule Lasso.Providers.CandidateListing do
     {%{http: http_cb, ws: ws_cb}, %{http: http_rl, ws: ws_rl}}
   end
 
-  defp candidate_gate_ready?(_candidate, _protocol, _include_half_open, _filters, :ranked),
-    do: true
+  defp candidate_gate_ready?(_candidate, _protocol, _include_half_open, _filters, mode)
+       when mode in [:ranked, :fastest_ranked],
+       do: true
 
   defp candidate_gate_ready?(candidate, protocol, include_half_open, filters, _mode) do
     circuit_breaker_ready?(candidate, protocol, include_half_open) and

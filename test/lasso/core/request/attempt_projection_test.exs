@@ -337,6 +337,152 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.successful_p95_latency_ms == nil
   end
 
+  test "fastest winner is qualified, generation-local, and cleared by its own failure" do
+    generation = publish_routes(["projection-slow", "projection-fast"])
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    started_at_us = System.monotonic_time(:microsecond)
+
+    Enum.each(1..3, fn offset ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   started_at_us + offset,
+                   100_000,
+                   "projection-slow",
+                   generation
+                 )
+               )
+    end)
+
+    assert %{route: {"projection-slow", :http}} = AttemptProjection.fastest_winner(scope)
+
+    Enum.each(4..6, fn offset ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   started_at_us + offset,
+                   10_000,
+                   "projection-fast",
+                   generation
+                 )
+               )
+    end)
+
+    assert %{route: {"projection-fast", :http}, latency_ms: 10.0} =
+             AttemptProjection.fastest_winner(scope)
+
+    assert :ok =
+             AttemptProjection.apply_control(
+               failure_event(started_at_us + 7, "projection-slow", generation)
+             )
+
+    assert %{route: {"projection-fast", :http}} = AttemptProjection.fastest_winner(scope)
+
+    assert :ok =
+             AttemptProjection.apply_control(
+               failure_event(started_at_us + 8, "projection-fast", generation)
+             )
+
+    assert AttemptProjection.fastest_winner(scope) == nil
+  end
+
+  test "fastest winner rows have fixed scope cardinality and reconcile removed scopes" do
+    generation = ConfigStore.route_generation()
+
+    routes = [
+      %{profile: @profile, chain_id: @chain_id, instance_id: "projection-a", transport: :http},
+      %{profile: @profile, chain_id: @chain_id, instance_id: "projection-b", transport: :ws},
+      %{
+        profile: "projection-peer",
+        chain_id: @chain_id,
+        instance_id: "projection-c",
+        transport: :http
+      }
+    ]
+
+    assert :ok = AttemptProjection.reconcile_routes(generation, routes)
+
+    assert 2 ==
+             :ets.match_object(
+               :lasso_instance_state,
+               {{:routing_fastest_winner, :_, @chain_id}, :_}
+             )
+             |> length()
+
+    assert :ok = AttemptProjection.reconcile_routes(generation, [List.last(routes)])
+
+    assert [{{:routing_fastest_winner, "projection-peer", @chain_id}, _state}] =
+             :ets.match_object(
+               :lasso_instance_state,
+               {{:routing_fastest_winner, :_, @chain_id}, :_}
+             )
+  end
+
+  test "older cross-route evidence cannot replace a newer fastest winner" do
+    generation = publish_routes(["projection-newer", "projection-older"])
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    started_at_us = System.monotonic_time(:microsecond)
+
+    Enum.each(1..3, fn offset ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   started_at_us + 100 + offset,
+                   20_000,
+                   "projection-newer",
+                   generation
+                 )
+               )
+    end)
+
+    assert %{route: {"projection-newer", :http}, latency_ms: 20.0} =
+             AttemptProjection.fastest_winner(scope)
+
+    Enum.each(1..3, fn offset ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   started_at_us + offset,
+                   1_000,
+                   "projection-older",
+                   generation
+                 )
+               )
+    end)
+
+    assert %{route: {"projection-newer", :http}, latency_ms: 20.0} =
+             AttemptProjection.fastest_winner(scope)
+  end
+
+  test "an older failure cannot clear a newer fastest winner" do
+    generation = publish_routes(["projection-instance"])
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    started_at_us = System.monotonic_time(:microsecond)
+
+    Enum.each(1..3, fn offset ->
+      assert :ok =
+               AttemptProjection.apply_control(
+                 success_event_with_latency(
+                   started_at_us + 100 + offset,
+                   10_000,
+                   "projection-instance",
+                   generation
+                 )
+               )
+    end)
+
+    assert %{route: {"projection-instance", :http}} =
+             AttemptProjection.fastest_winner(scope)
+
+    assert :ok =
+             AttemptProjection.apply_control(
+               failure_event(started_at_us + 1, "projection-instance", generation)
+             )
+
+    assert %{route: {"projection-instance", :http}} =
+             AttemptProjection.fastest_winner(scope)
+  end
+
   test "an older success delivered later cannot rewrite recent latency" do
     generation = publish_routes(["projection-instance"])
 
@@ -916,6 +1062,7 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.stale_drops == 1
     assert row.comparable_attempts == 0
     assert is_nil(row.observed_at_us)
+    assert AttemptProjection.fastest_winner(scope) == nil
   end
 
   test "a missing scope is conservatively degraded and neutral" do
@@ -1072,6 +1219,16 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     )
 
     :ets.match_delete(:lasso_instance_state, {{:routing_system_prior, :_, :_, :_}, :_})
+
+    :ets.match_delete(
+      :lasso_instance_state,
+      {{:routing_fastest_winner, @profile, :_}, :_}
+    )
+
+    :ets.match_delete(
+      :lasso_instance_state,
+      {{:routing_fastest_winner, "projection-peer", :_}, :_}
+    )
   rescue
     ArgumentError -> :ok
   end
