@@ -27,6 +27,7 @@ defmodule Lasso.BlockSync.Registry do
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
+  @cache_retries 4
 
   ## Client API
 
@@ -48,6 +49,8 @@ defmodule Lasso.BlockSync.Registry do
     :ets.insert(@table, {{:height, chain_id, provider_id}, {height, timestamp, source, metadata}})
 
     update_block_time(chain_id, height)
+    revision = next_consensus_revision(chain_id)
+    refresh_consensus_cache(chain_id, timestamp, revision)
 
     :ok
   end
@@ -78,10 +81,26 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
+  @spec get_consensus_height(pos_integer()) :: {:ok, integer()} | {:error, :no_data}
+  def get_consensus_height(chain_id) when is_integer(chain_id) and chain_id > 0 do
+    now_ms = System.system_time(:millisecond)
+    key = consensus_key(chain_id)
+
+    case :ets.lookup(@table, key) do
+      [{^key, revision, revision, height, valid_through_ms}]
+      when now_ms <= valid_through_ms ->
+        {:ok, height}
+
+      _missing_or_expired ->
+        refresh_consensus_cache(chain_id, now_ms, current_consensus_revision(chain_id))
+    end
+  end
+
   @spec get_consensus_height(pos_integer(), non_neg_integer()) ::
           {:ok, integer()} | {:error, :no_data}
-  def get_consensus_height(chain_id, freshness_ms \\ @default_freshness_ms)
-      when is_integer(chain_id) and chain_id > 0 do
+  def get_consensus_height(chain_id, freshness_ms)
+      when is_integer(chain_id) and chain_id > 0 and is_integer(freshness_ms) and
+             freshness_ms >= 0 do
     calculate_consensus(chain_id, nil, freshness_ms)
   end
 
@@ -179,6 +198,7 @@ defmodule Lasso.BlockSync.Registry do
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
     :ets.delete(@table, {:block_time, chain_id})
+    :ets.delete(@table, consensus_key(chain_id))
     :ok
   end
 
@@ -223,6 +243,72 @@ defmodule Lasso.BlockSync.Registry do
 
   ## Private Functions
 
+  defp refresh_consensus_cache(chain_id, now_ms, revision) do
+    cutoff = now_ms - @default_freshness_ms
+
+    case select_fresh_samples(chain_id, cutoff) do
+      [] ->
+        {:error, :no_data}
+
+      samples ->
+        height = consensus(Enum.map(samples, &elem(&1, 0)))
+        valid_through_ms = samples |> Enum.map(&elem(&1, 1)) |> Enum.min()
+        valid_through_ms = valid_through_ms + @default_freshness_ms
+
+        publish_consensus(
+          consensus_key(chain_id),
+          revision,
+          height,
+          valid_through_ms,
+          @cache_retries
+        )
+
+        {:ok, height}
+    end
+  end
+
+  defp next_consensus_revision(chain_id) do
+    :ets.update_counter(
+      @table,
+      consensus_key(chain_id),
+      {2, 1},
+      {consensus_key(chain_id), 0, 0, nil, 0}
+    )
+  end
+
+  defp current_consensus_revision(chain_id) do
+    key = consensus_key(chain_id)
+
+    case :ets.lookup(@table, key) do
+      [{^key, revision, _published_revision, _height, _valid_through_ms}] -> revision
+      [] -> 0
+    end
+  end
+
+  defp publish_consensus(key, revision, height, valid_through_ms, retries)
+       when retries > 0 do
+    case :ets.lookup(@table, key) do
+      [{^key, current_revision, _published_revision, _height, _valid_through_ms}]
+      when current_revision > revision ->
+        :ok
+
+      [{^key, ^revision, _published_revision, _height, _valid_through_ms} = current] ->
+        updated = {key, revision, revision, height, valid_through_ms}
+
+        case :ets.select_replace(@table, [{current, [], [{:const, updated}]}]) do
+          1 -> :ok
+          0 -> publish_consensus(key, revision, height, valid_through_ms, retries - 1)
+        end
+
+      [] ->
+        :ok
+    end
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp publish_consensus(_key, _revision, _height, _valid_through_ms, 0), do: :ok
+
   defp calculate_consensus(chain_id, provider_ids, freshness_ms) do
     cutoff = System.system_time(:millisecond) - freshness_ms
     fresh_heights = select_fresh_heights(chain_id, provider_ids, cutoff)
@@ -231,14 +317,27 @@ defmodule Lasso.BlockSync.Registry do
       [] ->
         {:error, :no_data}
 
-      [single] ->
-        {:ok, single}
-
-      list ->
-        sorted = Enum.sort(list, :desc)
-        idx = max(0, floor(length(sorted) * 0.25))
-        {:ok, Enum.at(sorted, idx)}
+      heights ->
+        {:ok, consensus(heights)}
     end
+  end
+
+  defp consensus([single]), do: single
+
+  defp consensus(heights) do
+    sorted = Enum.sort(heights, :desc)
+    idx = max(0, floor(length(sorted) * 0.25))
+    Enum.at(sorted, idx)
+  end
+
+  defp select_fresh_samples(chain_id, cutoff) do
+    :ets.select(@table, [
+      {
+        {{:height, chain_id, :_}, {:"$1", :"$2", :_, :_}},
+        [{:>=, :"$2", cutoff}],
+        [{{:"$1", :"$2"}}]
+      }
+    ])
   end
 
   defp select_fresh_heights(chain_id, provider_ids, cutoff)
@@ -266,4 +365,6 @@ defmodule Lasso.BlockSync.Registry do
       if MapSet.member?(provider_set, provider_id), do: [height | heights], else: heights
     end)
   end
+
+  defp consensus_key(chain_id), do: {:consensus, chain_id}
 end

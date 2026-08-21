@@ -118,5 +118,118 @@ defmodule Lasso.BlockSync.ConsensusP75Test do
 
       assert {:ok, 110} = BlockSyncRegistry.get_consensus_height_filtered(chain, [])
     end
+
+    test "default consensus uses the published snapshot and refreshes on height writes", %{
+      chain: chain
+    } do
+      BlockSyncRegistry.put_height(chain, "p1", 100, :http, %{})
+
+      assert [{{:consensus, ^chain}, first_revision, first_revision, 100, first_valid_through}] =
+               :ets.lookup(:block_sync_registry, {:consensus, chain})
+
+      assert is_integer(first_revision)
+      assert is_integer(first_valid_through)
+      assert {:ok, 100} = BlockSyncRegistry.get_consensus_height(chain)
+
+      BlockSyncRegistry.put_height(chain, "p2", 105, :http, %{})
+
+      assert [
+               {{:consensus, ^chain}, second_revision, second_revision, 105, second_valid_through}
+             ] =
+               :ets.lookup(:block_sync_registry, {:consensus, chain})
+
+      assert second_revision > first_revision
+      assert second_valid_through >= first_valid_through
+      assert {:ok, 105} = BlockSyncRegistry.get_consensus_height(chain)
+    end
+
+    test "expired snapshot falls back to an exact fresh calculation", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "p1", 100, :http, %{})
+
+      [{{:consensus, ^chain}, revision, revision, 100, _valid_through}] =
+        :ets.lookup(:block_sync_registry, {:consensus, chain})
+
+      now_ms = System.system_time(:millisecond)
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "p1"}, {999, now_ms - 31_000, :http, %{}}}
+      )
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "p2"}, {105, now_ms, :http, %{}}}
+      )
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:consensus, chain}, revision, revision, 100, now_ms - 1}
+      )
+
+      assert {:ok, 105} = BlockSyncRegistry.get_consensus_height(chain)
+
+      assert [{{:consensus, ^chain}, ^revision, ^revision, 105, valid_through}] =
+               :ets.lookup(:block_sync_registry, {:consensus, chain})
+
+      assert valid_through >= now_ms
+    end
+
+    test "an interrupted publication is never served and is repaired by the reader", %{
+      chain: chain
+    } do
+      BlockSyncRegistry.put_height(chain, "p1", 100, :http, %{})
+
+      now_ms = System.system_time(:millisecond)
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "p2"}, {105, now_ms, :http, %{}}}
+      )
+
+      allocated_revision =
+        :ets.update_counter(:block_sync_registry, {:consensus, chain}, {2, 1})
+
+      assert [
+               {{:consensus, ^chain}, ^allocated_revision, published_revision, 100,
+                _valid_through}
+             ] = :ets.lookup(:block_sync_registry, {:consensus, chain})
+
+      assert published_revision < allocated_revision
+      assert {:ok, 105} = BlockSyncRegistry.get_consensus_height(chain)
+
+      assert [
+               {{:consensus, ^chain}, ^allocated_revision, ^allocated_revision, 105,
+                repaired_valid_through}
+             ] = :ets.lookup(:block_sync_registry, {:consensus, chain})
+
+      assert repaired_valid_through >= now_ms
+    end
+
+    test "concurrent writers cannot leave an older consensus snapshot", %{chain: chain} do
+      1..32
+      |> Task.async_stream(
+        fn height ->
+          BlockSyncRegistry.put_height(chain, "p#{height}", height, :http, %{})
+        end,
+        max_concurrency: 16,
+        ordered: false
+      )
+      |> Stream.run()
+
+      assert BlockSyncRegistry.get_consensus_height(chain) ==
+               BlockSyncRegistry.get_consensus_height(chain, 30_000)
+
+      assert [{{:consensus, ^chain}, revision, revision, _height, _valid_through}] =
+               :ets.lookup(:block_sync_registry, {:consensus, chain})
+    end
+
+    test "clearing a chain removes its fixed consensus state", %{chain: chain} do
+      BlockSyncRegistry.put_height(chain, "p1", 100, :http, %{})
+      BlockSyncRegistry.clear_chain(chain)
+
+      assert [] = :ets.lookup(:block_sync_registry, {:consensus, chain})
+      assert {:error, :no_data} = BlockSyncRegistry.get_consensus_height(chain)
+      assert [] = :ets.lookup(:block_sync_registry, {:consensus, chain})
+    end
   end
 end
