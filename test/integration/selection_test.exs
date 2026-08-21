@@ -727,6 +727,87 @@ defmodule Lasso.RPC.SelectionTest do
       assert :done = CandidateCursor.next(cursor)
     end
 
+    test "fastest winner defers construction of fallback candidates", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "winner", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "fallback_a", priority: 20, behavior: :healthy, profile: profile},
+        %{id: "fallback_b", priority: 30, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      now_us = System.monotonic_time(:microsecond)
+
+      record_selection_successes(
+        chain,
+        profile,
+        "winner",
+        generation,
+        now_us,
+        10_000,
+        "client"
+      )
+
+      record_selection_successes(
+        chain,
+        profile,
+        "fallback_a",
+        generation,
+        now_us + 10,
+        20_000,
+        "client"
+      )
+
+      record_selection_successes(
+        chain,
+        profile,
+        "fallback_b",
+        generation,
+        now_us + 20,
+        30_000,
+        "client"
+      )
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http
+        )
+
+      assert cursor.candidate_labels == ["winner:http"]
+      assert length(cursor.descriptors) == 1
+      assert cursor.deferred_ranking.entries == []
+      assert is_function(cursor.deferred_ranking.resolver, 0)
+
+      large_params = Enum.to_list(1..50_000)
+
+      large_cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          params: large_params
+        )
+
+      {:env, resolver_environment} =
+        Function.info(large_cursor.deferred_ranking.resolver, :env)
+
+      refute Enum.any?(resolver_environment, &(&1 == large_params))
+      assert :erts_debug.flat_size(resolver_environment) < 5_000
+
+      assert {:ok, %{provider_id: "winner"}, cursor} = CandidateCursor.next(cursor)
+      assert {:ok, %{provider_id: "fallback_a"}, cursor} = CandidateCursor.next(cursor)
+
+      assert cursor.candidate_labels == [
+               "winner:http",
+               "fallback_a:http",
+               "fallback_b:http"
+             ]
+
+      assert {:ok, %{provider_id: "fallback_b"}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+    end
+
     test "ranked cursors tier a provider rate-limited after ranking", %{chain: chain} do
       profile = "public"
 
@@ -802,11 +883,7 @@ defmodule Lasso.RPC.SelectionTest do
           request_origin: :client
         )
 
-      assert cursor.candidate_labels == [
-               "qualified:http",
-               "cold_slow:http",
-               "cold_fast:http"
-             ]
+      assert cursor.candidate_labels == ["qualified:http"]
 
       assert {:ok, %{provider_id: "qualified"}, cursor} = CandidateCursor.next(cursor)
 
