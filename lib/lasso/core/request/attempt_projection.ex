@@ -377,6 +377,57 @@ defmodule Lasso.RPC.AttemptProjection do
     )
   end
 
+  @doc false
+  @spec summarize_client_partition(
+          map() | nil,
+          binary(),
+          :http | :ws,
+          pos_integer(),
+          integer()
+        ) :: Summary.t() | nil
+  def summarize_client_partition(row, instance_id, transport, chain_id, now_us)
+      when (is_map(row) or is_nil(row)) and is_binary(instance_id) and
+             transport in [:http, :ws] and is_integer(chain_id) and chain_id > 0 and
+             is_integer(now_us) do
+    summary(row, instance_id, transport, chain_id, :client, now_us)
+  end
+
+  @doc false
+  @spec complete_client_summary_bounded(
+          scope_state(),
+          map() | nil,
+          binary(),
+          binary(),
+          :http | :ws,
+          pos_integer(),
+          Summary.t() | nil,
+          integer()
+        ) :: Summary.t() | nil
+  def complete_client_summary_bounded(
+        scope,
+        row,
+        instance_id,
+        routing_instance_id,
+        transport,
+        chain_id,
+        primary,
+        now_us
+      )
+      when is_map(scope) and (is_map(row) or is_nil(row)) and is_binary(instance_id) and
+             is_binary(routing_instance_id) and transport in [:http, :ws] and
+             is_integer(chain_id) and chain_id > 0 and
+             (is_struct(primary, Summary) or is_nil(primary)) and is_integer(now_us) do
+    complete_client_summary(
+      primary,
+      row,
+      {:lookup_bounded, scope, routing_instance_id},
+      instance_id,
+      transport,
+      chain_id,
+      now_us
+    )
+  end
+
   @spec prepare_routes(non_neg_integer(), [map()]) :: :ok
   def prepare_routes(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
@@ -1275,6 +1326,26 @@ defmodule Lasso.RPC.AttemptProjection do
        ) do
     primary = summary(row, instance_id, transport, chain_id, :client, now_us)
 
+    complete_client_summary(
+      primary,
+      row,
+      shared_prior_source,
+      instance_id,
+      transport,
+      chain_id,
+      now_us
+    )
+  end
+
+  defp complete_client_summary(
+         primary,
+         row,
+         shared_prior_source,
+         instance_id,
+         transport,
+         chain_id,
+         now_us
+       ) do
     case primary do
       %Summary{state: :qualified} ->
         primary
@@ -1373,13 +1444,11 @@ defmodule Lasso.RPC.AttemptProjection do
   defp summary(row, instance_id, transport, chain_id, workload_key, now_us) do
     state =
       cond do
+        qualified_row?(row, now_us) ->
+          :qualified
+
         routing_evidence_stale?(row.observed_at_us, now_us) ->
           :stale
-
-        row.usable_successes >= 3 and row.consecutive_failures < 3 and
-          is_number(row.recent_success_probability) and
-            row.recent_success_probability >= @qualified_reliability ->
-          :qualified
 
         row.comparable_attempts > 0 ->
           :provisional
@@ -1403,6 +1472,15 @@ defmodule Lasso.RPC.AttemptProjection do
       support_source: workload_support_source(workload_key),
       generation: row.generation
     }
+  end
+
+  defp qualified_row?(nil, _now_us), do: false
+  defp qualified_row?(%{observed_at_us: nil}, _now_us), do: false
+
+  defp qualified_row?(row, now_us) do
+    not routing_evidence_stale?(row.observed_at_us, now_us) and row.usable_successes >= 3 and
+      row.consecutive_failures < 3 and is_number(row.recent_success_probability) and
+      row.recent_success_probability >= @qualified_reliability
   end
 
   defp attach_system_prior(nil, nil), do: nil
