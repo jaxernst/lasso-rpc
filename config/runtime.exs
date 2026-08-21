@@ -43,6 +43,20 @@ vm_metrics_enabled =
 
 config :lasso, :vm_metrics_enabled, vm_metrics_enabled
 
+cowboy_telemetry_enabled =
+  case System.get_env("LASSO_COWBOY_TELEMETRY_ENABLED") do
+    nil -> true
+    value when value in ["true", "1"] -> true
+    value when value in ["false", "0"] -> false
+    _value -> raise "LASSO_COWBOY_TELEMETRY_ENABLED must be true, false, 1, or 0"
+  end
+
+config :lasso, :cowboy_telemetry_enabled, cowboy_telemetry_enabled
+
+unless cowboy_telemetry_enabled do
+  config :lasso, LassoWeb.Endpoint, http: [stream_handlers: [:cowboy_stream_h]]
+end
+
 positive_integer_env = fn name, default ->
   case System.get_env(name) do
     nil ->
