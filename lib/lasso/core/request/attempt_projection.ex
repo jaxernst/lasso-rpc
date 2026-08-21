@@ -21,6 +21,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @version 1
   @max_bytes 4_096
   @control_retries 4
+  @fastest_winner_interval 8
   @probation_deliveries 32
   @routing_evidence_max_age_us 300_000_000
   @latency_ewma_weight 8
@@ -60,6 +61,16 @@ defmodule Lasso.RPC.AttemptProjection do
           missing_drops: non_neg_integer(),
           contention_drops: non_neg_integer(),
           availability_degradations: map()
+        }
+
+  @type fastest_winner :: %{
+          generation: non_neg_integer(),
+          revision: non_neg_integer(),
+          route: {binary(), :http | :ws},
+          route_revision: non_neg_integer(),
+          qualified?: true,
+          latency_ms: number(),
+          observed_at_us: integer()
         }
 
   @spec new(AttemptTerminal.t(), binary(), binary()) :: t()
@@ -279,6 +290,46 @@ defmodule Lasso.RPC.AttemptProjection do
     ArgumentError -> nil
   end
 
+  @doc false
+  @spec fastest_winner(scope_state()) :: fastest_winner() | nil
+  def fastest_winner(%{degraded?: true}), do: nil
+
+  def fastest_winner(scope) when is_map(scope) do
+    key = fastest_winner_key(scope.profile, scope.chain_id)
+
+    case :ets.lookup(:lasso_instance_state, key) do
+      [{^key, winner}] ->
+        visible_fastest_winner(scope, winner)
+
+      _other ->
+        nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp visible_fastest_winner(
+         %{generation: generation} = scope,
+         %{
+           generation: generation,
+           qualified?: true,
+           route: {routing_instance_id, transport},
+           observed_at_us: observed_at_us
+         } = winner
+       )
+       when is_binary(routing_instance_id) and transport in [:http, :ws] and
+              is_integer(observed_at_us) do
+    now_us = System.monotonic_time(:microsecond)
+
+    case {visible_after_floor?(scope, observed_at_us),
+          routing_evidence_stale?(observed_at_us, now_us)} do
+      {true, false} -> winner
+      _other -> nil
+    end
+  end
+
+  defp visible_fastest_winner(_scope, _winner), do: nil
+
   @spec batch_summaries(binary(), [Channel.t() | map()], pos_integer(), atom()) :: map()
   def batch_summaries(profile, channels, chain_id, workload_key) do
     scope = scope_state(profile, chain_id)
@@ -432,11 +483,12 @@ defmodule Lasso.RPC.AttemptProjection do
   def prepare_routes(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
     if ConfigStore.route_generation() == generation do
-      {scope_keys, route_keys, system_prior_keys} = route_keys(routes)
+      {scope_keys, route_keys, system_prior_keys, fastest_winner_keys} = route_keys(routes)
 
       Enum.each(scope_keys, &publish_scope(&1, generation))
       Enum.each(route_keys, &publish_route(&1, generation))
       Enum.each(system_prior_keys, &publish_system_prior(&1, generation))
+      Enum.each(fastest_winner_keys, &publish_fastest_winner(&1, generation))
     end
 
     :ok
@@ -448,8 +500,14 @@ defmodule Lasso.RPC.AttemptProjection do
   def commit_routes(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
     if ConfigStore.route_generation() == generation do
-      {scope_keys, route_keys, system_prior_keys} = route_keys(routes)
-      delete_unpublished_control_rows(scope_keys, route_keys, system_prior_keys)
+      {scope_keys, route_keys, system_prior_keys, fastest_winner_keys} = route_keys(routes)
+
+      delete_unpublished_control_rows(
+        scope_keys,
+        route_keys,
+        system_prior_keys,
+        fastest_winner_keys
+      )
     end
 
     :ok
@@ -468,11 +526,12 @@ defmodule Lasso.RPC.AttemptProjection do
   @spec routes_ready?(non_neg_integer(), [map()]) :: boolean()
   def routes_ready?(generation, routes)
       when is_integer(generation) and generation >= 0 and is_list(routes) do
-    {scope_keys, route_keys, system_prior_keys} = route_keys(routes)
+    {scope_keys, route_keys, system_prior_keys, fastest_winner_keys} = route_keys(routes)
 
     scope_keys
     |> MapSet.union(route_keys)
     |> MapSet.union(system_prior_keys)
+    |> MapSet.union(fastest_winner_keys)
     |> Enum.all?(fn key ->
       case :ets.lookup(:lasso_instance_state, key) do
         [{^key, %{generation: ^generation}}] -> true
@@ -567,7 +626,8 @@ defmodule Lasso.RPC.AttemptProjection do
   defp do_update_route(key, generation, event, delta, retries, barrier) do
     case :ets.lookup(:lasso_instance_state, key) do
       [{^key, %{generation: ^generation} = current}] ->
-        workload = event.fact |> identity() |> Map.fetch!(:workload_key) |> Workload.decode()
+        identity = identity(event.fact)
+        workload = identity |> Map.fetch!(:workload_key) |> Workload.decode()
         updated = apply_delta(current, event, delta, workload)
         await_control_barrier(barrier)
 
@@ -575,8 +635,15 @@ defmodule Lasso.RPC.AttemptProjection do
           1 ->
             if ConfigStore.route_generation() == generation do
               if delta.kind == :success do
-                advance_scope(identity(event.fact), event.emitted_at_us, @control_retries)
+                advance_scope(identity, event.emitted_at_us, @control_retries)
               end
+
+              maybe_update_fastest_winner(
+                identity,
+                updated,
+                Map.put(delta, :observed_at_us, event.emitted_at_us),
+                workload
+              )
 
               :ok
             else
@@ -596,6 +663,112 @@ defmodule Lasso.RPC.AttemptProjection do
       _other ->
         record_missing(identity(event.fact), generation, event.emitted_at_us)
         :stale
+    end
+  end
+
+  defp maybe_update_fastest_winner(identity, row, delta, :client) do
+    if refresh_fastest_winner?(row, delta) do
+      update_fastest_winner(
+        fastest_winner_key(identity.profile, identity.chain_id),
+        identity.route_generation,
+        {identity.upstream_instance_id, identity.transport},
+        row,
+        delta,
+        @control_retries
+      )
+    end
+
+    :ok
+  end
+
+  defp maybe_update_fastest_winner(_identity, _row, _delta, _workload), do: :ok
+
+  defp refresh_fastest_winner?(row, %{kind: :success}) do
+    row.usable_successes <= 3 or rem(row.usable_successes, @fastest_winner_interval) == 0
+  end
+
+  defp refresh_fastest_winner?(_row, %{kind: kind}) when kind in [:failure, :rate_limit],
+    do: true
+
+  defp refresh_fastest_winner?(_row, _delta), do: false
+
+  defp update_fastest_winner(key, generation, route, row, delta, retries) when retries > 0 do
+    if ConfigStore.route_generation() == generation do
+      case :ets.lookup(:lasso_instance_state, key) do
+        [{^key, %{generation: ^generation} = current}] ->
+          updated = next_fastest_winner(current, route, row, delta)
+
+          cond do
+            updated == current -> :ok
+            replace_exact(key, current, updated) == 1 -> :ok
+            true -> update_fastest_winner(key, generation, route, row, delta, retries - 1)
+          end
+
+        _other ->
+          :stale
+      end
+    else
+      :stale
+    end
+  rescue
+    ArgumentError -> :stale
+  end
+
+  defp update_fastest_winner(_key, _generation, _route, _row, _delta, 0), do: :contended
+
+  defp next_fastest_winner(
+         %{route: route} = current,
+         route,
+         %{state_observed_at_us: observed_at_us},
+         %{kind: :failure, observed_at_us: observed_at_us}
+       ) do
+    %{default_fastest_winner(current.generation) | revision: increment(current.revision)}
+  end
+
+  defp next_fastest_winner(
+         %{route: route} = current,
+         route,
+         %{rate_limit_observed_at_us: observed_at_us},
+         %{kind: :rate_limit, observed_at_us: observed_at_us}
+       ) do
+    %{default_fastest_winner(current.generation) | revision: increment(current.revision)}
+  end
+
+  defp next_fastest_winner(current, _route, _row, %{kind: kind})
+       when kind in [:failure, :rate_limit],
+       do: current
+
+  defp next_fastest_winner(current, route, row, %{kind: :success}) do
+    now_us = System.monotonic_time(:microsecond)
+    qualified? = qualified_row?(row, now_us)
+
+    cond do
+      is_integer(current.observed_at_us) and row.observed_at_us < current.observed_at_us ->
+        current
+
+      current.route == route and row.revision <= current.route_revision ->
+        current
+
+      not qualified? and current.route == route ->
+        %{default_fastest_winner(current.generation) | revision: increment(current.revision)}
+
+      not qualified? ->
+        current
+
+      current.route == route or not current.qualified? or
+          row.successful_mean_latency_ms < current.latency_ms ->
+        %{
+          current
+          | revision: increment(current.revision),
+            route: route,
+            route_revision: row.revision,
+            qualified?: true,
+            latency_ms: row.successful_mean_latency_ms,
+            observed_at_us: row.observed_at_us
+        }
+
+      true ->
+        current
     end
   end
 
@@ -1052,6 +1225,24 @@ defmodule Lasso.RPC.AttemptProjection do
     end
   end
 
+  defp publish_fastest_winner(key, generation) do
+    case :ets.lookup(:lasso_instance_state, key) do
+      [{^key, %{generation: ^generation}}] ->
+        :ok
+
+      [{^key, current}] ->
+        if replace_exact(key, current, default_fastest_winner(generation)) == 0,
+          do: publish_fastest_winner(key, generation)
+
+      [] ->
+        if not :ets.insert_new(
+             :lasso_instance_state,
+             {key, default_fastest_winner(generation)}
+           ),
+           do: publish_fastest_winner(key, generation)
+    end
+  end
+
   defp published_scope(profile, chain_id, generation, current) do
     scope = default_scope(profile, chain_id, generation)
 
@@ -1074,7 +1265,12 @@ defmodule Lasso.RPC.AttemptProjection do
     end
   end
 
-  defp delete_unpublished_control_rows(scope_keys, route_keys, system_prior_keys) do
+  defp delete_unpublished_control_rows(
+         scope_keys,
+         route_keys,
+         system_prior_keys,
+         fastest_winner_keys
+       ) do
     scope_rows =
       :ets.match_object(:lasso_instance_state, {{:routing_control_scope, :_, :_}, :_})
 
@@ -1100,6 +1296,13 @@ defmodule Lasso.RPC.AttemptProjection do
 
     Enum.each(system_prior_rows, fn {key, _state} ->
       unless MapSet.member?(system_prior_keys, key), do: :ets.delete(:lasso_instance_state, key)
+    end)
+
+    fastest_winner_rows =
+      :ets.match_object(:lasso_instance_state, {{:routing_fastest_winner, :_, :_}, :_})
+
+    Enum.each(fastest_winner_rows, fn {key, _state} ->
+      unless MapSet.member?(fastest_winner_keys, key), do: :ets.delete(:lasso_instance_state, key)
     end)
   end
 
@@ -1169,6 +1372,18 @@ defmodule Lasso.RPC.AttemptProjection do
     Map.merge(default_partition(), %{generation: generation, revision: 0})
   end
 
+  defp default_fastest_winner(generation) do
+    %{
+      generation: generation,
+      revision: 0,
+      route: nil,
+      route_revision: 0,
+      qualified?: false,
+      latency_ms: nil,
+      observed_at_us: nil
+    }
+  end
+
   defp default_partition do
     %{
       observed_at_us: nil,
@@ -1213,11 +1428,19 @@ defmodule Lasso.RPC.AttemptProjection do
       end)
       |> MapSet.new()
 
-    {scope_keys, route_keys, system_prior_keys}
+    fastest_winner_keys =
+      routes
+      |> Enum.map(&fastest_winner_key(&1.profile, &1.chain_id))
+      |> MapSet.new()
+
+    {scope_keys, route_keys, system_prior_keys, fastest_winner_keys}
   end
 
   defp scope_key(profile, chain_id),
     do: {:routing_control_scope, BoundedIdentifier.encode(profile), chain_id}
+
+  defp fastest_winner_key(profile, chain_id),
+    do: {:routing_fastest_winner, BoundedIdentifier.encode(profile), chain_id}
 
   defp route_key(identity) do
     {:routing_control, identity.profile, identity.chain_id, identity.upstream_instance_id,

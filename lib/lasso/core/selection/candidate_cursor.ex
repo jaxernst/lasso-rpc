@@ -117,7 +117,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       method: method,
       filters: filters,
       consensus_height: consensus_height,
-      learned_scope: nil,
+      learned_scope: deferred_scope(deferred_ranking),
       descriptors: descriptors,
       deferred_ranking: deferred_ranking,
       limit: limit,
@@ -284,7 +284,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   defp materialize(cursor, {:ranked, candidate, transport}) do
-    routing_state = Map.fetch!(candidate.routing_states, transport)
+    routing_state = ranked_routing_state(cursor, candidate, transport)
 
     {circuit_state, rate_limited?} =
       InstanceState.read_candidate_gate(
@@ -300,6 +300,28 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       {:ok, channel, tier, AdapterFilter.method_supported?(channel, cursor.method)}
     else
       _unavailable -> :skip
+    end
+  end
+
+  defp ranked_routing_state(cursor, candidate, transport) do
+    case Map.fetch!(candidate.routing_states, transport) do
+      nil ->
+        scope =
+          cursor.learned_scope ||
+            AttemptProjection.scope_state(
+              cursor.plan.profile,
+              cursor.plan.chain_id,
+              cursor.plan.generation
+            )
+
+        AttemptProjection.route_record_bounded(
+          scope,
+          candidate.routing_instance_id,
+          transport
+        )
+
+      row ->
+        row
     end
   end
 
@@ -397,6 +419,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp deferred_descriptors(_deferred), do: []
 
+  defp deferred_scope(%DeferredRanking{scope: scope}), do: scope
+  defp deferred_scope(_deferred), do: nil
+
   defp reject_deferred_provider(%DeferredRanking{entries: entries} = deferred, provider_id) do
     filtered =
       Enum.reject(entries, fn {_channel, candidate, _transport} -> candidate.id == provider_id end)
@@ -414,7 +439,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
        }) do
     summaries =
       Map.new(entries, fn {channel, candidate, transport} ->
-        row = Map.get(candidate.routing_states, transport)
+        row = candidate_route_record(scope, candidate, transport)
 
         summary =
           AttemptProjection.summarize_route_bounded(
@@ -444,6 +469,20 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
       {:ranked, candidate, transport}
     end)
+  end
+
+  defp candidate_route_record(scope, candidate, transport) do
+    case Map.get(candidate.routing_states, transport) do
+      nil ->
+        AttemptProjection.route_record_bounded(
+          scope,
+          candidate.routing_instance_id,
+          transport
+        )
+
+      row ->
+        row
+    end
   end
 
   defp empty_unsupported do

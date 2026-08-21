@@ -192,10 +192,17 @@ defmodule Lasso.RPC.Selection do
         end
 
       {:fastest, Lasso.RPC.Strategies.Fastest} ->
-        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod)
+        select_ranked_channel_candidates(
+          profile,
+          chain_id,
+          method,
+          opts,
+          strategy_mod,
+          :fastest_winner
+        )
 
       {:latency_weighted, Lasso.RPC.Strategies.LatencyWeighted} ->
-        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod)
+        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod, :full)
 
       _custom_or_unknown ->
         select_channels(profile, chain_id, method, opts)
@@ -247,13 +254,24 @@ defmodule Lasso.RPC.Selection do
       else: []
   end
 
-  defp select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod) do
+  defp select_ranked_channel_candidates(
+         profile,
+         chain_id,
+         method,
+         opts,
+         strategy_mod,
+         ranking_mode
+       ) do
     case capture_selection_snapshot(profile, chain_id) do
       {:ok, snapshot, plan} ->
         strategy = Keyword.fetch!(opts, :strategy)
 
+        fastest_winner = fastest_winner(ranking_mode, plan)
+
+        gate_mode = if fastest_winner, do: :deferred_fastest, else: :deferred_gates
+
         {candidates, _transport, workload_key, filters, consensus_height} =
-          routing_candidates(plan, method, opts, :deferred_gates)
+          routing_candidates(plan, method, opts, gate_mode)
 
         entries =
           for candidate <- candidates,
@@ -282,7 +300,8 @@ defmodule Lasso.RPC.Selection do
               plan: plan,
               timeout: Keyword.get(opts, :timeout, 30_000),
               workload_key: workload_key,
-              strategy_mod: strategy_mod
+              strategy_mod: strategy_mod,
+              fastest_winner: fastest_winner
             }
           )
 
@@ -341,6 +360,13 @@ defmodule Lasso.RPC.Selection do
 
     candidates =
       case gate_mode do
+        :deferred_fastest ->
+          CandidateListing.list_fastest_candidates_from_plan(
+            plan,
+            pool_filters,
+            consensus_height || :unavailable
+          )
+
         :deferred_gates ->
           CandidateListing.list_rankable_candidates_from_plan(
             plan,
@@ -358,6 +384,14 @@ defmodule Lasso.RPC.Selection do
 
     {candidates, transport, workload_key, pool_filters, consensus_height}
   end
+
+  defp fastest_winner(:fastest_winner, plan) do
+    plan.profile
+    |> AttemptProjection.scope_state(plan.chain_id, plan.generation)
+    |> AttemptProjection.fastest_winner()
+  end
+
+  defp fastest_winner(:full, _plan), do: nil
 
   defp ranking_channel(plan, candidate, transport) do
     %Channel{
@@ -481,6 +515,25 @@ defmodule Lasso.RPC.Selection do
   defp rank_candidate_channels(
          channels,
          entries_by_key,
+         %{fastest_winner: %{route: {_routing_instance_id, _transport}} = winner, plan: plan} =
+           ranking
+       ) do
+    case cached_fastest_ranking(channels, entries_by_key, winner, plan) do
+      {:ok, ranked, deferred} ->
+        {ranked, deferred}
+
+      :miss ->
+        rank_candidate_channels(
+          channels,
+          entries_by_key,
+          %{ranking | fastest_winner: nil}
+        )
+    end
+  end
+
+  defp rank_candidate_channels(
+         channels,
+         entries_by_key,
          %{
            candidates: candidates,
            strategy: :fastest,
@@ -488,7 +541,8 @@ defmodule Lasso.RPC.Selection do
            plan: plan,
            timeout: timeout,
            workload_key: :client,
-           strategy_mod: Lasso.RPC.Strategies.Fastest = strategy_mod
+           strategy_mod: Lasso.RPC.Strategies.Fastest = strategy_mod,
+           fastest_winner: nil
          } = ranking
        ) do
     if Enum.any?(candidates, & &1.learned_feedback_degraded?) do
@@ -562,6 +616,46 @@ defmodule Lasso.RPC.Selection do
     {rank_channels_eager(channels, entries_by_key, ranking), nil}
   end
 
+  defp cached_fastest_ranking(
+         channels,
+         entries_by_key,
+         %{route: {routing_instance_id, transport}},
+         plan
+       ) do
+    {winner_channels, remaining} =
+      Enum.split_with(channels, fn channel ->
+        {candidate, candidate_transport} =
+          Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
+
+        candidate.routing_instance_id == routing_instance_id and
+          candidate_transport == transport
+      end)
+
+    case winner_channels do
+      [winner] ->
+        {candidate, winner_transport} =
+          Map.fetch!(entries_by_key, {winner.instance_id, winner.transport})
+
+        deferred = %DeferredRanking{
+          entries:
+            Enum.map(remaining, fn channel ->
+              {remaining_candidate, remaining_transport} =
+                Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
+
+              {channel, remaining_candidate, remaining_transport}
+            end),
+          scope: AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation),
+          chain_id: plan.chain_id,
+          workload_key: :client
+        }
+
+        {:ok, [{candidate, winner_transport}], deferred}
+
+      _other ->
+        :miss
+    end
+  end
+
   defp split_client_qualified(channels, entries_by_key, chain_id, now_us) do
     channels
     |> Enum.map(fn channel ->
@@ -601,7 +695,7 @@ defmodule Lasso.RPC.Selection do
         summary =
           AttemptProjection.complete_client_summary_bounded(
             scope,
-            Map.get(candidate.routing_states, transport),
+            candidate_route_record(scope, candidate, transport),
             candidate.instance_id,
             candidate.routing_instance_id,
             transport,
@@ -623,6 +717,20 @@ defmodule Lasso.RPC.Selection do
     |> Enum.map(&elem(&1, 0))
     |> strategy_mod.rank_channels(method, prepared_ctx, plan.profile, plan.chain_id)
     |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
+  end
+
+  defp candidate_route_record(scope, candidate, transport) do
+    case Map.get(candidate.routing_states, transport) do
+      nil ->
+        AttemptProjection.route_record_bounded(
+          scope,
+          candidate.routing_instance_id,
+          transport
+        )
+
+      row ->
+        row
+    end
   end
 
   defp rank_channels_eager(

@@ -86,6 +86,33 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert Map.has_key?(candidate, :rate_limited)
     end
 
+    test "fastest winner candidates defer canonical route reads until cursor admission" do
+      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
+
+      fastest =
+        CandidateListing.list_fastest_candidates_from_plan(
+          plan,
+          %{protocol: :http},
+          :unavailable
+        )
+
+      assert length(fastest) == 3
+
+      assert Enum.all?(fastest, fn candidate ->
+               candidate.routing_states == %{http: nil, ws: nil} and
+                 candidate.circuit_state == %{http: :deferred, ws: :deferred}
+             end)
+
+      [rankable | _] =
+        CandidateListing.list_rankable_candidates_from_plan(
+          plan,
+          %{protocol: :http},
+          :unavailable
+        )
+
+      assert is_map(rankable.routing_states.http)
+    end
+
     test "lag filtering uses the request's captured consensus" do
       {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
       providers = Map.new(plan.providers, &{&1.id, &1.instance_id})

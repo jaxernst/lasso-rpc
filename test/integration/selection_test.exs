@@ -667,6 +667,66 @@ defmodule Lasso.RPC.SelectionTest do
       end
     end
 
+    test "fastest winner is rechecked against learned rate limits at cursor admission", %{
+      chain: chain
+    } do
+      profile = "public"
+
+      setup_providers([
+        %{id: "winner", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "fallback", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      now_us = System.monotonic_time(:microsecond)
+
+      record_selection_successes(
+        chain,
+        profile,
+        "winner",
+        generation,
+        now_us,
+        10_000,
+        "client"
+      )
+
+      record_selection_successes(
+        chain,
+        profile,
+        "fallback",
+        generation,
+        now_us + 10,
+        20_000,
+        "client"
+      )
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http
+        )
+
+      assert hd(cursor.candidate_labels) == "winner:http"
+
+      winner_instance = Catalog.lookup_instance_id(profile, chain, "winner")
+
+      assert :ok =
+               AttemptProjection.apply_control(
+                 selection_quota_event(
+                   chain,
+                   profile,
+                   "winner",
+                   winner_instance,
+                   generation,
+                   now_us + 20
+                 )
+               )
+
+      assert {:ok, %{provider_id: "fallback"}, cursor} = CandidateCursor.next(cursor)
+      assert {:ok, %{provider_id: "winner"}, cursor} = CandidateCursor.next(cursor)
+      assert :done = CandidateCursor.next(cursor)
+    end
+
     test "ranked cursors tier a provider rate-limited after ranking", %{chain: chain} do
       profile = "public"
 
@@ -956,6 +1016,43 @@ defmodule Lasso.RPC.SelectionTest do
       )
 
     fact = AttemptTerminal.Response.new(identity, :success, duration_us)
+    %{AttemptProjection.new(fact, provider_id, "eth_blockNumber") | emitted_at_us: emitted_at_us}
+  end
+
+  defp selection_quota_event(
+         chain,
+         profile,
+         provider_id,
+         instance_id,
+         generation,
+         emitted_at_us
+       ) do
+    identity =
+      AttemptIdentity.new(
+        request_id: "selection-quota-request",
+        attempt_id: "selection-quota-attempt-#{emitted_at_us}",
+        profile: profile,
+        chain_id: chain,
+        upstream_instance_id: instance_id,
+        transport: :http,
+        route_generation: generation,
+        circuit_scope: :broad,
+        circuit_epoch: 1,
+        execution_safety: :replay_safe,
+        routing_intent: "fastest",
+        workload_key: "client",
+        request_budget_ms: 100,
+        candidate_admission_count: 1,
+        dispatch_count: 1
+      )
+
+    fact =
+      AttemptTerminal.Response.new(identity, :application_error, 10,
+        error_code: -32_005,
+        error_category: :quota,
+        retry_after_ms: 60_000
+      )
+
     %{AttemptProjection.new(fact, provider_id, "eth_blockNumber") | emitted_at_us: emitted_at_us}
   end
 end
