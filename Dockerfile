@@ -1,5 +1,5 @@
 # Build stage
-FROM hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bullseye-20260713@sha256:163ac81d99259269e3465859f24e016897a7817e78992b565548104e26cba6c9 AS builder
+FROM hexpm/elixir:1.18.4-erlang-28.0-debian-bookworm-20260610@sha256:d9d55d4eda71e49ee175d170a62d4a25f3581e59dd196e3407ff0aaadfa292ea AS builder
 
 # Install build dependencies
 RUN apt-get update && \
@@ -48,7 +48,7 @@ RUN mix tailwind.install && \
 RUN mix release
 
 # Runtime stage
-FROM hexpm/elixir:1.17.3-erlang-27.3.4.14-debian-bullseye-20260713-slim@sha256:0d1d03b4106fa4fca80d1889911069d595db1e32bbe75a7898cd072d59495e3b
+FROM hexpm/elixir:1.18.4-erlang-28.0-debian-bookworm-20260610-slim@sha256:0e0f0fc71e298dc9517f825d4076af5235617b70a48b6394a055dd1800fe34ef
 
 # Install runtime dependencies
 RUN apt-get update && \
