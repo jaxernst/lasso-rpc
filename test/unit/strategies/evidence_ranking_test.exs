@@ -222,8 +222,16 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
 
         counts =
           if summary.state == :qualified,
-            do: %{comparable_attempts: 100, usable_successes: 99},
-            else: %{comparable_attempts: 0, usable_successes: 0}
+            do: %{
+              comparable_attempts: 100,
+              usable_successes: 99,
+              recent_success_probability: 1.0
+            },
+            else: %{
+              comparable_attempts: 0,
+              usable_successes: 0,
+              recent_success_probability: nil
+            }
 
         :ets.insert(
           :lasso_instance_state,
