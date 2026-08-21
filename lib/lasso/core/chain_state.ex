@@ -27,12 +27,20 @@ defmodule Lasso.RPC.ChainState do
           | {:error, term()}
   def consensus_height(chain_id, opts \\ []) when is_integer(chain_id) and chain_id > 0 do
     provider_ids = Keyword.get(opts, :provider_ids, nil)
-    freshness_ms = Keyword.get(opts, :freshness_ms, @default_freshness_ms)
 
-    if provider_ids do
-      BlockSyncRegistry.get_consensus_height_filtered(chain_id, provider_ids, freshness_ms)
-    else
-      BlockSyncRegistry.get_consensus_height(chain_id, freshness_ms)
+    case {provider_ids, Keyword.fetch(opts, :freshness_ms)} do
+      {provider_ids, freshness} when is_list(provider_ids) ->
+        BlockSyncRegistry.get_consensus_height_filtered(
+          chain_id,
+          provider_ids,
+          freshness_or_default(freshness)
+        )
+
+      {nil, {:ok, freshness_ms}} ->
+        BlockSyncRegistry.get_consensus_height(chain_id, freshness_ms)
+
+      {nil, :error} ->
+        BlockSyncRegistry.get_consensus_height(chain_id)
     end
   rescue
     e ->
@@ -176,4 +184,7 @@ defmodule Lasso.RPC.ChainState do
   def get_chain_status(chain_id) when is_integer(chain_id) and chain_id > 0 do
     BlockSyncRegistry.get_chain_status(chain_id)
   end
+
+  defp freshness_or_default({:ok, freshness_ms}), do: freshness_ms
+  defp freshness_or_default(:error), do: @default_freshness_ms
 end
