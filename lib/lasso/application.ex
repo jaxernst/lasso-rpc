@@ -17,6 +17,10 @@ defmodule Lasso.Application do
     node_id = Application.fetch_env!(:lasso, :node_id)
     :persistent_term.put({Lasso.Cluster.Topology, :self_node_id}, node_id)
 
+    Lasso.RPC.Transports.HTTP.configure_response_heap_tuning(
+      Application.get_env(:lasso, :http_response_heap_tuning_enabled, false)
+    )
+
     # Create ETS tables owned by Application process (never dies).
     # These tables survive GenServer restarts and provide stable storage.
 

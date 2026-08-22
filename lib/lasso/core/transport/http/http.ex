@@ -15,6 +15,9 @@ defmodule Lasso.RPC.Transports.HTTP do
   alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
 
+  @response_heap_tuning_key {__MODULE__, :response_heap_tuning_enabled}
+  @response_validation_min_heap_size 4_185
+
   # Channel is the provider configuration for HTTP (stateless)
   @type channel :: %{url: String.t(), provider_id: String.t(), config: map()}
 
@@ -107,6 +110,7 @@ defmodule Lasso.RPC.Transports.HTTP do
            ) do
         {:ok, {:raw, raw_bytes}} ->
           received_at_us = System.monotonic_time(:microsecond)
+          tune_response_heap()
           validation = UpstreamResponse.validate_unary(raw_bytes, upstream_id, client_id)
           validated_at_us = System.monotonic_time(:microsecond)
 
@@ -157,6 +161,28 @@ defmodule Lasso.RPC.Transports.HTTP do
   @impl true
   def close(_channel) do
     # HTTP channels are stateless
+    :ok
+  end
+
+  @doc false
+  @spec configure_response_heap_tuning(boolean()) :: :ok
+  def configure_response_heap_tuning(enabled) when is_boolean(enabled) do
+    :persistent_term.put(@response_heap_tuning_key, enabled)
+  end
+
+  @doc false
+  @spec response_heap_tuning_enabled?() :: boolean()
+  def response_heap_tuning_enabled? do
+    :persistent_term.get(@response_heap_tuning_key, false)
+  end
+
+  @doc false
+  @spec tune_response_heap() :: :ok
+  def tune_response_heap do
+    if response_heap_tuning_enabled?() do
+      Process.flag(:min_heap_size, @response_validation_min_heap_size)
+    end
+
     :ok
   end
 
