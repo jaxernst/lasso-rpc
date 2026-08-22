@@ -57,6 +57,16 @@ unless cowboy_telemetry_enabled do
   config :lasso, LassoWeb.Endpoint, http: [stream_handlers: [:cowboy_stream_h]]
 end
 
+http_response_heap_tuning_enabled =
+  case System.get_env("LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED") do
+    nil -> false
+    value when value in ["true", "1"] -> true
+    value when value in ["false", "0"] -> false
+    _value -> raise "LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED must be true, false, 1, or 0"
+  end
+
+config :lasso, :http_response_heap_tuning_enabled, http_response_heap_tuning_enabled
+
 positive_integer_env = fn name, default ->
   case System.get_env(name) do
     nil ->
