@@ -64,6 +64,49 @@ defmodule Lasso.Core.Support.ErrorNormalizerTest do
     end
   end
 
+  describe "provider capability classification" do
+    test "applies code-only, message-only, and combined rules through normalization" do
+      capabilities = %{
+        error_rules: [
+          %{code: 35, category: :capability_violation},
+          %{message_contains: "credits quota", category: :rate_limit},
+          %{code: 30, message_contains: "free tier", category: :auth_error}
+        ]
+      }
+
+      opts = [provider_id: "custom", provider_capabilities: capabilities]
+
+      assert %JError{category: :capability_violation} =
+               ErrorNormalizer.normalize(
+                 %{"error" => %{"code" => 35, "message" => "provider-specific"}},
+                 opts
+               )
+
+      assert %JError{category: :rate_limit, breaker_penalty?: false} =
+               ErrorNormalizer.normalize(
+                 %{"error" => %{"code" => -32_000, "message" => "Credits quota exhausted"}},
+                 opts
+               )
+
+      assert %JError{category: :auth_error} =
+               ErrorNormalizer.normalize(
+                 %{"error" => %{"code" => 30, "message" => "Timeout on the free tier"}},
+                 opts
+               )
+    end
+
+    test "keeps default classification when no provider rule matches" do
+      capabilities = %{error_rules: [%{code: 35, category: :rate_limit}]}
+
+      assert %JError{category: :invalid_params} =
+               ErrorNormalizer.normalize(
+                 %{"error" => %{"code" => -32_602, "message" => "Invalid params"}},
+                 provider_id: "custom",
+                 provider_capabilities: capabilities
+               )
+    end
+  end
+
   describe "client_error with non-JSON-RPC body (reclassification)" do
     test "reclassifies dRPC-style gateway rejection as server_error" do
       payload = %{

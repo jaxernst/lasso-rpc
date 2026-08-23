@@ -1706,7 +1706,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
           ErrorClassifier.classify(jerr.code, jerr.message,
             data: jerr.data,
-            provider_id: state.endpoint.id
+            provider_id: state.endpoint.id,
+            profile: state.endpoint.profile,
+            chain_id: state.endpoint.chain_id
           )
 
         enriched = %{
@@ -2484,6 +2486,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       jerr =
         ErrorNormalizer.normalize(message,
           provider_id: state.endpoint.id,
+          profile: state.endpoint.profile,
+          chain_id: state.endpoint.chain_id,
           context: :jsonrpc,
           transport: :ws
         )

@@ -60,7 +60,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
     # Unified classification with adapter priority
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, provider_id: provider_id)
+      ErrorClassifier.classify(code, message, classifier_opts(opts))
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -178,7 +178,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
     # Unified classification with adapter priority
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, provider_id: provider_id)
+      ErrorClassifier.classify(code, message, classifier_opts(opts))
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -210,7 +210,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
       {:json_rpc, code, message} ->
         # Body is a valid JSON-RPC error envelope — classify normally
         %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-          ErrorClassifier.classify(code, message, provider_id: provider_id)
+          ErrorClassifier.classify(code, message, classifier_opts(opts))
 
         data =
           payload
@@ -731,6 +731,10 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
        do: %{jerr | transport: transport}
 
   defp maybe_add_transport(jerr, _transport), do: jerr
+
+  defp classifier_opts(opts) do
+    Keyword.take(opts, [:provider_id, :profile, :chain_id, :chain, :provider_capabilities])
+  end
 
   # Extract nested JSON-RPC error from HTTP error payload (e.g., 4xx/5xx with JSON body).
   #

@@ -22,10 +22,11 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     provider_id = Keyword.get(opts, :provider_id)
     profile = Keyword.get(opts, :profile)
     chain = Keyword.get(opts, :chain_id) || Keyword.get(opts, :chain)
+    capabilities = Keyword.get(opts, :provider_capabilities)
     data = Keyword.get(opts, :data)
 
     {category, classification_path} =
-      classify_with_path(code, message, data, provider_id, profile, chain)
+      classify_with_path(code, message, data, provider_id, profile, chain, capabilities)
 
     retriable? = ErrorClassification.retriable_for_category?(category)
     breaker_penalty? = ErrorClassification.breaker_penalty?(category)
@@ -55,11 +56,24 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     }
   end
 
-  defp classify_with_path(code, message, data, provider_id, profile, chain)
+  defp classify_with_path(code, message, data, provider_id, _profile, _chain, capabilities)
+       when is_binary(provider_id) and is_map(capabilities) do
+    classify_from_capabilities(code, message, data, provider_id, capabilities)
+  end
+
+  defp classify_with_path(code, message, data, provider_id, profile, chain, _capabilities)
        when is_binary(provider_id) do
     caps = lookup_capabilities(profile, chain, provider_id)
 
-    case Capabilities.classify_error(code, message, caps) do
+    classify_from_capabilities(code, message, data, provider_id, caps)
+  end
+
+  defp classify_with_path(code, message, data, _provider_id, _profile, _chain, _capabilities) do
+    ErrorClassification.categorize_with_path(code, message, data)
+  end
+
+  defp classify_from_capabilities(code, message, data, provider_id, capabilities) do
+    case Capabilities.classify_error(code, message, capabilities) do
       {:ok, category} when is_atom(category) ->
         {category, :provider_rule}
 
@@ -73,10 +87,6 @@ defmodule Lasso.Core.Support.ErrorClassifier do
       )
 
       ErrorClassification.categorize_with_path(code, message, data)
-  end
-
-  defp classify_with_path(code, message, data, _provider_id, _profile, _chain) do
-    ErrorClassification.categorize_with_path(code, message, data)
   end
 
   defp emit_classification_telemetry(code, message, data, provider_id, category, path) do

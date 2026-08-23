@@ -908,6 +908,37 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     assert Connection.status(context.instance_id).transport_pending_requests == 0
   end
 
+  test "classifies upstream errors with the selected provider capability snapshot", context do
+    channel =
+      Map.put(context.channel, :config, %{
+        capabilities: %{
+          error_rules: [
+            %{
+              code: -32_000,
+              message_contains: "credits quota",
+              category: :rate_limit
+            }
+          ]
+        }
+      })
+
+    task = request_task(channel, "custom-classification", 1_000)
+    assert_receive {:protocol_ws_send, ws_pid, transport_id, _payload}
+
+    raw_error =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => transport_id,
+        "error" => %{"code" => -32_000, "message" => "Credits quota exhausted"}
+      })
+
+    :ok = TestSupport.ProtocolWSClient.acknowledge(ws_pid, transport_id, raw_error)
+
+    assert {:error, %JError{category: :rate_limit, retriable?: true, breaker_penalty?: false},
+            _io_ms} =
+             Task.await(task)
+  end
+
   test "uses validation completion for eligibility and receipt time only for I/O duration",
        context do
     {task, attempt_ref} = observed_request_task(context.channel)

@@ -213,6 +213,48 @@ defmodule Lasso.RPC.Transports.HTTPTest do
     assert error.breaker_penalty? == expected.breaker_penalty?
   end
 
+  test "classifies upstream errors with the selected provider capability snapshot" do
+    provider_id = "custom-rule-provider"
+
+    channel = %{
+      provider_id: provider_id,
+      profile: "custom-profile",
+      chain_id: 8_453,
+      provider_capabilities: %{
+        error_rules: [
+          %{
+            code: -32_000,
+            message_contains: "credits quota",
+            category: :rate_limit
+          }
+        ]
+      },
+      config: %{id: provider_id, url: "https://example.invalid"}
+    }
+
+    rpc_request = %{
+      "jsonrpc" => "2.0",
+      "method" => "eth_call",
+      "params" => [],
+      "id" => "custom-classification"
+    }
+
+    raw =
+      Jason.encode!(%{
+        "jsonrpc" => "2.0",
+        "id" => "custom-classification",
+        "error" => %{"code" => -32_000, "message" => "Credits quota exhausted"}
+      })
+
+    expect(Lasso.RPC.HttpClientMock, :request, fn _config, _method, _params, _opts ->
+      {:ok, {:raw, raw}}
+    end)
+
+    assert {:error, %JError{category: :rate_limit, retriable?: true, breaker_penalty?: false},
+            _io_ms} =
+             HTTP.request(channel, rpc_request, 1_000)
+  end
+
   test "request ownership projects production HTTP errors into canonical classes" do
     provider_id = "owner-classified-provider"
 
