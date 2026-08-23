@@ -13,7 +13,7 @@ defmodule Lasso.Core.Support.ContinuityPolicy do
           | {:exceeded, pos_integer(), pos_integer()}
   def needed_block_range(last_seen, head, max_backfill_blocks, _policy)
       when is_integer(last_seen) do
-    if head <= last_seen + 1 do
+    if head <= last_seen do
       {:none}
     else
       from_n = last_seen + 1

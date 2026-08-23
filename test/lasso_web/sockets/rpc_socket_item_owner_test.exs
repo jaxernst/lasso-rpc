@@ -475,6 +475,27 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     assert state.forwarded_item_counts.stale_subscription_event == 1
   end
 
+  test "continuity exhaustion closes a socket that owns the subscription" do
+    state = %{socket_state() | subscriptions: %{"sub-1" => true}}
+
+    assert {:stop, :continuity_exhausted, {1011, "Lasso subscription continuity exhausted"},
+            ^state} =
+             RPCSocket.handle_info(
+               {:subscription_terminated, "sub-1", :continuity_exhausted},
+               state
+             )
+  end
+
+  test "continuity exhaustion for an unknown subscription leaves the socket open" do
+    state = socket_state()
+
+    assert {:ok, ^state} =
+             RPCSocket.handle_info(
+               {:subscription_terminated, "unknown", :continuity_exhausted},
+               state
+             )
+  end
+
   test "production subscription owner rejects an already-expired scope before validation" do
     item_ref = make_ref()
     now_us = System.monotonic_time(:microsecond)

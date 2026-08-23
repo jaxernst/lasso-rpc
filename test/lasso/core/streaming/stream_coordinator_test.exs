@@ -44,6 +44,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     {:ok, List.last(excluded)}
   end
 
+  defp successful_replacement(_profile, _chain_id, _key, provider_id, coordinator_pid) do
+    send(coordinator_pid, {:subscription_confirmed, provider_id, "upstream-new"})
+  end
+
   # Helper to get coordinator state (encapsulated for stability)
   defp get_coordinator_state(pid) do
     :sys.get_state(pid)
@@ -104,7 +108,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       opts = [
         primary_provider_id: "provider_1",
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3
+        backfill_provider_selector: &successful_backfill_provider/3,
+        replacement_requester: &successful_replacement/5
       ]
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
@@ -173,8 +178,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       # Send events
       event1 = new_heads_event(100)
       event2 = new_heads_event(101)
-      GenServer.cast(pid, {:upstream_event, "provider_1", "upstream_1", event1, now()})
-      GenServer.cast(pid, {:upstream_event, "provider_1", "upstream_1", event2, now()})
+      GenServer.cast(pid, {:upstream_event, "p2", "upstream_1", event1, now()})
+      GenServer.cast(pid, {:upstream_event, "p2", "upstream_1", event2, now()})
 
       Process.sleep(10)
 
@@ -201,7 +206,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       # Send event
       event = new_heads_event(100)
-      GenServer.cast(pid, {:upstream_event, "provider_1", "upstream_1", event, now()})
+      GenServer.cast(pid, {:upstream_event, "p2", "upstream_1", event, now()})
 
       Process.sleep(10)
 
@@ -242,7 +247,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       opts = [
         primary_provider_id: "provider_1",
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3
+        backfill_provider_selector: &successful_backfill_provider/3,
+        replacement_requester: &successful_replacement/5
       ]
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
@@ -262,14 +268,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       Process.sleep(10)
 
-      # Verify failover initiated - test outcome, not intermediate state
-      # May be :backfilling or :switching (backfill completes fast in tests)
+      # Verify replacement and backfill completed.
       state = get_coordinator_state(pid)
-      assert state.failover_status in [:backfilling, :switching]
-
-      # Test observable outcome: failure recorded in history
-      assert length(state.failover_history) == 1
-      assert hd(state.failover_history).provider_id == "provider_1"
+      assert state.failover_status == :active
+      assert state.primary_provider_id == "provider_2"
     end
 
     test "ignores signal when status is :backfilling", %{coordinator: pid} do
@@ -344,7 +346,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         max_failover_attempts: 2,
         failover_cooldown_ms: 1_000,
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3
+        backfill_provider_selector: &successful_backfill_provider/3,
+        replacement_requester: &successful_replacement/5
       ]
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
@@ -396,13 +399,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       GenServer.cast(pid, {:provider_unhealthy, "p2", "p3"})
       Process.sleep(10)
 
-      # Test outcome: did NOT enter degraded mode, failover proceeding
+      # Test outcome: did not enter degraded mode and recovered.
       state = get_coordinator_state(pid)
       refute state.failover_status == :degraded
-      assert state.failover_status in [:backfilling, :switching]
-
-      # History should have grown (new failure recorded)
-      assert length(state.failover_history) == 2
+      assert state.failover_status == :active
     end
 
     test "resets failover history after entering degraded mode", %{coordinator: pid} do
@@ -493,7 +493,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       opts = [
         primary_provider_id: "provider_1",
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3
+        backfill_provider_selector: &successful_backfill_provider/3,
+        replacement_requester: &successful_replacement/5
       ]
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
@@ -506,10 +507,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       GenServer.cast(pid, {:provider_unhealthy, "provider_1", "provider_2"})
       Process.sleep(50)
 
-      # History should have one entry
       state = get_coordinator_state(pid)
-      assert length(state.failover_history) == 1
-      assert hd(state.failover_history).provider_id == "provider_1"
+      assert state.failover_history == []
+      assert state.primary_provider_id == "provider_2"
 
       GenServer.stop(pid)
     end
@@ -547,7 +547,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       # Send events up to max
       for i <- 1..3 do
         event = new_heads_event(100 + i)
-        GenServer.cast(pid, {:upstream_event, "p1", "up1", event, now()})
+        GenServer.cast(pid, {:upstream_event, "p2", "up1", event, now()})
       end
 
       Process.sleep(20)
@@ -581,7 +581,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       log =
         capture_log(fn ->
-          GenServer.cast(pid, {:upstream_event, "p1", "up1", event4, now()})
+          GenServer.cast(pid, {:upstream_event, "p2", "up1", event4, now()})
           Process.sleep(20)
         end)
 
@@ -594,26 +594,31 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     end
 
     test "buffer preserves event ordering during drain", %{coordinator: pid} do
-      # Set up :switching status with buffered events
+      # Set up a completed backfill with buffered events
       state = get_coordinator_state(pid)
       event1 = new_heads_event(100)
       event2 = new_heads_event(101)
       event3 = new_heads_event(102)
 
+      owner_id = make_ref()
+      owner_ref = Process.monitor(self())
+
       fake_context = %{
         old_provider_id: "p1",
         new_provider_id: "p2",
-        backfill_task_ref: make_ref(),
+        backfill_owner_id: owner_id,
+        backfill_owner_pid: self(),
+        backfill_owner_ref: owner_ref,
+        backfill_task_ref: owner_ref,
         started_at: now(),
         event_buffer: [event1, event2, event3],
         attempt_count: 1
       }
 
-      new_state = %{state | failover_status: :switching, failover_context: fake_context}
+      new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
-      # Complete failover (simulate subscription_confirmed)
-      send(pid, {:subscription_confirmed, "p2", "upstream_2"})
+      send(pid, {:backfill_result, owner_id, self(), :ok})
       Process.sleep(50)
 
       # Verify events were processed in order
@@ -708,7 +713,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         primary_provider_id: "provider_1",
         max_failover_attempts: 1,
         backfill_requester: requester,
-        backfill_provider_selector: &successful_backfill_provider/3
+        backfill_provider_selector: &successful_backfill_provider/3,
+        replacement_requester: &successful_replacement/5
       ]
 
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})

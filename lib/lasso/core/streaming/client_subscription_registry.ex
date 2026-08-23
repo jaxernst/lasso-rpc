@@ -99,6 +99,12 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
     GenServer.cast(via(profile, chain_id), {:dispatch, key, payload})
   end
 
+  @spec terminate(String.t(), pos_integer(), key, term()) :: :ok
+  def terminate(profile, chain_id, key, reason)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    GenServer.cast(via(profile, chain_id), {:terminate, key, reason})
+  end
+
   # GenServer callbacks
 
   @impl true
@@ -189,6 +195,36 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
     end)
 
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:terminate, key, reason}, state) do
+    subscription_ids = Map.get(state.by_key, key, [])
+
+    Enum.each(subscription_ids, fn subscription_id ->
+      case Map.get(state.by_id, subscription_id) do
+        %{client_pid: pid} ->
+          send(pid, {:subscription_terminated, subscription_id, reason})
+
+        nil ->
+          :ok
+      end
+    end)
+
+    terminated_state =
+      Enum.reduce(subscription_ids, state, fn subscription_id, acc ->
+        {_key, next_state} = remove_client_from_state(acc, subscription_id)
+        next_state
+      end)
+
+    if subscription_ids != [] do
+      GenServer.cast(
+        UpstreamSubscriptionPool.via(state.profile, state.chain_id),
+        {:clients_removed, %{key => length(subscription_ids)}}
+      )
+    end
+
+    {:noreply, terminated_state}
   end
 
   @impl true

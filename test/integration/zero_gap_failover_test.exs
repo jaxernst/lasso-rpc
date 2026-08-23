@@ -1,33 +1,21 @@
 defmodule Lasso.Integration.ZeroGapFailoverTest do
   @moduledoc """
-  Integration tests for zero-gap failover guarantee.
-
-  Tests the critical production guarantee:
-  "Client receives complete block sequence during provider failover (no missing blocks, no duplicates)"
-
-  This validates Lasso's core value proposition - seamless failover that users don't notice.
-
-  ## What We Test
-
-  These tests verify the behavioral guarantees provided by StreamCoordinator and
-  UpstreamSubscriptionPool, not the internal failover choreography:
-
-  1. **Deduplication** - When multiple providers send the same blocks, clients receive each block once
-  2. **Ordering** - Out-of-order blocks are delivered to clients (client can reorder if needed)
-
-  These guarantees ensure zero-gap failover works correctly in production.
+  Transport-integrated WebSocket replacement and bounded replay tests.
   """
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
   alias Lasso.Core.Streaming.UpstreamSubscriptionPool
-  alias Lasso.Testing.{IntegrationHelper, MockWSProvider}
+  alias Lasso.Testing.{IntegrationHelper, MockHTTPProvider, MockWSProvider}
 
   @moduletag :integration
 
   describe "WebSocket subscription zero-gap guarantee" do
-    test "no duplicate blocks during rapid provider switching", %{chain: chain} do
+    test "disconnect replaces the upstream and replays missed heads without overlap", %{
+      chain: chain
+    } do
       profile = "public"
+      head = start_supervised!({Agent, fn -> 203 end})
 
       {:ok, [p1_id, p2_id]} =
         IntegrationHelper.setup_test_chain_with_providers(
@@ -39,32 +27,42 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
           provider_type: :ws
         )
 
+      start_backfill_provider(chain, head, profile)
+
       client_pid = self()
       {:ok, _sub_id} = IntegrationHelper.subscribe_client(chain, client_pid, {:newHeads}, profile)
 
       wait_for_subscription_active(profile, chain, {:newHeads})
+      assert wait_for_any_upstream_subscription_established(profile, chain, {:newHeads}) == p1_id
 
-      MockWSProvider.send_block_sequence(chain, p1_id, 200, 5, delay_ms: 30)
-      MockWSProvider.send_block_sequence(chain, p2_id, 200, 5, delay_ms: 30)
+      MockWSProvider.send_block(chain, p1_id, block(200))
+      assert Enum.map(collect_blocks(1, timeout: 2_000), &extract_block_number/1) == [200]
 
-      Process.sleep(1000)
+      :ok = MockWSProvider.simulate_provider_failure(chain, p1_id)
+      wait_for_primary_provider(profile, chain, {:newHeads}, p2_id)
 
-      blocks = collect_all_blocks(timeout: 100)
-      block_numbers = Enum.map(blocks, &extract_block_number/1)
+      assert Enum.map(collect_blocks(3, timeout: 3_000), &extract_block_number/1) == [
+               201,
+               202,
+               203
+             ]
 
-      unique_blocks = Enum.uniq(block_numbers)
+      MockWSProvider.send_block(chain, p2_id, block(204))
+      assert Enum.map(collect_blocks(1, timeout: 2_000), &extract_block_number/1) == [204]
+      refute_receive {:subscription_event, _duplicate}, 100
 
-      assert length(unique_blocks) == length(block_numbers),
-             "Duplicate blocks detected during rapid switching: #{inspect(block_numbers)}"
+      Agent.update(head, fn _ -> 205 end)
+      :ok = MockWSProvider.simulate_provider_failure(chain, p2_id)
+      wait_for_primary_provider(profile, chain, {:newHeads}, p1_id)
 
-      assert Enum.all?(block_numbers, fn n -> n >= 200 and n <= 204 end),
-             "Received out-of-range blocks: #{inspect(block_numbers)}"
+      assert Enum.map(collect_blocks(1, timeout: 3_000), &extract_block_number/1) == [205]
     end
 
     test "handles out-of-order blocks during failover", %{chain: chain} do
       profile = "public"
+      head = start_supervised!({Agent, fn -> 303 end})
 
-      {:ok, [_p1_id, _p2_id]} =
+      {:ok, [p1_id, p2_id]} =
         IntegrationHelper.setup_test_chain_with_providers(
           chain,
           [
@@ -74,6 +72,8 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
           provider_type: :ws
         )
 
+      start_backfill_provider(chain, head, profile)
+
       client_pid = self()
       {:ok, _sub_id} = IntegrationHelper.subscribe_client(chain, client_pid, {:newHeads}, profile)
 
@@ -82,46 +82,62 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       selected_provider =
         wait_for_any_upstream_subscription_established(profile, chain, {:newHeads})
 
-      MockWSProvider.send_block(chain, selected_provider, %{
-        "number" => "0x12c",
-        "hash" => "0x#{Integer.to_string(300 * 1000, 16)}",
-        "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
-      })
+      assert selected_provider == p1_id
 
-      Process.sleep(50)
+      Enum.each([300, 302, 301], fn number ->
+        MockWSProvider.send_block(chain, selected_provider, block(number))
+      end)
 
-      MockWSProvider.send_block(chain, selected_provider, %{
-        "number" => "0x12e",
-        "hash" => "0x#{Integer.to_string(302 * 1000, 16)}",
-        "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
-      })
+      assert Enum.map(collect_blocks(3, timeout: 2_000), &extract_block_number/1) == [
+               300,
+               302,
+               301
+             ]
 
-      Process.sleep(50)
+      :ok = MockWSProvider.simulate_provider_failure(chain, p1_id)
+      wait_for_primary_provider(profile, chain, {:newHeads}, p2_id)
 
-      MockWSProvider.send_block(chain, selected_provider, %{
-        "number" => "0x12d",
-        "hash" => "0x#{Integer.to_string(301 * 1000, 16)}",
-        "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
-      })
-
-      Process.sleep(50)
-
-      MockWSProvider.send_block(chain, selected_provider, %{
-        "number" => "0x12f",
-        "hash" => "0x#{Integer.to_string(303 * 1000, 16)}",
-        "timestamp" => "0x#{Integer.to_string(:os.system_time(:second), 16)}"
-      })
-
-      Process.sleep(50)
-
-      blocks = collect_blocks(4, timeout: 2000)
-
-      block_numbers = Enum.map(blocks, &extract_block_number/1) |> Enum.sort()
-
-      assert block_numbers == [300, 301, 302, 303],
-             "Missing blocks during out-of-order delivery: #{inspect(block_numbers)}"
+      assert Enum.map(collect_blocks(1, timeout: 3_000), &extract_block_number/1) == [303]
+      refute_receive {:subscription_event, _duplicate}, 100
     end
   end
+
+  defp start_backfill_provider(chain, head, profile) do
+    behavior =
+      {:conditional,
+       fn
+         "eth_blockNumber", [], _state ->
+           {:ok, encode_hex(Agent.get(head, & &1))}
+
+         "eth_getBlockByNumber", [number, false], _state ->
+           {:ok, number |> decode_hex() |> block()}
+
+         "eth_getLogs", [_filter], _state ->
+           {:ok, []}
+
+         method, _params, _state ->
+           {:error, {:unexpected_method, method}}
+       end}
+
+    assert {:ok, "backfill"} =
+             MockHTTPProvider.start_mock(chain, %{
+               id: "backfill",
+               profile: profile,
+               priority: 1,
+               behavior: behavior
+             })
+  end
+
+  defp block(number) do
+    %{
+      "number" => encode_hex(number),
+      "hash" => "0x#{Integer.to_string(number * 1000, 16)}",
+      "timestamp" => encode_hex(:os.system_time(:second))
+    }
+  end
+
+  defp encode_hex(number), do: "0x" <> Integer.to_string(number, 16)
+  defp decode_hex("0x" <> number), do: String.to_integer(number, 16)
 
   defp collect_blocks(count, opts) do
     timeout = Keyword.get(opts, :timeout, 5000)
@@ -138,22 +154,6 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     after
       timeout ->
         raise "Timeout waiting for #{count} more blocks. Received: #{length(acc)} blocks"
-    end
-  end
-
-  defp collect_all_blocks(opts) do
-    timeout = Keyword.get(opts, :timeout, 100)
-    collect_all_blocks_recursive(timeout, [])
-  end
-
-  defp collect_all_blocks_recursive(timeout, acc) do
-    receive do
-      {:subscription_event, event} ->
-        block = event["params"]["result"]
-        collect_all_blocks_recursive(timeout, [block | acc])
-    after
-      timeout ->
-        Enum.reverse(acc)
     end
   end
 
@@ -208,6 +208,32 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
   defp wait_for_any_upstream_subscription_established(profile, chain, key, timeout \\ 3000) do
     deadline = System.monotonic_time(:millisecond) + timeout
     wait_for_active_subscription_loop(profile, chain, key, deadline)
+  end
+
+  defp wait_for_primary_provider(profile, chain, key, provider_id, timeout \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    wait_for_primary_provider_loop(profile, chain, key, provider_id, deadline)
+  end
+
+  defp wait_for_primary_provider_loop(profile, chain, key, provider_id, deadline) do
+    pool_state = :sys.get_state(UpstreamSubscriptionPool.via(profile, chain))
+
+    coordinator_state =
+      :sys.get_state(Lasso.Core.Streaming.StreamCoordinator.via(profile, chain, key))
+
+    case {Map.get(pool_state.keys, key), coordinator_state} do
+      {%{status: :active, primary_provider_id: ^provider_id},
+       %{failover_status: :active, primary_provider_id: ^provider_id}} ->
+        :ok
+
+      current ->
+        if System.monotonic_time(:millisecond) < deadline do
+          Process.sleep(10)
+          wait_for_primary_provider_loop(profile, chain, key, provider_id, deadline)
+        else
+          flunk("provider replacement did not complete: #{inspect(current)}")
+        end
+    end
   end
 
   defp wait_for_active_subscription_loop(profile, chain, key, deadline) do

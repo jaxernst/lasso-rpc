@@ -228,6 +228,15 @@ defmodule LassoWeb.RPCSocket do
   end
 
   @impl true
+  def handle_info({:subscription_terminated, subscription_id, :continuity_exhausted}, state) do
+    if Map.has_key?(state.subscriptions, subscription_id) do
+      {:stop, :continuity_exhausted, {1011, "Lasso subscription continuity exhausted"}, state}
+    else
+      {:ok, state}
+    end
+  end
+
+  @impl true
   def handle_info({:send_notification, notification_json}, state) do
     # Send metadata notification as separate WebSocket frame
     {:push, {:text, notification_json}, state}

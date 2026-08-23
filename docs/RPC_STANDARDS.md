@@ -200,10 +200,16 @@ Lasso normalizes all responses to JSON-RPC 2.0 format:
 
 When a provider fails mid-stream, Lasso automatically:
 
-1. **Detects gap:** Computes missed blocks between last received and current head
-2. **HTTP backfill:** Fetches missing blocks/logs via `eth_getBlockByNumber` or `eth_getLogs`
-3. **Injects events:** Delivers backfilled events to clients
-4. **Resumes stream:** Subscribes to new provider and continues
+1. **Establishes replacement:** Subscribes to the replacement and buffers its events
+2. **Detects gap:** Reads the current head after replacement confirmation
+3. **HTTP backfill:** Replays the checkpoint block through the bounded current head
+4. **Merges events:** Orders and suppresses overlap between replay and the live buffer
+5. **Resumes stream:** Continues from the replacement provider
+
+Subscription IDs are returned only after usable upstream establishment.
+Recovery that exceeds the replay, buffer, attempt, or time bounds closes the
+affected downstream socket with code 1011 so the client receives a terminal
+signal and can reconnect.
 
 **Supported Subscription Types:**
 
