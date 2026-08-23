@@ -55,4 +55,67 @@ defmodule LassoWeb.DashboardLiveTest do
     assert conn.status == 200
     assert Plug.Conn.get_resp_header(conn, "content-type") == ["image/png"]
   end
+
+  test "accepts live block state and removes it after a stale tombstone" do
+    {:ok, view, _html} = live(build_conn(), "/dashboard/public?tab=overview")
+    key = {"height-provider", "sjc-node"}
+
+    send(
+      view.pid,
+      {:dashboard_batch,
+       dashboard_batch(%{
+         key => %{
+           provider_id: "height-provider",
+           node_id: "sjc-node",
+           height: 25_000_000,
+           lag: 0,
+           stale?: nil
+         }
+       })}
+    )
+
+    _html = render(view)
+
+    assert :sys.get_state(view.pid).socket.assigns.cluster_block_heights[key] == %{
+             height: 25_000_000,
+             lag: 0
+           }
+
+    send(
+      view.pid,
+      {:dashboard_batch,
+       dashboard_batch(%{
+         key => %{
+           provider_id: "height-provider",
+           node_id: "sjc-node",
+           height: nil,
+           lag: nil,
+           stale?: true
+         }
+       })}
+    )
+
+    _html = render(view)
+    refute Map.has_key?(:sys.get_state(view.pid).socket.assigns.cluster_block_heights, key)
+    assert Process.alive?(view.pid)
+  end
+
+  defp dashboard_batch(block_states) do
+    %{
+      health: %{},
+      circuit_states: %{},
+      block_states: block_states,
+      cluster: nil,
+      metrics: nil,
+      node_ids: [],
+      heartbeat: false,
+      routing_events: [],
+      circuit_events: [],
+      provider_events: [],
+      subscription_events: [],
+      block_events: [],
+      sync_updates: [],
+      block_cache_updates: []
+    }
+  end
 end

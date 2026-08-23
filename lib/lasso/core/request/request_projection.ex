@@ -1,8 +1,10 @@
 defmodule Lasso.RPC.RequestProjection do
   @moduledoc false
 
+  alias Lasso.Core.Benchmarking.Metrics
   alias Lasso.Core.ProjectionDispatcher
   alias Lasso.Events.RoutingDecision
+  alias LassoWeb.Dashboard.TrafficCounters
 
   alias Lasso.RPC.{
     AttemptIdentity,
@@ -67,6 +69,7 @@ defmodule Lasso.RPC.RequestProjection do
 
   @spec enqueue(t(), atom()) :: term()
   def enqueue(%__MODULE__{} = event, dispatcher \\ @dispatcher) when is_atom(dispatcher) do
+    _counter_result = TrafficCounters.record(event)
     enqueue_lazy(event, dispatcher, fn -> encode(event) end)
   end
 
@@ -89,7 +92,7 @@ defmodule Lasso.RPC.RequestProjection do
       )
       when is_atom(dispatcher) do
     event = new(fact, method, route_identity, failover_count, request_origin)
-    enqueue_lazy(event, dispatcher, fn -> encode_validated(event) end)
+    enqueue(event, dispatcher)
   end
 
   @spec record_and_enqueue(
@@ -109,9 +112,11 @@ defmodule Lasso.RPC.RequestProjection do
         dispatcher \\ @dispatcher
       )
       when is_atom(dispatcher) do
+    _counter_result = TrafficCounters.record_request(fact, request_origin, failover_count)
+
     case RequestAggregate.record_and_reserve_detail(fact, request_origin) do
       :detail ->
-        new_and_enqueue(
+        new_and_enqueue_without_counting(
           fact,
           method,
           route_identity,
@@ -124,7 +129,7 @@ defmodule Lasso.RPC.RequestProjection do
         {:drop, :sampled_out, :untracked}
 
       :untracked ->
-        new_and_enqueue(
+        new_and_enqueue_without_counting(
           fact,
           method,
           route_identity,
@@ -133,6 +138,18 @@ defmodule Lasso.RPC.RequestProjection do
           dispatcher
         )
     end
+  end
+
+  defp new_and_enqueue_without_counting(
+         fact,
+         method,
+         route_identity,
+         failover_count,
+         request_origin,
+         dispatcher
+       ) do
+    event = new(fact, method, route_identity, failover_count, request_origin)
+    enqueue_lazy(event, dispatcher, fn -> encode_validated(event) end)
   end
 
   defp enqueue_lazy(event, dispatcher, encoder) do
@@ -348,8 +365,30 @@ defmodule Lasso.RPC.RequestProjection do
     publish_routing_decision(event)
     emit_terminal_telemetry(event)
     emit_request_telemetry(event)
+    record_dashboard_metric(event)
     :ok
   end
+
+  defp record_dashboard_metric(%__MODULE__{
+         request_origin: :client,
+         provider_id: provider_id,
+         transport: transport,
+         fact: fact,
+         method: method
+       })
+       when is_binary(provider_id) and transport in [:http, :ws] do
+    Metrics.record_request(
+      Map.fetch!(fact, :profile),
+      Map.fetch!(fact, :chain_id),
+      provider_id,
+      method,
+      div(Map.fetch!(fact, :elapsed_us), 1_000),
+      result(fact),
+      transport: transport
+    )
+  end
+
+  defp record_dashboard_metric(%__MODULE__{}), do: :ok
 
   defp publish_routing_decision(event) do
     with {:ok, decision} <- routing_decision(event),

@@ -35,9 +35,11 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
     end)
   end
 
-  defp build_provider_connection(profile_provider, _profile, chain_name, consensus_height) do
+  defp build_provider_connection(profile_provider, profile, chain_name, consensus_height) do
     instance_id = profile_provider.instance_id
     provider_id = profile_provider.provider_id
+
+    chain_id = resolve_chain_id(profile, chain_name)
 
     instance_config =
       case Catalog.get_instance(instance_id) do
@@ -89,6 +91,7 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
     %{
       id: provider_id,
       chain: chain_name,
+      chain_id: chain_id,
       name: provider_name,
       status: health.status,
       health_status: derive_health_status(availability),
@@ -118,6 +121,13 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
       consensus_height: consensus_height,
       blocks_behind: blocks_behind
     }
+  end
+
+  defp resolve_chain_id(profile, chain_name) do
+    case ConfigStore.get_chain(profile, chain_name) do
+      {:ok, %{chain_id: value}} when is_integer(value) -> value
+      _ -> nil
+    end
   end
 
   defp derive_health_status(:up), do: :healthy

@@ -62,6 +62,7 @@ defmodule Lasso.Application do
 
         # Task supervisor for async operations (needed by Topology)
         {Task.Supervisor, name: Lasso.TaskSupervisor},
+        LassoWeb.Dashboard.TrafficCounters,
 
         # Fixed, sharded admission ledger for aggregate in-flight request bytes.
         Lasso.Core.Request.ByteBudget,

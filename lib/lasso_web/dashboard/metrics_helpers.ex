@@ -23,6 +23,12 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp score_table_name(profile, chain_name), do: :"provider_scores_#{profile}_#{chain_name}"
 
+  # Request-rate measurement windows, narrowest first, with the sample floor a
+  # window must clear before it is trusted.
+  @rps_windows_ms [5_000, 15_000, 60_000]
+  @rps_min_samples 5
+  @rps_min_span_ms 1_000
+
   # ---------------------------------------------------------------------------
   # ETS-Based Time-Windowed Metrics
   # ---------------------------------------------------------------------------
@@ -443,27 +449,51 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     }
   end
 
-  @doc "Calculate RPC calls per second from routing events"
+  @doc """
+  Calculate RPC calls per second from routing events.
+
+  The rate is measured over the narrowest window that still holds enough
+  samples to be meaningful, so a burst registers within seconds instead of
+  being diluted across a minute of mostly-idle history. Sparse traffic falls
+  back to wider windows so low-volume readings stay stable.
+  """
   def rpc_calls_per_second(routing_events) when is_list(routing_events) do
-    routing_events = client_routing_events(routing_events)
     now = System.system_time(:millisecond)
-    one_minute_ago = now - 60_000
+    widest = List.last(@rps_windows_ms)
 
-    recent_events = Enum.filter(routing_events, fn e -> (e[:ts_ms] || 0) >= one_minute_ago end)
-    count = length(recent_events)
+    timestamps =
+      routing_events
+      |> client_routing_events()
+      |> Enum.map(&(&1[:ts_ms] || 0))
+      |> Enum.filter(&(&1 >= now - widest))
 
-    # If we have no events, return 0
-    if count == 0 do
-      0.0
-    else
-      oldest_event_time =
-        recent_events
-        |> Enum.map(&(&1[:ts_ms] || now))
-        |> Enum.min()
+    buffered = length(timestamps)
 
-      actual_duration_seconds = max(1, (now - oldest_event_time) / 1000)
-      Float.round(count / actual_duration_seconds, 1)
+    @rps_windows_ms
+    |> Enum.map(fn window -> {window, Enum.filter(timestamps, &(&1 >= now - window))} end)
+    |> Enum.find(fn {_window, in_window} -> length(in_window) >= @rps_min_samples end)
+    |> case do
+      nil -> rps_rate(timestamps, widest, now, buffered)
+      {window, in_window} -> rps_rate(in_window, window, now, buffered)
     end
+  end
+
+  defp rps_rate([], _window_ms, _now, _buffered), do: 0.0
+
+  # A window that holds every buffered event may have opened before the buffer
+  # starts, so the observed span is used instead of the nominal window to keep
+  # high-volume rates from reading low.
+  defp rps_rate(timestamps, window_ms, now, buffered) do
+    count = length(timestamps)
+
+    span_ms =
+      if count == buffered do
+        max(now - Enum.min(timestamps), @rps_min_span_ms)
+      else
+        window_ms
+      end
+
+    Float.round(count * 1000 / span_ms, 1)
   end
 
   @doc "Calculate error rate percentage from routing events"

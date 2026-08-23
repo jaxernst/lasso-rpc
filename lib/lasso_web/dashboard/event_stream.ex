@@ -27,12 +27,12 @@ defmodule LassoWeb.Dashboard.EventStream do
   ## Messages Sent to Subscribers
 
   On subscribe (initial state):
-  - `{:dashboard_snapshot, %{metrics, circuits, health_counters, cluster, events}}`
+  - `{:dashboard_snapshot, %{metrics, traffic_metrics, circuits, health_counters, cluster, events}}`
 
   Batched updates (coalesced per 175ms tick):
-  - `{:dashboard_batch, %{health, circuit_states, block_states, cluster, metrics, node_ids,
-     heartbeat, routing_events, circuit_events, provider_events, subscription_events,
-     block_events, sync_updates, block_cache_updates}}`
+  - `{:dashboard_batch, %{health, circuit_states, block_states, cluster, metrics,
+     traffic_metrics, node_ids, heartbeat, routing_events, circuit_events, provider_events,
+     subscription_events, block_events, sync_updates, block_cache_updates}}`
 
   All event types are buffered and flushed as a single structured batch per tick.
   Latest-wins coalescing applies to health, circuit_states, block_states, cluster, and metrics.
@@ -45,6 +45,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.{RoutingDecision, Subscription}
+  alias LassoWeb.Dashboard.TrafficCounters
 
   @batch_interval_ms 175
   @max_batch_size 100
@@ -59,6 +60,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   @max_seen_request_ids 50_000
   @heartbeat_interval_ms 2_000
   @idle_timeout_ms 30_000
+  @traffic_refresh_interval_ms 1_000
 
   defstruct [
     :profile,
@@ -106,6 +108,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     pending_block_states: %{},
     pending_cluster: nil,
     pending_metrics: nil,
+    pending_traffic_metrics: %{},
     # Accumulated lists
     pending_routing_events: [],
     pending_circuit_events: [],
@@ -116,7 +119,10 @@ defmodule LassoWeb.Dashboard.EventStream do
     pending_sync_updates: [],
     pending_block_cache_updates: [],
     # Flags
-    pending_heartbeat: false
+    pending_heartbeat: false,
+    traffic_metrics: %{},
+    traffic_task: nil,
+    last_traffic_refresh: 0
   ]
 
   # Client API
@@ -244,6 +250,8 @@ defmodule LassoWeb.Dashboard.EventStream do
        cluster_state: default_cluster_state(),
        last_tick: now,
        last_heartbeat: now - @heartbeat_interval_ms,
+       last_seen_ids_cleanup: now,
+       last_traffic_refresh: now - @traffic_refresh_interval_ms,
        tick_scheduled: false
      }, {:continue, :fetch_cluster_state}}
   end
@@ -266,6 +274,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> maybe_cleanup(now)
       |> maybe_cleanup_seen_request_ids(now)
       |> maybe_set_heartbeat(now)
+      |> maybe_start_traffic_refresh(now)
       |> flush_pending()
 
     state = schedule_tick(state)
@@ -304,6 +313,29 @@ defmodule LassoWeb.Dashboard.EventStream do
          %{state | pending_events: pending, pending_count: count, seen_request_ids: seen}}
       end
     end
+  end
+
+  def handle_info({ref, metrics}, %{traffic_task: %Task{ref: ref}} = state)
+      when is_map(metrics) do
+    Process.demonitor(ref, [:flush])
+    traffic_metrics = traffic_metrics_by_scope(metrics)
+
+    state = %{
+      state
+      | traffic_task: nil,
+        traffic_metrics: traffic_metrics,
+        pending_traffic_metrics: traffic_metrics,
+        last_traffic_refresh: now()
+    }
+
+    {:noreply, schedule_tick(state)}
+  end
+
+  def handle_info(
+        {:DOWN, ref, :process, _pid, _reason},
+        %{traffic_task: %Task{ref: ref}} = state
+      ) do
+    {:noreply, %{state | traffic_task: nil, last_traffic_refresh: now()}}
   end
 
   # Circuit breaker events - buffer state + raw event for next batch flush
@@ -515,6 +547,7 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     snapshot = %{
       metrics: state.provider_metrics,
+      traffic_metrics: Map.get(state.traffic_metrics, scope),
       circuits: state.circuit_states,
       health_counters: state.health_counters,
       cluster: state.cluster_state,
@@ -566,6 +599,39 @@ defmodule LassoWeb.Dashboard.EventStream do
       state
     end
   end
+
+  defp maybe_start_traffic_refresh(state, now) do
+    scopes = state.subscriber_scopes |> Map.values() |> Enum.uniq()
+
+    if scopes != [] and is_nil(state.traffic_task) and
+         now - state.last_traffic_refresh >= @traffic_refresh_interval_ms do
+      task =
+        Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
+          TrafficCounters.cluster_windows(state.profile, scopes)
+        end)
+
+      %{state | traffic_task: task, last_traffic_refresh: now}
+    else
+      state
+    end
+  end
+
+  defp traffic_metrics_by_scope(%{
+         scopes: scopes,
+         coverage: coverage,
+         window_seconds: window_seconds,
+         as_of_second: as_of_second
+       }) do
+    Map.new(scopes, fn {scope, stats} ->
+      {scope,
+       stats
+       |> Map.put(:coverage, coverage)
+       |> Map.put(:window_seconds, window_seconds)
+       |> Map.put(:as_of_second, as_of_second)}
+    end)
+  end
+
+  defp traffic_metrics_by_scope(_metrics), do: %{}
 
   defp schedule_idle_termination(state) do
     # Cancel any existing timer first
@@ -671,9 +737,24 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     new_heights =
       state.block_heights
-      |> Enum.reject(fn {_, %{timestamp: ts}} -> ts < stale_cutoff end)
+      |> Enum.filter(fn {_, %{timestamp: ts}} -> ts >= stale_cutoff end)
       |> Map.new()
       |> truncate_by_recency(@max_block_height_entries, & &1.timestamp)
+
+    removed_heights =
+      Enum.reject(state.block_heights, fn {key, _data} -> Map.has_key?(new_heights, key) end)
+
+    stale_block_states =
+      Map.new(removed_heights, fn {{provider_id, _chain_id, node_id}, _data} ->
+        {{provider_id, node_id},
+         %{provider_id: provider_id, node_id: node_id, height: nil, lag: nil, stale?: true}}
+      end)
+
+    new_consensus_heights =
+      Enum.reduce(new_heights, %{}, fn
+        {{_provider_id, chain_id, node_id}, %{height: height}}, consensus ->
+          Map.update(consensus, {chain_id, node_id}, height, &max(&1, height))
+      end)
 
     new_circuit_states =
       state.circuit_states
@@ -696,6 +777,8 @@ defmodule LassoWeb.Dashboard.EventStream do
       state
       | event_windows: new_windows,
         block_heights: new_heights,
+        consensus_heights: new_consensus_heights,
+        pending_block_states: Map.merge(state.pending_block_states, stale_block_states),
         circuit_states: new_circuit_states,
         health_counters: new_health_counters
     }
@@ -1057,6 +1140,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       block_states: state.pending_block_states,
       cluster: state.pending_cluster,
       metrics: state.pending_metrics,
+      traffic_metrics: state.pending_traffic_metrics,
       node_ids: Enum.reverse(state.pending_node_ids),
       heartbeat: state.pending_heartbeat,
       routing_events: Enum.reverse(state.pending_routing_events),
@@ -1075,6 +1159,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       map_size(batch.block_states) == 0 and
       is_nil(batch.cluster) and
       is_nil(batch.metrics) and
+      map_size(batch.traffic_metrics) == 0 and
       batch.node_ids == [] and
       batch.heartbeat == false and
       batch.routing_events == [] and
@@ -1089,7 +1174,8 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp filter_batch(batch, scope) do
     %{
       batch
-      | routing_events:
+      | traffic_metrics: Map.get(batch.traffic_metrics, scope),
+        routing_events:
           batch.routing_events
           |> Enum.filter(&event_visible_for_scope?(&1, scope))
           |> Enum.map(&sanitize_routing_event/1),
@@ -1105,6 +1191,7 @@ defmodule LassoWeb.Dashboard.EventStream do
         pending_block_states: %{},
         pending_cluster: nil,
         pending_metrics: nil,
+        pending_traffic_metrics: %{},
         pending_routing_events: [],
         pending_circuit_events: [],
         pending_provider_events: [],

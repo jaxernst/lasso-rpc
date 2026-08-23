@@ -1,6 +1,7 @@
 defmodule Lasso.RPC.RequestProjectionTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Benchmarking.BenchmarkStore
   alias Lasso.Core.ProjectionDispatcher
   alias Lasso.Events.RoutingDecision
 
@@ -13,6 +14,7 @@ defmodule Lasso.RPC.RequestProjectionTest do
   }
 
   alias Lasso.RPC.ExecutionFact.Codec
+  alias LassoWeb.Dashboard.TrafficCounters
 
   @fast_dispatcher Lasso.TestRequestProjectionFastDispatcher
 
@@ -172,6 +174,43 @@ defmodule Lasso.RPC.RequestProjectionTest do
     end
   end
 
+  test "exact traffic counts are independent of diagnostic sampling" do
+    suffix = System.unique_integer([:positive])
+    profile = "projection-exact-#{suffix}"
+    chain_id = 80_000 + rem(suffix, 9_000)
+    fact = terminal(profile, chain_id)
+    route = %{provider_id: "provider-a", instance_id: "instance-a", transport: :http}
+
+    for _index <- 1..258 do
+      _result =
+        RequestProjection.record_and_enqueue(
+          fact,
+          "eth_blockNumber",
+          route,
+          0,
+          :client
+        )
+    end
+
+    assert %{count: 258, successes: 258, errors: 0} =
+             TrafficCounters.windows(profile, [:profile], 60, System.system_time(:second))[
+               :profile
+             ]
+
+    _result =
+      RequestProjection.record_and_enqueue(
+        fact,
+        "eth_blockNumber",
+        route,
+        0,
+        :system
+      )
+
+    assert TrafficCounters.windows(profile, [:profile], 60, System.system_time(:second))[
+             :profile
+           ].count == 258
+  end
+
   test "application errors retain their complete native classification" do
     attempt =
       AttemptTerminal.Response.new(identity(), :application_error, 7_000,
@@ -327,6 +366,52 @@ defmodule Lasso.RPC.RequestProjectionTest do
     }
   end
 
+  test "client delivery records provider dashboard metrics without recording system traffic" do
+    suffix = System.unique_integer([:positive])
+    profile = "projection-metrics-#{suffix}"
+    chain_id = 90_000 + rem(suffix, 9_000)
+    method = "eth_blockNumber"
+
+    on_exit(fn -> BenchmarkStore.clear_chain_metrics(profile, chain_id) end)
+
+    route = %{provider_id: "client-provider", instance_id: "client-instance", transport: :http}
+    client_event = RequestProjection.new(terminal(profile, chain_id), method, route, 0)
+
+    assert :ok = RequestProjection.deliver(client_event)
+
+    assert %{
+             total_calls: 1,
+             success_calls: 1,
+             success_rate: 1.0,
+             avg_latency: 12
+           } =
+             BenchmarkStore.get_rpc_performance(
+               profile,
+               chain_id,
+               "client-provider",
+               "#{method}@http"
+             )
+
+    system_route = %{
+      provider_id: "system-provider",
+      instance_id: "system-instance",
+      transport: :http
+    }
+
+    system_event =
+      RequestProjection.new(terminal(profile, chain_id), method, system_route, 0, :system)
+
+    assert :ok = RequestProjection.deliver(system_event)
+
+    assert %{total_calls: 0} =
+             BenchmarkStore.get_rpc_performance(
+               profile,
+               chain_id,
+               "system-provider",
+               "#{method}@http"
+             )
+  end
+
   test "routing publication precedes potentially blocking telemetry consumers" do
     event = request_projection()
     topic = Lasso.Topics.routing_decision("public")
@@ -415,8 +500,8 @@ defmodule Lasso.RPC.RequestProjectionTest do
     )
   end
 
-  defp terminal do
-    attempt = AttemptTerminal.Response.new(identity(), :success, 7_000)
+  defp terminal(profile \\ "public", chain_id \\ 1) do
+    attempt = AttemptTerminal.Response.new(identity(profile, chain_id), :success, 7_000)
 
     RequestTerminal.UpstreamResponse.new(
       [
@@ -455,12 +540,12 @@ defmodule Lasso.RPC.RequestProjectionTest do
     )
   end
 
-  defp identity do
+  defp identity(profile \\ "public", chain_id \\ 1) do
     AttemptIdentity.new(
       request_id: "projection-request",
       attempt_id: "projection-attempt",
-      profile: "public",
-      chain_id: 1,
+      profile: profile,
+      chain_id: chain_id,
       upstream_instance_id: "instance-a",
       transport: :http,
       route_generation: 1,
