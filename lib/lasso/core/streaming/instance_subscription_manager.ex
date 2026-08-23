@@ -68,7 +68,18 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   @spec ensure_subscription(String.t(), sub_key()) ::
           {:ok, :new | :existing} | {:error, term()}
   def ensure_subscription(instance_id, sub_key) when is_binary(instance_id) do
-    GenServer.call(via(instance_id), {:ensure_subscription, sub_key}, 15_000)
+    ensure_subscription(instance_id, sub_key, 15_000)
+  end
+
+  @spec ensure_subscription(String.t(), sub_key(), pos_integer()) ::
+          {:ok, :new | :existing} | {:error, term()}
+  def ensure_subscription(instance_id, sub_key, timeout_ms)
+      when is_binary(instance_id) and is_integer(timeout_ms) and timeout_ms > 0 do
+    GenServer.call(
+      via(instance_id),
+      {:ensure_subscription, sub_key, timeout_ms},
+      timeout_ms + 100
+    )
   catch
     :exit, {:noproc, _} -> {:error, :noproc}
     :exit, {:timeout, _} -> {:error, :timeout}
@@ -116,16 +127,11 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
   @impl true
   def handle_call({:ensure_subscription, sub_key}, _from, state) do
-    case state.connection_state do
-      nil ->
-        {:reply, {:error, :connection_unknown}, state}
+    handle_subscription_call(state, sub_key, 15_000)
+  end
 
-      %{status: :disconnected} ->
-        {:reply, {:error, :not_connected}, state}
-
-      %{connection_id: current_conn_id} ->
-        handle_subscription_request(state, sub_key, current_conn_id)
-    end
+  def handle_call({:ensure_subscription, sub_key, timeout_ms}, _from, state) do
+    handle_subscription_call(state, sub_key, timeout_ms)
   end
 
   @impl true
@@ -151,6 +157,19 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     }
 
     {:reply, status, state}
+  end
+
+  defp handle_subscription_call(state, sub_key, timeout_ms) do
+    case state.connection_state do
+      nil ->
+        {:reply, {:error, :connection_unknown}, state}
+
+      %{status: :disconnected} ->
+        {:reply, {:error, :not_connected}, state}
+
+      %{connection_id: current_conn_id} ->
+        handle_subscription_request(state, sub_key, current_conn_id, timeout_ms)
+    end
   end
 
   @impl true
@@ -370,10 +389,10 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     end
   end
 
-  defp handle_subscription_request(state, sub_key, current_conn_id) do
+  defp handle_subscription_request(state, sub_key, current_conn_id, timeout_ms) do
     case Map.get(state.active_subscriptions, sub_key) do
       nil ->
-        create_new_subscription(state, sub_key, current_conn_id)
+        create_new_subscription(state, sub_key, current_conn_id, timeout_ms)
 
       %{marked_for_teardown_at: nil, connection_id: ^current_conn_id} ->
         {:reply, {:ok, :existing}, state}
@@ -386,7 +405,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
         emit_telemetry(:stale_subscription_detected, state, sub_key)
         state = remove_subscription(state, sub_key, sub_info.upstream_id)
-        create_new_subscription(state, sub_key, current_conn_id)
+        create_new_subscription(state, sub_key, current_conn_id, timeout_ms)
 
       %{connection_id: ^current_conn_id} = sub_info ->
         Logger.debug("Cancelling teardown for subscription",
@@ -400,7 +419,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
       %{upstream_id: upstream_id} ->
         state = remove_subscription(state, sub_key, upstream_id)
-        create_new_subscription(state, sub_key, current_conn_id)
+        create_new_subscription(state, sub_key, current_conn_id, timeout_ms)
     end
   end
 
@@ -415,8 +434,8 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     %{state | active_subscriptions: new_subs, upstream_index: new_index}
   end
 
-  defp create_new_subscription(state, sub_key, connection_id) do
-    case create_upstream_subscription(state.instance_id, sub_key) do
+  defp create_new_subscription(state, sub_key, connection_id, timeout_ms) do
+    case create_upstream_subscription(state.instance_id, sub_key, timeout_ms) do
       {:ok, upstream_id} ->
         now = System.monotonic_time(:millisecond)
 
@@ -476,10 +495,10 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     end
   end
 
-  defp create_upstream_subscription(instance_id, sub_key) do
+  defp create_upstream_subscription(instance_id, sub_key, timeout_ms) do
     params = subscription_params(sub_key)
 
-    case Connection.request(instance_id, "eth_subscribe", params, 10_000) do
+    case Connection.request(instance_id, "eth_subscribe", params, timeout_ms) do
       {:ok, %Response.Success{} = response} ->
         Response.Success.decode_result(response)
 

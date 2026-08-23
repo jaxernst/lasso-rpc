@@ -41,14 +41,23 @@ defmodule Lasso.Core.Streaming.StreamState do
       num = decode_hex(Map.get(payload, "number"))
       now = System.monotonic_time(:millisecond)
       dedupe1 = state.dedupe |> DedupeCache.put({:block, hash}, now) |> DedupeCache.cleanup(now)
-      markers1 = %{state.markers | last_block_num: num}
+
+      markers1 = %{
+        state.markers
+        | last_block_num: advance_marker(state.markers.last_block_num, num)
+      }
+
       {%{state | dedupe: dedupe1, markers: markers1}, :emit}
     end
   end
 
   @spec ingest_log(t(), map()) :: {t(), :emit | :skip}
   def ingest_log(%__MODULE__{} = state, payload) do
-    key = {Map.get(payload, "blockHash"), Map.get(payload, "logIndex")}
+    key = {
+      Map.get(payload, "blockHash"),
+      Map.get(payload, "logIndex"),
+      Map.get(payload, "removed", false) == true
+    }
 
     if DedupeCache.member?(state.dedupe, {:log, key}) do
       {state, :skip}
@@ -56,7 +65,12 @@ defmodule Lasso.Core.Streaming.StreamState do
       num = decode_hex(Map.get(payload, "blockNumber"))
       now = System.monotonic_time(:millisecond)
       dedupe1 = state.dedupe |> DedupeCache.put({:log, key}, now) |> DedupeCache.cleanup(now)
-      markers1 = %{state.markers | last_log_block: num}
+
+      markers1 = %{
+        state.markers
+        | last_log_block: advance_marker(state.markers.last_log_block, num)
+      }
+
       {%{state | dedupe: dedupe1, markers: markers1}, :emit}
     end
   end
@@ -71,4 +85,8 @@ defmodule Lasso.Core.Streaming.StreamState do
   defp decode_hex(nil), do: nil
   defp decode_hex("0x" <> rest), do: String.to_integer(rest, 16)
   defp decode_hex(num) when is_integer(num), do: num
+
+  defp advance_marker(nil, next), do: next
+  defp advance_marker(current, nil), do: current
+  defp advance_marker(current, next), do: max(current, next)
 end

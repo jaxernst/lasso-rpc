@@ -3,8 +3,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   Per-key coordinator that owns continuity (markers, dedupe) and orchestrates failover.
 
   Receives upstream events from UpstreamSubscriptionPool and provider health signals.
-  Orchestrates failover with synchronous transitions: :active -> :backfilling -> :switching -> :active.
-  Ensures gap-free, duplicate-free event delivery with automatic provider failover.
+  Establishes a replacement before bounded replay and merges buffered live events
+  through the stream dedupe state. Exhausted recovery terminates downstream
+  subscriptions instead of silently continuing an incomplete stream.
   """
 
   use GenServer
@@ -52,6 +53,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   @failover_cooldown_ms 5_000
   @max_event_buffer 100
   @degraded_mode_retry_delay_ms 60_000
+  @default_recovery_timeout_ms 30_000
 
   @spec start_link({String.t(), pos_integer(), term(), keyword()}) :: GenServer.on_start()
   def start_link({profile, chain_id, key, opts})
@@ -87,10 +89,17 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     )
   end
 
-  @spec provider_unhealthy(String.t(), pos_integer(), term(), String.t(), String.t()) :: :ok
+  @spec provider_unhealthy(String.t(), pos_integer(), term(), String.t(), String.t() | nil) :: :ok
   def provider_unhealthy(profile, chain_id, key, failed_id, proposed_new_id)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
     GenServer.cast(via(profile, chain_id, key), {:provider_unhealthy, failed_id, proposed_new_id})
+  end
+
+  @spec upstream_established(String.t(), pos_integer(), term(), String.t()) :: :ok
+  def upstream_established(profile, chain_id, key, provider_id)
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
+             is_binary(provider_id) do
+    GenServer.cast(via(profile, chain_id, key), {:upstream_established, provider_id})
   end
 
   # GenServer callbacks
@@ -110,18 +119,22 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       # Backfill config
       max_backfill_blocks: Keyword.get(opts, :max_backfill_blocks, 32),
       backfill_timeout: Keyword.get(opts, :backfill_timeout, 30_000),
-      continuity_policy: Keyword.get(opts, :continuity_policy, :best_effort),
+      continuity_policy: Keyword.get(opts, :continuity_policy, :strict_abort),
       backfill_requester:
         Keyword.get(opts, :backfill_requester, &Lasso.RPC.RequestPipeline.execute_owned/5),
       backfill_provider_selector:
         Keyword.get(opts, :backfill_provider_selector, &pick_best_http_provider/3),
+      replacement_requester:
+        Keyword.get(opts, :replacement_requester, &request_pool_replacement/5),
       # Failover state machine
       failover_status: :active,
       failover_context: nil,
       failover_history: [],
       max_failover_attempts: Keyword.get(opts, :max_failover_attempts),
       failover_cooldown_ms: Keyword.get(opts, :failover_cooldown_ms, @failover_cooldown_ms),
-      max_event_buffer: Keyword.get(opts, :max_event_buffer, @max_event_buffer)
+      max_event_buffer: Keyword.get(opts, :max_event_buffer, @max_event_buffer),
+      recovery_timeout_ms: Keyword.get(opts, :recovery_timeout_ms, @default_recovery_timeout_ms),
+      recovery_deadline_us: nil
     }
 
     {:ok, state}
@@ -134,19 +147,28 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   @impl true
-  def handle_cast({:upstream_event, _provider_id, _upstream_id, payload, _received_at}, state) do
+  def handle_cast({:upstream_event, provider_id, _upstream_id, payload, _received_at}, state) do
     case state.failover_status do
       :active ->
-        # Normal processing path
-        process_event_normal(state, payload)
+        if is_nil(state.primary_provider_id) or provider_id == state.primary_provider_id do
+          process_event_normal(state, payload)
+        else
+          drop_stale_provider_event(state, provider_id)
+        end
 
       :backfilling ->
-        # Buffer events during backfill
-        buffer_event(state, payload)
+        if provider_id == state.failover_context.new_provider_id do
+          buffer_event(state, payload)
+        else
+          drop_stale_provider_event(state, provider_id)
+        end
 
       :switching ->
-        # Buffer events during subscription switch
-        buffer_event(state, payload)
+        if provider_id == state.failover_context.new_provider_id do
+          buffer_event(state, payload)
+        else
+          drop_stale_provider_event(state, provider_id)
+        end
 
       :degraded ->
         # Circuit breaker triggered, drop events
@@ -184,11 +206,18 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  @impl true
+  def handle_cast({:upstream_established, provider_id}, %{failover_status: :active} = state) do
+    {:noreply, %{state | primary_provider_id: provider_id}}
+  end
+
+  def handle_cast({:upstream_established, _provider_id}, state), do: {:noreply, state}
+
   # Subscription confirmation from Pool
   @impl true
   def handle_info({:subscription_confirmed, provider_id, upstream_id}, state) do
     if state.failover_status == :switching do
-      complete_failover(state, provider_id, upstream_id)
+      start_backfill_after_replacement(state, provider_id, upstream_id)
     else
       Logger.warning("Unexpected subscription_confirmed in status #{state.failover_status}",
         chain_id: state.chain_id,
@@ -236,7 +265,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     Process.demonitor(context.backfill_owner_ref, [:flush])
 
     case result do
-      :ok -> transition_to_switching(state)
+      :ok -> complete_failover(state, context.new_provider_id, nil)
       {:error, reason} -> handle_backfill_failure(state, reason)
     end
   end
@@ -284,6 +313,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           Process.send_after(self(), :retry_from_degraded, @degraded_mode_retry_delay_ms)
           {:noreply, state}
       end
+    else
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:failover_deadline, deadline_us}, state) do
+    if state.recovery_deadline_us == deadline_us and
+         state.failover_status in [:switching, :backfilling] do
+      enter_degraded_mode(state, failover_budget(state))
     else
       {:noreply, state}
     end
@@ -349,9 +388,33 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  defp drop_stale_provider_event(state, provider_id) do
+    :telemetry.execute(
+      [:lasso, :stream, :dropped_event],
+      %{count: 1},
+      %{
+        chain_id: state.chain_id,
+        reason: :stale_provider,
+        provider_id: provider_id,
+        primary_provider_id: state.primary_provider_id
+      }
+    )
+
+    {:noreply, state}
+  end
+
   # Standard failover initiation with empty buffer
   defp initiate_failover(state, old_provider_id, new_provider_id) do
-    initiate_failover_with_buffer(state, old_provider_id, new_provider_id, [])
+    deadline_us =
+      System.monotonic_time(:microsecond) + state.recovery_timeout_ms * 1_000
+
+    state = %{state | recovery_deadline_us: deadline_us}
+
+    if is_binary(new_provider_id) do
+      initiate_failover_with_buffer(state, old_provider_id, new_provider_id, [])
+    else
+      enter_degraded_mode(state, failover_budget(state))
+    end
   end
 
   # Failover initiation with preserved buffer (used during cascade)
@@ -380,7 +443,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       case state.backfill_provider_selector.(state.profile, state.chain_id, excluded_providers) do
         {:ok, http_provider} ->
-          start_backfill_owner(
+          start_replacement(
             state,
             old_provider_id,
             new_provider_id,
@@ -401,7 +464,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp start_backfill_owner(
+  defp start_replacement(
          state,
          old_provider_id,
          new_provider_id,
@@ -411,6 +474,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
          budget
        ) do
     started_at_us = System.monotonic_time(:microsecond)
+    remaining_ms = recovery_remaining_ms(state.recovery_deadline_us)
+
+    Process.send_after(
+      self(),
+      {:failover_deadline, state.recovery_deadline_us},
+      remaining_ms
+    )
 
     plan =
       GapFiller.Plan.new(
@@ -418,7 +488,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         state.chain_id,
         http_provider,
         self(),
-        state.backfill_timeout,
+        min(state.backfill_timeout, remaining_ms),
         started_at_us: started_at_us,
         requester: state.backfill_requester
       )
@@ -433,26 +503,19 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       plan: plan
     }
 
-    owner_id = make_ref()
-    coordinator_pid = self()
-    key = state.key
-    continuity_marker = continuity_marker(state.state, key)
-
-    {owner_pid, owner_ref} =
-      spawn_monitor(fn ->
-        result = safely_execute_backfill(backfill_ctx, key, continuity_marker, owner_id)
-        send(coordinator_pid, {:backfill_result, owner_id, self(), result})
-      end)
+    continuity_marker = continuity_marker(state.state, state.key)
 
     failover_context = %{
       old_provider_id: old_provider_id,
       new_provider_id: new_provider_id,
       http_provider_id: http_provider,
-      backfill_owner_id: owner_id,
-      backfill_owner_pid: owner_pid,
-      backfill_owner_ref: owner_ref,
-      backfill_task_ref: owner_ref,
+      backfill_owner_id: nil,
+      backfill_owner_pid: nil,
+      backfill_owner_ref: nil,
+      backfill_task_ref: nil,
       backfill_plan: plan,
+      backfill_context: backfill_ctx,
+      continuity_marker: continuity_marker,
       started_at: div(started_at_us, 1_000),
       event_buffer: initial_buffer,
       event_buffer_count: length(initial_buffer),
@@ -486,13 +549,54 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       to_provider_id: new_provider_id
     })
 
+    state.replacement_requester.(
+      state.profile,
+      state.chain_id,
+      state.key,
+      new_provider_id,
+      self()
+    )
+
+    telemetry_resubscribe_initiated(state.chain_id, state.key, new_provider_id)
+
     {:noreply,
      %{
        state
-       | failover_status: :backfilling,
+       | failover_status: :switching,
          failover_context: failover_context,
          failover_history: new_history
      }}
+  end
+
+  defp start_backfill_after_replacement(state, provider_id, _upstream_id) do
+    context = state.failover_context
+    owner_id = make_ref()
+    coordinator_pid = self()
+    key = state.key
+
+    {owner_pid, owner_ref} =
+      spawn_monitor(fn ->
+        result =
+          safely_execute_backfill(
+            context.backfill_context,
+            key,
+            context.continuity_marker,
+            owner_id
+          )
+
+        send(coordinator_pid, {:backfill_result, owner_id, self(), result})
+      end)
+
+    updated_context = %{
+      context
+      | new_provider_id: provider_id,
+        backfill_owner_id: owner_id,
+        backfill_owner_pid: owner_pid,
+        backfill_owner_ref: owner_ref,
+        backfill_task_ref: owner_ref
+    }
+
+    {:noreply, %{state | failover_status: :backfilling, failover_context: updated_context}}
   end
 
   defp safely_execute_backfill(ctx, key, continuity_marker, owner_id) do
@@ -521,12 +625,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp backfill_blocks(ctx, key, last, owner_id) do
     with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
-      case ContinuityPolicy.needed_block_range(
-             last,
-             head,
-             ctx.max_backfill,
-             ctx.continuity_policy
-           ) do
+      case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
         {:none} ->
           :ok
 
@@ -566,12 +665,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp backfill_logs(ctx, key, filter, last, owner_id) do
     with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
-      case ContinuityPolicy.needed_block_range(
-             last,
-             head,
-             ctx.max_backfill,
-             ctx.continuity_policy
-           ) do
+      case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
         {:none} ->
           :ok
 
@@ -619,29 +713,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end)
   end
 
-  defp transition_to_switching(state) do
-    Logger.info("Backfill complete, transitioning to :switching",
-      chain_id: state.chain_id,
-      key: inspect(state.key)
-    )
-
-    # Request resubscription from Pool
-    pool_ref = Lasso.Core.Streaming.UpstreamSubscriptionPool.via(state.profile, state.chain_id)
-
-    GenServer.cast(
-      pool_ref,
-      {:resubscribe, state.key, state.failover_context.new_provider_id, self()}
-    )
-
-    telemetry_resubscribe_initiated(
-      state.chain_id,
-      state.key,
-      state.failover_context.new_provider_id
-    )
-
-    {:noreply, %{state | failover_status: :switching}}
-  end
-
   defp complete_failover(state, provider_id, _upstream_id) do
     Logger.info("Failover complete: now on provider #{provider_id}",
       chain_id: state.chain_id,
@@ -657,7 +728,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       | primary_provider_id: provider_id,
         failover_status: :active,
         failover_context: nil,
-        failover_history: []
+        failover_history: [],
+        recovery_deadline_us: nil
     }
 
     duration_ms = System.monotonic_time(:millisecond) - state.failover_context.started_at
@@ -678,15 +750,20 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       ordered_buffer =
         case subscription_key(state.key) do
           {:newHeads} ->
-            Enum.sort_by(state.failover_context.event_buffer, fn payload ->
+            state.failover_context.event_buffer
+            |> Enum.reverse()
+            |> Enum.sort_by(fn payload ->
               decode_hex(Map.get(payload, "number", "0x0"))
             end)
 
           {:logs, _filter} ->
-            Enum.sort_by(state.failover_context.event_buffer, fn log ->
+            state.failover_context.event_buffer
+            |> Enum.reverse()
+            |> Enum.sort_by(fn log ->
               {decode_hex(Map.get(log, "blockNumber", "0x0")),
                decode_hex(Map.get(log, "transactionIndex", "0x0")),
-               decode_hex(Map.get(log, "logIndex", "0x0"))}
+               decode_hex(Map.get(log, "logIndex", "0x0")),
+               Map.get(log, "removed", false) == true}
             end)
         end
 
@@ -792,6 +869,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp enter_degraded_mode(state, budget) do
     cancel_backfill_owner(state)
 
+    ClientSubscriptionRegistry.terminate(
+      state.profile,
+      state.chain_id,
+      state.key,
+      :continuity_exhausted
+    )
+
     tried_providers =
       state.failover_history
       |> Enum.map(& &1.provider_id)
@@ -824,7 +908,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
        state
        | failover_status: :degraded,
          failover_context: nil,
-         failover_history: []
+         failover_history: [],
+         recovery_deadline_us: nil
      }}
   end
 
@@ -864,6 +949,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       {:logs, _filter} ->
         StreamState.last_log_block(stream_state) || StreamState.last_block_num(stream_state)
     end
+  end
+
+  defp continuity_range(last_seen, head, max_backfill, policy) when is_integer(last_seen) do
+    ContinuityPolicy.needed_block_range(last_seen - 1, head, max_backfill + 1, policy)
+  end
+
+  defp continuity_range(last_seen, head, max_backfill, policy) do
+    ContinuityPolicy.needed_block_range(last_seen, head, max_backfill, policy)
   end
 
   defp failover_budget(%{max_failover_attempts: override})
@@ -915,10 +1008,19 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  defp request_pool_replacement(profile, chain_id, key, provider_id, coordinator_pid) do
+    pool_ref = Lasso.Core.Streaming.UpstreamSubscriptionPool.via(profile, chain_id)
+    GenServer.cast(pool_ref, {:resubscribe, key, provider_id, coordinator_pid})
+  end
+
   defp decode_hex(nil), do: 0
   defp decode_hex("0x" <> rest), do: String.to_integer(rest, 16)
   defp decode_hex(num) when is_integer(num), do: num
   defp decode_hex(_), do: 0
+
+  defp recovery_remaining_ms(deadline_us) do
+    max(div(deadline_us - System.monotonic_time(:microsecond) + 999, 1_000), 0)
+  end
 
   defp cancel_backfill_owner(%{failover_context: context}) when is_map(context) do
     owner_ref = Map.get(context, :backfill_owner_ref)

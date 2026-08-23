@@ -2,10 +2,20 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Request.ExecutionScope
-  alias Lasso.Core.Streaming.StreamCoordinator
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, StreamCoordinator}
 
   defp new_head(number) do
     %{"hash" => "0x#{number}", "number" => "0x#{Integer.to_string(number, 16)}"}
+  end
+
+  defp log_event(number, block_hash, removed \\ false) do
+    %{
+      "blockNumber" => "0x#{Integer.to_string(number, 16)}",
+      "blockHash" => block_hash,
+      "transactionIndex" => "0x0",
+      "logIndex" => "0x0",
+      "removed" => removed
+    }
   end
 
   defp await_state(pid, predicate, attempts \\ 1_000)
@@ -18,7 +28,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     if predicate.(state) do
       state
     else
-      :erlang.yield()
+      Process.sleep(1)
       await_state(pid, predicate, attempts - 1)
     end
   end
@@ -33,6 +43,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
       {:ok, "http-fixed"}
     end
 
+    replacement = fn _profile, _chain_id, _key, provider_id, coordinator_pid ->
+      send(coordinator_pid, {:subscription_confirmed, provider_id, "upstream-new"})
+    end
+
     {:ok, pid} =
       StreamCoordinator.start_link(
         {profile, chain_id, key,
@@ -40,6 +54,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
            [
              primary_provider_id: "ws-old",
              backfill_provider_selector: selector,
+             replacement_requester: replacement,
              max_failover_attempts: 1
            ],
            opts
@@ -58,6 +73,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
       case {method, params} do
         {"eth_blockNumber", []} ->
           {:ok, "0xc", %{}}
+
+        {"eth_getBlockByNumber", ["0xA", false]} ->
+          {:ok, new_head(10), %{}}
 
         {"eth_getBlockByNumber", ["0xB", false]} ->
           {:ok, new_head(11), %{}}
@@ -85,6 +103,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     assert_receive {:backfill_request, owner_pid, head_scope, ^chain_id, "eth_blockNumber", [],
                     head_opts}
 
+    assert_receive {:backfill_request, ^owner_pid, replay_scope, ^chain_id,
+                    "eth_getBlockByNumber", ["0xA", false], replay_opts}
+
     assert_receive {:backfill_request, ^owner_pid, block_scope, ^chain_id, "eth_getBlockByNumber",
                     ["0xB", false], block_opts}
 
@@ -103,7 +124,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     refute owner_pid in elem(Process.info(pid, :links), 1)
 
     Enum.each(
-      [{head_scope, head_opts}, {block_scope, block_opts}, {final_scope, final_opts}],
+      [
+        {head_scope, head_opts},
+        {replay_scope, replay_opts},
+        {block_scope, block_opts},
+        {final_scope, final_opts}
+      ],
       fn {scope, opts} ->
         assert scope.owner_pid == owner_pid
         assert scope.caller_pid == pid
@@ -127,14 +153,227 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
 
     send(owner_pid, :release)
 
-    switching = await_state(pid, &(&1.failover_status == :switching))
+    active = await_state(pid, &(&1.failover_status == :active))
 
-    assert switching.failover_context.event_buffer_count == 2
+    assert active.state.markers.last_block_num == 12
+  end
 
-    assert Enum.map(switching.failover_context.event_buffer, & &1["number"]) == [
-             "0xC",
-             "0xB"
-           ]
+  test "replacement is live before backfill and overlapping heads are delivered once in order" do
+    test_pid = self()
+    chain_id = System.unique_integer([:positive])
+    profile = "profile-#{chain_id}"
+    key = {:newHeads}
+
+    requester = fn _scope, _chain_id, method, params, _opts ->
+      case {method, params} do
+        {"eth_blockNumber", []} ->
+          send(test_pid, {:head_requested, self()})
+
+          receive do
+            :respond_head -> {:ok, "0x66", %{}}
+          end
+
+        {"eth_getBlockByNumber", [number, false]} ->
+          block_number = String.to_integer(String.trim_leading(number, "0x"), 16)
+
+          block =
+            if block_number == 100 do
+              %{new_head(block_number) | "hash" => "0xcanonical-100"}
+            else
+              new_head(block_number)
+            end
+
+          {:ok, block, %{}}
+      end
+    end
+
+    replacement = fn _profile, _chain_id, _key, provider_id, coordinator_pid ->
+      send(test_pid, {:replacement_requested, provider_id})
+      send(coordinator_pid, {:subscription_confirmed, provider_id, "upstream-new"})
+    end
+
+    selector = fn _profile, _chain_id, _excluded -> {:ok, "http-fixed"} end
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "client-sub", self(), key)
+
+    {:ok, pid} =
+      StreamCoordinator.start_link(
+        {profile, chain_id, key,
+         primary_provider_id: "ws-old",
+         backfill_requester: requester,
+         backfill_provider_selector: selector,
+         replacement_requester: replacement}
+      )
+
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub-old", new_head(100), 1})
+    assert_receive {:subscription_event, %{"params" => %{"result" => %{"number" => "0x64"}}}}
+
+    GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
+
+    assert_receive {:replacement_requested, "ws-new"}
+    assert_receive {:head_requested, owner_pid}
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub-old", new_head(103), 2})
+    GenServer.cast(pid, {:upstream_event, "ws-new", "sub-new", new_head(102), 2})
+    send(owner_pid, :respond_head)
+
+    assert await_state(pid, &(&1.failover_status == :active)).primary_provider_id == "ws-new"
+
+    assert_receive {:subscription_event,
+                    %{
+                      "params" => %{
+                        "result" => %{"number" => "0x64", "hash" => "0xcanonical-100"}
+                      }
+                    }}
+
+    assert_receive {:subscription_event, %{"params" => %{"result" => %{"number" => "0x65"}}}}
+    assert_receive {:subscription_event, %{"params" => %{"result" => %{"number" => "0x66"}}}}
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub-old", new_head(104), 3})
+    refute_receive {:subscription_event, _duplicate}, 50
+  end
+
+  test "log failover replays the last block, preserves removals, and suppresses overlap" do
+    test_pid = self()
+    chain_id = System.unique_integer([:positive])
+    profile = "profile-#{chain_id}"
+    filter = %{"address" => "0xabc"}
+    key = {:logs, filter}
+
+    canonical_100 = log_event(100, "0xcanonical-100")
+    log_101 = log_event(101, "0xcanonical-101")
+
+    requester = fn _scope, _chain_id, method, params, _opts ->
+      case {method, params} do
+        {"eth_blockNumber", []} ->
+          send(test_pid, {:log_head_requested, self()})
+
+          receive do
+            :respond_log_head -> {:ok, "0x65", %{}}
+          end
+
+        {"eth_getLogs", [request_filter]} ->
+          send(test_pid, {:log_backfill_filter, request_filter})
+          {:ok, [canonical_100, log_101], %{}}
+      end
+    end
+
+    replacement = fn _profile, _chain_id, _key, provider_id, coordinator_pid ->
+      send(coordinator_pid, {:subscription_confirmed, provider_id, "upstream-new"})
+    end
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "client-logs", self(), key)
+
+    {:ok, pid} =
+      StreamCoordinator.start_link(
+        {profile, chain_id, key,
+         primary_provider_id: "ws-old",
+         backfill_requester: requester,
+         backfill_provider_selector: fn _profile, _chain_id, _excluded ->
+           {:ok, "http-fixed"}
+         end,
+         replacement_requester: replacement}
+      )
+
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    original = log_event(100, "0xold-100")
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub-old", original, 1})
+    assert_receive {:subscription_event, %{"params" => %{"result" => ^original}}}
+
+    GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
+    assert_receive {:log_head_requested, owner_pid}
+
+    removed = %{original | "removed" => true}
+    GenServer.cast(pid, {:upstream_event, "ws-new", "sub-new", removed, 2})
+    GenServer.cast(pid, {:upstream_event, "ws-new", "sub-new", log_101, 3})
+    send(owner_pid, :respond_log_head)
+
+    assert_receive {:log_backfill_filter, %{"fromBlock" => "0x64", "toBlock" => "0x65"}}
+
+    assert await_state(pid, &(&1.failover_status == :active)).primary_provider_id == "ws-new"
+
+    assert_receive {:subscription_event, %{"params" => %{"result" => ^removed}}}
+    assert_receive {:subscription_event, %{"params" => %{"result" => ^canonical_100}}}
+    assert_receive {:subscription_event, %{"params" => %{"result" => ^log_101}}}
+    refute_receive {:subscription_event, _duplicate}, 50
+  end
+
+  test "a gap beyond the replay window terminates downstream subscriptions" do
+    chain_id = System.unique_integer([:positive])
+    profile = "profile-#{chain_id}"
+    key = {:newHeads}
+
+    requester = fn _scope, _chain_id, method, params, _opts ->
+      case {method, params} do
+        {"eth_blockNumber", []} -> {:ok, "0xc8", %{}}
+        {"eth_getBlockByNumber", _params} -> flunk("strict overflow must not partially replay")
+      end
+    end
+
+    replacement = fn _profile, _chain_id, _key, provider_id, coordinator_pid ->
+      send(coordinator_pid, {:subscription_confirmed, provider_id, "upstream-new"})
+    end
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "client-sub", self(), key)
+
+    {:ok, pid} =
+      StreamCoordinator.start_link(
+        {profile, chain_id, key,
+         primary_provider_id: "ws-old",
+         max_backfill_blocks: 32,
+         continuity_policy: :strict_abort,
+         max_failover_attempts: 1,
+         backfill_requester: requester,
+         backfill_provider_selector: fn _profile, _chain_id, _excluded ->
+           {:ok, "http-fixed"}
+         end,
+         replacement_requester: replacement}
+      )
+
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub-old", new_head(100), 1})
+    assert_receive {:subscription_event, _head_100}
+
+    GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
+
+    assert_receive {:subscription_terminated, "client-sub", :continuity_exhausted}
+    assert await_state(pid, &(&1.failover_status == :degraded)).failover_context == nil
+  end
+
+  test "replacement deadline exhaustion terminates downstream subscriptions" do
+    chain_id = System.unique_integer([:positive])
+    profile = "profile-#{chain_id}"
+    key = {:newHeads}
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "client-sub", self(), key)
+
+    {:ok, pid} =
+      StreamCoordinator.start_link(
+        {profile, chain_id, key,
+         primary_provider_id: "ws-old",
+         recovery_timeout_ms: 20,
+         backfill_provider_selector: fn _profile, _chain_id, _excluded ->
+           {:ok, "http-fixed"}
+         end,
+         replacement_requester: fn _profile, _chain_id, _key, _provider, _coordinator ->
+           :ok
+         end}
+      )
+
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
+
+    assert_receive {:subscription_terminated, "client-sub", :continuity_exhausted}, 200
+    assert await_state(pid, &(&1.failover_status == :degraded)).recovery_deadline_us == nil
   end
 
   test "a failed request is terminal for the backfill" do
@@ -145,8 +384,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
 
       case {method, params} do
         {"eth_blockNumber", []} -> {:ok, "0xc", %{}}
-        {"eth_getBlockByNumber", ["0xB", false]} -> {:error, :upstream_failed, %{}}
-        {"eth_getBlockByNumber", ["0xC", false]} -> flunk("request after terminal error")
+        {"eth_getBlockByNumber", ["0xA", false]} -> {:error, :upstream_failed, %{}}
+        {"eth_getBlockByNumber", [_number, false]} -> flunk("request after terminal error")
       end
     end
 
@@ -160,8 +399,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
 
     assert_receive {:attempted_request, "eth_blockNumber", []}
-    assert_receive {:attempted_request, "eth_getBlockByNumber", ["0xB", false]}
-    refute_receive {:attempted_request, "eth_getBlockByNumber", ["0xC", false]}, 0
+    assert_receive {:attempted_request, "eth_getBlockByNumber", ["0xA", false]}
+    refute_receive {:attempted_request, "eth_getBlockByNumber", ["0xB", false]}, 0
 
     assert await_state(pid, &(&1.failover_status == :degraded)).failover_context == nil
     assert Process.alive?(pid)

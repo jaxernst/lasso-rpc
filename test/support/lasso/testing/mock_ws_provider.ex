@@ -355,6 +355,8 @@ defmodule Lasso.Testing.MockWSProvider do
     # Handle eth_subscribe specially to return subscription ID synchronously
     case method do
       "eth_subscribe" ->
+        if state.confirm_delay > 0, do: Process.sleep(state.confirm_delay)
+
         # Generate subscription ID first
         sub_id = generate_sub_id(state)
 
