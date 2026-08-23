@@ -2,6 +2,7 @@ defmodule LassoWeb.Dashboard.EventStreamTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Events.RoutingDecision
+  alias LassoWeb.Dashboard.EventStream
 
   @max_batch_size 100
   @seen_request_id_ttl_ms 120_000
@@ -130,6 +131,58 @@ defmodule LassoWeb.Dashboard.EventStreamTest do
   end
 
   describe "stale data cleanup" do
+    test "retracts stale block heights and recomputes consensus" do
+      profile = "event-stream-stale-#{System.unique_integer([:positive])}"
+      {:ok, pid} = EventStream.ensure_started(profile)
+
+      on_exit(fn ->
+        if Process.alive?(pid) do
+          DynamicSupervisor.terminate_child(Lasso.Dashboard.StreamSupervisor, pid)
+        end
+      end)
+
+      assert :ok = EventStream.subscribe(profile)
+      assert_receive {:dashboard_snapshot, _snapshot}
+
+      system_now = System.system_time(:millisecond)
+      monotonic_now = System.monotonic_time(:millisecond)
+
+      :sys.replace_state(pid, fn state ->
+        %{
+          state
+          | block_heights: %{
+              {"stale", 1, "iad"} => %{
+                height: 100,
+                timestamp: system_now - 300_001,
+                source: :http
+              },
+              {"fresh", 1, "iad"} => %{
+                height: 105,
+                timestamp: system_now,
+                source: :http
+              }
+            },
+            consensus_heights: %{{1, "iad"} => 999},
+            pending_block_states: %{},
+            last_cleanup: monotonic_now - 30_001
+        }
+      end)
+
+      send(pid, :tick)
+
+      assert_receive {:dashboard_batch,
+                      %{
+                        block_states: %{
+                          {"stale", "iad"} => %{height: nil, lag: nil, stale?: true}
+                        }
+                      }}
+
+      state = :sys.get_state(pid)
+      refute Map.has_key?(state.block_heights, {"stale", 1, "iad"})
+      assert state.block_heights[{"fresh", 1, "iad"}].height == 105
+      assert state.consensus_heights == %{{1, "iad"} => 105}
+    end
+
     test "circuit states older than cutoff are removed" do
       now = System.system_time(:millisecond)
       stale_cutoff = now - 300_000

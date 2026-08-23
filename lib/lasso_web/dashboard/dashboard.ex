@@ -72,6 +72,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:selected_chain, nil)
       |> assign(:selected_provider, nil)
       |> assign(:routing_events, [])
+      |> assign(:traffic_metrics, nil)
       |> assign(:provider_events, [])
       |> assign(:latest_blocks, [])
       |> assign(:events, [])
@@ -227,6 +228,7 @@ defmodule LassoWeb.Dashboard do
     |> assign(:details_collapsed, true)
     |> assign(:events, [])
     |> assign(:routing_events, [])
+    |> assign(:traffic_metrics, nil)
     |> assign(:provider_events, [])
     |> assign(:metrics_selected_chain, default_metrics_chain)
     # Reset aggregator state for new profile
@@ -244,6 +246,8 @@ defmodule LassoWeb.Dashboard do
   # Coalesced batch from EventStream — single message per tick replaces individual handlers
   @impl true
   def handle_info({:dashboard_batch, batch}, socket) do
+    batch = Map.put_new(batch, :traffic_metrics, nil)
+
     socket =
       socket
       |> apply_health(batch.health)
@@ -252,6 +256,7 @@ defmodule LassoWeb.Dashboard do
       |> apply_cluster(batch.cluster)
       |> apply_node_ids(batch.node_ids)
       |> apply_metrics(batch.metrics)
+      |> apply_traffic_metrics(batch.traffic_metrics)
       |> apply_routing_events(batch.routing_events)
       |> apply_circuit_events(batch.circuit_events)
       |> apply_provider_events(batch.provider_events)
@@ -399,6 +404,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_status, cluster)
       |> assign(:available_node_ids, cluster.node_ids || [])
       |> assign(:metrics_coverage, %{responding: cluster.responding, total: cluster.connected})
+      |> apply_traffic_metrics(Map.get(snapshot, :traffic_metrics))
       |> recompute_provider_statuses()
       |> MessageHandlers.handle_events_snapshot(snapshot.events)
       |> refresh_selected_chain_events()
@@ -440,6 +446,7 @@ defmodule LassoWeb.Dashboard do
             <.dashboard_tab_content
               connections={@connections}
               routing_events={@routing_events}
+              traffic_metrics={@traffic_metrics}
               provider_events={@provider_events}
               latest_blocks={@latest_blocks}
               events={@events}
@@ -520,6 +527,7 @@ defmodule LassoWeb.Dashboard do
   # Dashboard tab content attrs
   attr(:connections, :list)
   attr(:routing_events, :list)
+  attr(:traffic_metrics, :map, default: nil)
   attr(:provider_events, :list)
   attr(:latest_blocks, :list)
   attr(:events, :list)
@@ -600,6 +608,7 @@ defmodule LassoWeb.Dashboard do
         details_collapsed={@details_collapsed}
         connections={@connections}
         routing_events={@routing_events}
+        traffic_metrics={@traffic_metrics}
         provider_events={@provider_events}
         latest_blocks={@latest_blocks}
         events={@events}
@@ -631,6 +640,7 @@ defmodule LassoWeb.Dashboard do
   attr(:details_collapsed, :boolean)
   attr(:connections, :list)
   attr(:routing_events, :list)
+  attr(:traffic_metrics, :map, default: nil)
   attr(:provider_events, :list)
   attr(:latest_blocks, :list)
   attr(:events, :list)
@@ -699,6 +709,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:status, status)
       |> assign(:title, title)
       |> assign(:on_toggle, on_toggle)
+      |> assign(:traffic_headline, traffic_headline(assigns.traffic_metrics))
 
     ~H"""
     <.floating_window
@@ -729,23 +740,23 @@ defmodule LassoWeb.Dashboard do
           <DetailPanelComponents.metrics_strip class="border-y border-gray-800">
             <:metric
               label="RPS"
-              value={format_rps(MetricsHelpers.rpc_calls_per_second(@routing_events))}
+              value={format_rps(@traffic_headline.rps)}
               value_class="text-sky-400"
             />
             <:metric
-              label={"Sampled success (#{MetricsHelpers.routing_sample_count(@routing_events)})"}
-              value={format_success_rate(MetricsHelpers.success_rate_percent(@routing_events))}
-              value_class={success_rate_class(MetricsHelpers.success_rate_percent(@routing_events))}
-              title="Delivered client routing events from the last 60 seconds. Optional diagnostics may be sampled under load."
+              label={"Success (#{@traffic_headline.count})"}
+              value={format_success_rate(@traffic_headline.success_rate)}
+              value_class={success_rate_class(@traffic_headline.success_rate)}
+              title="Client request outcomes from all responding cluster nodes over the last 60 seconds."
             />
             <:metric
               label="Latency"
-              value={format_latency(MetricsHelpers.avg_latency_ms(@routing_events))}
+              value={format_latency(@traffic_headline.latency_ms)}
               value_class="text-purple-400"
             />
             <:metric
               label="Failovers"
-              value={format_failovers(MetricsHelpers.failovers_last_minute(@routing_events))}
+              value={format_failovers(@traffic_headline.failovers)}
               value_class="text-yellow-300"
             />
           </DetailPanelComponents.metrics_strip>
@@ -763,8 +774,16 @@ defmodule LassoWeb.Dashboard do
               <%= for e <- Enum.take(@routing_events, 100) do %>
                 <div
                   data-event-id={e[:ts_ms]}
+                  data-request-origin={e[:request_origin] || :client}
                   class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0"
                 >
+                  <span
+                    :if={e[:request_origin] in [:system, "system"]}
+                    class="inline-flex items-center rounded bg-gray-700/50 px-1 py-px text-[7px] font-bold tracking-wide text-gray-400"
+                    title="Internal provider health or synchronization request"
+                  >
+                    SYSTEM
+                  </span>
                   <span class="text-purple-300">{e[:chain]}</span>
                   <span class="text-sky-300">{e[:method]}</span>
                   →
@@ -1252,18 +1271,16 @@ defmodule LassoWeb.Dashboard do
   defp apply_block_states(socket, blocks) do
     current = socket.assigns.cluster_block_heights
 
-    {changed?, merged} =
-      Enum.reduce(blocks, {false, current}, fn {key, data}, {changed, acc} ->
-        new_entry = %{height: data.height, lag: data.lag}
-
-        if Map.get(acc, key) == new_entry do
-          {changed, acc}
+    merged =
+      Enum.reduce(blocks, current, fn {key, data}, acc ->
+        if data[:stale?] == true or is_nil(data.height) do
+          Map.delete(acc, key)
         else
-          {true, Map.put(acc, key, new_entry)}
+          Map.put(acc, key, %{height: data.height, lag: data.lag})
         end
       end)
 
-    if changed?, do: assign(socket, :cluster_block_heights, merged), else: socket
+    if merged == current, do: socket, else: assign(socket, :cluster_block_heights, merged)
   end
 
   defp apply_cluster(socket, nil), do: socket
@@ -1308,6 +1325,18 @@ defmodule LassoWeb.Dashboard do
     else
       socket
       |> assign(:live_provider_metrics, merged)
+      |> mark_not_stale()
+    end
+  end
+
+  defp apply_traffic_metrics(socket, nil), do: socket
+
+  defp apply_traffic_metrics(socket, traffic_metrics) do
+    if socket.assigns.traffic_metrics == traffic_metrics do
+      socket
+    else
+      socket
+      |> assign(:traffic_metrics, traffic_metrics)
       |> mark_not_stale()
     end
   end
@@ -1769,6 +1798,30 @@ defmodule LassoWeb.Dashboard do
   # Formatting helpers for metrics display
   defp format_success_rate(nil), do: "—"
   defp format_success_rate(rate), do: "#{rate}%"
+
+  defp traffic_headline(%{
+         count: count,
+         successes: successes,
+         errors: errors,
+         elapsed_us: elapsed_us,
+         failovers: failovers,
+         window_seconds: window_seconds,
+         coverage: %{responding: responding, total: total, lossless: true}
+       })
+       when responding == total and total > 0 and count == successes + errors and count >= 0 and
+              elapsed_us >= 0 and failovers >= 0 and window_seconds > 0 do
+    %{
+      count: count,
+      rps: Float.round(count / window_seconds, 1),
+      success_rate: if(count > 0, do: Float.round(successes * 100.0 / count, 1)),
+      latency_ms: if(count > 0, do: round(elapsed_us / count / 1_000)),
+      failovers: failovers
+    }
+  end
+
+  defp traffic_headline(_metrics) do
+    %{count: 0, rps: 0.0, success_rate: nil, latency_ms: nil, failovers: 0}
+  end
 
   defp success_rate_class(nil), do: "text-gray-500"
   defp success_rate_class(rate) when rate >= 99.0, do: "text-emerald-400"

@@ -47,8 +47,16 @@ defmodule LassoWeb.Dashboard.Components.ActivityFeedPanel do
           <% else %>
             <div
               data-event-id={e[:ts_ms]}
+              data-request-origin={e[:request_origin] || :client}
               class="text-[9px] text-gray-300 flex items-center gap-1 shrink-0"
             >
+              <span
+                :if={e[:request_origin] in [:system, "system"]}
+                class="inline-flex items-center rounded bg-gray-700/50 px-1 py-px text-[7px] font-bold tracking-wide text-gray-400"
+                title="Internal provider health or synchronization request"
+              >
+                SYSTEM
+              </span>
               <span class="text-purple-300">{e.chain}</span>
               <span class="text-sky-300">{e.method}</span>
               → <span class="text-emerald-300">{String.slice(e.provider_id || "", 0, 14)}…</span>

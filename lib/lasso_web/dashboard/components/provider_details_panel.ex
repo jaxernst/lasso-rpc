@@ -74,6 +74,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       consensus_height: nil,
       optimistic_lag: nil,
       effective_lag: 0,
+      height_estimated?: false,
       sync_status: :healthy,
       mode: :aggregate
     })
@@ -206,7 +207,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
          chain_consensus
        ) do
     conn = provider_connection || %{}
-    chain = Map.get(conn, :chain)
+    chain_id = Map.get(conn, :chain_id)
+    instance_id = Map.get(conn, :instance_id) || provider_id
 
     {block_height, block_lag, consensus_height} =
       resolve_block_heights(
@@ -219,8 +221,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       )
 
     optimistic_lag =
-      if chain do
-        case StatusHelpers.calculate_optimistic_lag(chain, provider_id) do
+      if is_integer(chain_id) do
+        case StatusHelpers.calculate_optimistic_lag(chain_id, instance_id) do
           {:ok, lag} -> lag
           {:error, _} -> nil
         end
@@ -228,7 +230,14 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         nil
       end
 
-    effective_lag = resolve_effective_lag(block_lag, optimistic_lag, conn)
+    current_raw_lag =
+      if is_integer(block_height) and is_integer(consensus_height) do
+        block_height - consensus_height
+      else
+        block_lag
+      end
+
+    effective_lag = resolve_effective_lag(current_raw_lag, optimistic_lag, conn)
 
     display_block_height =
       if is_integer(optimistic_lag) and is_integer(consensus_height) and is_integer(block_height) do
@@ -242,6 +251,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       consensus_height: consensus_height,
       optimistic_lag: optimistic_lag,
       effective_lag: effective_lag,
+      height_estimated?: display_block_height != block_height,
       sync_status: sync_status_level(effective_lag),
       mode: if(selected_region == "aggregate", do: :aggregate, else: :region)
     }
@@ -564,7 +574,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       <div :if={@sync_data.block_height && @sync_data.consensus_height}>
         <div class="flex items-center justify-between text-sm mb-2">
           <span class="text-gray-400">
-            Block Height:
+            {if @sync_data.height_estimated?, do: "Estimated Height:", else: "Block Height:"}
             <span class="text-white font-mono">
               {Formatting.format_number(@sync_data.block_height)}
             </span>
