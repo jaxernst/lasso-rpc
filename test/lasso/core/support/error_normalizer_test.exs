@@ -210,4 +210,37 @@ defmodule Lasso.Core.Support.ErrorNormalizerTest do
       assert jerr.retriable? == true
     end
   end
+
+  describe "WebSocket upgrade failures" do
+    test "keeps throttling retriable without penalizing the circuit" do
+      jerr =
+        ErrorNormalizer.normalize({:ws_upgrade_error, 429, [{"retry-after", "1"}]},
+          provider_id: "custom",
+          transport: :ws
+        )
+
+      assert jerr.category == :rate_limit
+      assert jerr.retriable?
+      refute jerr.breaker_penalty?
+    end
+
+    test "distinguishes terminal authentication from retriable upstream failure" do
+      auth =
+        ErrorNormalizer.normalize({:ws_upgrade_error, 403, []},
+          provider_id: "custom",
+          transport: :ws
+        )
+
+      upstream =
+        ErrorNormalizer.normalize({:ws_upgrade_error, 503, []},
+          provider_id: "custom",
+          transport: :ws
+        )
+
+      assert auth.category == :client_error
+      refute auth.retriable?
+      assert upstream.category == :server_error
+      assert upstream.retriable?
+    end
+  end
 end

@@ -22,6 +22,13 @@
   # WebSocket connection state handling
   ~r"lib/lasso/core/transport/websocket/connection.ex.*pattern_match",
 
+  # mint_web_socket 1.0.6 types UpgradeFailureError.headers as a nested header
+  # list, while new/4 accepts and returns the flat Mint header representation.
+  # That external contract collapses the successful handshake branch and its
+  # callers into false pattern/unused warnings.
+  ~r"lib/lasso/core/transport/websocket/client.ex.*pattern_match",
+  ~r"lib/lasso/core/transport/websocket/client.ex.*unused_fun",
+
   # Discovery/probing error handling
   ~r"lib/lasso/discovery/probes/method_support.ex.*pattern_match",
 

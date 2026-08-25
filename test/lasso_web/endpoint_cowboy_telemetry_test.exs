@@ -12,16 +12,15 @@ defmodule LassoWeb.EndpointCowboyTelemetryTest do
   @dashboard_event [:lasso, :dashboard, :event_stream, :subscribe]
 
   defmodule WebSocketProbe do
-    use WebSockex
-
-    @impl true
     def handle_connect(_connection, owner) do
       send(owner, :websocket_connected)
       {:ok, owner}
     end
 
-    @impl true
     def handle_cast(:close, owner), do: {:close, owner}
+    def handle_info(_message, owner), do: {:ok, owner}
+    def handle_frame(_frame, owner), do: {:ok, owner}
+    def handle_disconnect(_reason, owner), do: {:ok, owner}
   end
 
   setup do
@@ -127,11 +126,18 @@ defmodule LassoWeb.EndpointCowboyTelemetryTest do
       websocket_url =
         "ws://127.0.0.1:#{port}/ws/rpc/cowboy-telemetry-websocket-test"
 
-      assert {:ok, websocket} = WebSockex.start(websocket_url, WebSocketProbe, self())
+      assert {:ok, websocket} =
+               Lasso.RPC.Transport.WebSocket.Client.start_link(
+                 websocket_url,
+                 WebSocketProbe,
+                 self(),
+                 owner: self()
+               )
+
       assert_receive :websocket_connected, 1_000
 
       websocket_monitor = Process.monitor(websocket)
-      WebSockex.cast(websocket, :close)
+      Lasso.RPC.Transport.WebSocket.Client.cast(websocket, :close)
       assert_receive {:DOWN, ^websocket_monitor, :process, ^websocket, _reason}, 1_000
 
       refute_receive {:cowboy_event, _event, ^ref}, 100

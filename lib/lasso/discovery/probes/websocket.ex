@@ -10,7 +10,7 @@ defmodule Lasso.Discovery.Probes.WebSocket do
 
   require Logger
 
-  alias Client
+  alias __MODULE__.Client
 
   @subscription_types ["newHeads", "logs", "newPendingTransactions"]
 
@@ -79,7 +79,6 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   def ensure_ws_url("http://" <> rest), do: "ws://" <> rest
   def ensure_ws_url(url), do: url
 
-  # Connection management using a simple GenServer wrapper around WebSockex
   defp connect(ws_url, timeout) do
     # Start our probe client
     Client.start_link(ws_url, timeout)
@@ -170,17 +169,18 @@ defmodule Lasso.Discovery.Probes.WebSocket do
   defp format_error(reason) when is_binary(reason), do: reason
   defp format_error(reason) when is_atom(reason), do: Atom.to_string(reason)
   defp format_error(%{"message" => msg}), do: msg
-  defp format_error(%WebSockex.RequestError{code: code, message: msg}), do: "HTTP #{code}: #{msg}"
+  defp format_error({:ws_upgrade_error, code, _headers}), do: "HTTP #{code}"
   defp format_error(%{__struct__: struct} = err), do: "#{struct}: #{Exception.message(err)}"
   defp format_error(reason), do: inspect(reason)
 end
 
-defmodule Client do
+defmodule Lasso.Discovery.Probes.WebSocket.Client do
   @moduledoc false
   # Internal WebSocket client for probing
 
-  use WebSockex
   require Logger
+
+  alias Lasso.RPC.Transport.WebSocket.Client, as: SocketClient
 
   defstruct [
     :url,
@@ -190,6 +190,15 @@ defmodule Client do
     :subscription_id,
     :event_listener
   ]
+
+  @type t :: %__MODULE__{
+          url: String.t(),
+          parent: pid(),
+          pending_requests: map(),
+          pending_subscription: {integer(), pid()} | nil,
+          subscription_id: String.t() | nil,
+          event_listener: pid() | nil
+        }
 
   @spec start_link(String.t(), non_neg_integer()) :: {:ok, pid()} | {:error, term()}
   def start_link(url, timeout) do
@@ -202,22 +211,16 @@ defmodule Client do
       event_listener: nil
     }
 
-    # Try to connect with timeout
-    task =
-      Task.async(fn ->
-        WebSockex.start_link(url, __MODULE__, state, handle_initial_conn_failure: true)
-      end)
-
-    case Task.yield(task, timeout) || Task.shutdown(task) do
-      {:ok, result} -> result
-      nil -> {:error, :connection_timeout}
-    end
+    SocketClient.start_link(url, __MODULE__, state,
+      connection_id: "discovery-probe",
+      connect_timeout: timeout
+    )
   end
 
   @spec stop(pid()) :: :ok | nil
   def stop(pid) do
     if Process.alive?(pid) do
-      WebSockex.cast(pid, :close)
+      SocketClient.cast(pid, :close)
     end
   catch
     :exit, _ -> :ok
@@ -234,7 +237,7 @@ defmodule Client do
       "id" => request_id
     }
 
-    WebSockex.cast(pid, {:send_request, request, self()})
+    SocketClient.cast(pid, {:send_request, request, self()})
 
     receive do
       {:response, ^request_id, result} -> {:ok, result}
@@ -256,7 +259,7 @@ defmodule Client do
       "id" => request_id
     }
 
-    WebSockex.cast(pid, {:send_subscription, request, self()})
+    SocketClient.cast(pid, {:send_subscription, request, self()})
 
     # Wait for subscription confirmation
     receive do
@@ -290,7 +293,7 @@ defmodule Client do
       "id" => request_id
     }
 
-    WebSockex.cast(pid, {:send_request, request, self()})
+    SocketClient.cast(pid, {:send_request, request, self()})
 
     receive do
       {:response, ^request_id, _} -> :ok
@@ -300,14 +303,12 @@ defmodule Client do
     end
   end
 
-  # WebSockex callbacks
-
-  @impl true
+  @spec handle_connect(map(), t()) :: {:ok, t()}
   def handle_connect(_conn, state) do
     {:ok, state}
   end
 
-  @impl true
+  @spec handle_frame(term(), t()) :: {:ok, t()}
   def handle_frame({:text, msg}, state) do
     case Jason.decode(msg) do
       {:ok, %{"id" => id, "result" => result}} when is_integer(id) ->
@@ -331,31 +332,29 @@ defmodule Client do
     end
   end
 
-  @impl true
   def handle_frame(_frame, state) do
     {:ok, state}
   end
 
-  @impl true
+  @spec handle_cast(term(), t()) ::
+          {:ok, t()} | {:reply, Mint.WebSocket.frame() | Mint.WebSocket.shorthand_frame(), t()}
   def handle_cast({:send_request, request, from}, state) do
     id = request["id"]
     new_state = %{state | pending_requests: Map.put(state.pending_requests, id, from)}
     {:reply, {:text, Jason.encode!(request)}, new_state}
   end
 
-  @impl true
   def handle_cast({:send_subscription, request, from}, state) do
     id = request["id"]
     new_state = %{state | pending_subscription: {id, from}}
     {:reply, {:text, Jason.encode!(request)}, new_state}
   end
 
-  @impl true
   def handle_cast(:close, state) do
     {:close, state}
   end
 
-  @impl true
+  @spec handle_disconnect(term(), t()) :: {:ok, t()}
   def handle_disconnect(_reason, state) do
     {:ok, state}
   end

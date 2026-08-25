@@ -7,13 +7,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
   management and error normalization. Implements the new Transport behaviour
   for transport-agnostic request routing.
 
-  Outbound frames use a one-way WebSockex cast guarded by the connection
-  generation, absolute decision cutoff, and a shared cancellation latch. Direct
-  `WebSockex.send_frame/2` is not used because its queued `GenServer.call` may
-  send after the waiting task has been cancelled or its deadline has expired.
-  Cast acceptance opens an indeterminate send phase. A same-process
-  acknowledgement after WebSockex completes its socket write proves dispatch;
-  a correlated response remains independently sufficient proof.
+  Outbound frames use a one-way client cast guarded by the connection generation,
+  absolute decision cutoff, and a shared cancellation latch. Cast acceptance opens
+  an indeterminate send phase. A same-process acknowledgement after the socket write
+  proves dispatch; a correlated response remains independently sufficient proof.
   """
 
   @behaviour Lasso.RPC.Transport

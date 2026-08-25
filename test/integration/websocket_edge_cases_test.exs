@@ -9,7 +9,7 @@ defmodule Lasso.Integration.WebSocketEdgeCasesTest do
   - Memory management
   - Rapid state transitions
 
-  Uses real WSConnection GenServer with mocked WebSockex transport.
+  Uses the real WSConnection GenServer with a mocked WebSocket client.
   """
 
   use Lasso.Test.LassoIntegrationCase, async: false
