@@ -529,10 +529,12 @@ defmodule Lasso.RPC.Transports.WebSocket do
   end
 
   defp classification_context(channel) do
+    provider_config = Map.get(channel, :config, %{})
+
     %{
       profile: Map.get(channel, :profile),
       chain_id: Map.get(channel, :chain_id),
-      provider_capabilities: get_in(channel, [:config, :capabilities])
+      provider_capabilities: Map.get(provider_config, :capabilities)
     }
   end
 

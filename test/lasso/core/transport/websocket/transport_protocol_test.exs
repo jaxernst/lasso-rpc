@@ -910,7 +910,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
   test "classifies upstream errors with the selected provider capability snapshot", context do
     channel =
-      Map.put(context.channel, :config, %{
+      Map.put(context.channel, :config, %Lasso.Config.ChainConfig.Provider{
         capabilities: %{
           error_rules: [
             %{
