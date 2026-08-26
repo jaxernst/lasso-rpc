@@ -572,10 +572,14 @@ defmodule LassoWeb.RPCSocket do
     end
   end
 
-  defp handle_forwarded_result({:error, reason, _updated_ctx}, item, state) do
-    if item.respond?,
-      do: {:push, error_frame(reason, item.id), state},
-      else: {:ok, state}
+  defp handle_forwarded_result({:error, reason, updated_ctx}, item, state) do
+    if item.respond? do
+      frame = error_frame(reason, item.id)
+      maybe_enqueue_metadata(item.lasso_meta_mode, updated_ctx)
+      {:push, frame, state}
+    else
+      {:ok, state}
+    end
   end
 
   defp handle_forwarded_result(_invalid_result, item, state) do

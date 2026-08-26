@@ -2,6 +2,7 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Request.ByteBudget
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.Response
   alias LassoWeb.RPCSocket
   alias LassoWeb.RPCSocket.ItemOwner
@@ -361,6 +362,34 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     assert %{"id" => 12, "result" => "response"} = Jason.decode!(response_json)
     assert_receive notification = {:send_notification, notification_json}
     assert %{"method" => "lasso_meta"} = Jason.decode!(notification_json)
+
+    assert {:push, {:text, ^notification_json}, ^state} =
+             RPCSocket.handle_info(notification, state)
+  end
+
+  test "an error response precedes its requested metadata notification" do
+    state = socket_state()
+    request = request(12) |> Map.put("lasso_meta", "notify")
+
+    assert {:ok, state} = handle_request(state, request)
+    assert_receive {:item_owner_started, item_ref, owner, _work}
+
+    error = JError.new(-32_005, "Rate limited", category: :rate_limit)
+    send(owner, {:complete_error, error})
+    assert_receive result = {:rpc_item_result, ^item_ref, ^owner, _result}
+
+    assert {:push, {:text, response_json}, state} = RPCSocket.handle_info(result, state)
+    assert %{"id" => 12, "error" => %{"code" => -32_005}} = Jason.decode!(response_json)
+
+    assert_receive notification = {:send_notification, notification_json}
+
+    assert %{
+             "method" => "lasso_meta",
+             "params" => %{"request_id" => request_id, "transport" => "ws"} = metadata
+           } = Jason.decode!(notification_json)
+
+    assert is_binary(request_id)
+    refute Map.has_key?(metadata, "error")
 
     assert {:push, {:text, ^notification_json}, ^state} =
              RPCSocket.handle_info(notification, state)
