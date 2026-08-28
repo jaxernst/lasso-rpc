@@ -3,7 +3,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Client do
 
   use GenServer
 
-  alias Lasso.Discovery.SSRFGuard
+  alias Lasso.Core.Transport.OriginResolver
 
   @default_connect_timeout 10_000
   @default_attempt_timeout 2_000
@@ -93,7 +93,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Client do
         Application.get_env(
           :lasso,
           :custom_origin_resolver,
-          &SSRFGuard.resolve_addresses/1
+          &OriginResolver.resolve_addresses/1
         )
       end)
 
@@ -101,13 +101,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Client do
     deadline = System.monotonic_time(:millisecond) + timeout
 
     with {:ok, uri} <- parse_url(url),
-         {:ok, _validated_uri, addresses} <- SSRFGuard.resolve_configured_url(url, resolver) do
+         {:ok, addresses} <- OriginResolver.resolve(uri.host, resolver) do
       addresses
       |> order_addresses(opts)
       |> connect_addresses(uri, opts, deadline, nil)
     else
-      {:error, :ssrf_blocked, reason} -> {:error, {:network_error, reason}}
-      {:error, reason} -> {:error, reason}
+      {:error, {:network_error, _reason} = error} -> {:error, error}
+      {:error, reason} -> {:error, {:network_error, reason}}
       _other -> {:error, {:network_error, :invalid_resolver_result}}
     end
   end
