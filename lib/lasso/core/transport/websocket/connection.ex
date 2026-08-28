@@ -78,7 +78,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{Catalog, InstanceState}
   alias Lasso.RPC.Response
-  alias Lasso.RPC.Transport.WebSocket.Endpoint
+  alias Lasso.RPC.Transport.WebSocket.{Client, Endpoint, Handler}
 
   @reconnect_log_threshold 5
   @shared_profile "__shared__"
@@ -1527,11 +1527,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:noreply, %{state | stability_timer_ref: nil}}
   end
 
-  # Handle EXIT from linked WebSockex process
-  # This catches cases where WebSockex exits before or after sending :ws_disconnect
-  # Without this, we might miss disconnects entirely if WebSockex crashes
+  # Catch client exits which occur before or after the typed disconnect event.
   def handle_info({:EXIT, pid, reason}, %{connection: pid, connected: true} = state) do
-    Logger.debug("WebSockex process exited",
+    Logger.debug("WebSocket client process exited",
       provider_id: state.endpoint.id,
       reason: inspect(reason)
     )
@@ -1561,7 +1559,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       )
 
     Logger.warning(
-      "WebSockex exited unexpectedly (via :EXIT): #{inspect(reason)}, " <>
+      "WebSocket client exited unexpectedly (via :EXIT): #{inspect(reason)}, " <>
         "was_stable=#{was_stable}, had_active_traffic=#{had_pending} (provider: #{state.endpoint.id})"
     )
 
@@ -1591,7 +1589,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     circuit_state =
       CircuitBreaker.report_external_bounded(breaker_id, {:error, jerr_with_penalty})
 
-    Logger.debug("Circuit breaker state after WebSockex exit",
+    Logger.debug("Circuit breaker state after WebSocket client exit",
       provider_id: state.endpoint.id,
       circuit_state: circuit_state
     )
@@ -1605,10 +1603,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:noreply, state}
   end
 
-  # Handle EXIT from WebSockex when we already know we're disconnected
-  # This can happen if the :ws_disconnect message was processed first
+  # The typed disconnect event can be processed before the linked-process exit.
   def handle_info({:EXIT, pid, reason}, %{connection: pid, connected: false} = state) do
-    Logger.debug("WebSockex process exited (already disconnected)",
+    Logger.debug("WebSocket client process exited (already disconnected)",
       provider_id: state.endpoint.id,
       reason: inspect(reason)
     )
@@ -1626,8 +1623,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     {:stop, {:shutdown, reason}, state}
   end
 
-  # Handle EXIT from an old WebSockex process (different pid than current connection)
-  # This can happen during rapid reconnection cycles
+  # Rapid reconnects can leave an exit signal from an older client generation.
   def handle_info({:EXIT, _pid, reason}, state) do
     Logger.debug("Received EXIT from old/unknown process",
       provider_id: state.endpoint.id,
@@ -1706,7 +1702,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
           ErrorClassifier.classify(jerr.code, jerr.message,
             data: jerr.data,
-            provider_id: state.endpoint.id
+            provider_id: state.endpoint.id,
+            profile: state.endpoint.profile,
+            chain_id: state.endpoint.chain_id
           )
 
         enriched = %{
@@ -1778,14 +1776,15 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     do: JError.from(other, provider_id: endpoint_id)
 
   defp connect_to_websocket(endpoint, parent_pid, connection_generation) do
-    # Start a separate WebSocket handler process
-    # Pass connection_id in opts for test-mode failure injection (MockWSClient)
-    # WebSockex ignores unknown opts, so this is safe for production
-    opts = [connection_id: endpoint.id, extra_headers: endpoint.headers]
+    opts = [
+      connection_id: endpoint.id,
+      connection_generation: connection_generation,
+      extra_headers: endpoint.headers
+    ]
 
     case ws_client().start_link(
            endpoint.ws_url,
-           Lasso.RPC.Transport.WebSocket.Handler,
+           Handler,
            %{
              endpoint: endpoint,
              parent: parent_pid,
@@ -2484,6 +2483,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       jerr =
         ErrorNormalizer.normalize(message,
           provider_id: state.endpoint.id,
+          profile: state.endpoint.profile,
+          chain_id: state.endpoint.chain_id,
           context: :jsonrpc,
           transport: :ws
         )
@@ -2659,6 +2660,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp ws_client do
-    Application.get_env(:lasso, :ws_client_module, WebSockex)
+    Application.get_env(:lasso, :ws_client_module, Client)
   end
 end

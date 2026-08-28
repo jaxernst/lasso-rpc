@@ -65,7 +65,7 @@ defmodule Lasso.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dotenvy, "~> 0.8.0"},
       {:jason, "~> 1.4.5"},
-      {:websockex, "~> 0.4"},
+      {:mint_web_socket, "~> 1.0"},
       {:phoenix, "~> 1.8"},
       {:phoenix_pubsub, "~> 2.1"},
       {:phoenix_live_view, "~> 1.1.33"},

@@ -26,6 +26,8 @@ defmodule Lasso.RPC.Transports.HTTP do
   @impl true
   def open(provider_config, opts \\ []) do
     provider_id = Keyword.get(opts, :provider_id, Map.get(provider_config, :id, "unknown"))
+    profile = Keyword.get(opts, :profile, Map.get(provider_config, :profile))
+    chain_id = Keyword.get(opts, :chain_id, Map.get(provider_config, :chain_id))
 
     case get_http_url(provider_config) do
       nil ->
@@ -39,6 +41,9 @@ defmodule Lasso.RPC.Transports.HTTP do
         channel = %{
           url: url,
           provider_id: provider_id,
+          profile: profile,
+          chain_id: chain_id,
+          provider_capabilities: Map.get(provider_config, :capabilities),
           config: provider_config,
           request_config: HttpClient.prepare_provider(provider_config)
         }
@@ -118,6 +123,9 @@ defmodule Lasso.RPC.Transports.HTTP do
             validation: validation,
             raw_bytes: raw_bytes,
             provider_id: provider_id,
+            profile: Map.get(channel, :profile),
+            chain_id: Map.get(channel, :chain_id),
+            provider_capabilities: Map.get(channel, :provider_capabilities),
             dispatch_context: dispatch_context,
             deadline_us: deadline_us,
             io_duration_us: max(received_at_us - io_start_us, 0),
@@ -128,6 +136,9 @@ defmodule Lasso.RPC.Transports.HTTP do
           {:error,
            ErrorNormalizer.normalize(reason,
              provider_id: provider_id,
+             profile: Map.get(channel, :profile),
+             chain_id: Map.get(channel, :chain_id),
+             provider_capabilities: Map.get(channel, :provider_capabilities),
              context: :transport,
              transport: :http
            )}
@@ -232,7 +243,10 @@ defmodule Lasso.RPC.Transports.HTTP do
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
       ErrorClassifier.classify(jerr.code, jerr.message,
         data: jerr.data,
-        provider_id: input.provider_id
+        provider_id: input.provider_id,
+        profile: Map.get(input, :profile),
+        chain_id: Map.get(input, :chain_id),
+        provider_capabilities: Map.get(input, :provider_capabilities)
       )
 
     AttemptProtocol.terminal_at(

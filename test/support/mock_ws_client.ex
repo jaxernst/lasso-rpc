@@ -7,14 +7,14 @@ defmodule TestSupport.MockWSClient do
 
   use GenServer
 
-  # Public API mimicking WebSockex - moved to later in file for proper grouping
+  # Public API used by the production WebSocket client seam.
 
   def send_frame(pid, frame) do
     GenServer.call(pid, {:send_frame, frame})
   end
 
   def cast(pid, message) do
-    GenServer.cast(pid, {:websockex_cast, message})
+    GenServer.cast(pid, {:client_cast, message})
   end
 
   # Test helpers for simulating various WebSocket behaviors
@@ -173,14 +173,6 @@ defmodule TestSupport.MockWSClient do
     {:noreply, %{s | state: new_state, connected: true}}
   end
 
-  # WebSockex sometimes sends an internal message to the client process
-  # to perform the actual send. Simulate immediate success here.
-  @impl true
-  def handle_info({:"$websockex_send", _ref, :ping}, s) do
-    # Pretend the ping was handled; also simulate a pong at handler level
-    {:noreply, s}
-  end
-
   def handle_info(
         {:lasso_ws_send_written, generation, send_key} = message,
         %{handler: handler, state: handler_state} = state
@@ -305,7 +297,7 @@ defmodule TestSupport.MockWSClient do
 
   @impl true
   def handle_cast(
-        {:websockex_cast, message},
+        {:client_cast, message},
         %{handler: handler, state: handler_state} = state
       ) do
     case handler.handle_cast(message, handler_state) do

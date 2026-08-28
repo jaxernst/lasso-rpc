@@ -8,7 +8,7 @@ defmodule TestSupport.ProtocolWSClient do
   end
 
   def send_frame(pid, frame), do: GenServer.call(pid, {:send_frame, frame}, :infinity)
-  def cast(pid, message), do: GenServer.cast(pid, {:websockex_cast, message})
+  def cast(pid, message), do: GenServer.cast(pid, {:client_cast, message})
 
   def acknowledge(pid, transport_id, raw_response \\ nil) do
     GenServer.call(pid, {:acknowledge, transport_id, raw_response})
@@ -37,7 +37,7 @@ defmodule TestSupport.ProtocolWSClient do
   end
 
   @impl true
-  def handle_cast({:websockex_cast, message}, state) do
+  def handle_cast({:client_cast, message}, state) do
     case state.handler.handle_cast(message, state.handler_state) do
       {:reply, frame, handler_state} ->
         state = %{state | handler_state: handler_state}

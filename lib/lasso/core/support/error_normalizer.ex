@@ -60,7 +60,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
     # Unified classification with adapter priority
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, provider_id: provider_id)
+      ErrorClassifier.classify(code, message, classifier_opts(opts))
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -178,7 +178,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
     # Unified classification with adapter priority
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, provider_id: provider_id)
+      ErrorClassifier.classify(code, message, classifier_opts(opts))
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -210,7 +210,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
       {:json_rpc, code, message} ->
         # Body is a valid JSON-RPC error envelope — classify normally
         %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-          ErrorClassifier.classify(code, message, provider_id: provider_id)
+          ErrorClassifier.classify(code, message, classifier_opts(opts))
 
         data =
           payload
@@ -310,8 +310,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  # WebSockex connection errors
-  def normalize(%WebSockex.RequestError{code: 429} = _err, opts) do
+  def normalize({:ws_upgrade_error, 429, _headers}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
     JError.new(429, "Rate limited",
@@ -325,10 +324,10 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  def normalize(%WebSockex.RequestError{code: 408, message: msg} = _err, opts) do
+  def normalize({:ws_upgrade_error, 408, _headers}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(-32_000, msg || "Upstream timeout",
+    JError.new(-32_000, "Upstream timeout",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -338,11 +337,11 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  def normalize(%WebSockex.RequestError{code: code, message: msg} = _err, opts)
+  def normalize({:ws_upgrade_error, code, _headers}, opts)
       when is_integer(code) and code >= 500 and code <= 599 do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(code, msg || "Upstream server error",
+    JError.new(code, "Upstream server error",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -352,11 +351,11 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  def normalize(%WebSockex.RequestError{code: code, message: msg} = _err, opts)
+  def normalize({:ws_upgrade_error, code, _headers}, opts)
       when is_integer(code) and code >= 400 and code <= 499 do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(code, msg || "Client error",
+    JError.new(code, "Client error",
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
@@ -366,22 +365,8 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  def normalize(%WebSockex.RequestError{} = err, opts) do
-    normalize({:network_error, {:request_error, err}}, Keyword.put(opts, :transport, :ws))
-  end
-
-  def normalize(%WebSockex.NotConnectedError{connection_state: state}, opts) do
-    provider_id = Keyword.get(opts, :provider_id)
-    context = Keyword.get(opts, :context, :transport)
-
-    JError.new(-32_000, "WebSocket not connected (state: #{state})",
-      provider_id: provider_id,
-      source: context,
-      transport: :ws,
-      category: :network_error,
-      retriable?: true,
-      breaker_penalty?: true
-    )
+  def normalize({:ws_upgrade_error, code, _headers}, opts) do
+    normalize({:network_error, {:upgrade_failed, code}}, Keyword.put(opts, :transport, :ws))
   end
 
   # WebSocket close codes (RFC 6455)
@@ -731,6 +716,10 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
        do: %{jerr | transport: transport}
 
   defp maybe_add_transport(jerr, _transport), do: jerr
+
+  defp classifier_opts(opts) do
+    Keyword.take(opts, [:provider_id, :profile, :chain_id, :chain, :provider_capabilities])
+  end
 
   # Extract nested JSON-RPC error from HTTP error payload (e.g., 4xx/5xx with JSON body).
   #

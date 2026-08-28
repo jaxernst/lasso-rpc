@@ -7,13 +7,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
   management and error normalization. Implements the new Transport behaviour
   for transport-agnostic request routing.
 
-  Outbound frames use a one-way WebSockex cast guarded by the connection
-  generation, absolute decision cutoff, and a shared cancellation latch. Direct
-  `WebSockex.send_frame/2` is not used because its queued `GenServer.call` may
-  send after the waiting task has been cancelled or its deadline has expired.
-  Cast acceptance opens an indeterminate send phase. A same-process
-  acknowledgement after WebSockex completes its socket write proves dispatch;
-  a correlated response remains independently sufficient proof.
+  Outbound frames use a one-way client cast guarded by the connection generation,
+  absolute decision cutoff, and a shared cancellation latch. Cast acceptance opens
+  an indeterminate send phase. A same-process acknowledgement after the socket write
+  proves dispatch; a correlated response remains independently sufficient proof.
   """
 
   @behaviour Lasso.RPC.Transport
@@ -128,7 +125,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
         params,
         request_id,
         context,
-        deadline_us
+        deadline_us,
+        classification_context(channel)
       )
 
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
@@ -154,7 +152,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
         encoded: prepared.encoded,
         client_id: prepared.client_id,
         context: context,
-        deadline_us: deadline_us
+        deadline_us: deadline_us,
+        classification_context: classification_context(channel)
       })
 
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
@@ -172,7 +171,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
          params,
          client_id,
          context,
-         deadline_us
+         deadline_us,
+         classification_context
        ) do
     transport_id = generate_transport_id()
 
@@ -190,7 +190,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
           encoded: encoded,
           client_id: client_id,
           context: context,
-          deadline_us: deadline_us
+          deadline_us: deadline_us,
+          classification_context: classification_context
         })
 
       {:error, reason} ->
@@ -215,7 +216,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
          encoded: encoded,
          client_id: client_id,
          context: context,
-         deadline_us: deadline_us
+         deadline_us: deadline_us,
+         classification_context: classification_context
        }) do
     with :ok <- AttemptProtocol.send_started(context),
          send_started_us = System.monotonic_time(:microsecond),
@@ -237,6 +239,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
         provider_id: provider_id,
         context: context,
         deadline_us: deadline_us,
+        classification_context: classification_context,
         started_us: send_started_us,
         connection: connection,
         certainty: :indeterminate
@@ -280,6 +283,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
          provider_id: provider_id,
          context: context,
          deadline_us: deadline_us,
+         classification_context: classification_context,
          started_us: started_us,
          connection: connection,
          certainty: certainty
@@ -294,6 +298,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
           provider_id: provider_id,
           context: context,
           deadline_us: deadline_us,
+          classification_context: classification_context,
           started_us: accepted_at_us,
           connection: connection,
           certainty: certainty
@@ -310,6 +315,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
           provider_id: provider_id,
           context: context,
           deadline_us: deadline_us,
+          classification_context: classification_context,
           started_us: started_us,
           connection: connection,
           certainty: :dispatched
@@ -331,6 +337,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
           client_id: client_id,
           context: context,
           provider_id: provider_id,
+          classification_context: classification_context,
           io_duration_us: io_duration_us,
           validated_at_us: validated_at_us
         })
@@ -369,6 +376,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
          client_id: client_id,
          context: context,
          provider_id: provider_id,
+         classification_context: classification_context,
          io_duration_us: io_duration_us,
          validated_at_us: validated_at_us
        }) do
@@ -394,9 +402,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
       {:error, %JError{} = error} ->
         %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-          ErrorClassifier.classify(error.code, error.message,
-            data: error.data,
-            provider_id: provider_id
+          ErrorClassifier.classify(
+            error.code,
+            error.message,
+            [data: error.data, provider_id: provider_id] ++ Map.to_list(classification_context)
           )
 
         AttemptProtocol.terminal_at(
@@ -514,6 +523,16 @@ defmodule Lasso.RPC.Transports.WebSocket do
   defp generate_transport_id do
     sequence = System.unique_integer([:positive, :monotonic])
     "lasso-#{sequence}"
+  end
+
+  defp classification_context(channel) do
+    provider_config = Map.get(channel, :config, %{})
+
+    %{
+      profile: Map.get(channel, :profile),
+      chain_id: Map.get(channel, :chain_id),
+      provider_capabilities: Map.get(provider_config, :capabilities)
+    }
   end
 
   @impl true

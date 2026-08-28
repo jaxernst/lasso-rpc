@@ -1,11 +1,12 @@
 defmodule Lasso.Core.Support.ErrorClassificationStore do
   @moduledoc """
-  GenServer + ETS store collecting error classification samples for validation
-  and future auto-improvement of the error classification system.
+  GenServer + ETS store collecting bounded error-classification drift evidence.
 
   Attaches to `[:lasso, :error_classification, :classified]` telemetry events
   and samples entries based on configurable rules. Entries are deduped by
-  `{provider_id, code, category, message_fingerprint}` and bounded by LRU eviction.
+  `{provider_id, code, category, classification_path, control_category,
+  shared_control?, message_fingerprint}` and bounded by LRU eviction.
+  Raw provider messages and response data are never retained.
   """
 
   use GenServer
@@ -35,6 +36,9 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
       {:provider_id, pid}, acc -> Enum.filter(acc, &(&1.provider_id == pid))
       {:category, cat}, acc -> Enum.filter(acc, &(&1.category == cat))
       {:code, code}, acc -> Enum.filter(acc, &(&1.code == code))
+      {:classification_path, path}, acc -> Enum.filter(acc, &(&1.classification_path == path))
+      {:control_category, cat}, acc -> Enum.filter(acc, &(&1.control_category == cat))
+      {:shared_control?, shared?}, acc -> Enum.filter(acc, &(&1.shared_control? == shared?))
       _, acc -> acc
     end)
   end
@@ -49,8 +53,6 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   def configure(new_config) when is_map(new_config) do
     GenServer.call(__MODULE__, {:configure, new_config})
   end
-
-  # Server
 
   @impl true
   def init(_opts) do
@@ -95,10 +97,15 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   end
 
   defp record_entry(metadata, state) do
-    fingerprint = message_fingerprint(metadata[:message])
+    fingerprint = metadata[:message_fingerprint]
+    category = metadata[:category]
+    classification_path = metadata[:classification_path]
+    control_category = metadata[:control_category] || category
+    shared_control? = metadata[:shared_control?] || false
 
     key =
-      {metadata[:provider_id], metadata[:code], metadata[:category], fingerprint}
+      {metadata[:provider_id], metadata[:code], category, classification_path, control_category,
+       shared_control?, fingerprint}
 
     now = System.system_time(:second)
 
@@ -112,13 +119,14 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
 
         entry = %{
           code: metadata[:code],
-          message: metadata[:message],
-          data_sample: metadata[:data_sample],
+          message_fingerprint: fingerprint,
+          data_kind: metadata[:data_kind],
           provider_id: metadata[:provider_id],
-          category: metadata[:category],
-          classification_path: metadata[:classification_path],
-          retriable?:
-            Lasso.Core.Support.ErrorClassification.retriable_for_category?(metadata[:category]),
+          category: category,
+          classification_path: classification_path,
+          control_category: control_category,
+          shared_control?: shared_control?,
+          retriable?: Lasso.Core.Support.ErrorClassification.retriable_for_category?(category),
           first_seen: now,
           last_seen: now,
           count: 1
@@ -137,14 +145,5 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
 
       Enum.each(oldest, fn {k, _v} -> :ets.delete(@table, k) end)
     end
-  end
-
-  defp message_fingerprint(nil), do: nil
-
-  defp message_fingerprint(message) when is_binary(message) do
-    message
-    |> String.downcase()
-    |> String.replace(~r/0x[0-9a-f]+/i, "<hex>")
-    |> String.trim()
   end
 end

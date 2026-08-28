@@ -8,7 +8,7 @@ defmodule Lasso.Integration.WebSocketReconnectionTest do
   - Reconnection attempt limits
   - State management across reconnection cycles
 
-  Uses real WSConnection GenServer with mocked WebSockex transport.
+  Uses the real WSConnection GenServer with a mocked WebSocket client.
   """
 
   use Lasso.Test.LassoIntegrationCase, async: false
