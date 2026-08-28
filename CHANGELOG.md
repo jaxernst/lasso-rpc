@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-28
+
+### Added
+
+- Bounded request execution with explicit ownership, deadlines, byte budgets, terminal facts, and projection lanes for HTTP and WebSocket traffic
+- Precompiled routing plans, candidate cursors, and bounded routing evidence used by every public selection strategy
+- Generation-bound transport dispatch and strict upstream JSON-RPC response validation
+- A validated Mint WebSocket client that resolves each configured origin once, pins the connection to that address set, and preserves the original HTTP and TLS authority
+- Cluster-aware circuit-breaker admission, recovery control, and transport diagnostics
+
+### Changed
+
+- Upgraded the release runtime to Erlang/OTP 28 and the routing stack to Phoenix 1.8 and Finch 0.23
+- Reworked provider selection to defer cold evidence, reuse immutable routing state, and avoid unnecessary materialization on the request path
+- Strengthened WebSocket subscription ownership, reconnection, gap-fill bounds, and stale-generation handling
+- Aggregated request and dashboard diagnostics through bounded local projection lanes
+- Kept self-hosted localhost and private-network providers supported while pinning each WebSocket connection to its resolved address set
+
+### Fixed
+
+- Applied provider-specific error rules consistently to live HTTP and WebSocket transports
+- Preserved provider metadata on WebSocket errors and classified structural execution evidence before ambiguous provider messages
+- Prevented stale or cancelled transport attempts from being accepted after their request owner or connection generation changed
+- Made provider capability reads safe when configuration fields are absent
+- Corrected dashboard routing counters, provider details, and cluster-wide activity reconciliation
+- Hardened response-size admission, batch accounting, circuit recovery races, and WebSocket continuity cleanup
+
 ## [0.2.0] - 2026-08-05
 
 ### Fixed
@@ -75,6 +102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jaxernst/lasso-rpc/releases/tag/v0.1.0
