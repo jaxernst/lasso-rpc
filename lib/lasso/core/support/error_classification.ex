@@ -8,8 +8,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   ## Classification Strategy
 
-  1. Message-based patterns (highest priority) - detects rate limits, auth, capabilities
-  2. Code-based classification (fallback) - standard JSON-RPC, HTTP, EIP-1193 codes
+  1. Structural revert data and definitive codes
+  2. Explicit execution/application message evidence
+  3. Provider condition patterns such as rate limits, auth, and capabilities
+  4. Code-based fallback for JSON-RPC, HTTP, and EIP-1193 codes
 
   ## Error Categories
 
@@ -50,6 +52,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
   - Constraint-based errors (`:block_not_available`, `:capability_violation`, `:rate_limit`) do not penalize
   """
 
+  @max_classification_message_graphemes 4_096
+
   # ===========================================================================
   # JSON-RPC 2.0 Standard Error Codes
   # ===========================================================================
@@ -60,6 +64,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @invalid_params -32_602
   @internal_error -32_603
 
+  @evm_execution_error 3
+
   # Server error range: -32_000 to -32_099 (reserved by spec)
 
   # Standard JSON-RPC codes with unambiguous meaning per spec.
@@ -67,10 +73,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Excludes -32603 (internal_error) because providers reuse it for capability violations.
   # Excludes -32603 (providers reuse for capability violations)
   # and -32602 (providers like OnFinality use for block-not-found).
-  @jsonrpc_standard_unambiguous [
+  @definitive_error_codes [
     @parse_error,
     @invalid_request,
-    @method_not_found
+    @method_not_found,
+    @evm_execution_error
   ]
 
   # ===========================================================================
@@ -82,14 +89,6 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @network_error_code -32_004
   @client_error_code -32_003
   @server_error_code -32_002
-
-  # ===========================================================================
-  # Ethereum Execution Error Code
-  # ===========================================================================
-
-  # EVM execution error (EIP-3171 / go-ethereum). Returned for reverts,
-  # out-of-gas, invalid opcodes, etc. Always deterministic & non-retriable.
-  @evm_execution_error 3
 
   # ===========================================================================
   # EIP-1193 Provider Error Codes
@@ -296,9 +295,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @doc """
   Categorizes an error into a semantic category.
 
-  Message-based classification takes priority over code-based classification,
-  allowing detection of capability violations, rate limits, and auth errors
-  that providers encode inconsistently.
+  Structural revert evidence and definitive codes take priority. Otherwise,
+  bounded message classification detects provider conditions that use
+  inconsistent codes.
 
   ## Examples
 
@@ -314,13 +313,13 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @spec categorize(integer(), String.t() | nil) :: atom()
   def categorize(code, message)
 
-  def categorize(code, message)
-      when code in @jsonrpc_standard_unambiguous and is_binary(message) do
+  def categorize(code, _message) when code in @definitive_error_codes do
     classify_by_code(code)
   end
 
   def categorize(code, message) when is_binary(message) do
     message
+    |> bounded_message()
     |> String.downcase()
     |> classify_by_message()
     |> case do
@@ -361,13 +360,13 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   def categorize_with_path(code, message, _data), do: do_categorize(code, message)
 
-  defp do_categorize(code, message)
-       when code in @jsonrpc_standard_unambiguous and is_binary(message) do
-    {classify_by_code(code), :code_based}
-  end
+  defp do_categorize(code, _message)
+       when code in @definitive_error_codes,
+       do: {classify_by_code(code), :definitive_code}
 
   defp do_categorize(code, message) when is_binary(message) do
     message
+    |> bounded_message()
     |> String.downcase()
     |> classify_by_message()
     |> case do
@@ -395,13 +394,13 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @spec retriable?(integer(), String.t() | nil) :: boolean()
   def retriable?(code, message)
 
-  def retriable?(code, message)
-      when code in @jsonrpc_standard_unambiguous and is_binary(message) do
+  def retriable?(code, _message) when code in @definitive_error_codes do
     retriable_by_code?(code)
   end
 
   def retriable?(code, message) when is_binary(message) do
     message
+    |> bounded_message()
     |> String.downcase()
     |> classify_by_message()
     |> case do
@@ -533,7 +532,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   defp classify_by_message(message_lower) do
     cond do
-      # Rate limits checked first (highest priority)
+      # Explicit EVM execution evidence is request-caused and must outrank broad
+      # provider phrases such as "access denied" or "please retry".
+      contains_any?(message_lower, @execution_revert_patterns) -> :execution_revert
+      # Provider capacity signals
       contains_any?(message_lower, @rate_limit_patterns) -> :rate_limit
       # Auth errors
       contains_any?(message_lower, @auth_patterns) -> :auth_error
@@ -541,12 +543,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
       # Patterns like "please retry" indicate the provider wants a retry
       contains_any?(message_lower, @transient_error_patterns) -> :server_error
       # Parameter validation errors — request-caused, not provider health issues.
-      # Check before execution_revert since "invalid" appears in both contexts.
       contains_any?(message_lower, @invalid_params_patterns) -> :invalid_params
-      # Execution/transaction errors — request-caused, not provider health issues.
-      # Must check before block_not_available since some revert messages could
-      # contain "not found" substrings.
-      contains_any?(message_lower, @execution_revert_patterns) -> :execution_revert
       # Block-not-available errors (check before capability violations to avoid
       # "not available"/"not found" patterns in @capability_violation_patterns swallowing these)
       block_not_available_match?(message_lower) -> :block_not_available
@@ -562,6 +559,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
   defp contains_any?(message, patterns) do
     Enum.any?(patterns, &String.contains?(message, &1))
   end
+
+  defp bounded_message(message),
+    do: String.slice(message, 0, @max_classification_message_graphemes)
 
   defp block_not_available_match?(msg) do
     contains_any?(msg, @block_not_available_patterns) or

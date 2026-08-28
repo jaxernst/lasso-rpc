@@ -143,6 +143,112 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     end
   end
 
+  describe "shared provider control classification" do
+    test "provider rules cannot override structural application evidence" do
+      capabilities = %{
+        error_rules: [
+          %{code: -32_000, category: :server_error},
+          %{code: 3, category: :rate_limit}
+        ]
+      }
+
+      revert_data = "0x08c379a0" <> String.duplicate("00", 64)
+
+      for classification <- [
+            ErrorClassifier.classify(-32_000, "vendor error",
+              data: revert_data,
+              provider_id: "custom-provider",
+              provider_capabilities: capabilities,
+              shared_instance?: false
+            ),
+            ErrorClassifier.classify(-32_000, "execution reverted: access denied",
+              provider_id: "custom-provider",
+              provider_capabilities: capabilities,
+              shared_instance?: false
+            ),
+            ErrorClassifier.classify(3, "rate limit reached",
+              provider_id: "custom-provider",
+              provider_capabilities: capabilities,
+              shared_instance?: false
+            )
+          ] do
+        assert classification.category == :execution_revert
+        assert classification.control_category == :execution_revert
+        refute classification.retriable?
+        refute classification.breaker_penalty?
+      end
+    end
+
+    test "keeps provider rules request-scoped when the instance is shared" do
+      capabilities = %{
+        error_rules: [
+          %{code: -32_000, message_contains: "vendor opaque denial", category: :rate_limit}
+        ]
+      }
+
+      classification =
+        ErrorClassifier.classify(-32_000, "Vendor opaque denial",
+          provider_id: "custom-provider",
+          provider_capabilities: capabilities,
+          shared_instance?: true
+        )
+
+      assert classification.category == :rate_limit
+      assert classification.retriable?
+      refute classification.breaker_penalty?
+      assert classification.control_category == :unclassified_server_error
+    end
+
+    test "uses provider rules for control when the instance is tenant-isolated" do
+      capabilities = %{
+        error_rules: [
+          %{code: -32_000, message_contains: "credits quota", category: :rate_limit}
+        ]
+      }
+
+      classification =
+        ErrorClassifier.classify(-32_000, "Credits quota exhausted",
+          provider_id: "custom-provider",
+          provider_capabilities: capabilities,
+          shared_instance?: false
+        )
+
+      assert classification.category == :rate_limit
+      assert classification.control_category == :rate_limit
+    end
+
+    test "telemetry exposes only one-way response evidence" do
+      test_pid = self()
+      handler_id = "bounded-error-evidence-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lasso, :error_classification, :classified],
+          fn _event, _measurements, metadata, _config ->
+            send(test_pid, {:classification_metadata, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      ErrorClassifier.classify(
+        -32_000,
+        "unknown upstream failure api_key=do-not-export 12345",
+        data: "0xdeadbeef-do-not-export",
+        provider_id: "custom-provider"
+      )
+
+      assert_receive {:classification_metadata, metadata}
+      assert byte_size(metadata.message_fingerprint) == 64
+      assert metadata.data_kind == :binary
+      refute Map.has_key?(metadata, :message)
+      refute Map.has_key?(metadata, :data_sample)
+      refute inspect(metadata) =~ "do-not-export"
+    end
+  end
+
   describe "execution_revert classification" do
     test "intrinsic gas too low is non-retriable execution_revert" do
       category = ErrorClassification.categorize(-32_000, "intrinsic gas too low")
@@ -246,12 +352,12 @@ defmodule Lasso.RPC.ErrorClassificationTest do
                :capability_violation
     end
 
-    test "categorize_with_path returns :code_based for unambiguous standard codes" do
+    test "categorize_with_path identifies definitive standard codes" do
       {category, path} =
         ErrorClassification.categorize_with_path(-32_601, "method not available")
 
       assert category == :method_not_found
-      assert path == :code_based
+      assert path == :definitive_code
     end
   end
 
@@ -305,11 +411,9 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert ErrorClassification.provider_health_failure?(:unclassified_server_error) == false
     end
 
-    test "message matching BOTH transient and execution_revert patterns: transient wins" do
-      # transient_error_patterns is checked before execution_revert_patterns in cond
+    test "execution evidence outranks transient provider wording" do
       msg = "execution reverted, please retry"
-      # "please retry" matches transient → :server_error
-      assert ErrorClassification.categorize(-32_000, msg) == :server_error
+      assert ErrorClassification.categorize(-32_000, msg) == :execution_revert
     end
   end
 
