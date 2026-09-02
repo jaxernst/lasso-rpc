@@ -1,8 +1,6 @@
-<div align="center">
+<img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
 
-<img src="priv/static/images/lasso-banner.png" alt="Lasso RPC: a smart proxy for better blockchain node RPC" width="820">
-
-<br>
+### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
 
 [![Docs](https://img.shields.io/badge/docs-docs.lasso.sh-38BDF8?style=flat-square&labelColor=19202E)](https://docs.lasso.sh/introduction)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
@@ -10,14 +8,6 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Version](https://img.shields.io/badge/version-0.3.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
-
-**[Documentation](https://docs.lasso.sh/introduction)** · **[Lasso Cloud](https://lasso.sh)** · **[Report a Bug](https://github.com/jaxernst/lasso-rpc/issues)** · **[Request a Feature](https://github.com/jaxernst/lasso-rpc/issues)**
-
-</div>
-
----
-
-### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
 
