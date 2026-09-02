@@ -13,9 +13,9 @@ Lasso is a smart proxy/router that turns your node infrastructure and RPC provid
 
 It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RPC API with expressive routing control (strategies, provider overrides, and profiles).
 
-This repository contains the self-hosted routing core. For a managed deployment, visit [Lasso Cloud](https://lasso.sh).
+Point your client at a Lasso URL instead of a provider's, and failover, retries, and provider selection happen behind it. No SDK, no client library, no application changes.
 
-Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve UX while keeping your application code simple.
+This repository contains the self-hosted routing core. For a managed deployment, visit [Lasso Cloud](https://lasso.sh).
 
 ---
 
