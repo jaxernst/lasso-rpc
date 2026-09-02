@@ -4,6 +4,8 @@
 
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-26A5E4?logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
+[![Follow on X](https://img.shields.io/badge/Follow-%40lassoRPC-000000?logo=x&logoColor=white)](https://x.com/lassoRPC)
 
 ### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
 
