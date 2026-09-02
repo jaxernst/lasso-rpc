@@ -1,11 +1,21 @@
-<p align="left">
-  <img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
-</p>
+<div align="center">
 
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/jaxernst/lasso-rpc/releases)
-[![Telegram](https://img.shields.io/badge/Telegram-Join%20Chat-26A5E4?logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
-[![Follow on X](https://img.shields.io/badge/Follow-%40lassoRPC-000000?logo=x&logoColor=white)](https://x.com/lassoRPC)
+<img src="priv/static/images/lasso-banner.png" alt="Lasso RPC: a smart proxy for better blockchain node RPC" width="820">
+
+<br>
+
+[![Docs](https://img.shields.io/badge/docs-docs.lasso.sh-38BDF8?style=flat-square&labelColor=19202E)](https://docs.lasso.sh/introduction)
+[![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
+[![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
+[![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Version](https://img.shields.io/badge/version-0.3.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
+
+**[Documentation](https://docs.lasso.sh/introduction)** · **[Lasso Cloud](https://lasso.sh)** · **[Report a Bug](https://github.com/jaxernst/lasso-rpc/issues)** · **[Request a Feature](https://github.com/jaxernst/lasso-rpc/issues)**
+
+</div>
+
+---
 
 ### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
 
@@ -16,14 +26,6 @@ It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RP
 This repository contains the self-hosted routing core. For a managed deployment, visit [Lasso Cloud](https://lasso.sh).
 
 Route every request to the best available provider to handle that request, while configuring providers to match your application's needs. Leverage deep redundancy, expressive routing, and built-in observability to improve UX while keeping your application code simple.
-
-### [Lasso Cloud](https://lasso.sh)
-
----
-
-**📚 [Docs](docs/)**
-**🐛 [Report Bug](https://github.com/jaxernst/lasso-rpc/issues)**
-**💡 [Request Feature](https://github.com/jaxernst/lasso-rpc/issues)**
 
 ---
 
@@ -292,6 +294,8 @@ Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-c
 ---
 
 ## Documentation
+
+Full hosted documentation lives at **[docs.lasso.sh](https://docs.lasso.sh/introduction)**. In-repo references:
 
 - **[CONFIGURATION.md](docs/CONFIGURATION.md)** - Profile YAML reference, strategies, provider capabilities
 - **[API_REFERENCE.md](docs/API_REFERENCE.md)** - HTTP/WebSocket endpoints, headers, errors
