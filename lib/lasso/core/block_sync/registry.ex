@@ -23,6 +23,7 @@ defmodule Lasso.BlockSync.Registry do
 
   require Logger
 
+  alias Lasso.BlockSync.ObservationProjection
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
 
   @table :block_sync_registry
@@ -71,13 +72,17 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
-  Get the consensus block height for a chain using P75 (75th percentile).
+  Get the time-aligned consensus block height for a chain using P75.
 
   With 1-3 providers, returns MAX (same as before). With 4+ providers, returns
   the second-highest height — filtering out one outlier fast provider that could
-  make all others appear lagged.
+  make all others appear lagged. When dynamic block time is available, fresh
+  HTTP samples are first advanced toward the highest actually observed height
+  by no more than their elapsed-time budget. WebSocket samples remain direct
+  evidence and no sample can be advanced beyond a real observation.
 
-  Only considers heights from the last `freshness_ms` milliseconds.
+  Each observation carries the effective freshness window from its worker
+  configuration. The explicit two-argument form overrides that window.
 
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
@@ -109,11 +114,19 @@ defmodule Lasso.BlockSync.Registry do
 
   Returns `{:ok, height}` or `{:error, :no_data}`.
   """
-  @spec get_consensus_height_filtered(pos_integer(), [String.t()] | nil, non_neg_integer()) ::
+  @spec get_consensus_height_filtered(
+          pos_integer(),
+          [String.t()] | nil,
+          non_neg_integer() | nil
+        ) ::
           {:ok, integer()} | {:error, :no_data}
-  def get_consensus_height_filtered(chain_id, provider_ids, freshness_ms \\ @default_freshness_ms)
-      when is_integer(chain_id) and chain_id > 0 do
-    calculate_consensus(chain_id, provider_ids, freshness_ms)
+  def get_consensus_height_filtered(chain_id, provider_ids, freshness_ms \\ nil)
+      when is_integer(chain_id) and chain_id > 0 and
+             (is_nil(freshness_ms) or
+                (is_integer(freshness_ms) and freshness_ms >= 0)) do
+    if is_nil(freshness_ms),
+      do: calculate_current_consensus(chain_id, provider_ids),
+      else: calculate_consensus(chain_id, provider_ids, freshness_ms)
   end
 
   @doc """
@@ -125,14 +138,17 @@ defmodule Lasso.BlockSync.Registry do
   - `{:error, :no_provider_data}` if provider has no height data
   - `{:error, :no_consensus}` if no consensus can be calculated
   """
-  @spec get_provider_lag(pos_integer(), String.t(), non_neg_integer()) ::
+  @spec get_provider_lag(pos_integer(), String.t(), non_neg_integer() | nil) ::
           {:ok, integer()} | {:error, :no_provider_data | :no_consensus | :stale_data}
-  def get_provider_lag(chain_id, provider_id, freshness_ms \\ @default_freshness_ms)
-      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
-    with {:ok, {height, timestamp, _source, _meta}} <- get_height(chain_id, provider_id),
-         age = System.system_time(:millisecond) - timestamp,
-         true <- age <= freshness_ms,
-         {:ok, consensus} <- get_consensus_height(chain_id, freshness_ms) do
+  def get_provider_lag(chain_id, provider_id, freshness_ms \\ nil)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) and
+             (is_nil(freshness_ms) or
+                (is_integer(freshness_ms) and freshness_ms >= 0)) do
+    now_ms = System.system_time(:millisecond)
+
+    with {:ok, {height, timestamp, _source, metadata}} <- get_height(chain_id, provider_id),
+         true <- observation_fresh?(timestamp, metadata, freshness_ms, now_ms),
+         {:ok, consensus} <- consensus_height(chain_id, freshness_ms) do
       {:ok, height - consensus}
     else
       false -> {:error, :stale_data}
@@ -244,16 +260,19 @@ defmodule Lasso.BlockSync.Registry do
   ## Private Functions
 
   defp refresh_consensus_cache(chain_id, now_ms, revision) do
-    cutoff = now_ms - @default_freshness_ms
-
-    case select_fresh_samples(chain_id, cutoff) do
+    case select_current_samples(chain_id, nil, now_ms) do
       [] ->
         {:error, :no_data}
 
       samples ->
-        height = consensus(Enum.map(samples, &elem(&1, 0)))
-        valid_through_ms = samples |> Enum.map(&elem(&1, 1)) |> Enum.min()
-        valid_through_ms = valid_through_ms + @default_freshness_ms
+        height = consensus_for_samples(samples, chain_id, now_ms)
+
+        valid_through_ms =
+          samples
+          |> Enum.map(fn {_height, timestamp, _source, metadata} ->
+            timestamp + stale_after_ms(metadata)
+          end)
+          |> Enum.min()
 
         publish_consensus(
           consensus_key(chain_id),
@@ -310,16 +329,53 @@ defmodule Lasso.BlockSync.Registry do
   defp publish_consensus(_key, _revision, _height, _valid_through_ms, 0), do: :ok
 
   defp calculate_consensus(chain_id, provider_ids, freshness_ms) do
-    cutoff = System.system_time(:millisecond) - freshness_ms
-    fresh_heights = select_fresh_heights(chain_id, provider_ids, cutoff)
+    now_ms = System.system_time(:millisecond)
+    samples = select_current_samples(chain_id, provider_ids, now_ms, freshness_ms)
 
-    case fresh_heights do
+    case samples do
       [] ->
         {:error, :no_data}
 
-      heights ->
-        {:ok, consensus(heights)}
+      current ->
+        {:ok, consensus_for_samples(current, chain_id, now_ms)}
     end
+  end
+
+  defp calculate_current_consensus(chain_id, provider_ids) do
+    now_ms = System.system_time(:millisecond)
+    samples = select_current_samples(chain_id, provider_ids, now_ms)
+
+    case samples do
+      [] -> {:error, :no_data}
+      current -> {:ok, consensus_for_samples(current, chain_id, now_ms)}
+    end
+  end
+
+  defp consensus_for_samples(samples, chain_id, now_ms) do
+    observed_height = samples |> Enum.map(&elem(&1, 0)) |> Enum.max()
+
+    heights =
+      case get_block_time_ms(chain_id) do
+        block_time_ms when is_integer(block_time_ms) and block_time_ms > 0 ->
+          Enum.map(samples, fn {height, timestamp, source, metadata} ->
+            metadata = metadata || %{}
+
+            %{
+              height: height,
+              source: source,
+              observed_at_ms: timestamp,
+              stale_after_ms: stale_after_ms(metadata),
+              credit_window_ms: Map.get(metadata, :optimistic_credit_ms)
+            }
+            |> ObservationProjection.align_height(observed_height, block_time_ms, now_ms)
+            |> Map.fetch!(:height)
+          end)
+
+        _unknown_block_time ->
+          Enum.map(samples, &elem(&1, 0))
+      end
+
+    consensus(heights)
   end
 
   defp consensus([single]), do: single
@@ -330,41 +386,42 @@ defmodule Lasso.BlockSync.Registry do
     Enum.at(sorted, idx)
   end
 
-  defp select_fresh_samples(chain_id, cutoff) do
+  defp select_current_samples(chain_id, provider_ids, now_ms, freshness_ms \\ nil) do
     :ets.select(@table, [
       {
-        {{:height, chain_id, :_}, {:"$1", :"$2", :_, :_}},
-        [{:>=, :"$2", cutoff}],
-        [{{:"$1", :"$2"}}]
+        {{:height, chain_id, :"$1"}, {:"$2", :"$3", :"$4", :"$5"}},
+        [],
+        [{{:"$1", :"$2", :"$3", :"$4", :"$5"}}]
       }
     ])
-  end
-
-  defp select_fresh_heights(chain_id, provider_ids, cutoff)
-       when provider_ids in [nil, []] do
-    :ets.select(@table, [
-      {
-        {{:height, chain_id, :_}, {:"$1", :"$2", :_, :_}},
-        [{:>=, :"$2", cutoff}],
-        [:"$1"]
-      }
-    ])
-  end
-
-  defp select_fresh_heights(chain_id, provider_ids, cutoff) when is_list(provider_ids) do
-    provider_set = MapSet.new(provider_ids)
-
-    :ets.select(@table, [
-      {
-        {{:height, chain_id, :"$1"}, {:"$2", :"$3", :_, :_}},
-        [{:>=, :"$3", cutoff}],
-        [{{:"$1", :"$2"}}]
-      }
-    ])
-    |> Enum.reduce([], fn {provider_id, height}, heights ->
-      if MapSet.member?(provider_set, provider_id), do: [height | heights], else: heights
+    |> Enum.filter(fn {provider_id, _height, timestamp, _source, metadata} ->
+      provider_selected?(provider_ids, provider_id) and
+        observation_fresh?(timestamp, metadata, freshness_ms, now_ms)
+    end)
+    |> Enum.map(fn {_provider_id, height, timestamp, source, metadata} ->
+      {height, timestamp, source, metadata}
     end)
   end
+
+  defp provider_selected?(provider_ids, _provider_id) when provider_ids in [nil, []], do: true
+  defp provider_selected?(provider_ids, provider_id), do: provider_id in provider_ids
+
+  defp observation_fresh?(timestamp, metadata, freshness_ms, now_ms) do
+    freshness_ms = freshness_ms || stale_after_ms(metadata)
+    now_ms - timestamp <= freshness_ms
+  end
+
+  defp stale_after_ms(metadata) when is_map(metadata) do
+    case Map.get(metadata, :stale_after_ms) do
+      value when is_integer(value) and value > 0 -> value
+      _missing_or_invalid -> @default_freshness_ms
+    end
+  end
+
+  defp stale_after_ms(_metadata), do: @default_freshness_ms
+
+  defp consensus_height(chain_id, nil), do: get_consensus_height(chain_id)
+  defp consensus_height(chain_id, freshness_ms), do: get_consensus_height(chain_id, freshness_ms)
 
   defp consensus_key(chain_id), do: {:consensus, chain_id}
 end

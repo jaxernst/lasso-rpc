@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Time-aligned fast-chain consensus using bounded HTTP observation credit while preserving WebSocket heads as direct evidence
+- Rejected stale block observations from provider lag decisions instead of manufacturing current synchronization state
+- Stored each worker's effective freshness and polling cadence with block-height observations so routing and dashboard status share one contract
+
 ## [0.3.0] - 2026-08-28
 
 ### Added

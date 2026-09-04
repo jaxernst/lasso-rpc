@@ -492,19 +492,22 @@ EMA adapts to variable block production (e.g., Arbitrum's 100ms-5s range) while 
 
 ### Consensus Height Derivation
 
-Consensus height is the P75 of fresh provider heights (within the last 30s). With 4+ providers, this is the second-highest height, filtering out one outlier ahead-running provider. With 1–3 providers, it is the MAX height.
+Consensus height is the P75 of fresh provider observations. Freshness follows each worker's effective HTTP poll or WebSocket liveness window; callers can still supply an explicit override. With 4+ providers, P75 filters out an ahead-running outlier. With 1–3 providers, it is the maximum height.
+
+Before computing P75, HTTP samples are time-aligned toward the highest actually observed height using the measured block time and no more than one effective polling interval of advancement. WebSocket samples remain direct observations and are never projected. No aligned sample can exceed a height that was genuinely observed, so a single implausible head remains bounded by the percentile calculation.
 
 ### Optimistic Lag Calculation
 
-Compensates for observation delay on fast chains to prevent false lag detection.
+Compensates for bounded HTTP observation delay on fast chains to prevent false lag detection. Stale evidence is unavailable for routing, and WebSocket observations receive no inferred advancement.
 
 **Algorithm**:
 
 ```elixir
 elapsed_ms = now - timestamp
 block_time_ms = Registry.get_block_time_ms(chain) || config.block_time_ms
-staleness_credit = min(div(elapsed_ms, block_time_ms), div(30_000, block_time_ms))
-optimistic_height = height + staleness_credit
+credit_window_ms = observation.optimistic_credit_ms || div(observation.stale_after_ms, 3)
+staleness_credit = min(div(elapsed_ms, block_time_ms), div(credit_window_ms, block_time_ms))
+optimistic_height = min(height + staleness_credit, consensus_height)
 optimistic_lag = optimistic_height - consensus_height
 ```
 
@@ -520,7 +523,7 @@ optimistic_height: 421,535,503 + 8 = 421,535,511
 optimistic_lag: 0 blocks
 ```
 
-Bounded observation delay from HTTP polling enables accurate credit calculation. The 30s cap prevents runaway values on stale connections.
+The worker stores the effective freshness and advancement windows with every observation. This keeps selection, consensus, and dashboard projections on the same contract without adding database or network work to request routing.
 
 ### Health Probing
 

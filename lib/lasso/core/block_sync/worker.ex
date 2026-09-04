@@ -212,6 +212,11 @@ defmodule Lasso.BlockSync.Worker do
       when instance_id == state.instance_id do
     source = if metadata[:latency_ms], do: :http, else: :ws
 
+    metadata =
+      metadata
+      |> Map.put(:stale_after_ms, observation_stale_after_ms(state, source))
+      |> maybe_put_optimistic_credit(state, source)
+
     BlockSyncRegistry.put_height(state.chain_id, instance_id, height, source, metadata)
     broadcast_height_update(state, height, source)
 
@@ -751,6 +756,15 @@ defmodule Lasso.BlockSync.Worker do
 
     %{state | http_strategy: new_http, http_reduced: false}
   end
+
+  defp observation_stale_after_ms(state, :http), do: state.config.poll_interval_ms * 3
+  defp observation_stale_after_ms(state, :ws), do: state.config.staleness_threshold_ms
+
+  defp maybe_put_optimistic_credit(metadata, state, :http) do
+    Map.put(metadata, :optimistic_credit_ms, state.config.poll_interval_ms)
+  end
+
+  defp maybe_put_optimistic_credit(metadata, _state, _source), do: metadata
 
   defp handle_ws_reconnected(%{mode: nil} = state), do: state
 
