@@ -6,6 +6,16 @@ Lasso's observability system provides comprehensive visibility into RPC request 
 
 ## Architecture
 
+### Block-height evidence
+
+Provider synchronization is derived from typed block observations kept in ETS.
+Each observation records its transport, observation time, and effective freshness
+window. HTTP observations may receive bounded time-alignment credit up to one
+polling interval; WebSocket observations remain direct evidence. Stale evidence
+is excluded, and consensus never advances beyond a height actually observed from
+an upstream provider. These rules are shared by routing and dashboard status so
+operator displays do not disagree with route eligibility.
+
 ### Core Components
 
 1. **RequestContext** (`lib/lasso/core/request/request_context.ex`)

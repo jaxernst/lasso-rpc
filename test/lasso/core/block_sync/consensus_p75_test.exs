@@ -2,6 +2,7 @@ defmodule Lasso.BlockSync.ConsensusP75Test do
   use ExUnit.Case, async: false
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.Core.BlockSync.BlockTimeMeasurement
 
   setup do
     chain = System.unique_integer([:positive])
@@ -81,6 +82,63 @@ defmodule Lasso.BlockSync.ConsensusP75Test do
       assert {:ok, 100} = BlockSyncRegistry.get_consensus_height(chain)
     end
 
+    test "time-aligns fresh sampled providers before rejecting a live head as an outlier", %{
+      chain: chain
+    } do
+      now_ms = System.system_time(:millisecond)
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:block_time, chain},
+         %BlockTimeMeasurement{ema_ms: 100.0, sample_count: 5, last_height: 1_200}}
+      )
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "live"}, {1_200, now_ms, :ws, %{stale_after_ms: 30_000}}}
+      )
+
+      for provider <- ~w(sampled-1 sampled-2 sampled-3 sampled-4) do
+        :ets.insert(
+          :block_sync_registry,
+          {{:height, chain, provider},
+           {1_000, now_ms - 20_000, :http,
+            %{stale_after_ms: 180_000, optimistic_credit_ms: 60_000}}}
+        )
+      end
+
+      assert {:ok, 1_200} = BlockSyncRegistry.get_consensus_height_filtered(chain, [])
+    end
+
+    test "bounded alignment does not let one implausible head dictate consensus", %{
+      chain: chain
+    } do
+      now_ms = System.system_time(:millisecond)
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:block_time, chain},
+         %BlockTimeMeasurement{ema_ms: 100.0, sample_count: 5, last_height: 1_500}}
+      )
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "outlier"}, {1_500, now_ms, :ws, %{stale_after_ms: 30_000}}}
+      )
+
+      for provider <- ~w(sampled-1 sampled-2 sampled-3 sampled-4) do
+        :ets.insert(
+          :block_sync_registry,
+          {{:height, chain, provider},
+           {1_000, now_ms - 1_000, :http,
+            %{stale_after_ms: 180_000, optimistic_credit_ms: 60_000}}}
+        )
+      end
+
+      assert {:ok, consensus} = BlockSyncRegistry.get_consensus_height_filtered(chain, [])
+      assert consensus in 1_009..1_011
+    end
+
     test "no providers: returns error", %{chain: chain} do
       assert {:error, :no_data} = BlockSyncRegistry.get_consensus_height(chain)
     end
@@ -100,6 +158,27 @@ defmodule Lasso.BlockSync.ConsensusP75Test do
 
       assert {999, ^stale_timestamp, :ws, %{payload: "stale"}} =
                BlockSyncRegistry.get_all_heights(chain)["stale"]
+    end
+
+    test "default consensus and lag honor the observation's configured freshness", %{
+      chain: chain
+    } do
+      observed_at_ms = System.system_time(:millisecond) - 45_000
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, chain, "slow-poll-provider"},
+         {500, observed_at_ms, :http, %{stale_after_ms: 90_000}}}
+      )
+
+      assert {:ok, 500} = BlockSyncRegistry.get_consensus_height(chain)
+      assert {:ok, 500} = BlockSyncRegistry.get_consensus_height_filtered(chain, [])
+      assert {:ok, 0} = BlockSyncRegistry.get_provider_lag(chain, "slow-poll-provider")
+
+      assert {:error, :no_data} = BlockSyncRegistry.get_consensus_height(chain, 30_000)
+
+      assert {:error, :stale_data} =
+               BlockSyncRegistry.get_provider_lag(chain, "slow-poll-provider", 30_000)
     end
 
     test "filtered consensus preserves provider and empty-list semantics", %{chain: chain} do

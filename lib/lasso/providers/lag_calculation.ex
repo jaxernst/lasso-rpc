@@ -1,10 +1,14 @@
 defmodule Lasso.Providers.LagCalculation do
   @moduledoc """
-  Shared optimistic lag calculation used by both CandidateListing (selection) and
-  StatusHelpers (dashboard display).
+  Shared time-aligned lag calculation used by provider selection and dashboards.
+
+  HTTP height samples receive bounded advancement credit based on their age and
+  effective poll cadence. WebSocket observations are compared directly, stale
+  evidence is rejected, and no projection can advance a provider past the
+  captured consensus height.
   """
 
-  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.BlockSync.{Observation, ObservationProjection, Registry}
   alias Lasso.Config.ConfigStore
   alias Lasso.RPC.ChainState
 
@@ -12,12 +16,12 @@ defmodule Lasso.Providers.LagCalculation do
           {:ok, integer(), integer()} | {:error, term()}
   def calculate_optimistic_lag(chain_id, provider_or_instance_id, block_time_ms)
       when is_integer(chain_id) and chain_id > 0 do
-    with {:ok, {height, timestamp, _source, _meta}} <-
-           BlockSyncRegistry.get_height(chain_id, provider_or_instance_id),
+    with {:ok, observation} <- Observation.read(chain_id, provider_or_instance_id),
          {:ok, consensus} <- ChainState.consensus_height(chain_id) do
-      calculate_from_height(height, timestamp, block_time_ms, consensus)
+      calculate_from_observation(observation, block_time_ms, consensus)
     else
       {:error, :not_found} -> {:error, :no_provider_data}
+      {:error, {:stale, _observation}} -> {:error, :stale_provider_data}
       {:error, :no_data} -> {:error, :no_consensus}
       error -> error
     end
@@ -37,33 +41,39 @@ defmodule Lasso.Providers.LagCalculation do
         consensus
       )
       when is_integer(chain_id) and chain_id > 0 and is_integer(consensus) and consensus >= 0 do
-    case BlockSyncRegistry.get_height(chain_id, provider_or_instance_id) do
-      {:ok, {height, timestamp, _source, _meta}} ->
-        calculate_from_height(height, timestamp, block_time_ms, consensus)
+    case Observation.read(chain_id, provider_or_instance_id) do
+      {:ok, observation} ->
+        calculate_from_observation(observation, block_time_ms, consensus)
 
       {:error, :not_found} ->
         {:error, :no_provider_data}
+
+      {:error, {:stale, _observation}} ->
+        {:error, :stale_provider_data}
     end
   end
 
-  defp calculate_from_height(height, timestamp, block_time_ms, consensus) do
-    now = System.system_time(:millisecond)
-    elapsed_ms = now - timestamp
-    raw_lag = height - consensus
+  defp calculate_from_observation(observation, block_time_ms, consensus) do
+    raw_lag = observation.height - consensus
 
-    staleness_credit =
-      if block_time_ms > 0, do: div(elapsed_ms, block_time_ms), else: 0
+    projected =
+      observation
+      |> Map.put(:lag, raw_lag)
+      |> Map.put(:credit_window_ms, credit_window_ms(observation.metadata))
+      |> ObservationProjection.project(block_time_ms)
 
-    max_credit = div(30_000, max(block_time_ms, 1))
-    capped_credit = min(staleness_credit, max_credit)
-    optimistic_lag = height + capped_credit - consensus
-
-    {:ok, optimistic_lag, raw_lag}
+    {:ok, projected.lag, raw_lag}
   end
+
+  defp credit_window_ms(%{optimistic_credit_ms: credit_ms})
+       when is_integer(credit_ms) and credit_ms > 0,
+       do: credit_ms
+
+  defp credit_window_ms(_metadata), do: nil
 
   @spec get_block_time_ms(pos_integer(), String.t() | nil) :: non_neg_integer()
   def get_block_time_ms(chain_id, profile \\ nil) when is_integer(chain_id) and chain_id > 0 do
-    case BlockSyncRegistry.get_block_time_ms(chain_id) do
+    case Registry.get_block_time_ms(chain_id) do
       ms when is_integer(ms) and ms > 0 ->
         ms
 

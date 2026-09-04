@@ -1,6 +1,6 @@
 defmodule Lasso.RPC.OptimisticLagTest do
   @moduledoc """
-  Tests for the optimistic lag calculation used in provider selection.
+  Tests for the time-aligned lag calculation used in provider selection.
 
   The optimistic lag formula accounts for observation delay on HTTP providers:
 
@@ -8,9 +8,9 @@ defmodule Lasso.RPC.OptimisticLagTest do
       optimistic_height = reported_height + staleness_credit
       optimistic_lag = optimistic_height - consensus_height
 
-  This prevents HTTP providers from being unfairly excluded on fast chains
-  like Arbitrum (0.25s blocks) where polling intervals (2s) cause providers
-  to always appear ~8 blocks behind.
+  This prevents HTTP providers from being unfairly excluded on fast chains.
+  Production credit is bounded by the effective poll cadence and never applies
+  to WebSocket observations.
   """
 
   use ExUnit.Case, async: true
@@ -154,6 +154,46 @@ defmodule Lasso.RPC.OptimisticLagTest do
 
       assert {:ok, -5, -5} =
                LagCalculation.calculate_optimistic_lag(@chain, provider_id, 12_000, 1_000)
+    end
+
+    test "uses the observation cadence as the advancement bound" do
+      provider_id = "managed_cadence_#{System.unique_integer()}"
+      timestamp = System.system_time(:millisecond) - 60_000
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, @chain, provider_id},
+         {1_000, timestamp, :http, %{optimistic_credit_ms: 60_000, stale_after_ms: 180_000}}}
+      )
+
+      assert {:ok, 0, -240} =
+               LagCalculation.calculate_optimistic_lag(@chain, provider_id, 250, 1_240)
+    end
+
+    test "does not infer advancement for WebSocket observations" do
+      provider_id = "ws_evidence_#{System.unique_integer()}"
+      timestamp = System.system_time(:millisecond) - 2_000
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, @chain, provider_id}, {1_000, timestamp, :ws, %{stale_after_ms: 30_000}}}
+      )
+
+      assert {:ok, -8, -8} =
+               LagCalculation.calculate_optimistic_lag(@chain, provider_id, 250, 1_008)
+    end
+
+    test "rejects stale evidence instead of manufacturing a current lag" do
+      provider_id = "stale_evidence_#{System.unique_integer()}"
+      timestamp = System.system_time(:millisecond) - 60_001
+
+      :ets.insert(
+        :block_sync_registry,
+        {{:height, @chain, provider_id}, {1_000, timestamp, :http, %{stale_after_ms: 60_000}}}
+      )
+
+      assert {:error, :stale_provider_data} =
+               LagCalculation.calculate_optimistic_lag(@chain, provider_id, 250, 1_240)
     end
 
     test "optimistic lag passes threshold when raw lag would fail" do
