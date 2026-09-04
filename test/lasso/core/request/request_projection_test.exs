@@ -413,7 +413,8 @@ defmodule Lasso.RPC.RequestProjectionTest do
   end
 
   test "routing publication precedes potentially blocking telemetry consumers" do
-    event = request_projection()
+    request_id = "blocking-telemetry-#{System.unique_integer([:positive])}"
+    event = request_projection(request_id)
     topic = Lasso.Topics.routing_decision("public")
     :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, topic)
     test_pid = self()
@@ -423,9 +424,13 @@ defmodule Lasso.RPC.RequestProjectionTest do
       :telemetry.attach(
         handler_id,
         [:lasso, :rpc, :request, :terminal],
-        fn _event, _measurements, _metadata, _config ->
-          send(test_pid, {:terminal_handler_entered, self()})
-          receive do: (:release_terminal_handler -> :ok)
+        fn
+          _event, _measurements, %{request_id: ^request_id}, _config ->
+            send(test_pid, {:terminal_handler_entered, self()})
+            receive do: (:release_terminal_handler -> :ok)
+
+          _event, _measurements, _metadata, _config ->
+            :ok
         end,
         nil
       )
@@ -443,11 +448,11 @@ defmodule Lasso.RPC.RequestProjectionTest do
 
     delivery = Task.async(fn -> RequestProjection.deliver(event) end)
 
-    assert_receive %RoutingDecision{request_id: "projection-request"}, 1_000
+    assert_receive %RoutingDecision{request_id: ^request_id}, 1_000
     assert_receive {:terminal_handler_entered, delivery_pid}, 1_000
     refute Task.yield(delivery, 0)
     send(delivery_pid, :release_terminal_handler)
-    assert :ok = Task.await(delivery, 15_000)
+    assert :ok = Task.await(delivery)
   end
 
   test "a terminal without an upstream route remains telemetry-only" do
@@ -491,17 +496,18 @@ defmodule Lasso.RPC.RequestProjectionTest do
              RequestProjection.decode(payload)
   end
 
-  defp request_projection do
+  defp request_projection(request_id \\ "projection-request") do
     RequestProjection.new(
-      terminal(),
+      terminal("public", 1, request_id),
       "eth_blockNumber",
       %{provider_id: "provider-a", instance_id: "instance-a", transport: :http},
       2
     )
   end
 
-  defp terminal(profile \\ "public", chain_id \\ 1) do
-    attempt = AttemptTerminal.Response.new(identity(profile, chain_id), :success, 7_000)
+  defp terminal(profile \\ "public", chain_id \\ 1, request_id \\ "projection-request") do
+    attempt =
+      AttemptTerminal.Response.new(identity(profile, chain_id, request_id), :success, 7_000)
 
     RequestTerminal.UpstreamResponse.new(
       [
@@ -540,9 +546,9 @@ defmodule Lasso.RPC.RequestProjectionTest do
     )
   end
 
-  defp identity(profile \\ "public", chain_id \\ 1) do
+  defp identity(profile \\ "public", chain_id \\ 1, request_id \\ "projection-request") do
     AttemptIdentity.new(
-      request_id: "projection-request",
+      request_id: request_id,
       attempt_id: "projection-attempt",
       profile: profile,
       chain_id: chain_id,
