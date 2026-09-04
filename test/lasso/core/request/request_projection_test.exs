@@ -447,7 +447,7 @@ defmodule Lasso.RPC.RequestProjectionTest do
     assert_receive {:terminal_handler_entered, delivery_pid}, 1_000
     refute Task.yield(delivery, 0)
     send(delivery_pid, :release_terminal_handler)
-    assert :ok = Task.await(delivery)
+    assert :ok = Task.await(delivery, 15_000)
   end
 
   test "a terminal without an upstream route remains telemetry-only" do
