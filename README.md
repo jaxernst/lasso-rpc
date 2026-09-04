@@ -6,7 +6,7 @@
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.3.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Version](https://img.shields.io/badge/version-0.3.1-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
