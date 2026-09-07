@@ -226,6 +226,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     chain_id = Map.get(conn, :chain_id)
     instance_id = Map.get(conn, :instance_id) || provider_id
 
+    cluster_block_heights =
+      Map.filter(cluster_block_heights, fn {_, observation} -> Observation.fresh?(observation) end)
+
     {block_height, block_lag, consensus_height} =
       resolve_block_heights(
         selected_region,
@@ -318,8 +321,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
       {max_height, min_lag, consensus}
     else
-      {region_data[:block_height] || Map.get(conn, :block_height), region_data[:block_lag] || 0,
-       consensus}
+      {Map.get(conn, :block_height), nil, consensus}
     end
   end
 

@@ -91,6 +91,24 @@ defmodule LassoWeb.Dashboard.ProviderDetailsPanelTest do
     refute html =~ "Synced"
   end
 
+  test "fresh local height survives an incomplete regional observation", %{
+    chain_id: chain_id,
+    instance_id: instance_id
+  } do
+    html =
+      draw(chain_id, instance_id,
+        connection: %{
+          block_observed_at_ms: System.system_time(:millisecond),
+          block_stale_after_ms: 60_000
+        },
+        cluster_block_heights: %{{"p1", "iad-node"} => %{height: 999, lag: 0}}
+      )
+
+    assert html =~ "Block Height:"
+    assert html =~ "990"
+    refute html =~ "Block height data unavailable"
+  end
+
   defp draw(chain_id, instance_id, opts) do
     connection = %{
       id: "p1",
@@ -104,6 +122,9 @@ defmodule LassoWeb.Dashboard.ProviderDetailsPanelTest do
       consensus_height: 1_000,
       blocks_behind: 10
     }
+
+    connection = Map.merge(connection, Keyword.get(opts, :connection, %{}))
+    opts = Keyword.delete(opts, :connection)
 
     base = %{
       id: "provider-details-p1",
