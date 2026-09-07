@@ -93,49 +93,50 @@ Routes without `/profile/:profile` use the included `public` profile. Use a name
 
 ## Quick Start
 
-### Prerequisites
+### Docker Compose (recommended)
 
-- **Elixir**: 1.18.4 (CI version) (check with `elixir --version`)
-- **Erlang/OTP**: 28 (CI version) (check with `erl -version`)
-- **Node.js**: 18+ (for asset compilation)
-
-### Local (recommended)
+You need Docker with the Compose plugin and OpenSSL. Start in an empty directory:
 
 ```bash
-# Clone the repository
+mkdir lasso && cd lasso
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.3.4/compose.yml --output compose.yml
+(umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
+docker compose up -d --wait
+curl --fail http://localhost:4000/api/health
+```
+
+Open **<http://localhost:4000/dashboard>**. The included public providers require
+no API keys. The prebuilt image supports Linux AMD64 and ARM64; no application
+build tools or source checkout are needed.
+
+Keep `.env` across restarts. Compose binds localhost and preserves profiles and
+history in a named volume. `docker compose down` stops the service and retains
+that data. See the [deployment guide](docs/DEPLOYMENT.md#docker) for custom
+providers, image verification, upgrades, and rollback.
+
+The dashboard uses YAML profiles, including your own nodes and provider
+credentials. [Configure profiles](docs/CONFIGURATION.md#multiple-profiles) to add
+or change them. Lasso has no built-in client authentication; protect externally
+accessible RPC, metrics, and dashboard endpoints with your network or reverse proxy.
+
+### Run from source
+
+For development, use Elixir 1.18.4 and Erlang/OTP 28 (the CI versions), plus
+Node.js 18 or newer for asset compilation:
+
+```bash
 git clone https://github.com/jaxernst/lasso-rpc
 cd lasso-rpc
-
-# Install dependencies
 mix deps.get
-
-# Install and build dashboard assets
 mix assets.setup
 mix assets.build
-
-# Start the Phoenix server
 mix phx.server
 ```
 
-The application will be available at `http://localhost:4000` and the dashboard at `http://localhost:4000/dashboard`.
-
-The self-hosted dashboard uses YAML profiles, including your own nodes and provider credentials. [Configure profiles](docs/CONFIGURATION.md#multiple-profiles) to add or change them.
-
-**Note**: The included `public` profile has free public providers (no API keys required), so you can start using it immediately.
-
-### Docker
-
-From a checkout of the release you want to run:
-
-```bash
-# Build and run with persistent profiles and history
-export SECRET_KEY_BASE="$(openssl rand -hex 64)"
-docker compose up --build -d
-```
-
-The application will be available at `http://localhost:4000`. Compose supplies `LASSO_NODE_ID=docker-local` unless you override it. This builds locally; see the [deployment guide](docs/DEPLOYMENT.md#docker) for storage, upgrades, and the foreground helper.
-
-For production deployments, see the [deployment guide](docs/DEPLOYMENT.md). Lasso has no built-in client authentication, so expose RPC and the dashboard only behind your preferred authentication or network boundary.
+The application runs at `http://localhost:4000`. To build a production container
+from a source checkout, use `docker compose up --build -d` with `SECRET_KEY_BASE`
+set, or the foreground `./run-docker.sh` helper. The source checkout's Compose file
+and the downloadable release Compose file support these separate build/install paths.
 
 ### Multi-Node Deployment (Cluster)
 

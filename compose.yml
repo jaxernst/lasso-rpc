@@ -4,6 +4,9 @@ services:
     image: lasso-rpc:local
     ports:
       - "127.0.0.1:4000:4000"
+    env_file:
+      - path: .env
+        required: false
     environment:
       SECRET_KEY_BASE: ${SECRET_KEY_BASE:?Set SECRET_KEY_BASE to a random secret of at least 64 bytes}
       LASSO_NODE_ID: ${LASSO_NODE_ID:-docker-local}

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Distribution
+
+- Publish versioned AMD64/ARM64 container images with anonymous installation checks, build provenance, SBOMs, and signed publication attestations.
+- Attach a standalone Compose recipe and native verification reports to each container release; document installation, custom profiles, image pinning, migration, and rollback.
+- Pass an optional local `.env` file into source-built Compose containers so provider credentials reach the running application.
+
 ## [0.3.4] - 2026-09-07
 
 ### Compatibility
