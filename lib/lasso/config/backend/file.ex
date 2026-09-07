@@ -39,7 +39,7 @@ defmodule Lasso.Config.Backend.File do
 
   require Logger
 
-  alias Lasso.Config.{ChainConfig, ProfileId}
+  alias Lasso.Config.{ChainConfig, FileSchema, ProfileId}
   alias Lasso.RPC.Providers.Capabilities
 
   @type state :: %{
@@ -162,8 +162,13 @@ defmodule Lasso.Config.Backend.File do
       end
     end)
     |> case do
-      {:ok, profiles} -> {:ok, Enum.reverse(profiles)}
-      error -> error
+      {:ok, profiles} ->
+        if Enum.any?(profiles, &(&1.slug == "public")),
+          do: {:ok, Enum.reverse(profiles)},
+          else: {:error, :public_profile_missing}
+
+      error ->
+        error
     end
   end
 
@@ -173,6 +178,8 @@ defmodule Lasso.Config.Backend.File do
          :ok <- validate_slug_matches_filename(spec, path) do
       {:ok, spec}
     end
+  catch
+    {:invalid_profile_config, _, _} = error -> {:error, error}
   end
 
   defp parse_profile_yaml(content) do
@@ -188,13 +195,15 @@ defmodule Lasso.Config.Backend.File do
   defp parse_frontmatter_format(content) do
     # Split on --- markers
     # Format: ---\nmeta\n---\nchains
-    case String.split(content, ~r/\n---\n/, parts: 2) do
+    case String.split(content, ~r/\r?\n---\r?\n/, parts: 2) do
       [frontmatter_with_marker, chains_yaml] ->
         # Remove leading --- from frontmatter
         frontmatter = String.replace_prefix(String.trim(frontmatter_with_marker), "---", "")
 
         with {:ok, meta} <- YamlElixir.read_from_string(frontmatter),
              {:ok, chains_data} <- YamlElixir.read_from_string(chains_yaml),
+             :ok <- FileSchema.validate_metadata!(meta),
+             :ok <- FileSchema.validate_body!(chains_data),
              {:ok, chains} <- parse_chains_data(chains_data) do
           {:ok,
            %{
@@ -218,6 +227,7 @@ defmodule Lasso.Config.Backend.File do
   defp parse_legacy_format(content) do
     # Legacy format: just chains (from chains.yml migration)
     with {:ok, yaml_data} <- YamlElixir.read_from_string(content),
+         :ok <- FileSchema.validate_legacy!(yaml_data),
          {:ok, chains} <- parse_chains_data(yaml_data) do
       # Extract slug from frontmatter or fall back to "public"
       slug = yaml_data["slug"] || "public"
@@ -238,6 +248,8 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp parse_chains_data(%{"chains" => chains_data}) when is_map(chains_data) do
+    FileSchema.validate_chains!(chains_data)
+
     chains =
       Map.new(chains_data, fn {chain_name, chain_data} ->
         {chain_name, parse_chain_config(chain_name, chain_data)}
@@ -267,7 +279,7 @@ defmodule Lasso.Config.Backend.File do
     Enum.map(providers_data, fn provider_data ->
       provider = %ChainConfig.Provider{
         id: provider_data["id"],
-        name: provider_data["name"],
+        name: provider_data["name"] || provider_data["id"],
         priority: provider_data["priority"] || 100,
         url: ChainConfig.substitute_env_vars(provider_data["url"]),
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
@@ -277,13 +289,19 @@ defmodule Lasso.Config.Backend.File do
         sharing_mode: parse_sharing_mode(provider_data["sharing_mode"]),
         api_key: ChainConfig.substitute_env_vars(provider_data["api_key"]),
         credentials: provider_data["credentials"],
-        headers: provider_data["headers"],
-        auth_headers: provider_data["auth_headers"]
+        headers: substitute_headers(provider_data["headers"]),
+        auth_headers: substitute_headers(provider_data["auth_headers"])
       }
 
       Capabilities.validate!(provider.id, provider.capabilities)
       provider
     end)
+  end
+
+  defp substitute_headers(nil), do: nil
+
+  defp substitute_headers(headers) do
+    Map.new(headers, fn {key, value} -> {key, ChainConfig.substitute_env_vars(value)} end)
   end
 
   defp parse_url_aliases(chain_name, chain_data) do
@@ -421,7 +439,7 @@ defmodule Lasso.Config.Backend.File do
 
   defp parse_monitoring(monitoring_data) when is_map(monitoring_data) do
     %ChainConfig.Monitoring{
-      probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 15_000),
+      probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
       # Support both new and legacy field names
       lag_alert_threshold_blocks:
         Map.get(monitoring_data, "lag_alert_threshold_blocks") ||
@@ -515,196 +533,5 @@ defmodule Lasso.Config.Backend.File do
 
   defp generate_profile_yaml(%{"__raw__" => content}) when is_binary(content) do
     legacy_profile_frontmatter() <> content
-  end
-
-  defp generate_profile_yaml(yaml_data) do
-    """
-    ---
-    name: Public Providers
-    slug: public
-    rps_limit: 100
-    burst_limit: 500
-    ---
-    chains:
-    #{generate_chains_yaml(yaml_data["chains"])}
-    """
-  end
-
-  defp generate_chains_yaml(chains_data) when is_map(chains_data) do
-    chains_data
-    |> Enum.map_join("\n", fn {chain_name, chain_config} ->
-      generate_chain_yaml(chain_name, chain_config)
-    end)
-  end
-
-  defp generate_chains_yaml(_), do: ""
-
-  defp generate_chain_yaml(chain_name, chain_config) do
-    providers_yaml = generate_providers_yaml(chain_config["providers"] || [])
-
-    # Build chain yaml with proper indentation
-    chain_yaml = "  #{chain_name}:\n"
-
-    chain_yaml =
-      if chain_config["chain_id"],
-        do: chain_yaml <> "    chain_id: #{chain_config["chain_id"]}\n",
-        else: chain_yaml
-
-    chain_yaml =
-      if chain_config["name"],
-        do: chain_yaml <> "    name: \"#{chain_config["name"]}\"\n",
-        else: chain_yaml
-
-    # Add monitoring config if present
-    chain_yaml =
-      if chain_config["monitoring"],
-        do: chain_yaml <> generate_monitoring_yaml(chain_config["monitoring"]),
-        else: chain_yaml
-
-    # Add selection config if present
-    chain_yaml =
-      if chain_config["selection"],
-        do: chain_yaml <> generate_selection_yaml(chain_config["selection"]),
-        else: chain_yaml
-
-    # Add websocket config (converting from legacy failover/monitoring fields)
-    chain_yaml = chain_yaml <> generate_websocket_yaml(chain_config)
-
-    # Add topology config if present
-    chain_yaml =
-      if chain_config["ui-topology"],
-        do: chain_yaml <> generate_topology_yaml(chain_config["ui-topology"]),
-        else: chain_yaml
-
-    # Add providers
-    chain_yaml <> "    providers:\n" <> providers_yaml
-  end
-
-  defp generate_monitoring_yaml(monitoring) do
-    yaml = "    monitoring:\n"
-
-    yaml =
-      if monitoring["probe_interval_ms"],
-        do: yaml <> "      probe_interval_ms: #{monitoring["probe_interval_ms"]}\n",
-        else: yaml
-
-    yaml =
-      if monitoring["lag_threshold_blocks"] || monitoring["lag_alert_threshold_blocks"],
-        do:
-          yaml <>
-            "      lag_alert_threshold_blocks: #{monitoring["lag_alert_threshold_blocks"] || monitoring["lag_threshold_blocks"]}\n",
-        else: yaml
-
-    yaml
-  end
-
-  defp generate_websocket_yaml(chain_config) do
-    monitoring = chain_config["monitoring"] || %{}
-    failover = chain_config["failover"] || %{}
-    websocket = chain_config["websocket"] || %{}
-
-    # Prefer new websocket config, fall back to legacy locations
-    subscribe_new_heads =
-      websocket["subscribe_new_heads"] || monitoring["subscribe_new_heads"]
-
-    new_heads_timeout_ms =
-      websocket["new_heads_timeout_ms"] || monitoring["new_heads_staleness_threshold_ms"]
-
-    max_backfill_blocks =
-      (websocket["failover"] || %{})["max_backfill_blocks"] || failover["max_backfill_blocks"]
-
-    backfill_timeout_ms =
-      (websocket["failover"] || %{})["backfill_timeout_ms"] ||
-        failover["backfill_timeout_ms"] || failover["backfill_timeout"]
-
-    # Only generate if there's something to write
-    if subscribe_new_heads || new_heads_timeout_ms || max_backfill_blocks || backfill_timeout_ms do
-      yaml = "    websocket:\n"
-
-      yaml =
-        if subscribe_new_heads != nil,
-          do: yaml <> "      subscribe_new_heads: #{subscribe_new_heads}\n",
-          else: yaml
-
-      yaml =
-        if new_heads_timeout_ms,
-          do: yaml <> "      new_heads_timeout_ms: #{new_heads_timeout_ms}\n",
-          else: yaml
-
-      append_failover_yaml(yaml, max_backfill_blocks, backfill_timeout_ms)
-    else
-      ""
-    end
-  end
-
-  defp append_failover_yaml(yaml, max_backfill_blocks, backfill_timeout_ms) do
-    if max_backfill_blocks || backfill_timeout_ms do
-      yaml = yaml <> "      failover:\n"
-
-      yaml =
-        if max_backfill_blocks,
-          do: yaml <> "        max_backfill_blocks: #{max_backfill_blocks}\n",
-          else: yaml
-
-      if backfill_timeout_ms,
-        do: yaml <> "        backfill_timeout_ms: #{backfill_timeout_ms}\n",
-        else: yaml
-    else
-      yaml
-    end
-  end
-
-  defp generate_selection_yaml(selection) do
-    yaml = "    selection:\n"
-
-    yaml =
-      if selection["max_lag_blocks"],
-        do: yaml <> "      max_lag_blocks: #{selection["max_lag_blocks"]}\n",
-        else: yaml
-
-    yaml
-  end
-
-  defp generate_topology_yaml(topology) do
-    yaml = "    ui-topology:\n"
-
-    yaml =
-      if topology["color"],
-        do: yaml <> "      color: \"#{topology["color"]}\"\n",
-        else: yaml
-
-    yaml =
-      if topology["size"],
-        do: yaml <> "      size: #{topology["size"]}\n",
-        else: yaml
-
-    yaml
-  end
-
-  defp generate_providers_yaml(providers) do
-    providers
-    |> Enum.map_join("", &generate_provider_yaml/1)
-  end
-
-  defp generate_provider_yaml(provider) do
-    yaml = "      - id: \"#{provider["id"]}\"\n"
-    yaml = if provider["name"], do: yaml <> "        name: \"#{provider["name"]}\"\n", else: yaml
-
-    yaml =
-      if provider["priority"],
-        do: yaml <> "        priority: #{provider["priority"]}\n",
-        else: yaml
-
-    yaml = if provider["url"], do: yaml <> "        url: \"#{provider["url"]}\"\n", else: yaml
-
-    yaml =
-      if provider["ws_url"], do: yaml <> "        ws_url: \"#{provider["ws_url"]}\"\n", else: yaml
-
-    yaml =
-      if provider["subscribe_new_heads"] != nil,
-        do: yaml <> "        subscribe_new_heads: #{provider["subscribe_new_heads"]}\n",
-        else: yaml
-
-    yaml
   end
 end

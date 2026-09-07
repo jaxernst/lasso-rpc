@@ -12,7 +12,7 @@ Elixir/OTP application providing RPC provider orchestration and routing for bloc
 - **WebSocket subscription management**: Intelligent multiplexing with automatic failover and gap-filling
 - **Circuit breaker protection**: Per-provider, per-transport breakers prevent cascade failures
 - **Method-specific benchmarking**: Passive latency measurement per-chain, per-method, per-transport
-- **Request observability**: Structured logging with optional client-visible metadata
+- **Request observability**: Request telemetry with optional client-visible metadata
 - **Cluster aggregation**: Optional BEAM clustering for aggregated observability across geo-distributed nodes
 
 ---
@@ -696,29 +696,12 @@ RPC requests tracked via:
 }
 ```
 
-### Structured Logging
+### Request Telemetry
 
-All requests emit JSON logs:
-
-```json
-{
-  "event": "rpc.request.completed",
-  "request_id": "uuid",
-  "strategy": "fastest",
-  "chain": "ethereum",
-  "transport": "http",
-  "jsonrpc_method": "eth_blockNumber",
-  "routing": {
-    "selected_provider": { "id": "ethereum_llamarpc" },
-    "retries": 0,
-    "circuit_breaker_state": "closed"
-  },
-  "timing": {
-    "upstream_latency_ms": 592,
-    "end_to_end_latency_ms": 595
-  }
-}
-```
+The pipeline emits `[:lasso, :rpc, :request, :stop]` with a `duration`
+measurement in milliseconds and chain, method, provider, strategy, transport,
+result, and failover metadata. Operational logs cover failures and state
+transitions. See [Observability](OBSERVABILITY.md) for the supported signals.
 
 ### Client-Visible Metadata (Opt-in)
 
@@ -907,5 +890,5 @@ Core architectural properties:
 - **Transport-agnostic routing**: Unified pipeline across HTTP and WebSocket
 - **WebSocket multiplexing**: N:1 client-to-upstream subscription ratio
 - **Cluster aggregation**: Optional BEAM clustering for unified observability without routing impact
-- **Request observability**: Structured logging with optional client metadata
+- **Request observability**: Request telemetry with optional client metadata
 - **BEAM concurrency**: Requests use lightweight processes

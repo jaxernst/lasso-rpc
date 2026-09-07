@@ -53,4 +53,29 @@ defmodule LassoWeb.Dashboard.SimulatorControlsTest do
       assert {:noreply, ^socket} = SimulatorControls.handle_event(event, %{}, socket)
     end
   end
+
+  test "custom runs and profile changes clamp the tester rate" do
+    initial = socket()
+    assert initial.assigns.request_rate == 2
+    {:noreply, selected} = SimulatorControls.handle_event("set_rate", %{"rate" => "30"}, initial)
+    assert selected.assigns.request_rate == 2
+    {:ok, reduced} = SimulatorControls.update(%{rps_limit: 1}, selected)
+    assert reduced.assigns.request_rate == 1
+    {:noreply, running} = SimulatorControls.handle_event("start_simulator_run", %{}, reduced)
+    [["start_simulator_run", config] | _] = Phoenix.LiveView.Utils.get_push_events(running)
+    assert config.http.rps == 1
+  end
+
+  test "malformed control events leave the selection intact" do
+    initial = socket()
+
+    for {event, params} <- [
+          {"set_rate", %{"rate" => "bad"}},
+          {"set_rate", %{"rate" => "-1"}},
+          {"update_duration", %{"duration" => "0"}},
+          {"select_strategy", %{"strategy" => "invented"}}
+        ] do
+      assert {:noreply, ^initial} = SimulatorControls.handle_event(event, params, initial)
+    end
+  end
 end

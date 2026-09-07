@@ -20,7 +20,7 @@ defmodule LassoWeb.Components.DashboardHeader do
 
     ~H"""
     <div class={[
-      "relative z-20 flex-shrink-0 bg-[#181e2c]",
+      "relative z-40 flex-shrink-0 bg-[#181e2c]",
       if(@active_tab == "docs", do: "", else: "border-gray-700/50 border-b")
     ]}>
       <div class="relative flex flex-wrap items-center justify-between gap-3 px-4 py-3 md:px-6">

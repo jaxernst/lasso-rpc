@@ -41,7 +41,7 @@ defmodule Lasso.Config.FileBackendCompatibilityTest do
             archival: false
             sharing_mode: isolated
             capabilities:
-              methods: [eth_blockNumber, eth_chainId]
+              unsupported_methods: [eth_getLogs]
     """)
 
     assert {:ok, state} =
@@ -72,7 +72,7 @@ defmodule Lasso.Config.FileBackendCompatibilityTest do
     assert provider.priority == 7
     assert provider.archival == false
     assert provider.sharing_mode == :isolated
-    assert provider.capabilities.methods == ["eth_blockNumber", "eth_chainId"]
+    assert provider.capabilities.unsupported_methods == ["eth_getLogs"]
   end
 
   test "frontmatter profile retains legacy aliases and provider authentication", context do

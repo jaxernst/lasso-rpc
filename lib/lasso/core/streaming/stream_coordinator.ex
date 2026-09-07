@@ -11,6 +11,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   use GenServer
   require Logger
 
+  alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.{ContinuityPolicy, GapFiller}
   alias Lasso.Events.Subscription
   alias Lasso.Providers.Catalog
@@ -106,6 +107,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   @impl true
   def init({profile, chain_id, key, opts}) do
+    opts = profile_failover_options(profile, chain_id, opts)
+
     state = %{
       profile: profile,
       chain_id: chain_id,
@@ -405,6 +408,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   # Standard failover initiation with empty buffer
   defp initiate_failover(state, old_provider_id, new_provider_id) do
+    state = refresh_failover_config(state)
+
     deadline_us =
       System.monotonic_time(:microsecond) + state.recovery_timeout_ms * 1_000
 
@@ -415,6 +420,32 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     else
       enter_degraded_mode(state, failover_budget(state))
     end
+  end
+
+  defp profile_failover_options(profile, chain_id, opts) do
+    case ConfigStore.get_chain(profile, chain_id) do
+      {:ok, %{websocket: %{failover: config}}} ->
+        opts
+        |> Keyword.put(:max_backfill_blocks, config.max_backfill_blocks)
+        |> Keyword.put(:backfill_timeout, config.backfill_timeout_ms)
+
+      _ ->
+        opts
+    end
+  end
+
+  defp refresh_failover_config(state) do
+    opts =
+      profile_failover_options(state.profile, state.chain_id,
+        max_backfill_blocks: state.max_backfill_blocks,
+        backfill_timeout: state.backfill_timeout
+      )
+
+    %{
+      state
+      | max_backfill_blocks: opts[:max_backfill_blocks],
+        backfill_timeout: opts[:backfill_timeout]
+    }
   end
 
   # Failover initiation with preserved buffer (used during cascade)

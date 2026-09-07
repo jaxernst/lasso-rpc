@@ -211,6 +211,7 @@ const ActivityFeed = {
 
 const SimulatorControl = {
   mounted() {
+    this.profile = this.el.getAttribute("data-profile");
     this.httpTimer = null;
     this.wsHandles = [];
     this.recentCalls = [];
@@ -253,9 +254,9 @@ const SimulatorControl = {
         this.el.isConnected &&
         window.liveSocket &&
         window.liveSocket.isConnected() &&
-        LassoSim.isRunning() // Only update when simulator is actually running
+        LassoSim.isRunning(this.profile) // Only update when simulator is actually running
       ) {
-        const stats = LassoSim.activeStats();
+        const stats = LassoSim.activeStats(this.profile);
         // Send updates directly to the SimulatorControls component
         this.pushEvent("sim_stats", stats);
         this.pushEvent("update_recent_calls", {
@@ -266,6 +267,17 @@ const SimulatorControl = {
   },
 
   updated() {
+    const nextProfile = this.el.getAttribute("data-profile");
+    if (nextProfile !== this.profile) {
+      this.profile = nextProfile;
+      this.recentCalls = [];
+      clearTimeout(this.immediateUpdate);
+      LassoSim.stopAllRuns();
+      this.pushEvent("sim_running", { running: false });
+      this.pushEvent("sim_stats", LassoSim.activeStats(this.profile));
+      this.pushEvent("update_recent_calls", { calls: [] });
+    }
+
     // Check if available chains changed (e.g., when profile switches)
     try {
       const chainsData = this.el.getAttribute("data-available-chains");
@@ -281,7 +293,7 @@ const SimulatorControl = {
         LassoSim.setAvailableChains(this.availableChains);
 
         // Stop all running simulations since chains changed
-        if (LassoSim.isRunning()) {
+        if (LassoSim.isRunning(this.profile)) {
           LassoSim.stopAllRuns();
         }
       }
@@ -304,6 +316,7 @@ const SimulatorControl = {
   },
 
   trackActivity(activity) {
+    if (activity.profile !== this.profile) return;
     // Add timestamp if not present
     if (!activity.timestamp) {
       activity.timestamp = Date.now();
@@ -327,9 +340,9 @@ const SimulatorControl = {
         window.liveSocket.isConnected()
       ) {
         // Update run state and stats immediately
-        const stats = activity.stats || LassoSim.activeStats();
+        const stats = activity.stats || LassoSim.activeStats(this.profile);
 
-        this.pushEvent("sim_running", { running: LassoSim.isRunning() });
+        this.pushEvent("sim_running", { running: LassoSim.isRunning(this.profile) });
         this.pushEvent("sim_stats", stats);
 
         // Update recent calls to show completion
@@ -344,7 +357,7 @@ const SimulatorControl = {
         this.pushEvent &&
         window.liveSocket &&
         window.liveSocket.isConnected() &&
-        LassoSim.isRunning()
+        LassoSim.isRunning(this.profile)
       ) {
         clearTimeout(this.immediateUpdate);
         this.immediateUpdate = setTimeout(() => {
@@ -587,7 +600,7 @@ const DraggableNetworkViewport = {
     this.updateTransform();
 
     // Re-center when topology data arrives in a later server diff (e.g. a
-    // draft profile hydrating from localStorage after mount). Without this
+    // profile data arriving after mount). Without this
     // the empty-at-mount viewport keeps its stale transform and the
     // now-present nodes render off-frame. Fire only on the no-nodes →
     // has-nodes transition — that is the initial hydration, before the

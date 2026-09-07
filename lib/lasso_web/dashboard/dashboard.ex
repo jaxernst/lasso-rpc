@@ -471,6 +471,7 @@ defmodule LassoWeb.Dashboard do
         id="simulator-control-anchor"
         class="hidden"
         phx-hook="SimulatorControl"
+        data-profile={@selected_profile}
         data-available-chains={Jason.encode!(@available_chains)}
       >
       </div>

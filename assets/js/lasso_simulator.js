@@ -232,6 +232,7 @@ class SimulatorRun {
         chain,
         status: "started",
         runId: this.id,
+        profile: this.config.profile || "public",
       });
 
       try {
@@ -263,6 +264,7 @@ class SimulatorRun {
             statusCode: resp.status,
             provider,
             runId: this.id,
+        profile: this.config.profile || "public",
           });
         } else {
           this.stats.http.error++;
@@ -276,6 +278,7 @@ class SimulatorRun {
             error: json?.error?.message,
             provider,
             runId: this.id,
+        profile: this.config.profile || "public",
           });
         }
       } catch (error) {
@@ -295,6 +298,7 @@ class SimulatorRun {
           latency: Math.round(dur),
           error: error.message,
           runId: this.id,
+        profile: this.config.profile || "public",
         });
       } finally {
         this.stats.http.inflight = Math.max(0, this.stats.http.inflight - 1);
@@ -331,10 +335,11 @@ class SimulatorRun {
     for (let i = 0; i < connections; i++) {
       const chain = chains[i % chains.length];
       const profile = this.config.profile || "public";
-      let url = `${location.origin.replace(
+      const strategyPath = this.config.strategy ? `${encodeURIComponent(this.config.strategy)}/` : "";
+      const url = `${location.origin.replace(
         /^http/,
         "ws"
-      )}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
+      )}/ws/rpc/profile/${encodeURIComponent(profile)}/${strategyPath}${encodeURIComponent(
         chain
       )}`;
       const ws = new WebSocket(url);
@@ -345,6 +350,7 @@ class SimulatorRun {
           chain,
           status: "connected",
           runId: this.id,
+        profile: this.config.profile || "public",
         });
 
         for (const topic of topics) {
@@ -369,6 +375,7 @@ class SimulatorRun {
               topic,
               requestId,
               runId: this.id,
+        profile: this.config.profile || "public",
             });
           } catch (error) {
             this._finishWsSubscription(requestId, {
@@ -386,6 +393,7 @@ class SimulatorRun {
           chain,
           status: "disconnected",
           runId: this.id,
+        profile: this.config.profile || "public",
         });
       };
 
@@ -395,6 +403,7 @@ class SimulatorRun {
           status: "error",
           error: error.message || "Connection error",
           runId: this.id,
+        profile: this.config.profile || "public",
         });
       };
 
@@ -429,6 +438,7 @@ class SimulatorRun {
         status: "message",
         method: "raw_data",
         runId: this.id,
+        profile: this.config.profile || "public",
       });
       return;
     }
@@ -457,6 +467,7 @@ class SimulatorRun {
         method: data.method,
         subscriptionId: data.params?.subscription,
         runId: this.id,
+        profile: this.config.profile || "public",
       });
       return;
     }
@@ -506,6 +517,7 @@ class SimulatorRun {
         type,
         timestamp: Date.now(),
         runId: this.id,
+        profile: this.config.profile || "public",
         ...data,
       });
     }
@@ -540,15 +552,16 @@ class SimulatorManager {
     }
   }
 
-  isRunning() {
-    return Array.from(this.runs.values()).some((run) => run.isActive());
+  isRunning(profile) {
+    return this.getActiveRuns(profile).length > 0;
   }
 
-  getActiveRuns() {
-    return Array.from(this.runs.values()).filter((run) => run.isActive());
+  getActiveRuns(profile) {
+    return Array.from(this.runs.values()).filter((run) =>
+      run.isActive() && (!profile || (run.config.profile || "public") === profile));
   }
 
-  getAggregateStats() {
+  getAggregateStats(profile) {
     const aggregate = {
       http: {
         success: 0,
@@ -560,7 +573,7 @@ class SimulatorManager {
       ws: emptyWsStats(),
     };
 
-    const activeRuns = this.getActiveRuns();
+    const activeRuns = this.getActiveRuns(profile);
     if (activeRuns.length === 0) {
       return aggregate;
     }
@@ -614,12 +627,12 @@ export function setActivityCallback(callback) {
   console.log("Simulator: Activity callback set");
 }
 
-export function activeStats() {
-  return simulator.getAggregateStats();
+export function activeStats(profile) {
+  return simulator.getAggregateStats(profile);
 }
 
-export function isRunning() {
-  return simulator.isRunning();
+export function isRunning(profile) {
+  return simulator.isRunning(profile);
 }
 
 export function startRun(config) {

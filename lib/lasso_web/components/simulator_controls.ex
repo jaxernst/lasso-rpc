@@ -44,6 +44,9 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           load_types: %{http: true, ws: true}
         })
       end)
+      |> then(fn socket ->
+        assign(socket, :request_rate, min(socket.assigns.request_rate, socket.assigns.rps_limit))
+      end)
       |> then(&assign(&1, :quick_run_config, get_default_run_config(&1)))
 
     {:ok, socket}
@@ -104,7 +107,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   @impl true
-  def handle_event("select_strategy", %{"strategy" => strategy}, socket) do
+  def handle_event("select_strategy", %{"strategy" => strategy}, socket)
+      when strategy in ["fastest", "load-balanced", "latency-weighted"] do
     socket =
       socket
       |> assign(:selected_strategy, strategy)
@@ -115,14 +119,16 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
   @impl true
   def handle_event("set_rate", %{"rate" => rate}, socket) do
-    rate_int = String.to_integer(rate)
+    case Integer.parse(rate) do
+      {rate_int, ""} when rate_int > 0 ->
+        {:noreply,
+         socket
+         |> assign(:request_rate, min(rate_int, socket.assigns.rps_limit))
+         |> update_preview_text()}
 
-    socket =
-      socket
-      |> assign(:request_rate, rate_int)
-      |> update_preview_text()
-
-    {:noreply, socket}
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   @impl true
@@ -227,10 +233,17 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
   @impl true
   def handle_event("update_duration", %{"duration" => duration_str}, socket) do
-    duration = String.to_integer(duration_str)
-    config = Map.put(socket.assigns.quick_run_config, :duration, duration * 1000)
-    {:noreply, assign(socket, run_duration: duration, quick_run_config: config)}
+    case Integer.parse(duration_str) do
+      {duration, ""} when duration in 1..300 ->
+        config = Map.put(socket.assigns.quick_run_config, :duration, duration * 1000)
+        {:noreply, assign(socket, run_duration: duration, quick_run_config: config)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
+
+  def handle_event("select_strategy", _params, socket), do: {:noreply, socket}
 
   @impl true
   def render(assigns) do
@@ -436,7 +449,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       
     <!-- Routing Strategy -->
       <div class="space-y-2">
-        <label class="text-[10px] font-medium text-gray-400">Routing Strategy</label>
+        <label class="text-[10px] font-medium text-gray-400">HTTP Routing Strategy</label>
         <div class="grid grid-cols-2 gap-1">
           <%= for strategy <- EndpointHelpers.available_strategies() do %>
             <button
@@ -456,12 +469,16 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <% end %>
         </div>
       </div>
-      
-    <!-- Request Rate -->
+
+      <p class="text-[10px] text-gray-500">
+        Runs HTTP requests and two newHeads subscriptions for 30 seconds.
+        Subscriptions select eligible providers by priority.
+      </p>
+      <!-- Request Rate -->
       <div class="space-y-2">
         <label class="text-[10px] font-medium text-gray-400">Request Rate</label>
         <div class="flex gap-2">
-          <%= for rate <- [5, 15, 30] do %>
+          <%= for rate <- Enum.uniq([min(5, @rps_limit), 15, 30]) do %>
             <% allowed = rate <= @rps_limit %>
             <button
               phx-click={allowed && "set_rate"}
@@ -617,7 +634,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       http: %{
         enabled: load_types.http,
         methods: ["eth_blockNumber", "eth_getBalance"],
-        rps: socket.assigns.request_rate,
+        rps: min(socket.assigns.request_rate, socket.assigns.rps_limit),
         concurrency: max(8, socket.assigns.request_rate)
       },
       ws: %{enabled: load_types.ws, connections: 2, topics: ["newHeads"]}
