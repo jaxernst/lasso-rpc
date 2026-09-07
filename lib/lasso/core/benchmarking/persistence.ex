@@ -2,15 +2,12 @@ defmodule Lasso.Benchmarking.Persistence do
   @moduledoc """
   Stores hourly benchmark snapshots as JSON files for historical analysis.
 
-  Snapshots are grouped by profile and chain under a directory selected at
-  build time by `LASSO_SNAPSHOTS_DIR` (default: `priv/benchmark_snapshots`).
-  Configure a persistent volume to
-  retain them across container replacements.
+  Snapshots are grouped by profile and chain under `:snapshots_dir` application
+  configuration, read when the collector starts (default: `priv/benchmark_snapshots`).
+  Configure a persistent volume to retain them across container replacements.
   """
 
   require Logger
-
-  @snapshots_dir System.get_env("LASSO_SNAPSHOTS_DIR") || "priv/benchmark_snapshots"
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
@@ -55,17 +52,18 @@ defmodule Lasso.Benchmarking.Persistence do
 
   @impl true
   def init(_opts) do
-    File.mkdir_p!(@snapshots_dir)
+    snapshots_dir = Application.get_env(:lasso, :snapshots_dir, "priv/benchmark_snapshots")
+    File.mkdir_p!(snapshots_dir)
     schedule_cleanup()
 
-    {:ok, %{}}
+    {:ok, %{snapshots_dir: snapshots_dir}}
   end
 
   @impl true
   def handle_cast({:save_snapshot, profile, chain_name, snapshot_data}, state) do
     timestamp = System.system_time(:second)
     filename = "#{profile}_#{chain_name}_#{timestamp}.json"
-    filepath = Path.join(@snapshots_dir, filename)
+    filepath = Path.join(state.snapshots_dir, filename)
 
     snapshot_with_metadata = %{
       profile: profile,
@@ -96,7 +94,7 @@ defmodule Lasso.Benchmarking.Persistence do
   def handle_cast({:cleanup_snapshots, days_to_keep}, state) do
     cutoff_timestamp = System.system_time(:second) - days_to_keep * 24 * 60 * 60
 
-    case File.ls(@snapshots_dir) do
+    case File.ls(state.snapshots_dir) do
       {:ok, files} ->
         files_to_delete =
           files
@@ -108,7 +106,7 @@ defmodule Lasso.Benchmarking.Persistence do
           end)
 
         Enum.each(files_to_delete, fn filename ->
-          filepath = Path.join(@snapshots_dir, filename)
+          filepath = Path.join(state.snapshots_dir, filename)
 
           case File.rm(filepath) do
             :ok ->
@@ -135,14 +133,14 @@ defmodule Lasso.Benchmarking.Persistence do
     cutoff_timestamp = System.system_time(:second) - hours_back * 60 * 60
 
     snapshots =
-      case File.ls(@snapshots_dir) do
+      case File.ls(state.snapshots_dir) do
         {:ok, files} ->
           files
           |> Enum.filter(fn filename ->
             String.starts_with?(filename, "#{profile}_#{chain_name}_") and
               String.ends_with?(filename, ".json")
           end)
-          |> Enum.map(&load_snapshot_file(&1, cutoff_timestamp))
+          |> Enum.map(&load_snapshot_file(state.snapshots_dir, &1, cutoff_timestamp))
           |> Enum.filter(&(&1 != nil))
           |> Enum.map(fn {:ok, data} -> data end)
           |> Enum.sort_by(fn data -> Map.get(data, "timestamp", 0) end, :desc)
@@ -158,7 +156,7 @@ defmodule Lasso.Benchmarking.Persistence do
   @impl true
   def handle_call(:get_summary, _from, state) do
     summary =
-      case File.ls(@snapshots_dir) do
+      case File.ls(state.snapshots_dir) do
         {:ok, files} ->
           json_files = Enum.filter(files, &String.ends_with?(&1, ".json"))
 
@@ -185,7 +183,7 @@ defmodule Lasso.Benchmarking.Persistence do
             total_snapshots: length(json_files),
             chains_tracked: chains,
             oldest_snapshot: oldest_timestamp,
-            storage_directory: @snapshots_dir
+            storage_directory: state.snapshots_dir
           }
 
         {:error, reason} ->
@@ -206,8 +204,8 @@ defmodule Lasso.Benchmarking.Persistence do
 
   # Private functions
 
-  defp load_snapshot_file(filename, cutoff_timestamp) do
-    filepath = Path.join(@snapshots_dir, filename)
+  defp load_snapshot_file(snapshots_dir, filename, cutoff_timestamp) do
+    filepath = Path.join(snapshots_dir, filename)
 
     case File.read(filepath) do
       {:ok, content} ->

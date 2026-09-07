@@ -1,0 +1,25 @@
+services:
+  lasso:
+    build: .
+    image: lasso-rpc:local
+    ports:
+      - "127.0.0.1:4000:4000"
+    environment:
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?Set SECRET_KEY_BASE to a random secret of at least 64 bytes}
+      LASSO_NODE_ID: ${LASSO_NODE_ID:-docker-local}
+      PHX_HOST: localhost
+      PHX_SCHEME: http
+    volumes:
+      - lasso-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  lasso-data:

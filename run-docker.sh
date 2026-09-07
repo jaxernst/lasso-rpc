@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# Simple Docker runner for Lasso RPC
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+# Local Docker runner for Lasso RPC
 echo "🚀 Starting Lasso RPC with Docker..."
 
 # Check if Docker is installed and running
@@ -28,13 +32,13 @@ else
 fi
 
 echo "🚀 Starting Lasso RPC container..."
-echo "📊 Live Dashboard: http://localhost:4000"
+echo "📊 Live Dashboard: http://localhost:4000/dashboard"
 echo "🔌 RPC Endpoint: http://localhost:4000/rpc/fastest/ethereum"
 echo ""
 echo "Press Ctrl+C to stop the server"
 
 # Generate SECRET_KEY_BASE if not set
-if [ -z "$SECRET_KEY_BASE" ]; then
+if [ -z "${SECRET_KEY_BASE:-}" ]; then
     echo "Generating SECRET_KEY_BASE..."
     SECRET_KEY_BASE=$(openssl rand -base64 48)
 fi
@@ -45,8 +49,11 @@ LASSO_NODE_ID="${LASSO_NODE_ID:-docker-local}"
 
 # Run the container
 docker run --rm \
-    -p 4000:4000 \
+    -p 127.0.0.1:4000:4000 \
     -e SECRET_KEY_BASE="$SECRET_KEY_BASE" \
     -e LASSO_NODE_ID="$LASSO_NODE_ID" \
+    -e PHX_HOST=localhost \
+    -e PHX_SCHEME=http \
+    --volume lasso-rpc-data:/data \
     --name lasso-rpc \
     lasso-rpc

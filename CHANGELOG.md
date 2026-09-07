@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Run Docker containers as UID/GID 10001 with a smaller runtime image, an image health check, and OCI source/license metadata
+- Add a Compose deployment with persistent profiles/history, a read-only root filesystem, and upgrade guidance
+
+### Fixed
+
+- Load the profiles seeded under `LASSO_DATA_DIR` and allow explicit runtime profile/history directories
+- Resolve benchmark snapshot storage when the collector starts instead of when the code is compiled
+- Use local HTTP URLs and persistent storage in the Docker helper
+
 ## [0.3.3] - 2026-09-07
 
 ### Changed
