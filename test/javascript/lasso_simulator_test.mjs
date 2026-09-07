@@ -41,3 +41,27 @@ for (const outcome of ['success', 'rpc-error', 'malformed']) {
     } finally { sim.stopAllRuns(); globalThis.fetch = originalFetch; }
   });
 }
+
+test('WebSocket tester URLs retain the selected profile, chain, and strategy', async () => {
+  const sim = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#ws-routing`);
+  const previousSocket = globalThis.WebSocket;
+  const previousLocation = globalThis.location;
+  const urls = [];
+  globalThis.location = {origin: 'http://localhost:4000'};
+  globalThis.WebSocket = class {
+    constructor(url) { urls.push(url); }
+    close() { this.onclose?.(); }
+  };
+  try {
+    sim.startRun({profile: 'local', chains: [1], strategy: 'fastest',
+      http: {enabled: false}, ws: {enabled: true, connections: 2}});
+    assert.deepEqual(urls, [
+      'ws://localhost:4000/ws/rpc/profile/local/fastest/1',
+      'ws://localhost:4000/ws/rpc/profile/local/fastest/1'
+    ]);
+  } finally {
+    sim.stopAllRuns();
+    globalThis.WebSocket = previousSocket;
+    globalThis.location = previousLocation;
+  }
+});

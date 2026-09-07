@@ -24,12 +24,15 @@ defmodule Lasso.Providers.InstanceSupervisor do
   def init(instance_id) do
     case Catalog.get_instance(instance_id) do
       {:ok, instance} ->
-        circuit_config = %{
-          failure_threshold: 5,
-          recovery_timeout: 60_000,
-          success_threshold: 2,
-          shared_mode: true
-        }
+        circuit_config =
+          %{
+            failure_threshold: 5,
+            recovery_timeout: 60_000,
+            success_threshold: 2,
+            shared_mode: true
+          }
+          |> Map.merge(Map.new(Application.get_env(:lasso, :circuit_breaker, [])))
+          |> Map.put(:shared_mode, true)
 
         children =
           []

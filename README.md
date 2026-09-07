@@ -60,7 +60,7 @@ Different providers excel at different workloads (hot reads vs archival queries 
 - **Method-aware benchmarking**: latency tracked per **provider × method × transport**
 - **Resilience**: circuit breakers, retries, and transport-aware failover
 - **WebSocket subscriptions**: multiplexing with optional gap-filling via HTTP on upstream failure
-- **Profiles**: isolated configs/state/metrics (dev/staging/prod, multi-tenant, experiments)
+- **Profiles**: separate routing configurations and dashboard views (dev/staging/prod, experiments); identical upstreams can share runtime state
 - **Cluster aggregation**: optional BEAM clustering aggregates metrics across geo-distributed nodes with regional drill-down
 - **LiveView dashboard**: interactive topology, fresh provider status, routing decisions, latency metrics, cluster-wide observability, and an HTTP/WebSocket request tester
 
@@ -199,7 +199,7 @@ A profile's YAML `slug` is its routing identity. Treat it as opaque in integrati
 
 Reload configuration with `Lasso.Config.ConfigStore.reload/0`. A malformed YAML reload is rejected and the last known-good configuration continues serving requests. On a cold restart, configuration is loaded from the YAML files before routing starts, so ensure required environment variables and profile files are available first.
 
-For the **full configuration reference (all supported options + tuning notes)**, see [`config/profiles/public.yml`](config/profiles/public.yml).
+See the [configuration reference](docs/CONFIGURATION.md) for supported options and [`config/profiles/public.yml`](config/profiles/public.yml) for a complete example.
 
 ### Ready to Use: Public Profile
 

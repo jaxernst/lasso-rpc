@@ -131,8 +131,9 @@ chains:
         priority: 4
         url: "https://base-sepolia-public.nodies.app"
         archival: true
-        adapter_config:
-          max_block_range: 500
+        capabilities:
+          limits:
+            max_block_range: 500
 
   arbitrum_sepolia:
     chain_id: 421614

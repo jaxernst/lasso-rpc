@@ -331,10 +331,11 @@ class SimulatorRun {
     for (let i = 0; i < connections; i++) {
       const chain = chains[i % chains.length];
       const profile = this.config.profile || "public";
-      let url = `${location.origin.replace(
+      const strategyPath = this.config.strategy ? `${encodeURIComponent(this.config.strategy)}/` : "";
+      const url = `${location.origin.replace(
         /^http/,
         "ws"
-      )}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
+      )}/ws/rpc/profile/${encodeURIComponent(profile)}/${strategyPath}${encodeURIComponent(
         chain
       )}`;
       const ws = new WebSocket(url);

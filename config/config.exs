@@ -28,46 +28,8 @@ config :lasso,
 # Default HTTP client adapter
 config :lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch
 
-# Health check and provider management defaults
-config :lasso, :health_check_interval, 30_000
-config :lasso, :health_check_timeout, 10_000
-config :lasso, :health_check_failure_threshold, 3
-config :lasso, :health_check_recovery_threshold, 2
-
-# Provider management defaults
-config :lasso, :auto_failover, true
-config :lasso, :load_balancing, "priority"
-
-# Connection defaults
-config :lasso, :reconnect_attempts, 10
-config :lasso, :heartbeat_interval, 30_000
-config :lasso, :reconnect_interval, 5_000
-
-# Failover defaults
-config :lasso, :failover_enabled, true
-config :lasso, :max_backfill_blocks, 100
-config :lasso, :backfill_timeout, 30_000
-
-# Observability configuration
-config :lasso, :observability,
-  log_level: :debug,
-  max_error_message_chars: 256,
-  max_meta_header_bytes: 4096,
-  sampling: [rate: 1.0]
-
-# Dashboard LiveView event buffering configuration
-config :lasso, :dashboard,
-  # Event batch flush interval in milliseconds
-  batch_interval: 100,
-  # Maximum events in buffer before early flush
-  max_buffer_size: 50,
-  # Mailbox backpressure thresholds
-  mailbox_thresholds: %{
-    throttle: 500,
-    drop: 1000
-  },
-  # Metrics recalculation debounce interval in milliseconds
-  metrics_debounce: 2_000
+# Encoded response metadata header limit
+config :lasso, :observability, max_meta_header_bytes: 4096
 
 # Dashboard status configuration
 config :lasso, :dashboard_status,
@@ -80,12 +42,6 @@ config :lasso, :dashboard_status,
 # When disabled, no VM statistics are collected and the tab is hidden.
 # Disable for production deployments where exposing VM internals is not desired.
 config :lasso, :vm_metrics_enabled, false
-
-# Provider probe configuration (integrated health & block height monitoring)
-# These are fallback defaults for dynamic/test chains not defined in chains.yml
-config :lasso, :provider_probe,
-  default_probe_interval_ms: 12_000,
-  default_lag_threshold: 3
 
 # Configure JSON library
 config :phoenix, :json_library, Jason

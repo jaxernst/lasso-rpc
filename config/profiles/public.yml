@@ -29,7 +29,7 @@ chains:
     # Health monitoring: Probe intervals and lag detection
     monitoring:
       probe_interval_ms: 12000 # Health check frequency (~1x block time for L1)
-      lag_alert_threshold_blocks: 5 # Log warning when provider lags this many blocks
+      lag_alert_threshold_blocks: 5 # Dashboard lag status threshold
 
     # Provider selection: Eligibility filtering
     selection:
@@ -254,11 +254,9 @@ chains:
       - id: "base_drpc"
         name: "dRPC Base"
         priority: 5
-        type: "public"
         url: "https://base.drpc.org"
         ws_url: "wss://base.drpc.org"
         subscribe_new_heads: false
-        api_key_required: false
         archival: true
         capabilities:
           unsupported_methods: ["eth_protocolVersion"]

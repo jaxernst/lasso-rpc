@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Lasso is configured via YAML profile files in `config/profiles/`. Each profile defines chains, providers, routing policy, and dashboard tester settings. Multiple profiles enable isolated configurations for different environments or tenants.
+Lasso is configured via YAML profile files in `config/profiles/`. Each profile defines chains, providers, routing policy, and dashboard tester settings. Multiple profiles provide separate routing configurations for different environments. Identical upstreams can share connections, health, and observations; profiles are not authentication boundaries.
 
 ## Profile File Structure
 
@@ -34,6 +34,10 @@ chains:
 | `burst_limit` | integer | No | Profile metadata (default: 500); no OSS ingress enforcement |
 
 OSS does not authenticate clients or enforce per-client request quotas. Configure authentication and inbound rate limiting at your reverse proxy. Provider quota and circuit-breaker backoff are separate routing controls.
+
+Unknown YAML fields and invalid types are rejected. Use booleans (`false`), not quoted strings (`"false"`). A failed reload keeps the previous active configuration. Errors identify the field without printing credential values.
+
+Profile slugs must match their `.yml` filenames. Files beginning with `_` or `.` are skipped. Keep a `public.yml` profile: routes without a profile use `public`, and it is required at startup. `unlisted: true` hides a profile from the selector; its endpoints remain accessible.
 
 ## Chain Configuration
 
@@ -80,12 +84,12 @@ chains:
 
 ### Monitoring
 
-Controls health probe frequency and lag alerting.
+Controls probe frequency and the dashboard lag status threshold. Shared upstreams use the shortest configured probe interval across profiles; HTTP polling slows while WebSocket block updates are active.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `probe_interval_ms` | integer | 12000 | Health check polling interval. Set to ~1x block time for L1, ~2.5x for L2 |
-| `lag_alert_threshold_blocks` | integer | 5 | Log warning when a provider lags this many blocks behind consensus |
+| `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold; this setting does not emit lag warning logs |
 
 ### Selection
 
@@ -93,7 +97,7 @@ Controls provider eligibility filtering during request routing.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_lag_blocks` | integer | 1 | Exclude providers lagging more than N blocks. L1: 1-2, L2: 3-10 |
+| `max_lag_blocks` | integer | unset | Exclude providers lagging more than N blocks. L1: 1-2, L2: 3-10 |
 | `archival_threshold` | integer | 128 | Blocks before data is considered "archival". Requests for blocks older than `head - threshold` are only routed to archival providers |
 
 ### WebSocket
@@ -102,10 +106,12 @@ Controls upstream WebSocket subscription behavior.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `subscribe_new_heads` | boolean | true | Subscribe to `newHeads` for real-time block tracking |
-| `new_heads_timeout_ms` | integer | 35000 | Timeout before marking subscription stale (~3x block time) |
+| `subscribe_new_heads` | boolean | true | Enable `newHeads` block tracking and eligibility for client `newHeads` subscriptions |
+| `new_heads_timeout_ms` | integer | 42000 | Timeout before marking subscription stale (~3x block time) |
 | `failover.max_backfill_blocks` | integer | 100 | Max blocks to fetch via HTTP during subscription failover |
 | `failover.backfill_timeout_ms` | integer | 30000 | Timeout for backfill HTTP requests |
+
+Failover limits are captured from the active profile at the beginning of each recovery, including after YAML reload. An in-progress recovery keeps its captured limits. The backfill timeout is also bounded by the overall 30-second recovery deadline. Gaps beyond `max_backfill_blocks` terminate continuity rather than silently skipping missing blocks.
 
 ### UI Topology
 
@@ -144,12 +150,16 @@ providers:
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
 | `capabilities` | map | No | Provider capabilities (see Capabilities below) |
+| `sharing_mode` | string | No | `auto` shares identical upstream runtime; `isolated` separates it by profile |
+| `api_key` | string | No | Sends `Authorization: Bearer <value>` |
+| `headers` | map | No | HTTP request and WebSocket handshake headers, overriding defaults |
+| `auth_headers` | map | No | Headers with precedence over `headers` and `api_key` |
 
 *At least one of `url` or `ws_url` is required.
 
 ## Environment Variable Substitution
 
-Provider URLs support `${ENV_VAR}` substitution. Unresolved variables crash at startup to prevent silent misconfiguration.
+Provider URLs support `${ENV_VAR}` substitution. Unresolved variables reject a profile at startup or reload. Substitution also applies to `api_key`, `headers`, and `auth_headers`.
 
 ```yaml
 providers:
@@ -164,7 +174,7 @@ Strategies control how providers are selected for each request. Set via URL path
 
 | Strategy | URL Slug | Description |
 |----------|----------|-------------|
-| **Priority** | `/rpc/:chain` | Select by `priority` field (lowest first). Default strategy |
+| **Priority** | `/rpc/:chain` with application default set to `:priority` | Select by `priority` field (lowest first) |
 | **Fastest** | `/rpc/fastest/:chain` | Lowest recent mean latency among reliability-qualified upstreams |
 | **Load Balanced** | `/rpc/load-balanced/:chain` | Distribute requests across healthy providers with health-aware tiering |
 | **Latency Weighted** | `/rpc/latency-weighted/:chain` | Weighted permutation using relative successful-attempt latency |
@@ -286,11 +296,11 @@ curl -X POST http://localhost:4000/rpc/profile/production/ethereum ...
 
 ## Application-Level Configuration
 
-Set in `config/runtime.exs` or via environment variables:
+Set in `config/runtime.exs` or via environment variables. Application configuration changes require a restart; profile YAML uses the reload command above:
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
-| `LASSO_NODE_ID` | Unique node identifier (typically region name) | Generated |
+| `LASSO_NODE_ID` | Stable unique node identifier, required in production | `local` in development |
 | `CLUSTER_DNS_QUERY` | DNS name for cluster node discovery | (disabled) |
 | `PHX_HOST` | Hostname for the Phoenix endpoint | `localhost` |
 | `PORT` | HTTP port | `4000` |
@@ -304,10 +314,12 @@ Set in `config/runtime.exs` or via environment variables:
 
 ```elixir
 config :lasso, :circuit_breaker,
-  failure_threshold: 5,     # Consecutive failures to open
+  failure_threshold: 5,     # Aggregate failure threshold; category thresholds also apply
   success_threshold: 2,     # Consecutive successes to close
-  recovery_timeout: 30_000  # ms before half-open attempt
+  recovery_timeout: 60_000  # Base ms before half-open; category/backoff rules also apply
 ```
+
+Circuit settings take effect when provider instances start; restart Lasso after changing application configuration. YAML reload does not restart existing circuit breakers.
 
 ### Default Strategy
 

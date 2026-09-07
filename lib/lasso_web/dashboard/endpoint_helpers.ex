@@ -134,7 +134,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   end
 
   def strategy_description("fastest") do
-    "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls"
+    "Prefers providers with the lowest recent successful latency, subject to reliability and health checks"
   end
 
   def strategy_description(_), do: "Strategy-based routing"

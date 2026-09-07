@@ -102,6 +102,13 @@ config :lasso, :http_pool,
   size: positive_integer_env.("LASSO_HTTP_POOL_SIZE", 256),
   count: positive_integer_env.("LASSO_HTTP_POOL_COUNT", 1)
 
+if value = System.get_env("LW_BETA") do
+  case Float.parse(value) do
+    {beta, ""} when beta > 0 -> config :lasso, :lw_beta, beta
+    _ -> raise "LW_BETA must be a positive number"
+  end
+end
+
 # Port configuration (runtime override for all environments)
 # Allows running multiple instances locally: PORT=4001 iex -S mix phx.server
 if port = System.get_env("PORT") do

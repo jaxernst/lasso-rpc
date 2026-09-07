@@ -82,7 +82,7 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
 
 ### Priority
 
-**URL**: `/rpc/:chain` (implicit when no strategy specified)
+**URL**: `/rpc/:chain` when `config :lasso, :provider_selection_strategy, :priority` is set. The shipped default is `:load_balanced`.
 **Module**: `Lasso.RPC.Strategies.Priority`
 
 Selects providers in the order defined by the `priority` field in the profile. Lower priority values are tried first.
@@ -196,23 +196,18 @@ Strategy behavior can be tuned via environment variables:
 |----------|----------|---------|-------------|
 | `LW_BETA` | Latency Weighted | 3.0 | Latency exponent |
 
-See [CONFIGURATION.md](CONFIGURATION.md#routing-strategies) for profile-level strategy configuration.
+See [CONFIGURATION.md](CONFIGURATION.md#routing-strategies) for the application default and URL strategy configuration.
 
-## Per-Method Routing
+## Method and Subscription Policy
 
-Profiles support per-method strategy and provider overrides. This allows fine-grained control for methods with different performance characteristics.
+Choose request strategies through the URL. YAML does not support a `routing` or
+`method_overrides` block. Provider `capabilities` can exclude specific methods
+and constrain block ranges and history; see [Configuration](CONFIGURATION.md#provider-capabilities).
 
-```yaml
-routing:
-  default_strategy: "load_balanced"
-  method_overrides:
-    eth_getLogs:
-      strategy: "fastest"  # Use fastest for log queries
-    eth_call:
-      providers: ["alchemy", "quicknode"]  # Restrict call to specific providers
-```
-
-See [CONFIGURATION.md](CONFIGURATION.md#per-method-routing) for full per-method configuration options.
+WebSocket URL strategies apply to forwarded JSON-RPC calls. `eth_subscribe`
+uses a shared subscription pool that selects eligible providers by priority,
+independently of the URL strategy. An explicit provider URL constrains the
+subscription to that provider and cannot fail over to another provider.
 
 ## Provider Override
 

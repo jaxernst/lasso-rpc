@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Configuration and operator controls
+
+- Reject unsupported YAML fields, invalid values, duplicate provider IDs, and unresolved credentials before activation; retain the active configuration on a failed reload or missing public profile.
+- Honor profile WebSocket backfill limits and application circuit-breaker thresholds. Read the documented `LW_BETA` setting.
+- Clamp request tester rates across profile changes and distinguish HTTP strategy selection from priority-based subscriptions.
+- Correct obsolete provider capability settings in the example profiles. Remove unused configuration facades, controls, and logging claims; document the supported routing and observability contracts.
+
+
 ### Changed
 
 - Run Docker containers as UID/GID 10001 with a smaller runtime image, an image health check, and OCI source/license metadata
