@@ -213,8 +213,7 @@ Minimal example:
 name: "Public RPC"
 slug: "public"
 type: "standard"
-default_rps_limit: 100
-default_burst_limit: 500
+rps_limit: 100  # Dashboard tester maximum
 ---
 chains:
   ethereum:
@@ -235,13 +234,14 @@ Multiple profiles:
 
 ```yaml
 # config/profiles/production.yml
+---
 name: "Production"
 slug: "production"
-default_rps_limit: 1000
-default_burst_limit: 5000
-
+rps_limit: 1000  # Dashboard tester maximum
+---
 chains:
   ethereum:
+    chain_id: 1
     providers:
       - id: "your_erigon"
         url: "http://your-erigon-node:8545"

@@ -36,6 +36,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         socket.assigns[:live_provider_metrics] != assigns[:live_provider_metrics] or
         socket.assigns[:cluster_circuit_states] != assigns[:cluster_circuit_states] or
         socket.assigns[:cluster_block_heights] != assigns[:cluster_block_heights] or
+        socket.assigns[:cluster_health_counters] != assigns[:cluster_health_counters] or
+        socket.assigns[:chain_consensus_height] != assigns[:chain_consensus_height] or
+        socket.assigns[:available_node_ids] != assigns[:available_node_ids] or
+        socket.assigns[:selected_provider_metrics] != assigns[:selected_provider_metrics] or
         socket.assigns[:selected_provider_unified_events] !=
           assigns[:selected_provider_unified_events]
 

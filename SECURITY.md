@@ -72,8 +72,8 @@ When deploying Lasso RPC in production, follow these security best practices:
 
 ### 7. Rate Limiting
 
-- Configure appropriate `default_rps_limit` and `default_burst_limit` in profiles
-- Consider per-IP rate limiting at the reverse proxy level
+- Enforce client or per-IP request limits at the reverse proxy
+- Profile `rps_limit` controls the dashboard tester; `burst_limit` is metadata. These settings do not enforce incoming RPC quotas in OSS
 - Monitor for abuse patterns
 
 ## Known Security Considerations

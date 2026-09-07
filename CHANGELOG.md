@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recognized method-specific block selectors without misclassifying transaction hashes as historical block requests
 - Removed credential-bearing paths and query strings from displayed provider endpoints
 - Preserved final request-tester outcomes when stopping and counted JSON-RPC errors returned with HTTP 200 as errors
+- Loaded metrics from bulk cache completion and rejected stale results after profile switches
 - Guarded invalid dashboard tabs and chain identifiers, empty-profile metrics, and tester profile changes
 - Stabilized WebSocket recovery tests by waiting for the recovery transition
 

@@ -15,8 +15,8 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   require Logger
 
   alias Lasso.Benchmarking.BenchmarkStore
-  alias Lasso.Config.ProfileValidator
-  alias LassoWeb.Dashboard.{Constants, Helpers}
+  alias Lasso.Config.{ConfigStore, ProfileValidator}
+  alias LassoWeb.Dashboard.{Constants, Helpers, MetricsStore}
   alias LassoWeb.Dashboard.Metrics.Calculations
 
   # ETS table name helpers (must match BenchmarkStore)
@@ -572,5 +572,180 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     events
     |> client_routing_events()
     |> Enum.filter(fn event -> (event[:ts_ms] || 0) >= one_minute_ago end)
+  end
+
+  @spec fetch_cluster_metrics(profile :: String.t(), chain_id :: pos_integer()) :: %{
+          provider_metrics: list(),
+          method_metrics: list(),
+          coverage: map(),
+          stale: boolean(),
+          cache_warming: boolean()
+        }
+  def fetch_cluster_metrics(profile, chain_id) do
+    case ConfigStore.get_providers(profile, chain_id) do
+      {:ok, provider_configs} ->
+        %{data: provider_leaderboard, coverage: coverage, stale: stale} =
+          MetricsStore.get_provider_leaderboard(profile, chain_id)
+
+        bulk_result = MetricsStore.get_bulk_method_performance(profile, chain_id)
+        bulk_data = bulk_result.data
+
+        provider_ids = Enum.map(provider_configs, & &1.id)
+
+        cache_warming =
+          provider_ids != [] and bulk_data == [] and bulk_result[:loading] == true
+
+        provider_metrics =
+          build_provider_metrics_from_bulk(
+            provider_ids,
+            provider_configs,
+            provider_leaderboard,
+            bulk_data
+          )
+
+        method_metrics = build_method_metrics_from_bulk(provider_configs, bulk_data)
+
+        %{
+          provider_metrics: provider_metrics,
+          method_metrics: method_metrics,
+          coverage: coverage,
+          stale: stale,
+          cache_warming: cache_warming
+        }
+
+      {:error, :not_found} ->
+        %{
+          provider_metrics: [],
+          method_metrics: [],
+          coverage: %{responding: 1, total: 1},
+          stale: false,
+          cache_warming: false
+        }
+    end
+  end
+
+  @doc """
+  Joins provider configs against per-method bulk stats, returning a list
+  of per-provider rollups sorted with healthy + fast first. Public for
+  unit testability — used by `fetch_cluster_metrics/2`.
+  """
+  def build_provider_metrics_from_bulk(
+        provider_ids,
+        provider_configs,
+        leaderboard,
+        bulk_data
+      ) do
+    config_by_id = Map.new(provider_configs, &{&1.id, &1})
+    leaderboard_by_id = Map.new(leaderboard, &{&1.provider_id, &1})
+    bulk_by_provider = Enum.group_by(bulk_data, & &1.provider_id)
+
+    provider_ids
+    |> Enum.reject(&(&1 == "no_channel"))
+    |> Enum.map(fn provider_id ->
+      config = Map.get(config_by_id, provider_id)
+      leaderboard_entry = Map.get(leaderboard_by_id, provider_id)
+
+      method_stats = Map.get(bulk_by_provider, provider_id, [])
+
+      total_calls = Enum.reduce(method_stats, 0, fn stat, acc -> acc + stat.total_calls end)
+
+      avg_latency = weighted_field(method_stats, & &1.avg_duration_ms)
+      p50_latency = weighted_field(method_stats, & &1.percentiles[:p50])
+      p95_latency = weighted_field(method_stats, & &1.percentiles[:p95])
+      p99_latency = weighted_field(method_stats, & &1.percentiles[:p99])
+      success_rate = weighted_field(method_stats, & &1.success_rate)
+
+      consistency_ratio =
+        if p50_latency && p99_latency && p50_latency > 0 do
+          p99_latency / p50_latency
+        end
+
+      latency_by_node =
+        if leaderboard_entry, do: Map.get(leaderboard_entry, :latency_by_node, []), else: []
+
+      %{
+        id: provider_id,
+        name: if(config, do: config.name, else: provider_id),
+        avg_latency: avg_latency,
+        p50_latency: p50_latency,
+        p95_latency: p95_latency,
+        p99_latency: p99_latency,
+        success_rate: success_rate,
+        total_calls: total_calls,
+        consistency_ratio: consistency_ratio,
+        score: if(leaderboard_entry, do: leaderboard_entry.score, else: nil),
+        method_count: length(method_stats),
+        latency_by_node: latency_by_node
+      }
+    end)
+    |> Enum.reject(&(&1.total_calls == 0))
+    |> Enum.sort_by(fn provider ->
+      healthy = (provider.success_rate || 0) >= 0.5
+      {!healthy, provider.avg_latency || 999_999}
+    end)
+  end
+
+  @doc """
+  Joins provider configs against per-method bulk stats, returning a list
+  of per-method rollups sorted by total call volume (descending). Public
+  for unit testability — used by `fetch_cluster_metrics/2`.
+  """
+  def build_method_metrics_from_bulk(provider_configs, bulk_data) do
+    config_by_id = Map.new(provider_configs, &{&1.id, &1})
+
+    bulk_data
+    |> Enum.reject(&(&1.provider_id == "no_channel"))
+    |> Enum.group_by(& &1.method)
+    |> Enum.map(fn {method, entries} ->
+      provider_stats =
+        entries
+        |> Enum.map(fn entry ->
+          config = Map.get(config_by_id, entry.provider_id)
+
+          %{
+            provider_id: entry.provider_id,
+            provider_name: if(config, do: config.name, else: entry.provider_id),
+            avg_latency: entry.avg_duration_ms,
+            p50_latency: entry.percentiles[:p50],
+            p95_latency: entry.percentiles[:p95],
+            p99_latency: entry.percentiles[:p99],
+            success_rate: entry.success_rate,
+            total_calls: entry.total_calls,
+            stats_by_node: Map.get(entry, :stats_by_node, [])
+          }
+        end)
+        |> Enum.sort_by(& &1.avg_latency)
+
+      %{
+        method: method,
+        providers: provider_stats,
+        total_calls: Enum.reduce(provider_stats, 0, fn stat, acc -> acc + stat.total_calls end)
+      }
+    end)
+    |> Enum.sort_by(& &1.total_calls, :desc)
+  end
+
+  @doc """
+  Computes a call-count-weighted average over a list of per-method
+  stat maps using `extractor` to pull the numeric field. Skips entries
+  where the field is nil or `total_calls == 0`. Returns `nil` for an
+  empty / all-skipped input.
+  """
+  def weighted_field([], _extractor), do: nil
+
+  def weighted_field(method_stats, extractor) do
+    {weighted_sum, total_weight} =
+      Enum.reduce(method_stats, {0.0, 0}, fn stat, {sum, weight} ->
+        value = extractor.(stat)
+        calls = stat.total_calls || 0
+
+        if not is_nil(value) and calls > 0 do
+          {sum + value * calls, weight + calls}
+        else
+          {sum, weight}
+        end
+      end)
+
+    if total_weight > 0, do: weighted_sum / total_weight, else: nil
   end
 end

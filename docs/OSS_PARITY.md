@@ -15,7 +15,7 @@ Release v0.3.2 before the hosted launch once the candidate passes CI and review.
 | Endpoints | File-configured profile routes, numeric chain identities, configured strategies, and origin-only provider URL display |
 | Profiles | Every configured YAML profile is selectable; configuration guidance replaces hosted create/upgrade actions |
 | Request tester | HTTP and WebSocket requests, configured profile/chain/strategy selection, final outcomes after stop, and accurate JSON-RPC error counts |
-| Metrics and activity | Empty-profile handling, zero-vs-missing success data, consistent subscription chain identities, and lifecycle events excluded from RPC counters |
+| Metrics and activity | Empty-profile handling, zero-vs-missing success data, consistent subscription chain identities, lifecycle events excluded from RPC counters, bulk cache loading, and profile-scoped async results |
 | RPC correctness | Method-specific block selectors, preserved error codes/data, bounded classification evidence, and consistent HTTP error bodies |
 | Dependencies | Mint 1.10.0 and CAStore 1.0.21 |
 
@@ -42,7 +42,7 @@ These are not all Cloud-only features. They require a separate dependency-aware 
 
 ## Verification
 
-- Full hermetic suite: 1,632 tests passed before the final browser-discovered lifecycle fix; focused dashboard and simulator tests cover subsequent fixes, with CI rerunning the complete suite.
+- Full hermetic suite and focused dashboard/simulator regressions, including cache loading and profile-switch isolation. CI runs the complete suite for the release candidate.
 - Warnings-as-errors compilation, formatting, strict Credo, Dialyzer, and dependency audit.
 - Production assets, release assembly, and Docker image build.
 - Browser checks at desktop and phone widths: profile selector, topology selection, metrics, provider details, request tester start/stop, final counters, and horizontal overflow.
