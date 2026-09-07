@@ -276,7 +276,9 @@ config/profiles/
 └── staging.yml      # Subset for testing
 ```
 
-The dashboard lists configured profiles and links to this guide. To add a profile, create its YAML file in `config/profiles/` on each node and restart Lasso, or reload a running release:
+The dashboard lists configured profiles and links to this guide. To add a profile, create its YAML file in the profiles directory on each node and restart Lasso. For containers, follow the [deployment instructions](DEPLOYMENT.md#custom-profiles-and-credentials). In v0.3.4, reload alone can leave a newly added profile's WebSocket subscriptions unavailable.
+
+For YAML edits to existing profiles, reload the running release:
 
 ```bash
 _build/prod/rel/lasso/bin/lasso rpc 'Lasso.Config.ConfigStore.reload()'
@@ -296,7 +298,7 @@ curl -X POST http://localhost:4000/rpc/profile/production/ethereum ...
 
 ## Application-Level Configuration
 
-Set in `config/runtime.exs` or via environment variables. Application configuration changes require a restart; profile YAML uses the reload command above:
+Set in `config/runtime.exs` or via environment variables. Application configuration changes require a restart; edits to existing profile YAML use the reload command above:
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|

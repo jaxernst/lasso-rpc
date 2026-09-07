@@ -122,13 +122,15 @@ traversable by that UID; host directories used for writable history must also be
 writable by UID 10001. Keep credential values in `.env` and reference them as
 `${VARIABLE_NAME}` in provider URLs or headers.
 
-Apply the mount or environment changes:
+Apply new profiles, mount changes, or environment changes:
 
 ```bash
 docker compose up -d --force-recreate --wait
 ```
 
-For subsequent YAML-only changes, reload the running node:
+In v0.3.4, adding a profile through reload alone can leave its WebSocket
+subscriptions unavailable. Recreate the container after adding profiles.
+For YAML-only edits to existing profiles, reload the running node:
 
 ```bash
 docker compose exec -T lasso /app/bin/lasso rpc 'IO.inspect(Lasso.Config.ConfigStore.reload())'
@@ -253,36 +255,45 @@ Clustering does **not** affect routing. Each node makes independent routing deci
 
 ### Requirements
 
-Clustering uses Erlang distribution with DNS-based node discovery (`libcluster`). You need:
-
-1. **DNS service discovery**: A DNS name that resolves to all node IPs (e.g., internal DNS in your orchestrator, Consul, or a headless Kubernetes service)
-2. **Erlang distribution port access**: Nodes must be able to reach each other on the EPMD port (4369) and distribution ports
-3. **Unique node IDs**: Each node needs a distinct `LASSO_NODE_ID`
-4. **Distribution secret**: Set the same private `RELEASE_COOKIE` on the nodes in your cluster; do not rely on a cookie bundled in a distributed image
+- A private DNS A record that resolves to every node's reachable IP address.
+- Named Erlang nodes in the form `lasso@<IP>`, with the same private cookie.
+- Connectivity between nodes on EPMD port 4369 and Erlang distribution ports.
+  Keep these ports private; Docker HTTP port mappings alone do not provide it.
+- A unique, stable `LASSO_NODE_ID` for each instance.
 
 ### Configuration
 
-| Variable | Description |
-|----------|-------------|
-| `CLUSTER_DNS_QUERY` | DNS name resolving to all node IPs (e.g., `lasso.internal`) |
-| `CLUSTER_NODE_BASENAME` | Erlang node basename for distribution (e.g., `lasso`) |
-| `LASSO_NODE_ID` | Unique node identifier (typically region name) |
+For each release/container instance, set:
 
-Both `CLUSTER_DNS_QUERY` and `CLUSTER_NODE_BASENAME` must be set for clustering to activate. If either is missing, the node runs standalone.
+| Variable | Example | Meaning |
+|----------|---------|---------|
+| `RELEASE_DISTRIBUTION` | `name` | Enable long node names |
+| `RELEASE_NODE` | `lasso@10.0.0.11` | This node's name, using its reachable private IP |
+| `RELEASE_COOKIE` | Shared secret | Same private value on every node |
+| `CLUSTER_DNS_QUERY` | `lasso.internal` | DNS A record containing all node IPs |
+| `CLUSTER_NODE_BASENAME` | `lasso` | Must match the name before `@` |
+| `LASSO_NODE_ID` | `us-east-1` | Unique observability identity |
+
+Replace the example IP and DNS name with your network's values. For a second
+node at `10.0.0.12`, use `RELEASE_NODE=lasso@10.0.0.12` and a different
+`LASSO_NODE_ID`; keep the cookie, DNS query, and basename the same. Supply matching
+profile YAML to every node. Recreate nodes after adding profiles; reload each
+node for edits to existing profiles.
+
+In Compose, put these values in each instance's `.env` and recreate its container
+with `docker compose up -d --force-recreate --wait`. Nodes poll DNS every five
+seconds. The deployment network must allow direct access to the IPs in DNS.
+
+Check the running node's name and peers:
 
 ```bash
-# Node in us-east
-export CLUSTER_DNS_QUERY="lasso.internal"
-export CLUSTER_NODE_BASENAME="lasso"
-export LASSO_NODE_ID="us-east-1"
-
-# Node in eu-west
-export CLUSTER_DNS_QUERY="lasso.internal"
-export CLUSTER_NODE_BASENAME="lasso"
-export LASSO_NODE_ID="eu-west-1"
+docker compose exec -T lasso /app/bin/lasso rpc 'IO.inspect({node(), Node.list()})'
 ```
 
-Nodes poll the DNS name every 5 seconds and automatically join the cluster.
+Each node should list the other members. An empty peer list means the node has
+not joined; check names, cookie equality, DNS results, and private connectivity.
+Setting discovery variables alone does not name a VM launched with plain
+`mix phx.server`; the release settings above apply to release/container startup.
 
 ### Geo-Distributed Deployment
 
@@ -324,6 +335,9 @@ The dashboard aggregates data across all nodes for unified observability with re
 |----------|----------|-------------|
 | `CLUSTER_DNS_QUERY` | For clustering | DNS name for node discovery |
 | `CLUSTER_NODE_BASENAME` | For clustering | Erlang distribution node basename |
+| `RELEASE_DISTRIBUTION` | For clustering | Set to `name` for long node names |
+| `RELEASE_NODE` | For clustering | `<basename>@<reachable-private-IP>` |
+| `RELEASE_COOKIE` | Release/container | Private distribution secret; identical across cluster members |
 
 ### Provider Keys
 
@@ -344,4 +358,4 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 - [ ] TLS terminated at reverse proxy / load balancer
 - [ ] Structured JSON log drain configured
 - [ ] RPC and dashboard protected by reverse-proxy authentication or a private network boundary (Lasso OSS has no built-in client authentication)
-- [ ] If clustering: `CLUSTER_DNS_QUERY` and `CLUSTER_NODE_BASENAME` set, Erlang distribution ports open between nodes
+- [ ] If clustering: named nodes, shared cookie, DNS discovery, and private distribution connectivity configured; peers visible in `Node.list()`
