@@ -5,13 +5,23 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   """
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.Config.ConfigStore
   alias Lasso.Providers.LagCalculation
 
   # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
   # Read from application config at runtime
-  defp lag_threshold_blocks do
-    Application.get_env(:lasso, :dashboard_status, [])
-    |> Keyword.get(:lag_threshold_blocks, 10)
+  def lag_threshold_blocks(profile_id, chain_id) do
+    with profile when is_binary(profile) <- profile_id,
+         chain when is_integer(chain) and chain > 0 <- chain_id,
+         {:ok, config} <- ConfigStore.get_chain(profile, chain),
+         threshold when is_integer(threshold) and threshold >= 0 <-
+           config.monitoring.lag_alert_threshold_blocks do
+      threshold
+    else
+      _other ->
+        Application.get_env(:lasso, :dashboard_status, [])
+        |> Keyword.get(:lag_threshold_blocks, 10)
+    end
   end
 
   @doc """
@@ -35,22 +45,31 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   """
   def determine_provider_status(provider) do
     fields = extract_status_fields(provider)
+    circuit_status = transport_circuit_status_from_fields(fields)
+    rate_limit_status = transport_rate_limit_status(fields)
 
     cond do
-      fields.circuit_state == :open ->
+      circuit_status == :open ->
         :circuit_open
 
-      rate_limited?(fields) ->
+      rate_limit_status == :rate_limited ->
         :rate_limited
 
-      fields.circuit_state == :half_open ->
+      circuit_status == :degraded or rate_limit_status == :degraded ->
+        :degraded
+
+      circuit_status == :half_open ->
         :testing_recovery
 
       ws_recovering?(fields) ->
         :recovering
 
       fields.health_status == :healthy ->
-        block_lag_to_status(fields.chain, fields.instance_id || fields.provider_id)
+        block_lag_to_status(
+          fields.chain_id,
+          fields.instance_id || fields.provider_id,
+          fields.profile_id
+        )
 
       fields.health_status in [:unhealthy, :degraded, :misconfigured] ->
         :degraded
@@ -62,7 +81,11 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         :recovering
 
       fields.connection_status == :connected ->
-        block_lag_to_status(fields.chain, fields.instance_id || fields.provider_id)
+        block_lag_to_status(
+          fields.chain_id,
+          fields.instance_id || fields.provider_id,
+          fields.profile_id
+        )
 
       fields.connection_status in [:disconnected, :rate_limited] ->
         :degraded
@@ -72,14 +95,26 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     end
   end
 
+  @doc "Returns the provider-wide circuit state across supported transports."
+  def transport_circuit_status(provider) when is_map(provider) do
+    provider
+    |> extract_status_fields()
+    |> transport_circuit_status_from_fields()
+  end
+
   defp extract_status_fields(provider) do
     %{
       circuit_state: Map.get(provider, :circuit_state, :closed),
+      http_circuit_state: Map.get(provider, :http_circuit_state, :closed),
+      ws_circuit_state: Map.get(provider, :ws_circuit_state, :closed),
+      http_supported: transport_supported?(provider, :http),
+      ws_supported: transport_supported?(provider, :ws),
       health_status: Map.get(provider, :health_status, :unknown),
       connection_status: Map.get(provider, :status, :unknown),
       consecutive_failures: Map.get(provider, :consecutive_failures, 0),
       probe_consecutive_failures: Map.get(provider, :probe_consecutive_failures, 0),
-      chain: Map.get(provider, :chain),
+      chain_id: Map.get(provider, :chain_id),
+      profile_id: Map.get(provider, :profile_id),
       provider_id: Map.get(provider, :id),
       instance_id: Map.get(provider, :instance_id),
       http_rate_limited: Map.get(provider, :http_rate_limited, false),
@@ -90,24 +125,63 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     }
   end
 
-  defp rate_limited?(fields) do
-    fields.http_rate_limited or
-      fields.ws_rate_limited or
-      fields.health_status == :rate_limited or
-      fields.is_in_cooldown
+  defp transport_circuit_status_from_fields(fields) do
+    states =
+      []
+      |> maybe_add_transport(fields.http_supported, fields.http_circuit_state)
+      |> maybe_add_transport(fields.ws_supported, fields.ws_circuit_state)
+
+    cond do
+      states == [] -> fields.circuit_state
+      Enum.all?(states, &(&1 == :open)) -> :open
+      Enum.any?(states, &(&1 == :open)) -> :degraded
+      Enum.any?(states, &(&1 == :half_open)) -> :half_open
+      Enum.any?(states, &(&1 == :unknown)) -> :unknown
+      true -> :closed
+    end
   end
+
+  defp transport_supported?(provider, :http) do
+    is_binary(Map.get(provider, :url)) or Map.get(provider, :type) in [:http, :both]
+  end
+
+  defp transport_supported?(provider, :ws) do
+    is_binary(Map.get(provider, :ws_url)) or Map.get(provider, :type) in [:websocket, :both]
+  end
+
+  defp maybe_add_transport(states, true, state), do: [state | states]
+  defp maybe_add_transport(states, false, _state), do: states
+
+  defp transport_rate_limit_status(fields) do
+    states =
+      []
+      |> maybe_add_transport(fields.http_supported, fields.http_rate_limited)
+      |> maybe_add_transport(fields.ws_supported, fields.ws_rate_limited)
+
+    cond do
+      states != [] and Enum.all?(states) -> :rate_limited
+      Enum.any?(states) -> :degraded
+      states == [] and fallback_rate_limited?(fields) -> :rate_limited
+      true -> :clear
+    end
+  end
+
+  defp fallback_rate_limited?(fields),
+    do:
+      fields.http_rate_limited or fields.ws_rate_limited or
+        fields.health_status == :rate_limited or fields.is_in_cooldown
 
   defp ws_recovering?(fields) do
     fields.reconnect_attempts > 0 and
       fields.ws_status in [:disconnected, :reconnecting]
   end
 
-  defp block_lag_to_status(chain, provider_id) do
-    case check_block_lag(chain, provider_id) do
+  defp block_lag_to_status(chain, provider_id, profile_id) do
+    case check_block_lag(chain, provider_id, profile_id) do
       :synced -> :healthy
       :lagging -> :lagging
-      :degraded_no_data -> :healthy
-      :unavailable -> :healthy
+      :degraded_no_data -> :degraded
+      :unavailable -> :unknown
     end
   end
 
@@ -124,9 +198,11 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   - :degraded_no_data - Block height polling is failing (distinct from startup transient)
   - :unavailable - No lag data available (fail-open for startup/transient)
   """
-  def check_block_lag(chain_id, provider_id)
+  def check_block_lag(chain_id, provider_id), do: check_block_lag(chain_id, provider_id, nil)
+
+  def check_block_lag(chain_id, provider_id, profile_id)
       when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
-    threshold = lag_threshold_blocks()
+    threshold = lag_threshold_blocks(profile_id, chain_id)
 
     if threshold == 0 do
       :synced
@@ -147,7 +223,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
     end
   end
 
-  def check_block_lag(_chain, _provider_id), do: :unavailable
+  def check_block_lag(_chain, _provider_id, _profile_id), do: :unavailable
 
   @doc """
   Calculate optimistic lag that accounts for observation delay.
@@ -206,7 +282,11 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
   @doc "Get provider status label with enhanced classifications"
   def provider_status_label(provider) do
-    case determine_provider_status(provider) do
+    provider |> determine_provider_status() |> status_label()
+  end
+
+  def status_label(status) do
+    case status do
       :circuit_open -> "Circuit Open"
       :testing_recovery -> "Recovering"
       :rate_limited -> "Rate Limited"
@@ -214,7 +294,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       :degraded -> "Degraded"
       :lagging -> "Lagging"
       :healthy -> "Healthy"
-      :unknown -> "Unknown"
+      :unknown -> "Awaiting Evidence"
     end
   end
 
@@ -339,6 +419,13 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   end
 
   @doc "Check if provider status is considered critical"
+  def status_indicator_class(status), do: status_color_scheme(status).dot
+
+  def status_badge_class(status) do
+    scheme = status_color_scheme(status)
+    [scheme.text, scheme.bg_muted, scheme.border]
+  end
+
   def critical_status?(provider) do
     determine_provider_status(provider) == :circuit_open
   end

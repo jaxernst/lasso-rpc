@@ -85,13 +85,8 @@ defmodule Lasso.JSONRPC.Error do
   """
   @spec new(integer(), String.t(), keyword()) :: t()
   def new(code, message, opts \\ []) do
-    # Normalize HTTP 429 to JSON-RPC -32_005 (rate limit code)
-    {normalized_code, original_code} =
-      if code == 429 do
-        {-32_005, code}
-      else
-        {code, Keyword.get(opts, :original_code, code)}
-      end
+    normalized_code = code
+    original_code = Keyword.get(opts, :original_code, code)
 
     data = Keyword.get(opts, :data)
 

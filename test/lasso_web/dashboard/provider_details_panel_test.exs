@@ -18,7 +18,7 @@ defmodule LassoWeb.Dashboard.ProviderDetailsPanelTest do
     {:ok, chain_id: chain_id, instance_id: instance_id}
   end
 
-  test "uses the instance identity to display a consistent estimated height", %{
+  test "shows observed height separately from the time-aligned lag assessment", %{
     chain_id: chain_id,
     instance_id: instance_id
   } do
@@ -41,13 +41,19 @@ defmodule LassoWeb.Dashboard.ProviderDetailsPanelTest do
         chain_id,
         instance_id,
         chain_consensus_height: 1_000,
-        cluster_block_heights: %{{"p1", "iad-node"} => %{height: 990, lag: -3}}
+        cluster_block_heights: %{
+          {"p1", "iad-node"} => %{
+            height: 990,
+            lag: -3,
+            observed_at_ms: System.system_time(:millisecond)
+          }
+        }
       )
 
-    assert html =~ "Estimated Height:"
-    assert html =~ "995"
+    assert html =~ "Block Height:"
+    assert html =~ "990"
     assert html =~ "-5"
-    refute html =~ ">990<"
+    refute html =~ "Estimated Height:"
   end
 
   test "recomputes raw lag against the displayed consensus", %{chain_id: chain_id} do
@@ -56,13 +62,51 @@ defmodule LassoWeb.Dashboard.ProviderDetailsPanelTest do
         chain_id,
         "#{chain_id}:missing:instance",
         chain_consensus_height: 1_000,
-        cluster_block_heights: %{{"p1", "iad-node"} => %{height: 990, lag: -3}}
+        cluster_block_heights: %{
+          {"p1", "iad-node"} => %{
+            height: 990,
+            lag: -3,
+            observed_at_ms: System.system_time(:millisecond)
+          }
+        }
       )
 
     assert html =~ "Block Height:"
     assert html =~ "990"
     assert html =~ "-10"
     refute html =~ ">-3<"
+  end
+
+  test "stale evidence cannot produce a synced height", %{
+    chain_id: chain_id,
+    instance_id: instance_id
+  } do
+    html =
+      draw(chain_id, instance_id,
+        chain_consensus_height: 1_000,
+        cluster_block_heights: %{{"p1", "iad-node"} => %{height: 990, lag: 0, observed_at_ms: 0}}
+      )
+
+    assert html =~ "Block height data unavailable"
+    refute html =~ "Synced"
+  end
+
+  test "fresh local height survives an incomplete regional observation", %{
+    chain_id: chain_id,
+    instance_id: instance_id
+  } do
+    html =
+      draw(chain_id, instance_id,
+        connection: %{
+          block_observed_at_ms: System.system_time(:millisecond),
+          block_stale_after_ms: 60_000
+        },
+        cluster_block_heights: %{{"p1", "iad-node"} => %{height: 999, lag: 0}}
+      )
+
+    assert html =~ "Block Height:"
+    assert html =~ "990"
+    refute html =~ "Block height data unavailable"
   end
 
   defp draw(chain_id, instance_id, opts) do
@@ -78,6 +122,9 @@ defmodule LassoWeb.Dashboard.ProviderDetailsPanelTest do
       consensus_height: 1_000,
       blocks_behind: 10
     }
+
+    connection = Map.merge(connection, Keyword.get(opts, :connection, %{}))
+    opts = Keyword.delete(opts, :connection)
 
     base = %{
       id: "provider-details-p1",

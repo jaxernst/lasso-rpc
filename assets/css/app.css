@@ -12,13 +12,59 @@ body {
   min-height: 100vh;
 }
 
+/* `100vh` on iOS is the toolbars-hidden viewport, so it reserves more height
+   than is actually visible and leaves the surplus scrollable. */
+@supports (min-height: 100dvh) {
+  body {
+    min-height: 100dvh;
+  }
+}
+
+/* The dashboard is a fixed app shell rather than a document: nothing outside
+   it should scroll, so a drag that escapes the bottom sheet has nowhere to
+   chain to. Scrolling pages are unaffected. */
+body:has(.lasso-app-shell) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/*
+ * The canvas stays hidden until DraggableNetworkViewport has computed its
+ * centering transform, so the first paint never shows an un-framed topology.
+ * The reveal is a class on the document element rather than an inline style on
+ * the canvas: morphdom syncs attributes from the template on every patch and
+ * would strip a JS-applied style, blanking the canvas for a frame each time.
+ * Nothing outside the LiveView container is patched, so the class survives.
+ */
+.network-canvas {
+  width: 4000px;
+  height: 3000px;
+  opacity: 0;
+  transform: var(--lasso-topology-transform);
+  transform-origin: 0 0;
+}
+
+html.topology-framed .network-canvas {
+  opacity: 1;
+}
+
 .grid-pattern {
   background-image: radial-gradient(
     circle at 1px 1px,
-    rgba(255, 255, 255, 0.15) 1px,
+    rgba(209, 213, 219, 0.09) 1px,
     transparent 0
   );
-  background-size: 20px 20px;
+  background-size: 22px 22px;
+}
+
+.lasso-live-grid {
+  background-color: #19202e;
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(209, 213, 219, 0.09) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
 }
 
 /* Custom animations for network visualization */
@@ -41,7 +87,10 @@ body {
 
 /* Network topology enhancements */
 .network-node {
-  transition: transform 0.3s ease, box-shadow 0.3s ease, filter 0.3s ease;
+  transition:
+    transform 0.3s ease,
+    box-shadow 0.3s ease,
+    filter 0.3s ease;
 }
 
 .network-node:hover {
@@ -50,7 +99,9 @@ body {
 }
 
 .connection-line {
-  transition: stroke-width 0.3s ease, stroke 0.3s ease;
+  transition:
+    stroke-width 0.3s ease,
+    stroke 0.3s ease;
 }
 
 /* Pulse animation for live indicators */
@@ -68,6 +119,271 @@ body {
 
 .animate-pulse-custom {
   animation: pulse-custom 2s ease-in-out infinite;
+}
+
+/* Rotating spinner around an in-flight provider pin on the topology canvas.
+   Injected by `NetworkTopologyStatus.toggleProbingAffordance` in app.js. The
+   ring is a div with transparent borders except top + right, which together
+   render as half an outline; rotating it produces the spinner. */
+@keyframes lassoProbeSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+[data-probing-ring] {
+  position: absolute;
+  z-index: 1;
+  inset: 4px;
+  border-radius: 2px;
+  border: 1.5px solid transparent;
+  border-top-color: rgba(56, 189, 248, 0.9);
+  border-right-color: rgba(56, 189, 248, 0.9);
+  animation: lassoProbeSpin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+
+/* Chain modules and provider pins.
+
+   A chain is a flat rounded module carrying its own colour on the border and on
+   a chip beside its label; its providers attach as solid pads on the four edges,
+   joined by axis-aligned connectors drawn in the SVG layer beneath. Status
+   colour lives on the pads and their connectors, chain colour lives on the
+   module, so the two palettes never compete for the same pixel.
+
+   The block height in the bottom-right corner is filled in by
+   `NetworkTopologyStatus.applyChainBlocks` in app.js, which keeps a value that
+   changes every few seconds on every chain out of the LiveView diff. */
+.chain-module {
+  /* The background tint is pulled toward slate before it is mixed into
+     near-black, so the module carries the chain's hue at low saturation rather
+     than reading as a coloured panel. Border and chip keep the colour at full
+     strength; they are the identity, the background is only the theming. */
+  --chain-tint: color-mix(in srgb, var(--chain-color) 55%, #6b7686);
+
+  padding: 12px 14px;
+  border-radius: 14px;
+  /* Dashes cover roughly half the perimeter, so the colour is stepped up to
+     keep the frame reading at the same weight as a solid one. */
+  border: 1.5px dashed color-mix(in srgb, var(--chain-color) 55%, transparent);
+  background-color: color-mix(in srgb, var(--chain-tint) 14%, #0d1118);
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.chain-module:hover {
+  border-color: color-mix(in srgb, var(--chain-color) 80%, transparent);
+  background-color: color-mix(in srgb, var(--chain-tint) 19%, #0d1118);
+}
+
+.chain-module[data-selected="true"] {
+  border-color: var(--chain-color);
+  background-color: color-mix(in srgb, var(--chain-tint) 23%, #0d1118);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chain-color) 22%, transparent);
+}
+
+.chain-module-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+}
+
+/* Colour chip is only the unknown-chain fallback. Known marks sit as
+   transparent SVGs on the module — no plate behind them. */
+.chain-module-chip {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background-color: var(--chain-color);
+}
+
+.chain-module-logo {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.chain-module-label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.chain-module-name {
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.012em;
+  color: #fff;
+}
+
+.chain-module-id {
+  margin-top: 2px;
+  font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.chain-module-block {
+  position: absolute;
+  right: 13px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 1;
+  transition: opacity 200ms ease;
+}
+
+/* Hidden until a height has actually arrived. Keyed off the readout being
+   empty rather than a JS-applied class, because LiveView re-syncs container
+   attributes on patch and would put such a class straight back. */
+.chain-module-block:has(.chain-module-block-height:empty) {
+  opacity: 0;
+}
+
+/* Quiet at rest, with a single pulse on each new head so the module reads as
+   live without anything blinking continuously. */
+.chain-module-block-tick {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background-color: rgba(148, 163, 184, 0.45);
+  transition: background-color 500ms ease;
+}
+
+.chain-module-block-height {
+  font-size: 9px;
+  font-weight: 400;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.38);
+  transition: color 500ms ease;
+}
+
+.chain-module-block.is-advancing .chain-module-block-tick {
+  background-color: rgba(52, 211, 153, 0.9);
+  transition: background-color 90ms ease;
+}
+
+.chain-module-block.is-advancing .chain-module-block-height {
+  color: rgba(255, 255, 255, 0.78);
+  transition: color 90ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chain-module-block-tick,
+  .chain-module-block-height {
+    transition: none;
+  }
+}
+
+/* The pin is a 26px hit target around a 10px pad, so the click area stays
+   comfortable without inflating the mark. The pad is an open square ring: the
+   status colour reads from the stroke and the canvas shows through the middle,
+   which keeps a dense edge of pins from turning into a row of solid blobs. */
+.provider-pin {
+  --pad-color: #6b7280;
+
+  display: flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+}
+
+.provider-pad {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1.5px solid var(--pad-color);
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    background-color 120ms ease;
+}
+
+.provider-pin:not(.provider-pin-static):hover .provider-pad {
+  transform: scale(1.3);
+  background-color: color-mix(in srgb, var(--pad-color) 30%, transparent);
+}
+
+.provider-pin[data-selected="true"] .provider-pad {
+  background-color: color-mix(in srgb, var(--pad-color) 40%, transparent);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+/* Provider name labels live in their own layer rendered after the modules and
+   pins so they stack above them, and pointer-events: none keeps clicks falling
+   through to the pins below. */
+.provider-labels-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
+
+/* Each label is positioned at its pin's canvas coordinates via inline left/top,
+   then pushed clear of the pad along the edge the pin sits on: horizontal-edge
+   pins get their name above or below, vertical-edge pins get it out to the side
+   where it has room to run.
+
+   Visible when the canvas root has `.labels-visible` (toggled by the
+   DraggableNetworkViewport hook past the zoom threshold), or for a single
+   hovered label via a rule NetworkTopologyStatus publishes to the document
+   head. */
+.provider-label {
+  --label-gap: 11px;
+
+  position: absolute;
+  padding: 1px 5px;
+  font-size: 9px;
+  line-height: 1.2;
+  font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: rgb(228 228 231); /* zinc-200 */
+  background-color: rgba(24, 24, 27, 0.88); /* zinc-900/88 */
+  border-radius: 3px;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+  letter-spacing: 0.01em;
+}
+
+.provider-label-top {
+  transform: translate(-50%, -100%) translateY(calc(var(--label-gap) * -1));
+}
+
+.provider-label-bottom {
+  transform: translate(-50%, 0) translateY(var(--label-gap));
+}
+
+.provider-label-left {
+  transform: translate(-100%, -50%) translateX(calc(var(--label-gap) * -1));
+}
+
+.provider-label-right {
+  transform: translate(0, -50%) translateX(var(--label-gap));
+}
+
+[data-network-canvas].labels-visible .provider-label {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-label {
+    transition: none;
+  }
 }
 
 /* Endpoint selector button states (data-attribute driven) */
@@ -134,4 +450,12 @@ body {
 [data-provider][data-state="inactive"]:hover {
   border-color: rgb(129 140 248); /* indigo-400 */
   color: rgb(165 180 252); /* indigo-300 */
+}
+
+/* Inputs that shrink to fit their content. Used so the trailing
+   pencil affordance hugs the editable text instead of floating
+   off at the far right edge of a full-width input. */
+.lasso-fit-input {
+  field-sizing: content;
+  min-width: 4ch;
 }

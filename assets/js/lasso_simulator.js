@@ -20,18 +20,47 @@ function updateAvg(avg, count, value) {
   return avg + (value - avg) / n;
 }
 
+function emptyWsStats() {
+  return { open: 0, pending: 0, established: 0, error: 0 };
+}
+
+function selectedProviderFromResponse(response) {
+  const encoded = response.headers.get("x-lasso-meta");
+  if (!encoded) return null;
+
+  try {
+    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = "=".repeat((4 - (normalized.length % 4)) % 4);
+    const bytes = Uint8Array.from(atob(normalized + padding), (char) =>
+      char.charCodeAt(0)
+    );
+    const metadata = JSON.parse(new TextDecoder().decode(bytes));
+    const provider = metadata.selected_provider;
+
+    if (typeof provider === "string") return provider;
+    if (provider && typeof provider.id === "string") return provider.id;
+  } catch (_error) {
+    return null;
+  }
+
+  return null;
+}
+
 function generateId() {
   return `run_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
 // SimulatorRun class - represents a single simulation run
 class SimulatorRun {
-  constructor(config) {
+  constructor(config, onStopped) {
     this.id = config.id || generateId();
     this.config = { ...config };
+    this.onStopped = onStopped;
     this.state = RunState.STARTING;
     this.startTime = Date.now();
     this.endTime = null;
+    this.durationTimer = null;
+    this.stopDrainTimer = null;
 
     // HTTP state
     this.httpController = null;
@@ -39,11 +68,19 @@ class SimulatorRun {
 
     // WebSocket state
     this.wsSockets = [];
+    this.wsPendingSubscriptions = new Map();
+    this.nextWsRequestId = 1;
 
     // Per-run statistics
     this.stats = {
-      http: { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 },
-      ws: { open: 0 },
+      http: {
+        success: 0,
+        error: 0,
+        limited: 0,
+        avgLatencyMs: 0,
+        inflight: 0,
+      },
+      ws: emptyWsStats(),
     };
   }
 
@@ -66,10 +103,10 @@ class SimulatorRun {
 
     // Set duration timeout if specified
     if (this.config.duration > 0) {
-      setTimeout(() => this.stop(), this.config.duration);
+      this.durationTimer = setTimeout(() => this.stop(), this.config.duration);
     }
 
-    this._logActivity("run", { status: "started", config: this.config });
+    this._logActivity("run", { status: "started" });
   }
 
   stop() {
@@ -80,21 +117,53 @@ class SimulatorRun {
     this.state = RunState.STOPPING;
     this.endTime = Date.now();
 
+    if (this.durationTimer) {
+      clearTimeout(this.durationTimer);
+      this.durationTimer = null;
+    }
+
     // Stop HTTP load
     this._stopHttpLoad();
 
     // Stop WebSocket load
     this._stopWsLoad();
 
+    this._finishStopWhenDrained();
+  }
+
+  _finishStopWhenDrained() {
+    if (this.state !== RunState.STOPPING) return;
+
+    if (this.stats.http.inflight > 0) {
+      if (!this.stopDrainTimer) {
+        this.stopDrainTimer = setTimeout(() => this._finalizeStop(), 5000);
+      }
+      return;
+    }
+
+    this._finalizeStop();
+  }
+
+  _finalizeStop() {
+    if (this.state !== RunState.STOPPING) return;
+
+    if (this.stopDrainTimer) {
+      clearTimeout(this.stopDrainTimer);
+      this.stopDrainTimer = null;
+    }
+
+    this.stats.http.inflight = 0;
     this.state = RunState.STOPPED;
     this._logActivity("run", {
       status: "stopped",
       duration: this.endTime - this.startTime,
+      stats: this.getStats(),
     });
+    this.onStopped(this.id);
   }
 
   isActive() {
-    return this.state === RunState.RUNNING || this.state === RunState.STARTING;
+    return this.state !== RunState.STOPPED;
   }
 
   getStats() {
@@ -120,13 +189,19 @@ class SimulatorRun {
         ? rawStrategy
         : null;
 
-    this.stats.http = { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 };
+    this.stats.http = {
+      success: 0,
+      error: 0,
+      limited: 0,
+      avgLatencyMs: 0,
+      inflight: 0,
+    };
 
     const intervalMs = Math.max(50, Math.floor(1000 / Math.max(1, rps)));
     this.httpController = { stopped: false };
 
     const fireOnce = async () => {
-      if (this.httpController.stopped || this.state !== RunState.RUNNING)
+      if (!this.httpController || this.httpController.stopped || this.state !== RunState.RUNNING)
         return;
       if (this.stats.http.inflight >= concurrency) return;
 
@@ -143,21 +218,11 @@ class SimulatorRun {
             : [],
       };
 
-      // Use strategy-specific endpoints as defined in the router
-      // strategy is already normalized to null if invalid at the top of _startHttpLoad
       const profile = this.config.profile || "public";
-      const apiKey = this.config.api_key;
-      let url = strategy
-        ? `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
-            strategy
-          )}/${encodeURIComponent(chain)}`
-        : `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
-            chain
-          )}`;
-      // Append API key if available
-      if (apiKey) {
-        url = `${url}?key=${encodeURIComponent(apiKey)}`;
-      }
+      const headers = { "Content-Type": "application/json" };
+      const url = strategy
+        ? `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(strategy)}/${encodeURIComponent(chain)}`
+        : `/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(chain)}`;
 
       this.stats.http.inflight++;
       const start = now();
@@ -166,27 +231,29 @@ class SimulatorRun {
         method,
         chain,
         status: "started",
-        url,
         runId: this.id,
       });
 
       try {
         const resp = await fetch(url, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(body),
         });
 
-        const _json = await resp.json().catch(() => null);
+        const json = await resp.json().catch(() => null);
         const dur = now() - start;
+        const provider = selectedProviderFromResponse(resp);
 
         this.stats.http.avgLatencyMs = updateAvg(
           this.stats.http.avgLatencyMs,
-          this.stats.http.success + this.stats.http.error,
+          this.stats.http.success +
+            this.stats.http.error +
+            this.stats.http.limited,
           dur
         );
 
-        if (resp.ok) {
+        if (resp.ok && json?.jsonrpc === "2.0" && json.id === body.id && Object.hasOwn(json, "result") && !Object.hasOwn(json, "error")) {
           this.stats.http.success++;
           this._logActivity("http", {
             method,
@@ -194,6 +261,7 @@ class SimulatorRun {
             status: "success",
             latency: Math.round(dur),
             statusCode: resp.status,
+            provider,
             runId: this.id,
           });
         } else {
@@ -204,6 +272,9 @@ class SimulatorRun {
             status: "error",
             latency: Math.round(dur),
             statusCode: resp.status,
+            errorCode: json?.error?.code,
+            error: json?.error?.message,
+            provider,
             runId: this.id,
           });
         }
@@ -211,7 +282,9 @@ class SimulatorRun {
         const dur = now() - start;
         this.stats.http.avgLatencyMs = updateAvg(
           this.stats.http.avgLatencyMs,
-          this.stats.http.success + this.stats.http.error,
+          this.stats.http.success +
+            this.stats.http.error +
+            this.stats.http.limited,
           dur
         );
         this.stats.http.error++;
@@ -224,7 +297,10 @@ class SimulatorRun {
           runId: this.id,
         });
       } finally {
-        this.stats.http.inflight--;
+        this.stats.http.inflight = Math.max(0, this.stats.http.inflight - 1);
+        if (this.state === RunState.STOPPING) {
+          this._finishStopWhenDrained();
+        }
       }
     };
 
@@ -248,23 +324,19 @@ class SimulatorRun {
     const connections = wsConfig.connections || 2;
     const topics = wsConfig.topics || ["newHeads"];
 
-    this.stats.ws.open = 0;
+    this.stats.ws = emptyWsStats();
     this.wsSockets = [];
+    this.wsPendingSubscriptions.clear();
 
     for (let i = 0; i < connections; i++) {
       const chain = chains[i % chains.length];
       const profile = this.config.profile || "public";
-      const apiKey = this.config.api_key;
       let url = `${location.origin.replace(
         /^http/,
         "ws"
       )}/ws/rpc/profile/${encodeURIComponent(profile)}/${encodeURIComponent(
         chain
       )}`;
-      // Append API key if available
-      if (apiKey) {
-        url = `${url}?key=${encodeURIComponent(apiKey)}`;
-      }
       const ws = new WebSocket(url);
 
       ws.onopen = () => {
@@ -272,30 +344,43 @@ class SimulatorRun {
         this._logActivity("websocket", {
           chain,
           status: "connected",
-          url,
           runId: this.id,
         });
 
         for (const topic of topics) {
+          const requestId = this.nextWsRequestId++;
           const subscribeMsg = {
             jsonrpc: "2.0",
-            id: Math.floor(Math.random() * 1e9),
+            id: requestId,
             method: "eth_subscribe",
             params: [topic],
           };
-          ws.send(JSON.stringify(subscribeMsg));
 
-          this._logActivity("websocket", {
-            method: "eth_subscribe",
-            chain,
-            status: "subscribed",
-            topic,
-            runId: this.id,
-          });
+          this.wsPendingSubscriptions.set(requestId, { ws, chain, topic });
+          this.stats.ws.pending++;
+
+          try {
+            ws.send(JSON.stringify(subscribeMsg));
+
+            this._logActivity("websocket", {
+              method: "eth_subscribe",
+              chain,
+              status: "pending",
+              topic,
+              requestId,
+              runId: this.id,
+            });
+          } catch (error) {
+            this._finishWsSubscription(requestId, {
+              status: "rejected",
+              error: error.message || "Failed to send subscription request",
+            });
+          }
         }
       };
 
       ws.onclose = () => {
+        this._rejectPendingForSocket(ws);
         this.stats.ws.open = Math.max(0, this.stats.ws.open - 1);
         this._logActivity("websocket", {
           chain,
@@ -314,23 +399,7 @@ class SimulatorRun {
       };
 
       ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this._logActivity("websocket", {
-            chain,
-            status: "message",
-            method: data.method || "notification",
-            id: data.id,
-            runId: this.id,
-          });
-        } catch (e) {
-          this._logActivity("websocket", {
-            chain,
-            status: "message",
-            method: "raw_data",
-            runId: this.id,
-          });
-        }
+        this._handleWsMessage(ws, chain, event.data);
       };
 
       this.wsSockets.push(ws);
@@ -344,7 +413,91 @@ class SimulatorRun {
       } catch (_e) {}
     }
     this.wsSockets = [];
+    this.wsPendingSubscriptions.clear();
+    this.stats.ws.pending = 0;
     this.stats.ws.open = 0;
+  }
+
+  _handleWsMessage(ws, chain, rawData) {
+    let data;
+
+    try {
+      data = JSON.parse(rawData);
+    } catch (_error) {
+      this._logActivity("websocket", {
+        chain,
+        status: "message",
+        method: "raw_data",
+        runId: this.id,
+      });
+      return;
+    }
+
+    if (this.wsPendingSubscriptions.has(data.id)) {
+      if (typeof data.result === "string" && data.result.length > 0) {
+        this._finishWsSubscription(data.id, {
+          status: "established",
+          subscriptionId: data.result,
+        });
+      } else {
+        this._finishWsSubscription(data.id, {
+          status: "rejected",
+          errorCode: data.error?.code,
+          error: data.error?.message || "Subscription establishment failed",
+        });
+      }
+
+      return;
+    }
+
+    if (data.method === "eth_subscription") {
+      this._logActivity("websocket", {
+        chain,
+        status: "notification",
+        method: data.method,
+        subscriptionId: data.params?.subscription,
+        runId: this.id,
+      });
+      return;
+    }
+
+    this._logActivity("websocket", {
+      chain,
+      status: "message",
+      method: data.method || "response",
+      id: data.id,
+      runId: this.id,
+    });
+  }
+
+  _finishWsSubscription(requestId, outcome) {
+    const request = this.wsPendingSubscriptions.get(requestId);
+    if (!request) return;
+
+    this.wsPendingSubscriptions.delete(requestId);
+    this.stats.ws.pending = Math.max(0, this.stats.ws.pending - 1);
+    if (outcome.status === "established") this.stats.ws.established++;
+    if (outcome.status === "rejected") this.stats.ws.error++;
+
+    this._logActivity("websocket", {
+      ...outcome,
+      method: "eth_subscribe",
+      chain: request.chain,
+      topic: request.topic,
+      requestId,
+      runId: this.id,
+    });
+  }
+
+  _rejectPendingForSocket(ws) {
+    for (const [requestId, request] of this.wsPendingSubscriptions) {
+      if (request.ws !== ws) continue;
+
+      this._finishWsSubscription(requestId, {
+        status: "rejected",
+        error: "Connection closed before subscription establishment",
+      });
+    }
   }
 
   _logActivity(type, data) {
@@ -366,27 +519,16 @@ class SimulatorManager {
   }
 
   startRun(config) {
-    const run = new SimulatorRun(config);
+    const run = new SimulatorRun(config, (runId) => this.runs.delete(runId));
     this.runs.set(run.id, run);
 
     try {
       run.start();
       return run;
     } catch (error) {
-      this.runs.delete(run.id);
+      run.stop();
       throw error;
     }
-  }
-
-  stopRun(runId) {
-    const run = this.runs.get(runId);
-    if (run) {
-      run.stop();
-      // Keep run in registry for a moment to allow final stats collection
-      setTimeout(() => this.runs.delete(runId), 1000);
-      return true;
-    }
-    return false;
   }
 
   stopAllRuns() {
@@ -396,14 +538,6 @@ class SimulatorManager {
         run.stop();
       }
     }
-    // Clean up stopped runs after a delay
-    setTimeout(() => {
-      for (const [runId, run] of this.runs.entries()) {
-        if (run.state === RunState.STOPPED) {
-          this.runs.delete(runId);
-        }
-      }
-    }, 1000);
   }
 
   isRunning() {
@@ -414,14 +548,16 @@ class SimulatorManager {
     return Array.from(this.runs.values()).filter((run) => run.isActive());
   }
 
-  getAllRuns() {
-    return Array.from(this.runs.values());
-  }
-
   getAggregateStats() {
     const aggregate = {
-      http: { success: 0, error: 0, avgLatencyMs: 0, inflight: 0 },
-      ws: { open: 0 },
+      http: {
+        success: 0,
+        error: 0,
+        limited: 0,
+        avgLatencyMs: 0,
+        inflight: 0,
+      },
+      ws: emptyWsStats(),
     };
 
     const activeRuns = this.getActiveRuns();
@@ -436,10 +572,15 @@ class SimulatorManager {
       const stats = run.getStats();
       aggregate.http.success += stats.http.success;
       aggregate.http.error += stats.http.error;
+      aggregate.http.limited += stats.http.limited;
       aggregate.http.inflight += stats.http.inflight;
       aggregate.ws.open += stats.ws.open;
+      aggregate.ws.pending += stats.ws.pending;
+      aggregate.ws.established += stats.ws.established;
+      aggregate.ws.error += stats.ws.error;
 
-      const httpCalls = stats.http.success + stats.http.error;
+      const httpCalls =
+        stats.http.success + stats.http.error + stats.http.limited;
       totalLatency += stats.http.avgLatencyMs * httpCalls;
       totalHttpCalls += httpCalls;
     }
@@ -463,14 +604,9 @@ function getDefaultChains() {
   return ["ethereum"]; // Ethereum mainnet as fallback
 }
 
-// Public API functions that maintain backward compatibility
 export function setAvailableChains(chains) {
   availableChains = chains;
   console.log("Simulator: Set available chains to:", availableChains);
-}
-
-export function getAvailableChains() {
-  return availableChains;
 }
 
 export function setActivityCallback(callback) {
@@ -478,77 +614,10 @@ export function setActivityCallback(callback) {
   console.log("Simulator: Activity callback set");
 }
 
-// Backward compatibility functions - convert to new run-based API
-export function startHttpLoad(opts = {}) {
-  // Stop any existing runs first to maintain old behavior
-  simulator.stopAllRuns();
-
-  // Normalize strategy: ensure undefined/null/empty becomes a valid strategy or omitted
-  let strategy = opts.strategy;
-  if (
-    !strategy ||
-    strategy === "undefined" ||
-    strategy === "null" ||
-    typeof strategy !== "string"
-  ) {
-    strategy = null; // Will use default routing on backend
-  }
-
-  const config = {
-    chains: opts.chains || getDefaultChains(),
-    duration: opts.durationMs || 30000,
-    http: {
-      enabled: true,
-      methods: opts.methods || ["eth_blockNumber"],
-      rps: opts.rps || 5,
-      concurrency: opts.concurrency || 4,
-    },
-    ws: {
-      enabled: false,
-    },
-  };
-
-  // Only include strategy if it's valid
-  if (strategy) {
-    config.strategy = strategy;
-  }
-
-  return simulator.startRun(config);
-}
-
-export function stopHttpLoad() {
-  simulator.stopAllRuns();
-}
-
-export function startWsLoad(opts = {}) {
-  // Stop any existing runs first to maintain old behavior
-  simulator.stopAllRuns();
-
-  const config = {
-    chains: opts.chains || getDefaultChains(),
-    duration: opts.durationMs || 30000,
-    http: {
-      enabled: false,
-    },
-    ws: {
-      enabled: true,
-      connections: opts.connections || 2,
-      topics: opts.topics || ["newHeads"],
-    },
-  };
-
-  return simulator.startRun(config);
-}
-
-export function stopWsLoad() {
-  simulator.stopAllRuns();
-}
-
 export function activeStats() {
   return simulator.getAggregateStats();
 }
 
-// New API functions for enhanced control
 export function isRunning() {
   return simulator.isRunning();
 }
@@ -557,22 +626,6 @@ export function startRun(config) {
   return simulator.startRun(config);
 }
 
-export function stopRun(runId) {
-  return simulator.stopRun(runId);
-}
-
 export function stopAllRuns() {
   return simulator.stopAllRuns();
-}
-
-export function getActiveRuns() {
-  return simulator.getActiveRuns();
-}
-
-export function getAllRuns() {
-  return simulator.getAllRuns();
-}
-
-export function getSimulator() {
-  return simulator;
 }

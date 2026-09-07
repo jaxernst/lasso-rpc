@@ -4,6 +4,36 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   alias Lasso.Core.Support.ErrorClassification
   alias Lasso.Core.Support.ErrorClassifier
 
+  test "quota exhaustion requires exhaustion evidence, not a mention of quota or billing" do
+    for message <- [
+          "quota service unavailable",
+          "daily maintenance window",
+          "monthly report could not be generated",
+          "rate limit exceeded for this plan",
+          "monthly quota information is unavailable",
+          "Your monthly quota is not exhausted",
+          "Your monthly quota is not currently exhausted",
+          "Your monthly quota isn't currently exhausted",
+          "Your monthly quota does not appear to have been exceeded",
+          "You have not exceeded your daily quota",
+          "Credits are not depleted",
+          "Your monthly quota has not yet been exhausted"
+        ] do
+      refute ErrorClassification.quota_exhausted?(message), message
+    end
+
+    for message <- [
+          "Daily request limit exceeded",
+          "Monthly capacity limit exceeded",
+          "You've reached your monthly quota of Request Units (RUs).",
+          "insufficient credits for this request",
+          "exceeded your plan allowance",
+          "Daily quota is not exhausted, but monthly quota is exhausted"
+        ] do
+      assert ErrorClassification.quota_exhausted?(message), message
+    end
+  end
+
   describe "categorize/2" do
     test "classifies LlamaRPC block range error as capability violation" do
       category =
@@ -23,11 +53,11 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert category == :capability_violation
     end
 
-    test "classifies PublicNode error code -32_701 as capability violation even without message" do
+    test "does not infer PublicNode capability from an undocumented bare code" do
       %{category: category} =
         ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
 
-      assert category == :capability_violation
+      assert category == :unknown_error
     end
 
     test "classifies regular internal error as internal error" do
@@ -35,14 +65,50 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert category == :internal_error
     end
 
-    test "classifies DRPC unsupported subscription code as server_error" do
+    test "classifies an explicit unsupported subscription as a capability constraint" do
       category = ErrorClassification.categorize(23, "Unsupported subscription: newHeads")
-      assert category == :server_error
+      assert category == :capability_violation
     end
 
     test "classifies rate limit error correctly" do
       category = ErrorClassification.categorize(429, "Rate limit exceeded")
       assert category == :rate_limit
+    end
+
+    test "classifies a provider monthly request allowance as a rate limit" do
+      category =
+        ErrorClassification.categorize(37, "User monthly free request limit has been reached")
+
+      assert category == :rate_limit
+    end
+
+    test "classifies a monthly capacity response as definitive provider capacity" do
+      message =
+        "Monthly capacity limit exceeded. Visit the provider dashboard to upgrade your scaling policy."
+
+      assert ErrorClassification.categorize_with_path(429, message) ==
+               {:rate_limit, :definitive_capacity_message}
+    end
+
+    test "classifies a plan usage allowance as a rate limit without trusting its code" do
+      category =
+        ErrorClassification.categorize(
+          -32_001,
+          "You've reached the usage limit for your current plan."
+        )
+
+      assert category == :rate_limit
+    end
+
+    test "classifies an unavailable free-plan chain as provider capacity" do
+      category =
+        ErrorClassification.categorize(
+          35,
+          "chain is not available on free plan, please upgrade to paid plan"
+        )
+
+      assert category == :rate_limit
+      assert ErrorClassification.categorize(35, nil) == :unknown_error
     end
 
     test "classifies result size violation as capability violation (provider-specific limit)" do
@@ -85,11 +151,11 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert retriable == true
     end
 
-    test "PublicNode error code -32_701 is retriable even without message" do
+    test "bare undocumented PublicNode code supplies no retry contract" do
       %{retriable?: retriable?} =
         ErrorClassifier.classify(-32_701, nil, provider_id: "ethereum_publicnode")
 
-      assert retriable? == true
+      assert retriable? == false
     end
 
     test "rate limits are retriable" do
@@ -217,35 +283,51 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert classification.control_category == :rate_limit
     end
 
-    test "telemetry exposes only one-way response evidence" do
-      test_pid = self()
-      handler_id = "bounded-error-evidence-#{System.unique_integer([:positive])}"
+    test "free-plan capacity evidence outranks a generic provider code rule" do
+      capabilities = %{
+        error_rules: [%{code: 35, category: :capability_violation}]
+      }
 
-      :ok =
-        :telemetry.attach(
-          handler_id,
-          [:lasso, :error_classification, :classified],
-          fn _event, _measurements, metadata, _config ->
-            send(test_pid, {:classification_metadata, metadata})
-          end,
-          nil
+      classification =
+        ErrorClassifier.classify(
+          35,
+          "chain is not available on free plan, please upgrade to paid plan",
+          provider_id: "premium_sep_1",
+          provider_capabilities: capabilities,
+          shared_instance?: true
         )
 
-      on_exit(fn -> :telemetry.detach(handler_id) end)
+      assert classification.category == :rate_limit
+      assert classification.control_category == :rate_limit
+      assert classification.retriable?
+      refute classification.breaker_penalty?
 
-      ErrorClassifier.classify(
-        -32_000,
-        "unknown upstream failure api_key=do-not-export 12345",
-        data: "0xdeadbeef-do-not-export",
-        provider_id: "custom-provider"
-      )
+      assert %{category: :capability_violation} =
+               ErrorClassifier.classify(35, "requested method is not available",
+                 provider_id: "premium_sep_1",
+                 provider_capabilities: capabilities,
+                 shared_instance?: true
+               )
+    end
 
-      assert_receive {:classification_metadata, metadata}
-      assert byte_size(metadata.message_fingerprint) == 64
-      assert metadata.data_kind == :binary
-      refute Map.has_key?(metadata, :message)
-      refute Map.has_key?(metadata, :data_sample)
-      refute inspect(metadata) =~ "do-not-export"
+    test "monthly capacity evidence outranks a positive provider code rule" do
+      capabilities = %{
+        error_rules: [%{code: 429, category: :capability_violation}]
+      }
+
+      classification =
+        ErrorClassifier.classify(
+          429,
+          "Monthly capacity limit exceeded. Upgrade your scaling policy for continued service.",
+          provider_id: "premium_unichain_1",
+          provider_capabilities: capabilities,
+          shared_instance?: true
+        )
+
+      assert classification.category == :rate_limit
+      assert classification.control_category == :rate_limit
+      assert classification.retriable?
+      refute classification.breaker_penalty?
     end
   end
 
@@ -327,7 +409,7 @@ defmodule Lasso.RPC.ErrorClassificationTest do
     test "-32601 classifies as method_not_found even with 'not available' in message" do
       msg = "The method eth_fooBarBaz does not exist/is not available"
       assert ErrorClassification.categorize(-32_601, msg) == :method_not_found
-      assert ErrorClassification.retriable?(-32_601, msg) == false
+      assert ErrorClassification.retriable?(-32_601, msg) == true
     end
 
     test "-32601 with 'not supported' message still classifies as method_not_found" do
@@ -376,13 +458,13 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert ErrorClassification.categorize(-32_000, nil) == :unclassified_server_error
     end
 
-    test "-32001 through -32099 still return :server_error (retriable)" do
-      assert ErrorClassification.categorize(-32_001, nil) == :server_error
-      assert ErrorClassification.categorize(-32_050, nil) == :server_error
-      assert ErrorClassification.categorize(-32_099, nil) == :server_error
+    test "extension fallbacks distinguish resource rejection from opaque application errors" do
+      assert ErrorClassification.categorize(-32_001, nil) == :block_not_available
+      assert ErrorClassification.categorize(-32_050, nil) == :unclassified_server_error
+      assert ErrorClassification.categorize(-32_099, nil) == :unclassified_server_error
 
       assert ErrorClassification.retriable?(-32_001, nil) == true
-      assert ErrorClassification.retriable?(-32_050, nil) == true
+      assert ErrorClassification.retriable?(-32_050, nil) == false
     end
 
     test "transient patterns under -32000 still classify as :server_error" do
@@ -411,9 +493,73 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       assert ErrorClassification.provider_health_failure?(:unclassified_server_error) == false
     end
 
-    test "execution evidence outranks transient provider wording" do
-      msg = "execution reverted, please retry"
-      assert ErrorClassification.categorize(-32_000, msg) == :execution_revert
+    test "explicit execution revert evidence outranks broad provider substrings" do
+      for message <- [
+            "execution reverted, please retry",
+            "execution reverted: access denied",
+            "execution reverted: rate limit reached"
+          ] do
+        assert ErrorClassification.categorize(-32_000, message) == :execution_revert
+        refute ErrorClassification.retriable?(-32_000, message)
+      end
+    end
+
+    test "EVM execution code is definitive even when the message resembles provider capacity" do
+      assert ErrorClassification.categorize(3, "rate limit reached") == :execution_revert
+      refute ErrorClassification.retriable?(3, "please retry")
+    end
+
+    test "classification work is bounded to the message prefix" do
+      oversized = String.duplicate("x", 4_096) <> " rate limit reached"
+
+      assert ErrorClassification.categorize(-32_000, oversized) ==
+               :unclassified_server_error
+
+      classification =
+        ErrorClassifier.classify(-32_000, oversized,
+          provider_id: "custom-provider",
+          provider_capabilities: %{
+            error_rules: [
+              %{message_contains: "rate limit reached", category: :rate_limit}
+            ]
+          }
+        )
+
+      assert classification.category == :unclassified_server_error
+      refute classification.retriable?
+      refute classification.breaker_penalty?
+    end
+
+    test "telemetry exposes only one-way response evidence" do
+      test_pid = self()
+      handler_id = "bounded-error-evidence-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:lasso, :error_classification, :classified],
+          fn _event, _measurements, metadata, _config ->
+            send(test_pid, {:classification_metadata, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      secret_message = "unknown upstream failure api_key=do-not-export 12345"
+      secret_data = "0xdeadbeef-do-not-export"
+
+      ErrorClassifier.classify(-32_000, secret_message,
+        data: secret_data,
+        provider_id: "custom-provider"
+      )
+
+      assert_receive {:classification_metadata, metadata}
+      assert byte_size(metadata.message_fingerprint) == 64
+      assert metadata.data_kind == :binary
+      refute Map.has_key?(metadata, :message)
+      refute Map.has_key?(metadata, :data_sample)
+      refute inspect(metadata) =~ "do-not-export"
     end
   end
 
@@ -489,18 +635,18 @@ defmodule Lasso.RPC.ErrorClassificationTest do
 
   # Phase 4: Client-specific codes
   describe "client-specific error codes" do
-    test "-32010 is execution_revert" do
-      assert ErrorClassification.categorize(-32_010, nil) == :execution_revert
+    test "bare -32010 does not prove an execution revert" do
+      assert ErrorClassification.categorize(-32_010, nil) == :unclassified_server_error
       assert ErrorClassification.retriable?(-32_010, nil) == false
     end
 
-    test "-32015 (Nethermind) is execution_revert" do
-      assert ErrorClassification.categorize(-32_015, nil) == :execution_revert
+    test "bare -32015 does not prove an execution revert" do
+      assert ErrorClassification.categorize(-32_015, nil) == :unclassified_server_error
       assert ErrorClassification.retriable?(-32_015, nil) == false
     end
 
-    test "-32016 (Besu) is execution_revert" do
-      assert ErrorClassification.categorize(-32_016, nil) == :execution_revert
+    test "bare -32016 does not prove an execution revert" do
+      assert ErrorClassification.categorize(-32_016, nil) == :unclassified_server_error
       assert ErrorClassification.retriable?(-32_016, nil) == false
     end
 
@@ -528,6 +674,17 @@ defmodule Lasso.RPC.ErrorClassificationTest do
       {category, path} = ErrorClassification.categorize_with_path(-32_000, "rate limit exceeded")
       assert category == :rate_limit
       assert path == :message_pattern
+    end
+
+    test "an unavailable free-plan chain returns a definitive capacity path" do
+      {category, path} =
+        ErrorClassification.categorize_with_path(
+          35,
+          "chain is not available on free plan, please upgrade to paid plan"
+        )
+
+      assert category == :rate_limit
+      assert path == :definitive_capacity_message
     end
 
     test "code-based returns :code_based path" do

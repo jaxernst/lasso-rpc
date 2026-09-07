@@ -42,11 +42,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
   - `:provider_error` - Infrastructure-level provider unavailability (no channels, pool errors)
   - `:timeout` - Request timeout
   - `:unknown_error` - Unclassified error (fallback category)
-  - `:unclassified_server_error` - Unmatched -32000 error (non-retriable, gets 1 failover attempt)
+  - `:unclassified_server_error` - Opaque application error (bounded failover for replay-safe requests)
 
   **Circuit breaker penalty**:
   - Only true provider health failures penalize circuit breakers: `:server_error`, `:network_error`,
-    `:timeout`, `:internal_error`, `:provider_error`, `:auth_error`, `:chain_error`, `:unknown_error`
+    `:timeout`, `:internal_error`, `:provider_error`, `:auth_error`, `:chain_error`
   - Request-caused errors (`:execution_revert`, `:client_error`, `:user_error`, `:invalid_params`,
     `:invalid_request`, `:parse_error`, `:method_not_found`) do not penalize
   - Constraint-based errors (`:block_not_available`, `:capability_violation`, `:rate_limit`) do not penalize
@@ -81,12 +81,12 @@ defmodule Lasso.Core.Support.ErrorClassification do
   ]
 
   # ===========================================================================
-  # Lasso Custom Error Codes (within server error range)
+  # Ethereum extension error codes (EIP-1474 compatibility fallbacks)
   # ===========================================================================
 
   @generic_server_error -32_000
   @rate_limit_error -32_005
-  @network_error_code -32_004
+  @unsupported_method_code -32_004
   @client_error_code -32_003
   @server_error_code -32_002
 
@@ -112,6 +112,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "reached your quota",
     "monthly quota",
     "daily quota",
+    "monthly capacity limit",
+    "monthly free request limit",
+    "usage limit for your current plan",
+    "chain is not available on free plan",
     "capacity exceeded",
     "request count exceeded",
     "maximum requests",
@@ -119,8 +123,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "requests per second",
     "compute units",
     "cannot fulfill request",
-    "request units",
-    "timeout on the free tier"
+    "request units"
+  ]
+
+  @definitive_rate_limit_patterns [
+    "chain is not available on free plan"
   ]
 
   # Patterns indicating transient/retriable server errors
@@ -221,6 +228,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   ]
 
   @capability_violation_patterns [
+    "unsupported subscription",
     "free tier",
     # Address/query limits
     "maximum number of addresses",
@@ -310,7 +318,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
       iex> categorize(429, "rate limit exceeded")
       :rate_limit
   """
-  @spec categorize(integer(), String.t() | nil) :: atom()
+  @spec categorize(integer() | nil, String.t() | nil) :: atom()
   def categorize(code, message)
 
   def categorize(code, _message) when code in @definitive_error_codes do
@@ -330,7 +338,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   def categorize(code, _message), do: classify_by_code(code)
 
-  @spec categorize(integer(), String.t() | nil, binary() | map() | nil) :: atom()
+  @spec categorize(integer() | nil, String.t() | nil, binary() | map() | nil) :: atom()
   def categorize(code, message, data) when is_binary(data) do
     if revert_data?(data), do: :execution_revert, else: categorize(code, message)
   end
@@ -365,17 +373,78 @@ defmodule Lasso.Core.Support.ErrorClassification do
        do: {classify_by_code(code), :definitive_code}
 
   defp do_categorize(code, message) when is_binary(message) do
-    message
-    |> bounded_message()
-    |> String.downcase()
+    bounded_message = message |> bounded_message() |> String.downcase()
+
+    bounded_message
     |> classify_by_message()
     |> case do
-      nil -> {classify_by_code(code), :code_based}
-      category -> {category, :message_pattern}
+      nil ->
+        {classify_by_code(code), :code_based}
+
+      :rate_limit ->
+        if definitive_rate_limit_message?(bounded_message),
+          do: {:rate_limit, :definitive_capacity_message},
+          else: {:rate_limit, :message_pattern}
+
+      category ->
+        {category, :message_pattern}
     end
   end
 
   defp do_categorize(code, _message), do: {classify_by_code(code), :code_based}
+
+  @doc """
+  Returns true when a response unambiguously reports an exhausted allowance.
+
+  Bare throttling messages do not qualify because they should retain the normal
+  retry cadence. Windowed limits, depleted credits, HTTP 402, and exhausted
+  plan or quota messages qualify for longer-lived capacity handling.
+  """
+  @spec quota_exhausted?(map() | integer() | String.t()) :: boolean()
+  def quota_exhausted?(402), do: true
+
+  def quota_exhausted?(%{"status" => 402}), do: true
+
+  def quota_exhausted?(%{"message" => message}) when is_binary(message),
+    do: quota_exhausted?(message)
+
+  def quota_exhausted?(message) when is_binary(message) do
+    message = message |> bounded_message() |> String.downcase()
+
+    message
+    |> String.split(~r/[.;!]|\bbut\b/)
+    |> Enum.any?(&affirmative_quota_exhaustion?/1)
+  end
+
+  def quota_exhausted?(_value), do: false
+
+  defp affirmative_quota_exhaustion?(clause) do
+    negated? = Regex.match?(~r/\b(?:not|never|without)\b|\b\w+n['’]t\b/, clause)
+
+    exhausted? =
+      contains_any?(clause, [
+        "exceed",
+        "exhaust",
+        "reached",
+        "depleted",
+        "insufficient",
+        "out of credits",
+        "used up"
+      ])
+
+    quota_scope? =
+      contains_any?(clause, [
+        "daily",
+        "monthly",
+        "quota",
+        "credits",
+        "plan allowance",
+        "usage limit for your current plan",
+        "billing period"
+      ])
+
+    exhausted? and quota_scope? and not negated?
+  end
 
   @doc """
   Determines if an error should trigger failover to another provider.
@@ -383,12 +452,12 @@ defmodule Lasso.Core.Support.ErrorClassification do
   Retriable errors include:
   - Rate limits (temporary backpressure)
   - Network errors (transient connectivity)
+  - Method not found (another provider may serve it)
   - Server errors (provider-side issues)
   - Capability violations (try a different provider)
 
   Non-retriable errors include:
   - Invalid requests (bad client input)
-  - Method not found (API mismatch)
   - Invalid params (client error)
   """
   @spec retriable?(integer(), String.t() | nil) :: boolean()
@@ -441,6 +510,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   def breaker_penalty?(:parse_error), do: false
   def breaker_penalty?(:method_not_found), do: false
   def breaker_penalty?(:unclassified_server_error), do: false
+  def breaker_penalty?(:unknown_error), do: false
   def breaker_penalty?(_category), do: true
 
   @doc """
@@ -465,9 +535,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
   Retriable errors include:
   - Rate limits (temporary backpressure)
   - Network errors (transient connectivity)
+  - Method not found (another provider may serve it)
   - Server errors (provider-side issues)
   - Capability violations (try a provider with different capabilities)
-  - Method not found (try a provider that supports the method)
   - Auth errors (this provider's credentials failed, another might work)
   - Internal errors (provider-side crashes)
 
@@ -534,30 +604,54 @@ defmodule Lasso.Core.Support.ErrorClassification do
     cond do
       # Explicit EVM execution evidence is request-caused and must outrank broad
       # provider phrases such as "access denied" or "please retry".
-      contains_any?(message_lower, @execution_revert_patterns) -> :execution_revert
+      contains_any?(message_lower, @execution_revert_patterns) ->
+        :execution_revert
+
       # Provider capacity signals
-      contains_any?(message_lower, @rate_limit_patterns) -> :rate_limit
+      contains_any?(message_lower, @rate_limit_patterns) ->
+        :rate_limit
+
+      contains_any?(message_lower, ["unsupported subscription", "timeout on the free tier"]) ->
+        :capability_violation
+
       # Auth errors
-      contains_any?(message_lower, @auth_patterns) -> :auth_error
+      contains_any?(message_lower, @auth_patterns) ->
+        :auth_error
+
       # Transient/retriable server errors (check before capability violations)
       # Patterns like "please retry" indicate the provider wants a retry
-      contains_any?(message_lower, @transient_error_patterns) -> :server_error
+      contains_any?(message_lower, @transient_error_patterns) ->
+        :server_error
+
       # Parameter validation errors — request-caused, not provider health issues.
-      contains_any?(message_lower, @invalid_params_patterns) -> :invalid_params
+      contains_any?(message_lower, @invalid_params_patterns) ->
+        :invalid_params
+
       # Block-not-available errors (check before capability violations to avoid
       # "not available"/"not found" patterns in @capability_violation_patterns swallowing these)
-      block_not_available_match?(message_lower) -> :block_not_available
+      block_not_available_match?(message_lower) ->
+        :block_not_available
+
       # Result size violations are provider-specific capabilities, not client errors
       # Different providers have different limits (10k free tier, 100k+ premium)
-      contains_any?(message_lower, @result_size_violation_patterns) -> :capability_violation
+      contains_any?(message_lower, @result_size_violation_patterns) ->
+        :capability_violation
+
       # Other capability constraints
-      contains_any?(message_lower, @capability_violation_patterns) -> :capability_violation
-      true -> nil
+      contains_any?(message_lower, @capability_violation_patterns) ->
+        :capability_violation
+
+      true ->
+        nil
     end
   end
 
   defp contains_any?(message, patterns) do
     Enum.any?(patterns, &String.contains?(message, &1))
+  end
+
+  defp definitive_rate_limit_message?(message) do
+    contains_any?(message, @definitive_rate_limit_patterns) or quota_exhausted?(message)
   end
 
   defp bounded_message(message),
@@ -581,9 +675,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
     @internal_error
   ]
 
-  @lasso_custom_codes [
+  @ethereum_extension_codes [
+    -32_001,
+    -32_006,
     @rate_limit_error,
-    @network_error_code,
+    @unsupported_method_code,
     @client_error_code,
     @server_error_code
   ]
@@ -595,38 +691,14 @@ defmodule Lasso.Core.Support.ErrorClassification do
     @chain_disconnected
   ]
 
-  # Pocket Network PATH gateway codes
-  @pocket_gateway_internal -31_001
-  @pocket_gateway_backend -31_002
-
-  # DRPC gateway codes
-  @drpc_grpc_cancelled 14
-  @drpc_unsupported_subscription 23
-
-  @provider_specific_codes %{
-    @drpc_grpc_cancelled => :server_error,
-    @drpc_unsupported_subscription => :server_error,
-    26 => :block_not_available,
-    30 => :rate_limit,
-    35 => :capability_violation,
-    @pocket_gateway_internal => :server_error,
-    @pocket_gateway_backend => :server_error,
-    -32_010 => :execution_revert,
-    -32_015 => :execution_revert,
-    -32_016 => :execution_revert,
-    -32_046 => :rate_limit,
-    -32_701 => :capability_violation
-  }
-
   defp classify_by_code(code) do
     cond do
       code == @evm_execution_error -> :execution_revert
       code in @jsonrpc_standard_codes -> classify_jsonrpc_standard(code)
-      code in @lasso_custom_codes -> classify_lasso_error(code)
+      code in @ethereum_extension_codes -> classify_ethereum_extension(code)
       code in @eip1193_codes -> classify_eip1193_error(code)
-      Map.has_key?(@provider_specific_codes, code) -> @provider_specific_codes[code]
       code == @generic_server_error -> :unclassified_server_error
-      jsonrpc_server_range?(code) -> :server_error
+      jsonrpc_server_range?(code) -> :unclassified_server_error
       http_status_code?(code) -> classify_http_status(code)
       true -> :unknown_error
     end
@@ -645,10 +717,12 @@ defmodule Lasso.Core.Support.ErrorClassification do
     end
   end
 
-  defp classify_lasso_error(code) do
+  defp classify_ethereum_extension(code) do
     case code do
+      -32_001 -> :block_not_available
+      -32_006 -> :capability_violation
       @rate_limit_error -> :rate_limit
-      @network_error_code -> :network_error
+      @unsupported_method_code -> :method_not_found
       @client_error_code -> :client_error
       @server_error_code -> :server_error
     end
@@ -672,49 +746,5 @@ defmodule Lasso.Core.Support.ErrorClassification do
     end
   end
 
-  defp retriable_by_code?(code) do
-    cond do
-      # EVM execution error (code 3) — deterministic, never retry
-      code == @evm_execution_error ->
-        false
-
-      # Non-retriable: client/user errors (bad input)
-      code in [@invalid_request, @method_not_found, @invalid_params] ->
-        false
-
-      code in [@user_rejected, @unauthorized] ->
-        false
-
-      # Provider-specific codes: check retriability by mapped category
-      Map.has_key?(@provider_specific_codes, code) ->
-        retriable_for_category?(@provider_specific_codes[code])
-
-      # Retriable: server/network/transient errors (check before 4xx range)
-      code in [@parse_error, @internal_error, @rate_limit_error] ->
-        true
-
-      code in [@chain_disconnected, @network_error_code] ->
-        true
-
-      code == @generic_server_error ->
-        false
-
-      code >= -32_099 and code <= -32_001 ->
-        true
-
-      code == 429 ->
-        true
-
-      code >= 500 ->
-        true
-
-      # Non-retriable 4xx range (after checking 429)
-      code >= 400 and code < 500 ->
-        false
-
-      # Conservative default: non-retriable
-      true ->
-        false
-    end
-  end
+  defp retriable_by_code?(code), do: code |> classify_by_code() |> retriable_for_category?()
 end

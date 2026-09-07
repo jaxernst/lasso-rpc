@@ -281,7 +281,7 @@ defmodule LassoWeb.Components.DetailPanelComponents do
   end
 
   attr(:value, :float, required: true)
-  attr(:status, :atom, default: :healthy, values: [:healthy, :degraded, :down])
+  attr(:status, :atom, default: :healthy, values: [:healthy, :degraded, :down, :unknown])
   attr(:class, :string, default: "")
 
   def progress_bar(assigns) do

@@ -1,7 +1,7 @@
 defmodule LassoWeb.Components.ProfileSelector do
   @moduledoc """
   Profile selector dropdown for switching between routing profiles.
-  Built-in profiles render first, custom (BYOK) profiles below a divider.
+  Every profile is configured by the operator through YAML files.
   """
   use Phoenix.Component
 
@@ -10,12 +10,10 @@ defmodule LassoWeb.Components.ProfileSelector do
 
   attr(:profiles, :list, required: true)
   attr(:selected_profile, :string, required: true)
-  attr(:profile_entitlements, :map, default: %{})
   attr(:class, :string, default: "")
-  attr(:show_create_cta, :boolean, default: true)
 
   def profile_selector(assigns) do
-    profile_data = get_profile_data(assigns.profiles, assigns.profile_entitlements)
+    profile_data = get_profile_data(assigns.profiles)
 
     selected_data =
       case Enum.find(profile_data, fn {slug, _} -> slug == assigns.selected_profile end) do
@@ -23,13 +21,9 @@ defmodule LassoWeb.Components.ProfileSelector do
         nil -> %{name: assigns.selected_profile, logo: nil}
       end
 
-    {builtin_profiles, custom_profiles} =
-      Enum.split_with(profile_data, fn {_slug, data} -> !data.byok end)
-
     assigns =
       assigns
-      |> assign(:builtin_profiles, builtin_profiles)
-      |> assign(:custom_profiles, custom_profiles)
+      |> assign(:profile_data, profile_data)
       |> assign(:selected_display_name, selected_data.name)
       |> assign(:selected_logo, selected_data.logo)
 
@@ -82,19 +76,19 @@ defmodule LassoWeb.Components.ProfileSelector do
       <div
         id="profile-dropdown"
         class={[
-          "absolute top-full right-0 mt-2 w-72",
+          "absolute top-full right-0 mt-2 w-72 max-w-[calc(100vw-2rem)]",
           "ring-black/50 rounded-lg border border-gray-600/40 bg-[#121a28] shadow-xl ring-1",
           "z-50 overflow-hidden"
         ]}
       >
         <div class="px-2 pt-1.5 pb-2">
           <span class="text-[10px] font-semibold tracking-wider text-gray-500 uppercase">
-            Lasso Profiles
+            Configured profiles
           </span>
         </div>
 
         <div class="px-2 space-y-1">
-          <%= for {profile, data} <- @builtin_profiles do %>
+          <%= for {profile, data} <- @profile_data do %>
             <.profile_card
               profile={profile}
               data={data}
@@ -103,49 +97,18 @@ defmodule LassoWeb.Components.ProfileSelector do
           <% end %>
         </div>
 
-        <%= if @show_create_cta or @custom_profiles != [] do %>
-          <div class="mt-3 border-t border-gray-800/60"></div>
-
-          <div class="flex items-center justify-between px-2 pt-3 pb-2">
-            <span class="text-[10px] font-semibold tracking-wider text-gray-500 uppercase">
-              Custom Profiles
-            </span>
-            <%= if @show_create_cta do %>
-              <button
-                type="button"
-                phx-click={JS.push("show_upgrade_modal") |> close_dropdown()}
-                class="text-[11px] flex items-center gap-1 text-purple-400 transition-colors hover:text-purple-300"
-              >
-                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M12 4v16m8-8H4"
-                  />
-                </svg>
-                Create
-              </button>
-            <% end %>
-          </div>
-
-          <div class="px-2 pb-2 space-y-1">
-            <%= for {profile, data} <- @custom_profiles do %>
-              <.profile_card
-                profile={profile}
-                data={data}
-                selected={profile == @selected_profile}
-              />
-            <% end %>
-            <%= if @custom_profiles == [] do %>
-              <p class="py-1 text-[11px] text-gray-600">
-                Bring your own RPC providers with custom routing preferences.
-              </p>
-            <% end %>
-          </div>
-        <% else %>
-          <div class="pb-2"></div>
-        <% end %>
+        <div class="mt-3 border-t border-gray-800/60 px-3 py-3 text-[11px] leading-relaxed text-gray-400">
+          Profiles are managed in YAML files. Add your own providers and reload the configuration.
+          <a
+            id="profile-configuration-help"
+            href="https://github.com/jaxernst/lasso-rpc/blob/main/docs/CONFIGURATION.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mt-2 block text-purple-400 hover:text-purple-300"
+          >
+            Configure profiles ↗
+          </a>
+        </div>
       </div>
     </details>
     """
@@ -228,21 +191,20 @@ defmodule LassoWeb.Components.ProfileSelector do
     |> JS.dispatch("blur", to: "#profile-selector-trigger")
   end
 
-  defp get_profile_data(profiles, _profile_entitlements) do
+  defp get_profile_data(profiles) do
     Enum.map(profiles, fn profile_slug ->
       chains = ConfigStore.list_chains_for_profile(profile_slug)
 
-      {display_name, logo, unlisted} =
+      {display_name, logo} =
         case ConfigStore.get_profile(profile_slug) do
-          {:ok, meta} -> {meta.name, meta.logo, meta.unlisted}
-          _ -> {profile_slug, nil, false}
+          {:ok, meta} -> {meta.name, meta.logo}
+          _ -> {profile_slug, nil}
         end
 
       {profile_slug,
        %{
          name: display_name,
          logo: logo,
-         byok: unlisted,
          chain_count: length(chains)
        }}
     end)

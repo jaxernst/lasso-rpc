@@ -7,6 +7,39 @@ import { LiveSocket } from "phoenix_live_view";
 // Enhanced Simulator module
 import * as LassoSim from "./lasso_simulator";
 
+const copyTextToClipboard = async (text) => {
+  if (!text) return false;
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_error) {
+      // Fall back to execCommand below.
+    }
+  }
+
+  try {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    textarea.style.pointerEvents = "none";
+
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const copied = document.execCommand("copy");
+    document.body.removeChild(textarea);
+
+    return copied;
+  } catch (_error) {
+    return false;
+  }
+};
+
 // Collapsible Section Hook
 const CollapsibleSection = {
   mounted() {
@@ -187,7 +220,6 @@ const SimulatorControl = {
     try {
       const chainsData = this.el.getAttribute("data-available-chains");
       this.availableChains = chainsData ? JSON.parse(chainsData) : [];
-      console.log("Available chains:", this.availableChains);
 
       // Make chains available to the simulator module
       LassoSim.setAvailableChains(this.availableChains);
@@ -201,49 +233,12 @@ const SimulatorControl = {
       this.availableChains = [];
     }
 
-    // Modern run-based event handlers
     this.handleEvent("start_simulator_run", (config) => {
-      console.log("Starting simulator run with config:", config);
       this.startSimulatorRun(config);
     });
 
     this.handleEvent("stop_all_runs", () => {
-      console.log("Stopping all simulator runs");
       LassoSim.stopAllRuns();
-    });
-
-    this.handleEvent("stop_run", ({ run_id }) => {
-      console.log("Stopping simulator run:", run_id);
-      LassoSim.stopRun(run_id);
-    });
-
-    // Legacy handlers for backward compatibility
-    this.handleEvent("sim_start_http", (opts) => {
-      console.log("sim_start_http (legacy) received with opts:", opts);
-      LassoSim.startHttpLoad(opts);
-    });
-
-    this.handleEvent("sim_stop_http", () => {
-      LassoSim.stopHttpLoad();
-    });
-
-    this.handleEvent("sim_start_ws", (opts) => {
-      console.log("sim_start_ws (legacy) received with opts:", opts);
-      LassoSim.startWsLoad(opts);
-    });
-
-    this.handleEvent("sim_stop_ws", () => {
-      LassoSim.stopWsLoad();
-    });
-
-    this.handleEvent("sim_start_http_advanced", (opts) => {
-      console.log("sim_start_http_advanced (legacy) received with opts:", opts);
-      LassoSim.startHttpLoad(opts);
-    });
-
-    this.handleEvent("sim_start_ws_advanced", (opts) => {
-      console.log("sim_start_ws_advanced (legacy) received with opts:", opts);
-      LassoSim.startWsLoad(opts);
     });
 
     this.handleEvent("clear_sim_logs", () => {
@@ -261,11 +256,8 @@ const SimulatorControl = {
         LassoSim.isRunning() // Only update when simulator is actually running
       ) {
         const stats = LassoSim.activeStats();
-        const activeRuns = LassoSim.getActiveRuns();
-
         // Send updates directly to the SimulatorControls component
         this.pushEvent("sim_stats", stats);
-        this.pushEvent("active_runs_update", { runs: activeRuns });
         this.pushEvent("update_recent_calls", {
           calls: this.recentCalls.slice(-8),
         });
@@ -285,18 +277,11 @@ const SimulatorControl = {
         JSON.stringify(newAvailableChains);
 
       if (chainsChanged) {
-        console.log(
-          "Available chains changed from",
-          this.availableChains,
-          "to",
-          newAvailableChains,
-        );
         this.availableChains = newAvailableChains;
         LassoSim.setAvailableChains(this.availableChains);
 
         // Stop all running simulations since chains changed
         if (LassoSim.isRunning()) {
-          console.log("Stopping all runs due to chain change");
           LassoSim.stopAllRuns();
         }
       }
@@ -307,13 +292,12 @@ const SimulatorControl = {
 
   startSimulatorRun(config) {
     try {
-      // Use the new run-based API
-      const run = LassoSim.startRun(config);
-      console.log("Started simulator run:", run.id, config);
+      this.recentCalls = [];
 
-      // Immediately update active runs
-      const activeRuns = LassoSim.getActiveRuns();
-      this.pushEvent("active_runs_update", { runs: activeRuns });
+      // Use the new run-based API
+      LassoSim.startRun(config);
+
+      this.pushEvent("sim_running", { running: true });
     } catch (error) {
       console.error("Failed to start simulator run:", error);
     }
@@ -342,13 +326,10 @@ const SimulatorControl = {
         window.liveSocket &&
         window.liveSocket.isConnected()
       ) {
-        console.log("Run completed, sending immediate update:", activity);
+        // Update run state and stats immediately
+        const stats = activity.stats || LassoSim.activeStats();
 
-        // Update active runs and stats immediately
-        const activeRuns = LassoSim.getActiveRuns();
-        const stats = LassoSim.activeStats();
-
-        this.pushEvent("active_runs_update", { runs: activeRuns });
+        this.pushEvent("sim_running", { running: LassoSim.isRunning() });
         this.pushEvent("sim_stats", stats);
 
         // Update recent calls to show completion
@@ -378,8 +359,7 @@ const SimulatorControl = {
   destroyed() {
     clearInterval(this.statsInterval);
     clearTimeout(this.immediateUpdate);
-    LassoSim.stopHttpLoad();
-    LassoSim.stopWsLoad();
+    LassoSim.stopAllRuns();
   },
 };
 
@@ -387,8 +367,12 @@ const SimulatorControl = {
 const DraggableNetworkViewport = {
   mounted() {
     this.isDragging = false;
+    this.isPinching = false;
     this.hasDragged = false; // Track if user actually dragged (moved mouse significantly)
     this.dragThreshold = 5; // Pixels of movement to consider it a drag
+    this.touchDragThreshold = 10; // Fingers wobble; a tap needs more slack
+    this.pinchStartDistance = 0;
+    this.pinchStartScale = 1;
     this.startX = 0;
     this.startY = 0;
     this.startClientX = 0; // Track initial mouse position
@@ -396,9 +380,39 @@ const DraggableNetworkViewport = {
     this.translateX = 0;
     this.translateY = 0;
     this.scale = 1;
+    // Zoom limits belong with the rest of the transform state: centerCanvas()
+    // runs further down and clamps against minScale.
+    this.minScale = 0.3;
+    this.maxScale = 3.0;
+    this.zoomSensitivity = 0.002; // scroll-to-zoom, towards the cursor
     this.animationId = null;
     this.canvasCenterX = null;
     this.canvasCenterY = null;
+
+    // LiveView owns the canvas DOM and removes JS-authored inline styles while
+    // applying the connected-mount patch. Keep the camera transform on the
+    // document element instead, so the old frame remains in force while
+    // account and billing decoration is reconciled.
+    this.frameTransformProperty = "--lasso-topology-transform";
+    const restoredFrame = document.documentElement.style
+      .getPropertyValue(this.frameTransformProperty)
+      .trim();
+    const restoredParts = restoredFrame.match(
+      /^translate\(([-\d.]+)px,\s*([-\d.]+)px\) scale\(([\d.]+)\)$/,
+    );
+    if (restoredParts) {
+      const [, x, y, scale] = restoredParts.map(Number);
+      if (
+        Number.isFinite(x) &&
+        Number.isFinite(y) &&
+        Number.isFinite(scale) &&
+        scale > 0
+      ) {
+        this.translateX = x;
+        this.translateY = y;
+        this.scale = scale;
+      }
+    }
 
     // Store bound handler functions for proper event listener cleanup
     this.boundHandleCanvasClick = this.handleCanvasClick.bind(this);
@@ -428,21 +442,47 @@ const DraggableNetworkViewport = {
       }
     }
 
-    // Compute initial transform to center the canvas in the viewport
-    const viewportRect = this.el.getBoundingClientRect();
-    const canvasWidth =
-      this.canvasEl.scrollWidth || this.canvasEl.offsetWidth || 4000;
-    const canvasHeight =
-      this.canvasEl.scrollHeight || this.canvasEl.offsetHeight || 3000;
+    // Compute initial transform to center the topology in the viewport.
+    // If the viewport is 0-sized at mount time (CSS layout race when the
+    // dashboard panels are still settling) the centering math pushes the
+    // canvas off-screen and the user sees a blank canvas until they
+    // interact. Retry on the next animation frame in that case.
+    // A canvas restored from browser history can reuse the last document-level
+    // transform. Keep that frame visible while layout settles; a fresh document
+    // stays hidden until centerCanvas() can measure it.
+    const hasRestoredFrame =
+      document.documentElement.classList.contains("topology-framed") &&
+      Boolean(restoredFrame);
 
-    this.translateX = viewportRect.width / 2 - canvasWidth / 2;
-    this.translateY = viewportRect.height / 2 - canvasHeight / 2;
-    this.updateTransform();
-
-    // Reveal canvas now that the centering transform is applied
-    if (this.canvasEl) {
-      this.canvasEl.style.opacity = "1";
+    if (!hasRestoredFrame) {
+      document.documentElement.classList.remove("topology-framed");
     }
+
+    if (!this.centerCanvas()) {
+      requestAnimationFrame(() => {
+        if (!this.centerCanvas())
+          requestAnimationFrame(() => this.centerCanvas());
+      });
+    }
+
+    // Those retries are bounded, so a viewport that is still collapsed on the
+    // third frame (panels settling, a hidden tab, a slow font load) would leave
+    // the canvas hidden for good. Watch for the element gaining a real size and
+    // frame then; the observer stops itself once framing succeeds.
+    if (typeof ResizeObserver !== "undefined") {
+      this.sizeObserver = new ResizeObserver(() => {
+        const { width, height } = this.el.getBoundingClientRect();
+        if (width > 0 && height > 0 && this.centerCanvas()) {
+          this.sizeObserver.disconnect();
+          this.sizeObserver = null;
+        }
+      });
+      this.sizeObserver.observe(this.el);
+    }
+
+    // Track whether the last render had topology nodes so updated() can
+    // re-center when a late-arriving server diff hydrates them.
+    this.hadNodes = this.countTopologyNodes() > 0;
 
     // Mouse events
     this.el.addEventListener("mousedown", this.handleMouseDown.bind(this));
@@ -459,7 +499,10 @@ const DraggableNetworkViewport = {
       );
     }
 
-    // Touch events for mobile
+    // Touch events for mobile. The viewport carries `touch-none` in its
+    // server-rendered class so the browser's pan and pinch gestures belong to
+    // this hook and a two-finger pinch zooms the canvas rather than the page.
+    // It has to be a class: LiveView patching strips inline styles set here.
     this.el.addEventListener("touchstart", this.handleTouchStart.bind(this), {
       passive: false,
     });
@@ -467,8 +510,26 @@ const DraggableNetworkViewport = {
       passive: false,
     });
     this.el.addEventListener("touchend", this.handleTouchEnd.bind(this));
+    this.el.addEventListener("touchcancel", this.handleTouchEnd.bind(this));
 
-    // Zoom disabled - wheel events ignored (but we add programmatic zoom)
+    // Safari on iOS still raises its own pinch gestures over an element that
+    // opted out via touch-action, which would zoom the document.
+    ["gesturestart", "gesturechange", "gestureend"].forEach((name) => {
+      this.el.addEventListener(name, (e) => e.preventDefault(), {
+        passive: false,
+      });
+    });
+
+    // Provider name labels: shown when zoomed past `labelShowThreshold`,
+    // hidden again once below `labelHideThreshold`. The hysteresis band
+    // avoids flicker on micro-zoom around the boundary. The class is
+    // toggled on the canvas root so CSS handles per-node visibility.
+    this.labelShowThreshold = 1.45;
+    this.labelHideThreshold = 1.2;
+    this.labelsVisible = false;
+    this.el.addEventListener("wheel", this.handleWheel.bind(this), {
+      passive: false,
+    });
 
     // Prevent context menu on right click
     this.el.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -526,10 +587,58 @@ const DraggableNetworkViewport = {
 
     this.updateTransform();
 
-    // Re-apply visibility after LiveView patches (which restore opacity: 0)
-    if (this.canvasEl) {
-      this.canvasEl.style.opacity = "1";
+    // Re-center when topology data arrives in a later server diff (e.g. a
+    // draft profile hydrating from localStorage after mount). Without this
+    // the empty-at-mount viewport keeps its stale transform and the
+    // now-present nodes render off-frame. Fire only on the no-nodes →
+    // has-nodes transition — that is the initial hydration, before the
+    // user has panned or zoomed. centerCanvas() resets both translate and
+    // zoom, so firing it on a later update would override a manual view.
+    const hasNodes = this.countTopologyNodes() > 0;
+    if (hasNodes && !this.hadNodes) {
+      this.centerCanvas();
     }
+    this.hadNodes = hasNodes;
+  },
+
+  // Marks the topology as framed. Lives on the document element, outside the
+  // LiveView container, so no patch can revert it and blank the canvas.
+  revealCanvas() {
+    document.documentElement.classList.add("topology-framed");
+  },
+
+  // Count chain bubbles inside the draggable topology container. The
+  // `[data-chain]` selector is also used by the edit/detail panels, so the
+  // `networkContainer` scope is load-bearing — it limits the count to the
+  // topology canvas. Bubbles present = topology data has hydrated.
+  countTopologyNodes() {
+    if (!this.networkContainer) return 0;
+    return this.networkContainer.querySelectorAll("[data-chain]").length;
+  },
+
+  // Compute the transform that frames the topology in the viewport.
+  // Returns false when the viewport is still 0-sized (CSS layout race) so
+  // callers can retry on a later frame.
+  centerCanvas() {
+    const viewportRect = this.el.getBoundingClientRect();
+
+    if (viewportRect.width <= 0 || viewportRect.height <= 0) {
+      return false;
+    }
+
+    const { canvasWidth, canvasHeight } = this.getCanvasDimensions();
+    const centerX = this.canvasCenterX ?? canvasWidth / 2;
+    const centerY = this.canvasCenterY ?? canvasHeight / 2;
+
+    const box = this.visibleViewportBox(viewportRect);
+
+    this.scale = this.initialScale(box);
+    this.translateX = (box.left + box.right) / 2 - centerX * this.scale;
+    this.translateY = (box.top + box.bottom) / 2 - centerY * this.scale;
+    this.updateTransform();
+    this.revealCanvas();
+
+    return true;
   },
 
   handleMouseDown(e) {
@@ -571,40 +680,68 @@ const DraggableNetworkViewport = {
   },
 
   handleCanvasClick(e) {
-    // If we dragged, prevent the click event from reaching LiveView
-    // This prevents "deselect_all" from firing when panning the canvas
     if (this.hasDragged) {
       e.stopPropagation();
       e.preventDefault();
     }
-    // Reset the flag for the next interaction
     this.hasDragged = false;
   },
 
+  handleWheel(e) {
+    e.preventDefault();
+
+    const delta = -e.deltaY * this.zoomSensitivity;
+    const newScale = Math.min(
+      this.maxScale,
+      Math.max(this.minScale, this.scale * (1 + delta)),
+    );
+
+    const rect = this.el.getBoundingClientRect();
+    this.zoomAtPoint(newScale, e.clientX - rect.left, e.clientY - rect.top);
+  },
+
   handleTouchStart(e) {
+    if (e.touches.length === 2) {
+      this.beginPinch(e.touches[0], e.touches[1]);
+      e.preventDefault();
+      return;
+    }
+
     if (e.touches.length === 1) {
       this.isDragging = true;
+      this.isPinching = false;
       this.hasDragged = false; // Reset drag flag
       const touch = e.touches[0];
       this.startX = touch.clientX - this.translateX;
       this.startY = touch.clientY - this.translateY;
       this.startClientX = touch.clientX; // Store initial touch position
       this.startClientY = touch.clientY;
-      e.preventDefault();
+      // Deliberately no preventDefault: suppressing the default on touchstart
+      // also suppresses the synthesized click, and that click is how a tap
+      // reaches `phx-click` to select a node or deselect the canvas. Panning
+      // is kept off the page by `touch-action: none` plus the touchmove
+      // preventDefault below.
     }
   },
 
   handleTouchMove(e) {
+    if (this.isPinching && e.touches.length === 2) {
+      this.updatePinch(e.touches[0], e.touches[1]);
+      e.preventDefault();
+      return;
+    }
+
     if (!this.isDragging || e.touches.length !== 1) return;
 
     const touch = e.touches[0];
     this.translateX = touch.clientX - this.startX;
     this.translateY = touch.clientY - this.startY;
 
-    // Check if we've moved beyond the drag threshold
+    // Check if we've moved beyond the drag threshold. Fingers wobble more
+    // than a mouse, so a tap needs more slack before it counts as a drag.
     const deltaX = Math.abs(touch.clientX - this.startClientX);
     const deltaY = Math.abs(touch.clientY - this.startClientY);
-    if (deltaX > this.dragThreshold || deltaY > this.dragThreshold) {
+    if (deltaX > this.touchDragThreshold || deltaY > this.touchDragThreshold) {
       this.hasDragged = true;
     }
 
@@ -612,17 +749,151 @@ const DraggableNetworkViewport = {
     e.preventDefault();
   },
 
-  handleTouchEnd() {
-    this.isDragging = false;
+  handleTouchEnd(e) {
+    const remaining = e && e.touches ? e.touches.length : 0;
+
+    if (remaining === 0) {
+      this.isDragging = false;
+      this.isPinching = false;
+      return;
+    }
+
+    // Lifting one finger out of a pinch hands the gesture back to panning,
+    // re-anchored on the finger still down so the canvas does not jump.
+    if (remaining === 1 && this.isPinching) {
+      this.isPinching = false;
+      const touch = e.touches[0];
+      this.isDragging = true;
+      this.startX = touch.clientX - this.translateX;
+      this.startY = touch.clientY - this.translateY;
+      this.startClientX = touch.clientX;
+      this.startClientY = touch.clientY;
+    }
     // Note: hasDragged flag will be checked and reset in handleCanvasClick
   },
 
+  beginPinch(a, b) {
+    this.isDragging = false;
+    this.isPinching = true;
+    // A pinch is never a tap; keep the trailing click from deselecting.
+    this.hasDragged = true;
+    this.pinchStartDistance = this.touchDistance(a, b);
+    this.pinchStartScale = this.scale;
+  },
+
+  updatePinch(a, b) {
+    if (!this.pinchStartDistance) return;
+
+    const ratio = this.touchDistance(a, b) / this.pinchStartDistance;
+    const newScale = Math.min(
+      this.maxScale,
+      Math.max(this.minScale, this.pinchStartScale * ratio),
+    );
+
+    const rect = this.el.getBoundingClientRect();
+    this.zoomAtPoint(
+      newScale,
+      (a.clientX + b.clientX) / 2 - rect.left,
+      (a.clientY + b.clientY) / 2 - rect.top,
+    );
+  },
+
+  touchDistance(a, b) {
+    return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+  },
+
+  // Scale about a viewport-relative point, keeping the canvas coordinate
+  // under that point fixed. Shared by wheel zoom and pinch zoom.
+  zoomAtPoint(newScale, x, y) {
+    if (newScale === this.scale) return;
+
+    const canvasX = (x - this.translateX) / this.scale;
+    const canvasY = (y - this.translateY) / this.scale;
+
+    this.scale = newScale;
+    this.translateX = x - canvasX * this.scale;
+    this.translateY = y - canvasY * this.scale;
+
+    this.updateTransform();
+  },
+
   updateTransform() {
-    const target = this.canvasEl || this.networkContainer;
-    if (target) {
-      target.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
-      target.style.transformOrigin = "0 0";
+    const transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
+    document.documentElement.style.setProperty(
+      this.frameTransformProperty,
+      transform,
+    );
+
+    // Remove transforms written by an older asset version after the equivalent
+    // document-level value exists. The CSS variable then remains authoritative
+    // when LiveView replaces or patches the canvas element.
+    this.canvasEl?.style.removeProperty("transform");
+    this.canvasEl?.style.removeProperty("transform-origin");
+    this.updateLabelVisibility();
+  },
+
+  updateLabelVisibility() {
+    if (!this.canvasEl) return;
+    const next =
+      this.scale >= this.labelShowThreshold
+        ? true
+        : this.scale < this.labelHideThreshold
+          ? false
+          : this.labelsVisible;
+    this.labelsVisible = next;
+    // Always sync the class — the canvas element can be replaced by
+    // LiveView patches, in which case the new node won't carry it.
+    if (this.canvasEl.classList.contains("labels-visible") !== next) {
+      this.canvasEl.classList.toggle("labels-visible", next);
     }
+  },
+
+  // A phone viewport is narrower than the topology's natural spread, so 1:1
+  // drops the user inside a single chain with no sense of the whole graph.
+  // Fit the node bounds to the space the sheet leaves instead. Desktop is
+  // already well framed at 1:1 and is left alone.
+  initialScale(box) {
+    const width = box.right - box.left;
+    if (width >= 768) return 1;
+
+    const bounds = this.topologyBounds();
+    if (!bounds) return 0.7;
+
+    const padding = 60;
+    const fit = Math.min(
+      width / (bounds.width + padding * 2),
+      (box.bottom - box.top) / (bounds.height + padding * 2),
+    );
+
+    return Math.max(this.minScale, Math.min(1, fit * 1.2));
+  },
+
+  // Bounding box of every placed node, in canvas coordinates.
+  topologyBounds() {
+    const nodes = this.networkContainer?.querySelectorAll(
+      "[data-chain-center], [data-provider-center]",
+    );
+    if (!nodes || !nodes.length) return null;
+
+    const xs = [];
+    const ys = [];
+    nodes.forEach((el) => {
+      const raw =
+        el.getAttribute("data-chain-center") ||
+        el.getAttribute("data-provider-center");
+      const [x, y] = (raw || "").split(",").map(Number);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        xs.push(x);
+        ys.push(y);
+      }
+    });
+    if (!xs.length) return null;
+
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    return { width: maxX - minX, height: maxY - minY };
   },
 
   // Canvas dimensions used for viewport anchoring math.
@@ -635,13 +906,59 @@ const DraggableNetworkViewport = {
     return { canvasWidth, canvasHeight };
   },
 
+  // The details window sits over the canvas, so the geometric centre of the
+  // viewport is not the centre of what the user can actually see. Measure the
+  // panel and pull the framing area back from whichever edge it occupies:
+  // the right on desktop, the bottom for the mobile sheet. Everything that
+  // frames a target routes through here, so centring a node lands it in open
+  // space instead of behind the panel.
+  visibleViewportBox(viewportRect) {
+    const box = {
+      left: 0,
+      top: 0,
+      right: viewportRect.width,
+      bottom: viewportRect.height,
+    };
+
+    const panel = document.querySelector(
+      '[data-floating-window="details-window"] > div',
+    );
+    if (!panel) return box;
+
+    const p = panel.getBoundingClientRect();
+    if (p.width < 1 || p.height < 1) return box;
+
+    const left = p.left - viewportRect.left;
+    const right = p.right - viewportRect.left;
+    const top = p.top - viewportRect.top;
+    const bottom = p.bottom - viewportRect.top;
+
+    // Shrink along the axis the panel spans, away from the edge it sits
+    // nearest. Comparing gaps rather than testing for a flush edge keeps this
+    // correct for the desktop window, which is inset from the corner it hugs.
+    if (p.width >= viewportRect.width * 0.9) {
+      if (viewportRect.height - bottom <= top) {
+        box.bottom = Math.max(box.top + 1, top);
+      } else {
+        box.top = Math.min(box.bottom - 1, bottom);
+      }
+    } else if (viewportRect.width - right <= left) {
+      box.right = Math.max(box.left + 1, left);
+    } else {
+      box.left = Math.min(box.right - 1, right);
+    }
+
+    return box;
+  },
+
   // Preferred "camera center" inside the viewport when centering on a target point.
   // If TopologyConfig.canvas_center is left-of-canvas-center, this keeps the view
   // framed slightly left even when focusing a chain/provider.
   getViewportAnchor(viewportRect, scale) {
     const { canvasWidth, canvasHeight } = this.getCanvasDimensions();
-    const viewportCenterX = viewportRect.width / 2;
-    const viewportCenterY = viewportRect.height / 2;
+    const box = this.visibleViewportBox(viewportRect);
+    const viewportCenterX = (box.left + box.right) / 2;
+    const viewportCenterY = (box.top + box.bottom) / 2;
 
     const canvasCenterX =
       this.canvasCenterX == null ? canvasWidth / 2 : this.canvasCenterX;
@@ -673,6 +990,18 @@ const DraggableNetworkViewport = {
     }, 100);
   },
 
+  // How far to zoom when framing a selected node. Mobile opens fitted to the
+  // whole topology, so stepping straight to the desktop zoom is a three-fold
+  // jump that throws away every surrounding node. Scale relative to that
+  // fitted baseline instead, so selection tightens the view without
+  // stranding the user inside a single cluster.
+  focusScale(desktopZoom, mobileFactor) {
+    const box = this.visibleViewportBox(this.el.getBoundingClientRect());
+    if (box.right - box.left >= 768) return desktopZoom;
+
+    return Math.min(desktopZoom, this.initialScale(box) * mobileFactor);
+  },
+
   // Center viewport on a specific chain
   centerOnChain(chainName, opts = {}) {
     const chainElement = this.networkContainer?.querySelector(
@@ -682,8 +1011,7 @@ const DraggableNetworkViewport = {
       const center = chainElement.getAttribute("data-chain-center");
       if (center) {
         const [x, y] = center.split(",").map(Number);
-        const zoom = opts.zoom || 1.25;
-        this.animateTo(x, y, 800, zoom);
+        this.animateTo(x, y, 800, this.focusScale(opts.zoom || 1.25, 2));
       }
     }
   },
@@ -697,8 +1025,7 @@ const DraggableNetworkViewport = {
       const center = providerElement.getAttribute("data-provider-center");
       if (center) {
         const [x, y] = center.split(",").map(Number);
-        const zoom = opts.zoom || 1.4;
-        this.animateTo(x, y, 800, zoom);
+        this.animateTo(x, y, 800, this.focusScale(opts.zoom || 1.4, 2.6));
       }
     }
   },
@@ -746,19 +1073,12 @@ const DraggableNetworkViewport = {
       cancelAnimationFrame(this.animationId);
     }
 
-    const viewportRect = this.el.getBoundingClientRect();
-
     const startTranslateX = this.translateX;
     const startTranslateY = this.translateY;
     const startScale = this.scale;
 
     // If targetScale provided, animate scale too, keeping target point centered
     const finalScale = targetScale == null ? this.scale : targetScale;
-    const anchorFinal = this.getViewportAnchor(viewportRect, finalScale);
-
-    // Compute the translation needed at the final scale
-    const targetTranslateX_final = anchorFinal.x - targetX * finalScale;
-    const targetTranslateY_final = anchorFinal.y - targetY * finalScale;
 
     const startTime = performance.now();
 
@@ -766,6 +1086,17 @@ const DraggableNetworkViewport = {
       const elapsed = currentTime - startTime;
       const progress = Math.min(elapsed / duration, 1);
       const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+      // Re-anchor every frame. Selecting a node resizes the details panel in
+      // the same LiveView patch that starts this animation, so an anchor taken
+      // up front would aim at the old panel geometry and leave the node partly
+      // behind the new one. Recomputing converges on the final framing.
+      const anchorFinal = this.getViewportAnchor(
+        this.el.getBoundingClientRect(),
+        finalScale,
+      );
+      const targetTranslateX_final = anchorFinal.x - targetX * finalScale;
+      const targetTranslateY_final = anchorFinal.y - targetY * finalScale;
 
       // Interpolate scale and translation
       this.scale = startScale + (finalScale - startScale) * easeProgress;
@@ -800,6 +1131,8 @@ const DraggableNetworkViewport = {
         true,
       );
     }
+    this.sizeObserver?.disconnect();
+    this.sizeObserver = null;
   },
 };
 
@@ -1291,24 +1624,18 @@ const CopyButton = {
     this.el.addEventListener("click", (e) => {
       const btn = e.target.closest("[data-copy-text]");
       if (btn && btn.dataset.copyText) {
-        navigator.clipboard
-          .writeText(btn.dataset.copyText)
-          .then(() => {
-            const originalHTML = btn.innerHTML;
-            const originalClasses = btn.className;
+        const originalHTML = btn.innerHTML;
+        const originalClasses = btn.className;
+        const successText = btn.dataset.copySuccess || "Copied!";
 
-            // Show "Copied!" feedback
-            btn.innerHTML =
-              '<span class="text-xs text-emerald-400">Copied!</span>';
+        btn.innerHTML = `<span class="text-white">${successText}</span>`;
 
-            setTimeout(() => {
-              btn.innerHTML = originalHTML;
-              btn.className = originalClasses;
-            }, 1500);
-          })
-          .catch((err) => {
-            console.error("Failed to copy:", err);
-          });
+        copyTextToClipboard(btn.dataset.copyText).catch(() => {});
+
+        setTimeout(() => {
+          btn.innerHTML = originalHTML;
+          btn.className = originalClasses;
+        }, 1500);
       }
     });
   },
@@ -1317,43 +1644,147 @@ const CopyButton = {
 // Network Topology Status Hook - applies provider status colors via push_event
 // to avoid 28KB+ LiveView diffs from comprehension re-renders
 const STATUS_COLORS = {
-  healthy:          { line: "#10b981", border: "#4b5563", bg: "rgba(6, 78, 59, 0.3)",   dot: "#34d399" },
-  lagging:          { line: "#38bdf8", border: "#0ea5e9", bg: "rgba(12, 74, 110, 0.3)", dot: "#38bdf8" },
-  recovering:       { line: "#f59e0b", border: "#4b5563", bg: "rgba(120, 53, 15, 0.3)", dot: "#f59e0b" },
-  testing_recovery: { line: "#f59e0b", border: "#4b5563", bg: "rgba(120, 53, 15, 0.3)", dot: "#f59e0b" },
-  degraded:         { line: "#f97316", border: "#f97316", bg: "rgba(124, 45, 18, 0.3)", dot: "#f97316" },
-  rate_limited:     { line: "#8b5cf6", border: "#8b5cf6", bg: "rgba(88, 28, 135, 0.3)", dot: "#a78bfa" },
-  circuit_open:     { line: "#dc2626", border: "#dc2626", bg: "rgba(127, 29, 29, 0.4)", dot: "#dc2626" },
-  unknown:          { line: "#6b7280", border: "#4b5563", bg: "rgba(17, 24, 39, 0.3)",  dot: "#9ca3af" },
+  healthy: "#34d399",
+  lagging: "#38bdf8",
+  recovering: "#f59e0b",
+  testing_recovery: "#f59e0b",
+  degraded: "#f97316",
+  rate_limited: "#a78bfa",
+  circuit_open: "#dc2626",
+  unknown: "#9ca3af",
+  failed: "#ef4444",
+  probing: "#38bdf8",
+};
+
+const STATUS_COPY = {
+  healthy: ["Healthy", "available evidence shows no current impairment in the selected scope"],
+  lagging: ["Lagging", "fresh head evidence is behind the profile comparison reference"],
+  recovering: ["Recovering", "a route is reconnecting or testing recovery"],
+  testing_recovery: [
+    "Recovering",
+    "a circuit is testing whether the upstream has recovered",
+  ],
+  degraded: [
+    "Degraded",
+    "one or more regions or transports are impaired; other routes may remain available",
+  ],
+  rate_limited: ["Rate limited", "all supported routes in the selected scope are in quota cooldown"],
+  circuit_open: ["Circuit open", "all supported routes in the selected scope have open circuits"],
+  unknown: ["Awaiting evidence", "evidence is missing or stale; routing may still try this provider"],
+  failed: ["Failed", "the provider is unavailable"],
+  probing: ["Probing", "provider validation is in progress"],
 };
 
 const NetworkTopologyStatus = {
   mounted() {
     this.currentStatuses = {};
+    this.currentStatusDetails = {};
+    this.currentBlocks = {};
+    this.blockPulses = new Map();
     this.pendingApply = false;
-    this.handleEvent("provider-statuses", ({ statuses, snapshot }) => {
+
+    this.statusStyleEl = document.createElement("style");
+    this.statusStyleEl.dataset.topologyStatus = "";
+    document.head.appendChild(this.statusStyleEl);
+
+    this.hoverStyleEl = document.createElement("style");
+    this.hoverStyleEl.dataset.topologyHover = "";
+    document.head.appendChild(this.hoverStyleEl);
+
+    this.handleEvent("chain-blocks", ({ blocks }) => {
+      const advanced = {};
+      for (const [chainId, height] of Object.entries(blocks)) {
+        // A null height is a retraction: the chain's providers went stale, so
+        // the readout is cleared rather than left showing a dead number.
+        if (height === null) {
+          delete this.currentBlocks[chainId];
+        } else {
+          if (this.currentBlocks[chainId] !== height) advanced[chainId] = true;
+          this.currentBlocks[chainId] = height;
+        }
+      }
+      this.applyChainBlocks(blocks, advanced);
+    });
+    this.handleEvent("provider-statuses", ({ statuses, snapshot, details = {} }) => {
       if (snapshot) {
         this.currentStatuses = statuses;
+        this.currentStatusDetails = details;
       } else {
         for (const [id, status] of Object.entries(statuses)) {
           if (status === null) {
             delete this.currentStatuses[id];
+            delete this.currentStatusDetails[id];
           } else {
             this.currentStatuses[id] = status;
+            if (details[id]) this.currentStatusDetails[id] = details[id];
+            else delete this.currentStatusDetails[id];
           }
         }
       }
       this.applyStatuses(this.currentStatuses);
     });
     this.pushEvent("request_provider_statuses", {});
+
+    // Provider label hover bridge: labels live in a separate layer (above the
+    // modules) and are not descendants of the pin, so CSS :hover cannot reveal
+    // them. Track which provider the cursor is over and publish a rule for its
+    // label. A class would not survive: the dashboard re-renders on every
+    // coalesced batch tick, and morphdom strips JS-applied classes, which made
+    // a hovered label appear and then vanish a moment later.
+    this.lastHoveredProviderId = null;
+    this.boundHandleProviderHover = this.handleProviderHover.bind(this);
+    this.boundClearProviderHover = this.clearProviderHover.bind(this);
+    this.el.addEventListener("mouseover", this.boundHandleProviderHover);
+    this.el.addEventListener("mouseleave", this.boundClearProviderHover);
   },
 
+  destroyed() {
+    this.el.removeEventListener("mouseover", this.boundHandleProviderHover);
+    this.el.removeEventListener("mouseleave", this.boundClearProviderHover);
+    for (const timer of this.blockPulses.values()) clearTimeout(timer);
+    this.blockPulses.clear();
+    this.statusStyleEl?.remove();
+    this.statusStyleEl = null;
+    this.hoverStyleEl?.remove();
+    this.hoverStyleEl = null;
+  },
+
+  handleProviderHover(e) {
+    const provider = e.target.closest("[data-provider]");
+    const id = provider ? provider.dataset.provider : null;
+    if (id === this.lastHoveredProviderId) return;
+    this.setHoveredLabel(id);
+  },
+
+  clearProviderHover() {
+    this.setHoveredLabel(null);
+  },
+
+  setHoveredLabel(id) {
+    this.lastHoveredProviderId = id;
+
+    if (!this.hoverStyleEl) return;
+
+    this.hoverStyleEl.textContent = id
+      ? `[data-provider-label="${CSS.escape(id)}"]{opacity:1}`
+      : "";
+  },
+
+  // A LiveView patch can replace canvas nodes, taking the JS-applied colours and
+  // block heights with it, so both layers are re-applied after every patch.
   updated() {
-    if (this.pendingApply || Object.keys(this.currentStatuses).length === 0) return;
+    if (this.pendingApply) return;
+    if (
+      Object.keys(this.currentStatuses).length === 0 &&
+      Object.keys(this.currentBlocks).length === 0
+    ) {
+      return;
+    }
     this.pendingApply = true;
     requestAnimationFrame(() => {
       this.pendingApply = false;
       this.applyStatuses(this.currentStatuses);
+      this.applyChainBlocks(this.currentBlocks);
     });
   },
 
@@ -1362,29 +1793,91 @@ const NetworkTopologyStatus = {
   },
 
   applyStatuses(statuses) {
-    for (const [providerId, status] of Object.entries(statuses)) {
-      const colors = STATUS_COLORS[status] || STATUS_COLORS.unknown;
-
-      const lines = this.el.querySelectorAll(`line[data-provider-line="${providerId}"]`);
-      for (const line of lines) {
-        line.setAttribute("stroke", colors.line);
-      }
-
-      const node = this.el.querySelector(`[data-provider="${providerId}"]`);
+    for (const status of Object.keys(statuses)) {
+      const node = this.el.querySelector(
+        `[data-provider="${CSS.escape(status)}"]`,
+      );
       if (node) {
-        node.style.borderColor = colors.border;
-        node.style.backgroundColor = colors.bg;
-
-        const dot = node.querySelector("[data-dot]");
-        if (dot) {
-          dot.style.backgroundColor = colors.dot;
-        }
+        this.toggleProbingAffordance(node, statuses[status]);
+        this.applyStatusTitle(node, statuses[status]);
       }
+    }
+
+    this.writeStatusStyles();
+  },
+
+  // Status colour is published as a stylesheet in the document head rather than
+  // an inline style on each pin. Anything JS writes into the LiveView-managed
+  // DOM is stripped by the next patch that touches the canvas — selecting a
+  // chain re-renders the whole comprehension — which repainted every pad to its
+  // default grey for a frame before the next re-apply could restore it. A
+  // stylesheet lives outside the patched tree, so the colours simply survive.
+  writeStatusStyles() {
+    if (!this.statusStyleEl) return;
+
+    const rules = [];
+    for (const [providerId, status] of Object.entries(this.currentStatuses)) {
+      const color = STATUS_COLORS[status] || STATUS_COLORS.unknown;
+      rules.push(
+        `[data-provider="${CSS.escape(providerId)}"] .provider-pad{--pad-color:${color}}`,
+      );
+    }
+
+    this.statusStyleEl.textContent = rules.join("\n");
+  },
+
+  applyStatusTitle(node, status) {
+    const baseTitle = node.dataset.providerTitle || "Provider";
+    const explanation = this.currentStatusDetails[node.dataset.provider];
+    const [label, detail] = explanation?.description
+      ? [explanation.label, explanation.description]
+      : STATUS_COPY[status] || STATUS_COPY.unknown;
+    node.title = `${baseTitle} · ${label}: ${detail}`;
+  },
+
+  // Chain head heights arrive as a delta of {chain_id => height}. Only a height
+  // that actually moved pulses; `advanced` is decided against the hook's own
+  // tracked state, so re-applying after a patch restores the number silently.
+  applyChainBlocks(blocks, advanced = {}) {
+    for (const [chainId, height] of Object.entries(blocks)) {
+      const indicator = this.el.querySelector(
+        `[data-chain-block="${chainId}"]`,
+      );
+      if (!indicator) continue;
+
+      const value = indicator.querySelector("[data-block-height]");
+      if (!value) continue;
+
+      value.textContent =
+        height === null ? "" : Number(height).toLocaleString("en-US");
+
+      if (advanced[chainId]) this.pulseBlock(indicator);
+    }
+  },
+
+  pulseBlock(indicator) {
+    indicator.classList.add("is-advancing");
+    clearTimeout(this.blockPulses.get(indicator));
+    this.blockPulses.set(
+      indicator,
+      setTimeout(() => indicator.classList.remove("is-advancing"), 420),
+    );
+  },
+
+  toggleProbingAffordance(node, status) {
+    const existing = node.querySelector("[data-probing-ring]");
+
+    if (status === "probing" && !existing) {
+      const ring = document.createElement("div");
+      ring.dataset.probingRing = "";
+      node.appendChild(ring);
+    } else if (status !== "probing" && existing) {
+      existing.remove();
     }
   },
 };
 
-
+// External Redirect Hook - for redirecting to external URLs (e.g., Stripe Checkout)
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");

@@ -62,7 +62,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     )
 
     if category == :unclassified_server_error do
-      Logger.warning("Unclassified -32000 error",
+      Logger.warning("Unclassified upstream RPC error",
         code: code,
         provider_id: provider_id,
         classification_path: classification_path,
@@ -98,7 +98,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   defp definitive_baseline_evidence?(:execution_revert, _path), do: true
 
   defp definitive_baseline_evidence?(_category, :definitive_code), do: true
-
+  defp definitive_baseline_evidence?(:rate_limit, :definitive_capacity_message), do: true
   defp definitive_baseline_evidence?(_category, _path), do: false
 
   defp classify_from_capabilities(code, message, data, provider_id, capabilities) do
@@ -189,6 +189,10 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   defp data_kind(nil), do: :none
   defp data_kind(data) when is_binary(data), do: :binary
   defp data_kind(data) when is_map(data), do: :object
+  defp data_kind(data) when is_list(data), do: :array
+  defp data_kind(data) when is_boolean(data), do: :boolean
+  defp data_kind(data) when is_number(data), do: :number
+  defp data_kind(_data), do: :other
 
   defp bounded_message(message) when is_binary(message),
     do: String.slice(message, 0, @max_classification_message_graphemes)

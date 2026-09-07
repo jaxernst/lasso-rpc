@@ -1,18 +1,15 @@
 defmodule Lasso.RPC.MethodRegistry do
   @moduledoc """
-  Canonical registry of Ethereum JSON-RPC methods categorized by
-  support patterns across hosted providers.
+  Canonical registry of Ethereum JSON-RPC methods categorized by routing and
+  capability concerns.
 
-  Categories reflect real-world availability:
-  - :core - Universal support (99%+ providers)
-  - :state - Common support (90%+ providers)
-  - :filters - Restricted support (60% providers, often limited)
-  - :debug/:trace - Rare support (<10% providers)
-  - :local_only - Never supported on hosted providers
+  A method's category informs execution safety and capability handling; it does
+  not claim that every provider or chain exposes it. Provider support remains
+  explicit capability evidence.
   """
 
   @standard_methods %{
-    # Universal support - all hosted providers
+    # Common application reads
     core: [
       "eth_blockNumber",
       "eth_chainId",
@@ -33,7 +30,7 @@ defmodule Lasso.RPC.MethodRegistry do
       "eth_getTransactionByBlockNumberAndIndex"
     ],
 
-    # Common support - may have archive restrictions
+    # State reads that may have archive restrictions
     state: [
       "eth_call",
       "eth_estimateGas",
@@ -94,9 +91,15 @@ defmodule Lasso.RPC.MethodRegistry do
       "eth_unsubscribe"
     ],
 
-    # Batch methods (provider-specific)
-    batch: [
-      # Parity/Erigon/Alchemy enhanced
+    # Reads in the pinned execution-apis baseline whose deployment, fork, cost,
+    # or access policy still varies materially across providers.
+    extended_reads: [
+      "eth_baseFee",
+      "eth_capabilities",
+      "eth_config",
+      "eth_fillTransaction",
+      "eth_getStorageValues",
+      "eth_simulateV1",
       "eth_getBlockReceipts"
     ],
 
@@ -186,7 +189,7 @@ defmodule Lasso.RPC.MethodRegistry do
   def default_support_assumption(method) do
     case method_category(method) do
       cat when cat in [:core, :state, :network, :eip1559, :mempool] -> true
-      cat when cat in [:debug, :trace, :local_only, :txpool] -> false
+      cat when cat in [:extended_reads, :debug, :trace, :local_only, :txpool] -> false
       # New, conservative
       :eip4844 -> false
       # Conservative for unknown

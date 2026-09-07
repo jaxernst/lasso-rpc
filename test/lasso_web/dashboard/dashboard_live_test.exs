@@ -6,6 +6,23 @@ defmodule LassoWeb.DashboardLiveTest do
 
   @endpoint LassoWeb.Endpoint
 
+  test "file-based profiles expose configuration help without hosted create or upgrade actions" do
+    {:ok, view, html} = live(build_conn(), "/dashboard/public")
+    assert has_element?(view, "#profile-configuration-help")
+    refute html =~ "show_upgrade_modal"
+    refute html =~ "Create"
+    refute html =~ "Sign in"
+    assert html =~ "Self-hosted"
+  end
+
+  test "unknown tabs and chain parameters preserve a working dashboard" do
+    {:ok, view, _} = live(build_conn(), "/dashboard/public?tab=invalid&chain=not-a-chain")
+    assert has_element?(view, "#network-topology")
+    assert :sys.get_state(view.pid).socket.assigns.selected_chain == nil
+    render_click(view, "switch_tab", %{tab: "metrics"})
+    assert :sys.get_state(view.pid).socket.assigns.active_tab == "metrics"
+  end
+
   test "keeps the LiveView alive when block events use chain_id" do
     {:ok, view, _html} = live(build_conn(), "/dashboard/public?tab=overview")
 

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-07
+
+### Changed
+
+- Refreshed the self-hosted dashboard with shared topology styling, chain logos, touch/pinch navigation, responsive details, and an HTTP/WebSocket request tester
+- Kept profile management file-based, with configuration guidance instead of hosted create, sign-in, billing, or upgrade controls
+- Made provider status reflect transport availability and observation freshness; unavailable measurements display as unknown
+
+### Fixed
+
+- Updated Mint to 1.10.0 to address the September 2026 security advisories
+- Preserved upstream JSON-RPC error codes and data, refined quota/revert classification, and handled HTTP error bodies consistently
+- Recognized method-specific block selectors without misclassifying transaction hashes as historical block requests
+- Removed credential-bearing paths and query strings from displayed provider endpoints
+- Preserved final request-tester outcomes when stopping and counted JSON-RPC errors returned with HTTP 200 as errors
+- Loaded metrics from bulk cache completion and rejected stale results after profile switches
+- Guarded invalid dashboard tabs and chain identifiers, empty-profile metrics, and tester profile changes
+- Stabilized WebSocket recovery tests by waiting for the recovery transition
+
+### Documentation
+
+- Documented YAML profile reloads and clarified that tester rate settings do not enforce client quotas
+- Recorded the scope and remaining shared-core gaps in [the launch parity assessment](docs/OSS_PARITY.md)
+
 ## [0.3.1] - 2026-09-04
 
 ### Fixed
@@ -110,7 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.1.0...v0.2.0

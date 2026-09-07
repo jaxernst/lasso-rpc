@@ -8,6 +8,7 @@ defmodule Lasso.RPC.RequestAnalysis do
   """
 
   alias Lasso.Config.ChainConfig
+  alias Lasso.JSONRPC.BlockSelector
 
   @type requirements :: %{
           requires_archival: boolean(),
@@ -35,7 +36,7 @@ defmodule Lasso.RPC.RequestAnalysis do
       iex> RequestAnalysis.analyze("eth_call", [%{}, "0x64"], consensus_height: 20_000_000)
       %{requires_archival: true, block_range: nil, address_count: nil}
   """
-  @spec analyze(String.t(), list(), keyword()) :: requirements()
+  @spec analyze(String.t(), list() | map(), keyword()) :: requirements()
   def analyze(method, params, opts \\ []) do
     %{
       requires_archival: requires_archival?(method, params, opts),
@@ -45,33 +46,26 @@ defmodule Lasso.RPC.RequestAnalysis do
     }
   end
 
-  # Archival detection for state methods that take block parameter as last argument
-  defp requires_archival?(method, params, opts)
-       when method in ~w(eth_call eth_getBalance eth_getCode eth_getTransactionCount eth_getStorageAt) do
-    block_param = List.last(params)
-    archival_block?(block_param, opts)
-  end
-
   # Archival detection for eth_getLogs with fromBlock/toBlock in filter
   defp requires_archival?("eth_getLogs", params, opts) do
     case params do
       [filter] when is_map(filter) ->
-        from_block = filter["fromBlock"] || "latest"
-        to_block = filter["toBlock"] || "latest"
-        archival_block?(from_block, opts) or archival_block?(to_block, opts)
+        if is_binary(filter["blockHash"]) do
+          false
+        else
+          from_block = filter["fromBlock"] || "latest"
+          to_block = filter["toBlock"] || "latest"
+          archival_block?(from_block, opts) or archival_block?(to_block, opts)
+        end
 
       _ ->
         false
     end
   end
 
-  # Archival detection for eth_getBlockByNumber
-  defp requires_archival?("eth_getBlockByNumber", [block | _], opts) do
-    archival_block?(block, opts)
+  defp requires_archival?(method, params, opts) do
+    archival_block?(BlockSelector.extract(method, params), opts)
   end
-
-  # All other methods don't require archival
-  defp requires_archival?(_method, _params, _opts), do: false
 
   # Block parameter evaluation
   defp archival_block?("earliest", _opts), do: true
@@ -80,6 +74,18 @@ defmodule Lasso.RPC.RequestAnalysis do
   defp archival_block?("safe", _opts), do: false
   defp archival_block?("finalized", _opts), do: false
   defp archival_block?(nil, _opts), do: false
+
+  defp archival_block?(%{"blockNumber" => block_number}, opts),
+    do: archival_block?(block_number, opts)
+
+  defp archival_block?(%{"blockHash" => block_hash}, _opts) when is_binary(block_hash), do: false
+
+  defp archival_block?("0x" <> hex, _opts) when byte_size(hex) == 64 do
+    case Integer.parse(hex, 16) do
+      {_block_hash, ""} -> false
+      _invalid -> false
+    end
+  end
 
   defp archival_block?("0x" <> hex, opts) do
     case Integer.parse(hex, 16) do
