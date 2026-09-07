@@ -7,13 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-07
+
+### Compatibility
+
+- Configuration validation now rejects unsupported settings that were previously ignored. Check custom profiles against `docs/CONFIGURATION.md` before upgrading; the bundled profiles use the supported schema. A rejected reload retains the active configuration.
+
 ### Configuration and operator controls
 
 - Reject unsupported YAML fields, invalid values, duplicate provider IDs, and unresolved credentials before activation; retain the active configuration on a failed reload or missing public profile.
 - Honor profile WebSocket backfill limits and application circuit-breaker thresholds. Read the documented `LW_BETA` setting.
 - Clamp request tester rates across profile changes and distinguish HTTP strategy selection from priority-based subscriptions.
 - Correct obsolete provider capability settings in the example profiles. Remove unused configuration facades, controls, and logging claims; document the supported routing and observability contracts.
-
 
 ### Changed
 
@@ -25,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Load the profiles seeded under `LASSO_DATA_DIR` and allow explicit runtime profile/history directories
 - Resolve benchmark snapshot storage when the collector starts instead of when the code is compiled
 - Use local HTTP URLs and persistent storage in the Docker helper
+- Stop and clear request tester runs when switching between profiles, including profiles with identical chain lists
+- Keep the profile selector accessible above floating dashboard panels
 
 ## [0.3.3] - 2026-09-07
 
@@ -167,7 +174,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.0...v0.3.1
