@@ -31,6 +31,24 @@ if System.get_env("PHX_SERVER") do
   config :lasso, LassoWeb.Endpoint, server: true
 end
 
+data_dir = System.get_env("LASSO_DATA_DIR")
+
+profiles_dir =
+  System.get_env("LASSO_PROFILES_DIR") ||
+    if(data_dir, do: Path.join(data_dir, "config/profiles"))
+
+if profiles_dir do
+  config :lasso, :backend_config,
+    backend: Lasso.Config.Backend.File,
+    config: [profiles_dir: profiles_dir]
+end
+
+snapshots_dir =
+  System.get_env("LASSO_SNAPSHOTS_DIR") ||
+    if(data_dir, do: Path.join(data_dir, "benchmark_snapshots"), else: "priv/benchmark_snapshots")
+
+config :lasso, :snapshots_dir, snapshots_dir
+
 # VM Metrics configuration
 # Enable collection with LASSO_VM_METRICS_ENABLED=true
 vm_metrics_enabled =

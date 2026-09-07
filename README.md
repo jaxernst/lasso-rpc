@@ -125,12 +125,15 @@ The self-hosted dashboard uses YAML profiles, including your own nodes and provi
 
 ### Docker
 
+From a checkout of the release you want to run:
+
 ```bash
-# Run with Docker
-./run-docker.sh
+# Build and run with persistent profiles and history
+export SECRET_KEY_BASE="$(openssl rand -hex 64)"
+docker compose up --build -d
 ```
 
-The application will be available at `http://localhost:4000`. The helper supplies a local `LASSO_NODE_ID`; set it yourself when you need a stable deployment identity.
+The application will be available at `http://localhost:4000`. Compose supplies `LASSO_NODE_ID=docker-local` unless you override it. This builds locally; see the [deployment guide](docs/DEPLOYMENT.md#docker) for storage, upgrades, and the foreground helper.
 
 For production deployments, see the [deployment guide](docs/DEPLOYMENT.md). Lasso has no built-in client authentication, so expose RPC and the dashboard only behind your preferred authentication or network boundary.
 

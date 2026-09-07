@@ -48,33 +48,31 @@ RUN mix tailwind.install && \
 RUN mix release
 
 # Runtime stage
-FROM hexpm/elixir:1.18.4-erlang-28.0-debian-bookworm-20260610-slim@sha256:0e0f0fc71e298dc9517f825d4076af5235617b70a48b6394a055dd1800fe34ef
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 
-# Install runtime dependencies
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    nodejs && \
-    rm -rf /var/lib/apt/lists/*
+    ca-certificates curl libstdc++6 libtinfo6 libssl3 && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 10001 lasso && \
+    useradd --uid 10001 --gid 10001 --no-create-home --home-dir /data --shell /usr/sbin/nologin lasso && \
+    mkdir -p /data && chown 10001:10001 /data
 
-# Set working directory
+LABEL org.opencontainers.image.source="https://github.com/jaxernst/lasso-rpc" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.title="Lasso RPC" \
+      org.opencontainers.image.description="Ethereum JSON-RPC routing, provider failover, and operational observability"
+
 WORKDIR /app
+ENV MIX_ENV=prod PHX_SERVER=true LASSO_DATA_DIR=/data RELEASE_TMP=/tmp/lasso LANG=C.UTF-8
 
-# Set environment
-ENV MIX_ENV=prod
-ENV PHX_SERVER=true
-
-# Copy built release from builder stage
 COPY --from=builder /app/_build/prod/rel/lasso ./
-# Copy config/profiles for runtime (seeded to /data/config/profiles by entrypoint if needed)
 COPY --from=builder /app/config/profiles ./config/profiles
-# Copy entrypoint script
-COPY deployment/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY --chmod=755 deployment/entrypoint.sh /app/entrypoint.sh
 
-# Expose port
+USER 10001:10001
 EXPOSE 4000
-
-# Use entrypoint script to handle profile seeding before starting the app
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl --fail --silent "http://127.0.0.1:${PORT:-4000}/api/health" > /dev/null || exit 1
 ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["start"]
