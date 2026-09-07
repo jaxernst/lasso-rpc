@@ -60,10 +60,12 @@ end users need Docker Compose and the downloaded configuration.
 
 ### First publication and package access
 
-GHCR packages initially default to private. After the first candidate is built,
-open the repository-linked `lasso-rpc` package settings and make that specific OSS
-package public. Do not change visibility of other packages. Then rerun failed
-verification jobs. An authenticated push is not evidence that a user can pull.
+GHCR packages initially default to private. If the anonymous pull fails because
+the package is private, open the repository-linked `lasso-rpc` package settings
+and make that specific OSS package public. Do not change visibility of other
+packages. Then rerun failed verification jobs. A package that already permits
+anonymous pulls needs no visibility change. An authenticated push alone does not
+establish public access.
 
 If package access or runner capacity blocks a stage, retain the run and report the
 actual blocker. Do not bypass anonymous verification or publish version tags to

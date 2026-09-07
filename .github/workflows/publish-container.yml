@@ -197,8 +197,15 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Download the assembled image identity
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          name: container-release
+          path: ${{ runner.temp }}/distribution
+      - name: Download native verification evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: verification-*
           merge-multiple: true
           path: ${{ runner.temp }}/distribution
       - name: Publish verified version, current latest, Compose recipe, and evidence
