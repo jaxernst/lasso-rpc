@@ -35,8 +35,7 @@ Run Lasso on your own infrastructure and configure upstreams in YAML.
 - [Documentation](#documentation)
 - [Contributing](#contributing)
 - [Security](#security)
-- [Troubleshooting](#troubleshooting)
-- [License](#license)
+- [License](#license-apache-20)
 
 ---
 
