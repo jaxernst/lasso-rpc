@@ -81,17 +81,18 @@ export LASSO_NODE_ID="us-east-1"
 
 ## Profile System Architecture
 
-Multi-tenancy via profiles: isolated routing configurations with independent chains, providers, and rate limits.
+Profiles select routing configurations, chains, and provider credentials. Profile names are routing namespaces, not authentication boundaries. Profile rate settings configure the dashboard tester; enforce incoming client quotas at the reverse proxy.
 
 ### Profile Structure
 
 ```yaml
 # config/profiles/public.yml
+---
 name: "Lasso Public"
 slug: "public"
-type: "standard"
-default_rps_limit: 100
-default_burst_limit: 500
+rps_limit: 100
+burst_limit: 500
+---
 
 chains:
   ethereum:
@@ -108,7 +109,7 @@ See `config/profiles/public.yml` for complete configuration reference.
 
 ### Profile-Scoped Supervision
 
-Each `(profile, chain)` pair runs in an isolated supervision tree with independent circuit breakers, metrics, and provider state.
+Each `(profile, chain)` pair owns its routing configuration and profile metrics. Profiles referencing the same upstream instance share instance health, circuit breakers, and transport state; separate credentials identify separate upstream instances.
 
 ### URL Routing
 

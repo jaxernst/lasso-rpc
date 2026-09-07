@@ -191,7 +191,7 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 - [ ] Provider credentials set when referenced by profile configuration
 - [ ] Health check (`GET /api/health`) monitored by orchestrator
 - [ ] Profile YAML validated (startup crashes on unresolved `${ENV_VAR}`)
-- [ ] Rate limits configured in profile frontmatter
+- [ ] Client request limits enforced at the reverse proxy; profile rate settings only configure the dashboard tester
 - [ ] TLS terminated at reverse proxy / load balancer
 - [ ] Structured JSON log drain configured
 - [ ] RPC and dashboard protected by reverse-proxy authentication or a private network boundary (Lasso OSS has no built-in client authentication)
