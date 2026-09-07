@@ -19,6 +19,21 @@ defmodule LassoWeb.Dashboard.ProviderStatusProjectionTest do
     )
   end
 
+  test "single-node status uses direct local evidence without waiting for cluster circuit events" do
+    now = System.system_time(:millisecond)
+    conn = connection(%{block_observed_at_ms: now, block_stale_after_ms: 5000})
+    opts = [available_node_ids: ["local"], local_node_id: "local", now_ms: now]
+    assert ProviderStatusProjection.status(conn, opts) == :healthy
+
+    assert ProviderStatusProjection.status(conn, Keyword.put(opts, :now_ms, now + 5001)) ==
+             :unknown
+
+    assert ProviderStatusProjection.status(conn,
+             available_node_ids: ["remote"],
+             local_node_id: "local"
+           ) == :unknown
+  end
+
   defp status(opts) when is_list(opts), do: status(connection(), opts)
 
   defp status(connection, opts) do

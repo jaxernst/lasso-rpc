@@ -11,7 +11,7 @@ Release v0.3.2 before the hosted launch once the candidate passes CI and review.
 | Area | Candidate behavior |
 | --- | --- |
 | Visuals and navigation | Shared topology layout, chain icons, branding, solid panels, pan/zoom, touch gestures, copy feedback, mobile navigation and details |
-| Provider evidence | Transport-aware status, quota/circuit state, profile freshness thresholds, raw observed heights, and explicit unknown measurements |
+| Provider evidence | Transport-aware status, direct evidence for single-node deployments, profile freshness thresholds, raw observed heights, and explicit unknown measurements |
 | Endpoints | File-configured profile routes, numeric chain identities, configured strategies, and origin-only provider URL display |
 | Profiles | Every configured YAML profile is selectable; configuration guidance replaces hosted create/upgrade actions |
 | Request tester | HTTP and WebSocket requests, configured profile/chain/strategy selection, final outcomes after stop, and accurate JSON-RPC error counts |
@@ -37,6 +37,8 @@ The inspected Cloud revision includes additional shared runtime changes beyond t
 - Head-observation and capability-freshness architecture changes that require coordinated probe, storage, routing, and dashboard contracts.
 - WebSocket ingress, continuity, and capacity/budget lifecycle changes.
 - Shared managed-capacity admission and related execution behavior that require separating reusable runtime contracts from hosted policy.
+
+Multi-node status requires fresh regional evidence; incomplete legacy observations remain unknown rather than being presented as healthy.
 
 These are not all Cloud-only features. They require a separate dependency-aware sync and regression review; copying individual files would leave incompatible runtime contracts. This release does not certify parity for those areas. Keep the existing OSS execution architecture until each coherent change can be ported and verified as a unit.
 

@@ -126,11 +126,14 @@ defmodule LassoWeb.Dashboard.ProviderStatusProjection do
   def description(_projection), do: nil
 
   defp scoped_node_ids(opts) do
-    case Keyword.get(opts, :scope, "aggregate") do
-      "aggregate" -> Keyword.get(opts, :available_node_ids, [])
-      node_id when is_binary(node_id) -> [node_id]
-    end
-    |> Enum.uniq()
+    node_ids =
+      case Keyword.get(opts, :scope, "aggregate") do
+        "aggregate" -> Keyword.get(opts, :available_node_ids, [])
+        node_id when is_binary(node_id) -> [node_id]
+      end
+      |> Enum.uniq()
+
+    if node_ids == [Keyword.get(opts, :local_node_id)], do: [], else: node_ids
   end
 
   defp project_cluster_status(connection, node_ids, opts) do

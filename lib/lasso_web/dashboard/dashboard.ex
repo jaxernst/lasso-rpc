@@ -1269,6 +1269,7 @@ defmodule LassoWeb.Dashboard do
         socket.assigns.connections,
         socket.assigns.cluster_circuit_states,
         available_node_ids: socket.assigns.available_node_ids,
+        local_node_id: Lasso.Cluster.Topology.self_node_id(),
         cluster_blocks: socket.assigns.cluster_block_heights,
         cluster_health: socket.assigns.cluster_health_counters
       )

@@ -185,6 +185,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       ProviderStatusProjection.explain(provider_connection || %{},
         scope: selected_region,
         available_node_ids: available_node_ids,
+        local_node_id: Lasso.Cluster.Topology.self_node_id(),
         cluster_circuits: cluster_circuits,
         cluster_health: cluster_health_counters,
         cluster_blocks: cluster_block_heights
