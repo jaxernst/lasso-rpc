@@ -14,13 +14,12 @@ defmodule Lasso.VMMetricsCollector do
   2. **Improves efficiency**: Metrics are collected once every interval regardless
      of how many dashboard users are connected, rather than N times for N users.
 
-  3. **Scales better**: Supports 1000+ concurrent dashboard users since they all
-     consume the same data stream.
+  3. **Shares updates**: Dashboard subscribers consume the same data stream.
 
   ## Configuration
 
-  The collector is disabled by default in production SaaS deployments where
-  exposing VM internals may not be appropriate. Enable via config:
+  The collector is disabled by default. Enable it with
+  `LASSO_VM_METRICS_ENABLED=true` or application configuration:
 
       config :lasso, :vm_metrics_enabled, true
 

@@ -6,7 +6,7 @@ defmodule LassoWeb.MetricsController do
   alias Lasso.Benchmarking.BenchmarkStore
   alias Lasso.Config.{ChainAlias, ConfigStore}
   alias Lasso.Config.ProfileValidator
-  alias LassoWeb.Dashboard.MetricsHelpers
+  alias LassoWeb.Dashboard.{MetricsHelpers, ProviderConnection, ProviderStatusProjection}
 
   @doc """
   Returns comprehensive metrics for a specific chain.
@@ -56,23 +56,24 @@ defmodule LassoWeb.MetricsController do
     # Calculate VM/system metrics
     vm_metrics = MetricsHelpers.collect_vm_metrics()
 
-    # Get routing events from telemetry (simplified implementation)
-    # In a full implementation, this would aggregate telemetry events
-    # For now, return empty list with placeholder for future implementation
-    routing_events = []
+    total_calls = chain_stats.total_calls
+    success_rate = if total_calls > 0, do: 100.0 * chain_stats.total_successes / total_calls
+    {p50, p95} = MetricsHelpers.get_windowed_percentiles_from_ets(profile, chain_id)
 
-    # Calculate chain performance metrics
+    connections =
+      ProviderConnection.fetch_connections(profile) |> Enum.filter(&(&1.chain_id == chain_id))
+
     chain_performance = %{
-      total_calls: Map.get(chain_stats, :total_calls, 0),
-      success_rate: calculate_success_rate(realtime_stats),
-      p50_latency: Map.get(realtime_stats, :p50_latency, nil),
-      p95_latency: Map.get(realtime_stats, :p95_latency, nil),
-      failovers_last_minute: Map.get(realtime_stats, :failovers_last_minute, 0),
-      connected_providers: Map.get(realtime_stats, :connected_providers, 0),
-      total_providers: Map.get(realtime_stats, :total_providers, 0),
-      recent_activity: Map.get(realtime_stats, :recent_activity, 0),
-      rpc_calls_per_second: MetricsHelpers.rpc_calls_per_second(routing_events),
-      error_rate_percent: MetricsHelpers.error_rate_percent(routing_events)
+      total_calls: total_calls,
+      success_rate: success_rate,
+      p50_latency: p50,
+      p95_latency: p95,
+      failovers_last_minute: nil,
+      connected_providers: Enum.count(connections, &ProviderStatusProjection.available?/1),
+      total_providers: length(provider_configs),
+      recent_activity: nil,
+      rpc_calls_per_second: nil,
+      error_rate_percent: if(success_rate, do: 100.0 - success_rate)
     }
 
     # Get provider-specific metrics
@@ -136,14 +137,6 @@ defmodule LassoWeb.MetricsController do
       rpc_performance_by_method: rpc_performance_by_method,
       last_updated: Map.get(realtime_stats, :last_updated, System.system_time(:millisecond))
     }
-  end
-
-  defp calculate_success_rate(realtime_stats) do
-    case Map.get(realtime_stats, :success_rate) do
-      nil -> nil
-      rate when is_float(rate) -> Float.round(rate, 1)
-      rate when is_integer(rate) -> rate / 1.0
-    end
   end
 
   defp get_provider_name(provider_id, provider_configs) do

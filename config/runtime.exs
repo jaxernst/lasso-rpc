@@ -32,7 +32,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 # VM Metrics configuration
-# Disable in production SaaS by setting LASSO_VM_METRICS_ENABLED=false
+# Enable collection with LASSO_VM_METRICS_ENABLED=true
 vm_metrics_enabled =
   case System.get_env("LASSO_VM_METRICS_ENABLED") do
     "false" -> false

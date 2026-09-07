@@ -22,7 +22,7 @@ mix compile --warnings-as-errors
 
 ### 2. Fast Test Suite
 ```bash
-mix test --exclude battle --exclude slow --max-failures 5
+mix test --max-failures 5
 ```
 
 **Expected:** All tests pass.

@@ -10,7 +10,7 @@ Run fast unit tests suitable for CI pipelines:
 mix test
 ```
 
-This excludes: `:skip`, `:integration`, `:battle`, `:real_providers`, `:slow`
+This excludes: `:skip`, `:integration`, `:real_providers`, `:slow`
 
 ### Integration Tests
 Run integration tests that use mocked providers:
@@ -23,24 +23,14 @@ Or run ONLY integration tests:
 mix test --only integration
 ```
 
-### Battle Tests
-Run battle tests with real provider connections:
+### Live Provider and Slow Tests
+
 ```bash
-mix test --include battle
+mix test --include integration --include real_providers --include slow
 ```
 
-**Warning:** Battle tests make real network calls and may take several minutes.
-
-### All Tests
-Run everything including slow tests:
-```bash
-mix test --include integration --include battle --include slow
-```
-
-Or simply include all:
-```bash
-mix test --include integration --include battle --include real_providers --include slow
-```
+These opt-in tests can make real network requests. The default and integration
+suites use local fixtures and do not require provider credentials.
 
 ## Test Categories
 
@@ -55,11 +45,6 @@ mix test --include integration --include battle --include real_providers --inclu
 - Tests that verify multiple components working together
 - Typically 1-10 seconds per test
 
-### `:battle`
-- Performance and chaos testing scenarios
-- Long-running stress tests
-- May take 30+ seconds per test
-
 ### `:real_providers`
 - Tests that connect to real Ethereum RPC providers
 - Require network connectivity
@@ -67,7 +52,7 @@ mix test --include integration --include battle --include real_providers --inclu
 
 ### `:slow`
 - Any test that takes > 10 seconds
-- Often overlaps with `:battle` or `:real_providers`
+- Can overlap with `:real_providers`
 
 ### `:skip`
 - Disabled tests (WIP or known issues)
@@ -92,9 +77,8 @@ end
 
 ## CI Configuration
 
-For CI pipelines, use the default `mix test` command which runs only fast unit tests.
+CI runs unit tests and the full hermetic integration suite, plus formatting,
+Credo, Dialyzer, dependency auditing, and Docker build/boot checks. The dashboard
+simulator's JavaScript contract tests run through ExUnit and require Node.js 18+.
 
-For nightly builds or pre-release validation, include integration and battle tests:
-```bash
-mix test --include integration --include battle
-```
+Use `mix test --include integration` to reproduce the full hermetic suite locally.

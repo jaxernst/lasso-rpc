@@ -31,7 +31,7 @@ Zero compilation errors and zero warnings. Fix before committing.
 ### 3. Test Suite
 
 ```bash
-mix test --exclude battle --exclude slow
+mix test
 ```
 
 All tests pass. No new failures.

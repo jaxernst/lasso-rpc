@@ -3,7 +3,7 @@ defmodule Lasso.Config.ChainValidator do
   Validates chain names and IDs against a canonical allowlist.
 
   Chain names must use canonical identifiers to ensure consistent global component
-  sharing across profiles. BYOK profiles are validated at load time.
+  sharing across profiles. YAML profiles are validated at load time.
 
   ## Rationale
 

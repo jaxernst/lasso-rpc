@@ -72,8 +72,7 @@ defmodule Lasso.Config.Backend do
   @doc """
   Save a profile configuration.
 
-  Optional callback for backends that support writes (e.g., database backend).
-  File backend may implement this for hot reload support.
+  Optional callback for writable backends. The file backend persists YAML to disk.
   """
   @callback save(state(), slug :: String.t(), yaml :: String.t()) :: :ok | {:error, term()}
 

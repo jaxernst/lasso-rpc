@@ -20,6 +20,7 @@ mix compile --warnings-as-errors
 mix format --check-formatted
 mix credo --strict
 mix test --include integration
+MIX_ENV=prod mix assets.setup
 MIX_ENV=prod mix assets.deploy
 MIX_ENV=prod mix release
 docker build --pull --no-cache --tag lasso-rpc:rc .

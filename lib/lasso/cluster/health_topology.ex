@@ -1,10 +1,7 @@
 defmodule Lasso.Cluster.HealthTopology do
   @moduledoc """
-  Shared cluster-topology helpers for the health endpoint.
-
-  Both the OSS and cloud `HealthController` consume this module so the
-  `regions` extraction and standalone-fallback logic stay identical and
-  drift-free across repos.
+  Cluster-topology data for the health endpoint, with a local-node fallback
+  when cluster discovery is unavailable.
   """
 
   @type info :: %{

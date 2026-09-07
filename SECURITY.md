@@ -2,11 +2,7 @@
 
 ## Supported Versions
 
-Lasso RPC is currently in initial release. We support the latest version with security updates.
-
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+We support the latest published release with security updates. Upgrade older versions to the latest release before deploying.
 
 ## Reporting a Vulnerability
 
@@ -41,7 +37,8 @@ When deploying Lasso RPC in production, follow these security best practices:
 
 ### 3. Authentication & Authorization
 
-- The dashboard is currently **read-only** and does not require authentication
+- Lasso has no built-in client authentication for RPC, metrics, or the dashboard
+- The dashboard request tester sends real upstream requests; protect dashboard access as well as RPC access
 - If you add admin API endpoints, **you must implement authentication**
 - Recommended auth methods:
   - OAuth2 via reverse proxy (Cloudflare Access, Auth0, etc.)
@@ -84,7 +81,7 @@ Lasso RPC does **not** include built-in authentication. The dashboard is designe
 
 - Implement authentication at the reverse proxy level, OR
 - Use network-level isolation (VPN, internal network only), OR
-- Accept that dashboard metrics are publicly visible (read-only)
+- Deliberately allow public access, including visible metrics and the ability to generate upstream traffic through RPC and the dashboard tester
 
 ## Disclosure Policy
 
