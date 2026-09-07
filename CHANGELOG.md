@@ -7,12 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-07
+
+### Changed
+
+- Made setup, deployment, configuration, and contributor documentation self-contained
+- Removed unused profile-downgrade and crawler-preview plugs, unreachable editing forms, and unused landing-page assets
+- Removed private lint extensions, unrelated vendor tooling, and obsolete planning documents
+
+### Fixed
+
+- Derived metrics API success rates, latency samples, and provider counts from actual local measurements; unavailable counters return `null`
+- Included the dashboard favicon in Docker builds
+- Corrected asset-build prerequisites, provider-credential examples, VM metrics defaults, and test commands
+- Clarified dashboard access controls and removed unsupported performance estimates
+
 ## [0.3.2] - 2026-09-07
 
 ### Changed
 
 - Refreshed the self-hosted dashboard with shared topology styling, chain logos, touch/pinch navigation, responsive details, and an HTTP/WebSocket request tester
-- Kept profile management file-based, with configuration guidance instead of hosted create, sign-in, billing, or upgrade controls
+- Documented file-based profile management and configuration reloads
 - Made provider status reflect transport availability and observation freshness; unavailable measurements display as unknown
 
 ### Fixed
@@ -29,7 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Documented YAML profile reloads and clarified that tester rate settings do not enforce client quotas
-- Recorded the scope and remaining shared-core gaps in [the launch parity assessment](docs/OSS_PARITY.md)
 
 ## [0.3.1] - 2026-09-04
 
@@ -90,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard and RPC routes accept both configured chain aliases and decimal chain IDs, while WebSocket startup attempts are jittered to avoid synchronized upstream handshakes
 - Default profile (`config/profiles/default.yml`) removed in favor of the canonical `public` profile; existing `default` slug requests still work via the alias system, eliminating the `Duplicate chain IDs detected across profiles` startup warning
 - `public` profile pruned of broken provider configurations: removed dead WebSocket URLs from LlamaRPC (Ethereum and Base), removed unreachable `arbitrum_meowrpc` (TLS failure), removed `base_sepolia_onfinality` (returns 401 Unauthorized)
-- `.credo.exs` ExSlop checks made conditional, eliminating "Ignoring an undefined check" noise on every credo run
+- Removed undefined optional lint-check warnings
 - Hardcoded `"default"` string fallbacks across controllers, plugs, and dashboard components replaced with `Lasso.Config.ProfileValidator.default_profile/0` to remove a class of single-source-of-truth drift bugs
 - `HealthController` topology logic extracted to `Lasso.Cluster.HealthTopology` and shared with the cloud variant so the OSS/cloud controllers can no longer drift independently
 - Several integration tests strengthened from `assert error != nil` to assert the specific `JSONRPC.Error` shape, code, and category — closes a regression channel that had previously masked a bug fix being lost during sync
@@ -134,7 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.2.0...v0.3.0

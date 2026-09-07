@@ -6,8 +6,8 @@ Thank you for your interest in contributing to Lasso RPC! This document provides
 
 ### Prerequisites
 
-- **Elixir**: 1.17+ (check with `elixir --version`)
-- **Erlang/OTP**: 26+ (check with `erl -version`)
+- **Elixir**: 1.18.4 (CI version) (check with `elixir --version`)
+- **Erlang/OTP**: 28 (CI version) (check with `erl -version`)
 - **Node.js**: 18+ (for asset compilation)
 - **Git**: For version control
 
@@ -21,6 +21,10 @@ cd lasso-rpc
 # Install dependencies
 mix deps.get
 
+# Install and build dashboard assets
+mix assets.setup
+mix assets.build
+
 # Start the Phoenix server
 mix phx.server
 ```
@@ -31,29 +35,24 @@ The application will be available at `http://localhost:4000`.
 
 Create a `.env` file for local development (optional; system environment variables take precedence):
 
-```bash
-# Optional: Add your RPC provider API keys
-DRPC_API_KEY=your_key_here
-LAVA_API_KEY=your_key_here
-# ... etc
-```
+Provider credentials are only used when referenced in a configured YAML URL or header, for example `${ALCHEMY_API_KEY}`. The included public providers require no credentials. See [provider configuration](docs/CONFIGURATION.md#provider-credentials).
 
 ## Development Workflow
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# Run unit tests
 mix test
 
 # Run specific test file
-mix test test/lasso/core/request/request_pipeline_test.exs
+mix test test/lasso/rpc/request_analysis_test.exs
 
 # Run with coverage
 mix test --cover
 
-# Run integration tests (requires real providers)
-mix test --only integration
+# Run the complete hermetic suite with local mock providers
+mix test --include integration
 ```
 
 ### Code Quality Tools
@@ -83,6 +82,14 @@ mix format --check-formatted && mix credo --strict && mix test
 - Include examples in documentation where helpful
 - Update relevant documentation in `docs/` when changing behavior
 - Keep README.md up to date with new features
+
+## Standalone Project Requirements
+
+Public documentation must describe functionality implemented in this repository.
+Keep private deployment details, internal synchronization notes, and unrelated
+vendor tooling out of the source tree. Verify that setup commands work from a
+clean checkout, links resolve, and visible controls have working handlers.
+Provider credentials must be supplied by the operator through configuration.
 
 ## Pull Request Process
 
@@ -177,7 +184,7 @@ mix format --check-formatted && mix credo --strict && mix test
 - Use descriptive test names
 - One assertion per test when possible
 - Use fixtures for complex test data
-- Tag slow tests appropriately (`:integration`, `:real_providers`)
+- Use `:integration` for hermetic integration tests, `:real_providers` for live upstreams, and `:slow` for expensive tests
 
 Example test structure:
 ```elixir

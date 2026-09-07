@@ -349,7 +349,19 @@ Returns the configured chains in the included `public` profile.
 GET /api/metrics/:chain
 ```
 
-Returns provider performance metrics for a chain.
+Returns node-local upstream attempt metrics for a configured chain in the `public`
+profile, including provider and per-method latency and success data. These are
+upstream attempt measurements, not end-to-end client request counts.
+
+`chain_performance.total_providers` counts configured providers, including those
+without traffic. `success_rate` and `error_rate_percent` are percentages and are
+`null` before any observations. Provider and per-method success rates are fractions
+between 0 and 1. Latency percentiles use retained samples from provider/method
+entries updated within five minutes.
+
+The response retains `failovers_last_minute`, `recent_activity`, and
+`rpc_calls_per_second` as `null`: this endpoint does not collect those measurements.
+The dashboard provides live client traffic counters.
 
 ---
 

@@ -1,37 +1,11 @@
 defmodule Lasso.Benchmarking.Persistence do
   @moduledoc """
-  Handles persistence of benchmark data for historical analysis.
+  Stores hourly benchmark snapshots as JSON files for historical analysis.
 
-  This module provides snapshot-based persistence using JSON files for the MVP.
-  Future implementations should migrate to a proper database like PostgreSQL
-  when Ecto is added to the project.
-
-  ## Database Schema (Future Implementation)
-
-  When adding Ecto to the project, use this schema:
-
-  ```sql
-  CREATE TABLE provider_performance_snapshots (
-    id SERIAL PRIMARY KEY,
-    chain_name VARCHAR(50) NOT NULL,
-    provider_id VARCHAR(100) NOT NULL,
-    hour_timestamp TIMESTAMP NOT NULL,
-    event_type VARCHAR(50),
-    wins INTEGER,
-    total_races INTEGER,
-    avg_margin_ms FLOAT,
-    rpc_method VARCHAR(50),
-    rpc_calls INTEGER,
-    rpc_avg_duration_ms FLOAT,
-    rpc_success_rate FLOAT,
-    created_at TIMESTAMP DEFAULT NOW(),
-
-    INDEX idx_chain_provider (chain_name, provider_id),
-    INDEX idx_timestamp (hour_timestamp),
-    INDEX idx_event_type (event_type),
-    INDEX idx_rpc_method (rpc_method)
-  );
-  ```
+  Snapshots are grouped by profile and chain under a directory selected at
+  build time by `LASSO_SNAPSHOTS_DIR` (default: `priv/benchmark_snapshots`).
+  Configure a persistent volume to
+  retain them across container replacements.
   """
 
   require Logger

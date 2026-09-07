@@ -3,8 +3,9 @@ defmodule Lasso.Config.ProfileMeta do
   Profile metadata stored in `Lasso.Config.ConfigStore`.
 
   Carries the opaque routing identity and YAML slug for a system profile,
-  plus display fields (`name`, `logo`, `unlisted`) and request limits
-  (`rps_limit`, `burst_limit`).
+  plus display fields (`name`, `logo`, `unlisted`), the dashboard tester
+  rate setting (`rps_limit`), and retained configuration metadata (`burst_limit`).
+  These fields do not enforce incoming RPC quotas.
 
   Use the field accessors (`meta.name`, `meta.rps_limit`, etc.). For
   optional fields use `Map.get/3` rather than bracket access — structs

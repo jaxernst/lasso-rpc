@@ -4,7 +4,7 @@ import "phoenix_html";
 import { Socket } from "phoenix";
 import { LiveSocket } from "phoenix_live_view";
 
-// Enhanced Simulator module
+// Dashboard request tester
 import * as LassoSim from "./lasso_simulator";
 
 const copyTextToClipboard = async (text) => {
@@ -391,8 +391,7 @@ const DraggableNetworkViewport = {
 
     // LiveView owns the canvas DOM and removes JS-authored inline styles while
     // applying the connected-mount patch. Keep the camera transform on the
-    // document element instead, so the old frame remains in force while
-    // account and billing decoration is reconciled.
+    // document element so it survives connected-mount patches.
     this.frameTransformProperty = "--lasso-topology-transform";
     const restoredFrame = document.documentElement.style
       .getPropertyValue(this.frameTransformProperty)
@@ -1407,52 +1406,6 @@ const EndpointSelector = {
 };
 
 // Scroll Reveal Hook
-const ScrollReveal = {
-  mounted() {
-    this.revealed = false;
-
-    // Check if we should reveal immediately (if already visible or near top)
-    // But usually we trust the observer.
-
-    this.observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            this.reveal();
-            this.observer.unobserve(this.el);
-          }
-        });
-      },
-      {
-        root: null,
-        threshold: 0.1,
-        rootMargin: "0px 0px -50px 0px",
-      },
-    );
-    this.observer.observe(this.el);
-  },
-
-  updated() {
-    // LiveView might have reset the classes to the server-side state (hidden).
-    // If we have already revealed this element, we must force it back to visible.
-    if (this.revealed) {
-      this.el.classList.remove("opacity-0", "translate-y-8");
-      this.el.classList.add("opacity-100", "translate-y-0");
-    }
-  },
-
-  reveal() {
-    this.revealed = true;
-    this.el.classList.remove("opacity-0", "translate-y-8");
-    this.el.classList.add("opacity-100", "translate-y-0");
-  },
-
-  destroyed() {
-    if (this.observer) {
-      this.observer.disconnect();
-    }
-  },
-};
 
 // Expandable Details Hook - preserves open state across LiveView updates
 const ExpandableDetails = {
@@ -1505,104 +1458,8 @@ const ExpandableDetails = {
 };
 
 // Heatmap Animation Hook - adds dynamic cell highlighting effects
-const HeatmapAnimation = {
-  mounted() {
-    this.cells = [];
-    this.highlightInterval = null;
-
-    // Start random highlight effect when live
-    this.startHighlightEffect();
-  },
-
-  updated() {
-    // Refresh cell references and restart effect
-    this.startHighlightEffect();
-  },
-
-  startHighlightEffect() {
-    // Clear existing interval
-    if (this.highlightInterval) {
-      clearInterval(this.highlightInterval);
-    }
-
-    // Get all heatmap cells
-    this.cells = Array.from(this.el.querySelectorAll(".heatmap-cell"));
-
-    if (this.cells.length === 0) return;
-
-    // Random highlight every 800-1500ms
-    this.highlightInterval = setInterval(
-      () => {
-        this.highlightRandomCell();
-      },
-      800 + Math.random() * 700,
-    );
-  },
-
-  highlightRandomCell() {
-    if (this.cells.length === 0) return;
-
-    const cell = this.cells[Math.floor(Math.random() * this.cells.length)];
-
-    // Add a quick flash effect
-    cell.style.transition = "filter 0.15s ease-out, transform 0.15s ease-out";
-    cell.style.filter = "brightness(1.4)";
-    cell.style.transform = "scale(1.05)";
-
-    // Reset after flash
-    setTimeout(() => {
-      cell.style.filter = "";
-      cell.style.transform = "";
-    }, 150);
-  },
-
-  destroyed() {
-    if (this.highlightInterval) {
-      clearInterval(this.highlightInterval);
-    }
-  },
-};
 
 // Parallax Background Hook
-const ParallaxBackground = {
-  mounted() {
-    this.ticking = false;
-
-    this.handleScroll = () => {
-      if (!this.ticking) {
-        window.requestAnimationFrame(() => {
-          const scrolled = this.el.scrollTop;
-          const blobs = this.el.querySelectorAll("[data-parallax-speed]");
-
-          blobs.forEach((blob) => {
-            const speed = parseFloat(blob.dataset.parallaxSpeed);
-            // Move UP as we scroll down to create depth (background moves slower than foreground)
-            // Since foreground moves at 1px/px, background should move at (1-speed)px/px or similar.
-            // But these are fixed elements. They don't move at all by default.
-            // To make them look like they are "far away", they should move slightly opposite to scroll direction
-            // or slightly WITH scroll direction?
-            // If they are "background", they should move upwards but slower than the content.
-            // Content moves up at speed equal to scroll.
-            // If we want them to appear "behind", they should move up slower.
-            // Since they are FIXED, they effectively move with the camera (0 movement relative to viewport).
-            // To make them look like background, we need to push them UP as we scroll down.
-            const yPos = -(scrolled * speed);
-            blob.style.transform = `translate3d(0, ${yPos}px, 0)`;
-          });
-
-          this.ticking = false;
-        });
-
-        this.ticking = true;
-      }
-    };
-
-    this.el.addEventListener("scroll", this.handleScroll);
-  },
-  destroyed() {
-    this.el.removeEventListener("scroll", this.handleScroll);
-  },
-};
 
 // Profile Persistence Hook - saves selected profile to sessionStorage
 const ProfilePersistence = {
@@ -1877,7 +1734,6 @@ const NetworkTopologyStatus = {
   },
 };
 
-// External Redirect Hook - for redirecting to external URLs (e.g., Stripe Checkout)
 let csrfToken = document
   .querySelector("meta[name='csrf-token']")
   .getAttribute("content");
@@ -1892,10 +1748,7 @@ let liveSocket = new LiveSocket("/live", Socket, {
     TerminalFeed,
     ActivityFeed,
     TabSwitcher: EndpointSelector,
-    ScrollReveal,
-    ParallaxBackground,
     ExpandableDetails,
-    HeatmapAnimation,
     ProfilePersistence,
     CopyButton,
     NetworkTopologyStatus,

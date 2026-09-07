@@ -2,11 +2,11 @@
 
 ### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
 
-[![Docs](https://img.shields.io/badge/docs-docs.lasso.sh-38BDF8?style=flat-square&labelColor=19202E)](https://docs.lasso.sh/introduction)
+[![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](docs/API_REFERENCE.md)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.3.2-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Version](https://img.shields.io/badge/version-0.3.3-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
@@ -15,7 +15,7 @@ It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RP
 
 Point your client at a Lasso URL instead of a provider's, and failover, retries, and provider selection happen behind it. No SDK, no client library, no application changes.
 
-This repository contains the self-hosted routing core. For a managed deployment, visit [lasso.sh](https://lasso.sh).
+Run Lasso on your own infrastructure and configure upstreams in YAML.
 
 ---
 
@@ -95,8 +95,8 @@ Routes without `/profile/:profile` use the included `public` profile. Use a name
 
 ### Prerequisites
 
-- **Elixir**: 1.17+ (check with `elixir --version`)
-- **Erlang/OTP**: 27+ (check with `erl -version`)
+- **Elixir**: 1.18.4 (CI version) (check with `elixir --version`)
+- **Erlang/OTP**: 28 (CI version) (check with `erl -version`)
 - **Node.js**: 18+ (for asset compilation)
 
 ### Local (recommended)
@@ -109,13 +109,17 @@ cd lasso-rpc
 # Install dependencies
 mix deps.get
 
+# Install and build dashboard assets
+mix assets.setup
+mix assets.build
+
 # Start the Phoenix server
 mix phx.server
 ```
 
 The application will be available at `http://localhost:4000` and the dashboard at `http://localhost:4000/dashboard`.
 
-The self-hosted dashboard uses YAML profiles, including your own nodes and provider credentials. [Configure profiles](docs/CONFIGURATION.md#multiple-profiles) to add or change them. Lasso Cloud provides hosted account, API-key, billing, and database-backed profile management; those controls are not part of the OSS dashboard.
+The self-hosted dashboard uses YAML profiles, including your own nodes and provider credentials. [Configure profiles](docs/CONFIGURATION.md#multiple-profiles) to add or change them.
 
 **Note**: The included `public` profile has free public providers (no API keys required), so you can start using it immediately.
 
@@ -186,7 +190,7 @@ curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
 
 ## Configuration
 
-Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and limits. `${ENV_VAR}` substitution is supported (and unresolved placeholders will fail startup).
+Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and tester settings. `${ENV_VAR}` substitution is supported (and unresolved placeholders will fail startup).
 
 A profile's YAML `slug` is its routing identity. Treat it as opaque in integrations. Chain routing accepts the configured name (such as `ethereum`) or its decimal EIP-155 ID (such as `1`); Lasso resolves either form to a positive integer internally. The `default` route remains an alias for the included `public` profile.
 
@@ -212,7 +216,6 @@ Minimal example:
 ---
 name: "Public RPC"
 slug: "public"
-type: "standard"
 rps_limit: 100  # Dashboard tester maximum
 ---
 chains:
@@ -287,7 +290,7 @@ Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-c
 
 ## Documentation
 
-Full hosted documentation lives at **[docs.lasso.sh](https://docs.lasso.sh/introduction)**. In-repo references:
+Documentation for this release:
 
 - **[CONFIGURATION.md](docs/CONFIGURATION.md)** - Profile YAML reference, strategies, provider capabilities
 - **[API_REFERENCE.md](docs/API_REFERENCE.md)** - HTTP/WebSocket endpoints, headers, errors
@@ -296,7 +299,6 @@ Full hosted documentation lives at **[docs.lasso.sh](https://docs.lasso.sh/intro
 - **[OBSERVABILITY.md](docs/OBSERVABILITY.md)** - Logging/metrics
 - **[RPC_STANDARDS.md](docs/RPC_STANDARDS.md)** - RPC compliance details
 - **[TESTING.md](docs/TESTING.md)** - Dev workflow
-- **[FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md)** - Roadmap
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history
 
 ---

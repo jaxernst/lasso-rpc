@@ -230,7 +230,7 @@ capabilities:
 
 When `capabilities` is omitted, defaults to permissive (only `local_only` methods blocked, no limits).
 
-## BYOK (Bring Your Own Keys)
+## Provider Credentials
 
 Use your own provider API keys alongside public providers:
 
@@ -262,11 +262,11 @@ Create separate profiles for different environments or use cases:
 ```
 config/profiles/
 ├── public.yml       # Included free public providers
-├── production.yml   # BYOK + own nodes
+├── production.yml   # Credentialed providers + own nodes
 └── staging.yml      # Subset for testing
 ```
 
-The dashboard lists configured profiles and links to this guide. It does not create database-backed profiles. To add a profile, create its YAML file in `config/profiles/` on each node and restart Lasso, or reload a running release:
+The dashboard lists configured profiles and links to this guide. To add a profile, create its YAML file in `config/profiles/` on each node and restart Lasso, or reload a running release:
 
 ```bash
 _build/prod/rel/lasso/bin/lasso rpc 'Lasso.Config.ConfigStore.reload()'
@@ -295,7 +295,6 @@ Set in `config/runtime.exs` or via environment variables:
 | `PHX_HOST` | Hostname for the Phoenix endpoint | `localhost` |
 | `PORT` | HTTP port | `4000` |
 | `SECRET_KEY_BASE` | Phoenix secret key (required in production) | - |
-| `DATABASE_URL` | PostgreSQL connection URL (cloud only) | - |
 | `LASSO_COWBOY_TELEMETRY_ENABLED` | Enable Cowboy per-request telemetry (`true`, `false`, `1`, or `0`); disabling it does not disable Lasso application or dashboard events | `true` |
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | Use a larger short-lived heap while validating completed HTTP upstream responses; useful for CPU-bound, high-concurrency deployments | `false` |
 | `LASSO_HTTP_POOL_SIZE` | Maximum HTTP/1 connections per upstream host and pool | `256` |

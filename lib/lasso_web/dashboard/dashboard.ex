@@ -531,8 +531,6 @@ defmodule LassoWeb.Dashboard do
               cluster_node_ids={@available_node_ids}
               cluster_circuit_states={@cluster_circuit_states}
             />
-          <% "benchmarks" -> %>
-            <DashboardComponents.benchmarks_tab_content />
           <% "system" -> %>
             <%= if @vm_metrics_enabled do %>
               <DashboardComponents.metrics_tab_content

@@ -4,8 +4,8 @@
 
 ### Prerequisites
 
-- **Elixir**: 1.17+
-- **Erlang/OTP**: 27+
+- **Elixir**: 1.18.4 (CI version)
+- **Erlang/OTP**: 28 (CI version)
 - **Node.js**: 18+ (asset compilation)
 
 ### Setup
@@ -14,6 +14,8 @@
 git clone https://github.com/jaxernst/lasso-rpc
 cd lasso-rpc
 mix deps.get
+mix assets.setup
+mix assets.build
 mix phx.server
 ```
 
@@ -48,6 +50,9 @@ Lasso is a standard Elixir/Phoenix release. It runs anywhere you can deploy an O
 ### Building a Release
 
 ```bash
+MIX_ENV=prod mix deps.get
+MIX_ENV=prod mix assets.setup
+MIX_ENV=prod mix assets.deploy
 MIX_ENV=prod mix release
 ```
 
@@ -87,7 +92,7 @@ The health endpoint confirms that the application is running and reports cluster
 
 ### HTTPS
 
-Lasso serves HTTP. Terminate TLS at your reverse proxy or load balancer. Set `PHX_HOST` to your public hostname so generated URLs use the correct scheme.
+Lasso serves HTTP. Terminate TLS at your reverse proxy or load balancer. Set `PHX_HOST` to your public hostname. Production URL generation defaults to HTTPS; set `PHX_SCHEME=http` when serving locally without a TLS proxy.
 
 ---
 
@@ -154,10 +159,11 @@ The dashboard aggregates data across all nodes for unified observability with re
 |----------|----------|-------------|---------|
 | `SECRET_KEY_BASE` | Prod | Phoenix signing secret (64+ bytes) | - |
 | `PHX_HOST` | Prod | Public hostname | `localhost` |
+| `PHX_SCHEME` | No | External URL scheme | `https` in production |
 | `PHX_SERVER` | Prod | Set to `true` to start HTTP server | - |
 | `PORT` | No | HTTP listener port | `4000` |
 | `LASSO_NODE_ID` | Prod | Unique node identifier | `"local"` in dev |
-| `LASSO_VM_METRICS_ENABLED` | No | Set to `false` to disable VM metrics | `true` |
+| `LASSO_VM_METRICS_ENABLED` | No | Set to `true` to enable VM metrics | `false` |
 | `LASSO_COWBOY_TELEMETRY_ENABLED` | No | Set to `false` to disable Cowboy per-request telemetry; Lasso application and dashboard events remain enabled | `true` |
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | No | Use a larger short-lived heap while validating completed HTTP upstream responses; benchmark before enabling for latency-bound traffic | `false` |
 | `LASSO_HTTP_POOL_SIZE` | No | Maximum HTTP/1 connections per upstream host and pool | `256` |
@@ -182,10 +188,10 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 - [ ] `PHX_HOST` set to public hostname
 - [ ] `PHX_SERVER=true` set
 - [ ] `LASSO_NODE_ID` set to a unique, stable value
-- [ ] Provider API keys set if using BYOK providers
+- [ ] Provider credentials set when referenced by profile configuration
 - [ ] Health check (`GET /api/health`) monitored by orchestrator
 - [ ] Profile YAML validated (startup crashes on unresolved `${ENV_VAR}`)
-- [ ] Rate limits configured in profile frontmatter
+- [ ] Client request limits enforced at the reverse proxy; profile rate settings only configure the dashboard tester
 - [ ] TLS terminated at reverse proxy / load balancer
 - [ ] Structured JSON log drain configured
 - [ ] RPC and dashboard protected by reverse-proxy authentication or a private network boundary (Lasso OSS has no built-in client authentication)

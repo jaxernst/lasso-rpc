@@ -8,6 +8,8 @@ erl_crash.dump
 
 # Static assets that will be built in container
 priv/static/
+!priv/static/favicon.svg
+!priv/static/robots.txt
 !priv/static/images/
 !priv/static/images/**
 

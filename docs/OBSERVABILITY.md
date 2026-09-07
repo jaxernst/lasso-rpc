@@ -338,33 +338,12 @@ config :lasso, :observability,
 
 ## Performance Characteristics
 
-### Overhead Breakdown
+Request metadata encoding, logging, and metric collection add work to each request.
+Sampling can reduce log volume. Actual latency and memory costs depend on traffic,
+metadata size, enabled instrumentation, and deployment resources.
 
-| Operation           | Overhead  | Notes                       |
-| ------------------- | --------- | --------------------------- |
-| Context creation    | <1ms      | Single struct allocation    |
-| Timing markers      | <0.1ms    | System.monotonic_time/0     |
-| Provider selection  | 2-5ms     | Existing selection overhead |
-| Log emission        | <5ms      | Async logger, sampling      |
-| Header encoding     | <2ms      | JSON encode + base64url     |
-| Body enrichment     | <1ms      | Map.put operation           |
-| **Total (headers)** | **~10ms** | End-to-end with metadata    |
-| **Total (body)**    | **~9ms**  | End-to-end with metadata    |
-| **Total (none)**    | **~8ms**  | End-to-end without metadata |
-
-### Memory Usage
-
-- **RequestContext struct**: ~200 bytes per request
-- **Process dictionary storage**: ~200 bytes per request (until response sent)
-- **Log buffer**: Varies by logger backend (async by default)
-- **Peak usage**: <1KB per in-flight request
-
-### Scalability
-
-- **High concurrency**: No shared state, per-request context
-- **Sampling support**: Reduces log volume without code changes
-- **Async logging**: Non-blocking log emission
-- **No persistence**: Context discarded after response
+This repository does not publish a reproducible overhead or concurrency benchmark.
+Measure representative workloads on your deployment before setting capacity targets.
 
 ## Use Cases
 

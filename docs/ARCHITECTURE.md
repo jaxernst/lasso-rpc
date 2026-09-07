@@ -81,17 +81,18 @@ export LASSO_NODE_ID="us-east-1"
 
 ## Profile System Architecture
 
-Multi-tenancy via profiles: isolated routing configurations with independent chains, providers, and rate limits.
+Profiles select routing configurations, chains, and provider credentials. Profile names are routing namespaces, not authentication boundaries. Profile rate settings configure the dashboard tester; enforce incoming client quotas at the reverse proxy.
 
 ### Profile Structure
 
 ```yaml
 # config/profiles/public.yml
+---
 name: "Lasso Public"
 slug: "public"
-type: "standard"
-default_rps_limit: 100
-default_burst_limit: 500
+rps_limit: 100
+burst_limit: 500
+---
 
 chains:
   ethereum:
@@ -108,7 +109,7 @@ See `config/profiles/public.yml` for complete configuration reference.
 
 ### Profile-Scoped Supervision
 
-Each `(profile, chain)` pair runs in an isolated supervision tree with independent circuit breakers, metrics, and provider state.
+Each `(profile, chain)` pair owns its routing configuration and profile metrics. Profiles referencing the same upstream instance share instance health, circuit breakers, and transport state; separate credentials identify separate upstream instances.
 
 ### URL Routing
 
@@ -850,7 +851,6 @@ ETS-based configuration cache for fast lookups:
 **Configuration backend abstraction**:
 
 - File backend: Loads from `config/profiles/*.yml`
-- Database backend: SaaS extension (not in OSS)
 
 ---
 
@@ -891,23 +891,10 @@ Drop-in replacement for existing RPC URLs.
 
 ## Performance Characteristics
 
-### Overhead
-
-| Operation             | Latency | Notes                    |
-| --------------------- | ------- | ------------------------ |
-| Context creation      | <1ms    | Single struct allocation |
-| Provider selection    | 2-5ms   | ETS lookups + scoring    |
-| Benchmarking update   | <1ms    | Async ETS write          |
-| Circuit breaker check | <0.1ms  | GenServer call           |
-| Request observability | <5ms    | Async logger             |
-| Total overhead        | ~10ms   | End-to-end added latency |
-
-### Scalability
-
-- **Concurrent requests**: 10,000+ simultaneous (BEAM lightweight processes)
-- **Subscriptions per upstream**: 1,000+ clients per upstream subscription
-- **Memory per request**: <1KB (RequestContext + temporary state)
-- **ETS table scans**: <1ms P99 (consensus height calculation)
+Capacity depends on upstream limits, request mix, subscriptions, instrumentation,
+and node resources. BEAM processes and ETS support concurrent routing, but do not
+establish a throughput or latency guarantee. Benchmark representative workloads
+on the intended deployment; no reproducible capacity benchmark is published here.
 
 ---
 
@@ -921,4 +908,4 @@ Core architectural properties:
 - **WebSocket multiplexing**: N:1 client-to-upstream subscription ratio
 - **Cluster aggregation**: Optional BEAM clustering for unified observability without routing impact
 - **Request observability**: Structured logging with optional client metadata
-- **BEAM concurrency**: 10,000+ concurrent requests via lightweight processes
+- **BEAM concurrency**: Requests use lightweight processes

@@ -304,10 +304,7 @@ When comparing approaches, consider:
 
 ## Related Documents
 
-- `PROPAGATION_TRACKING_SPEC.md` — Fair lag filtering (V1, implemented)
-- `PROPAGATION_TRACKING_SPEC_V0.md` — Original complex approach (archived)
-- Review feedback: `GPT_PRODUCT.md`, `GEMINI_SKEPTIC.md`, etc.
+- [Architecture](../ARCHITECTURE.md) describes implemented observation and lag handling.
+- [Routing](../ROUTING.md) describes the available selection strategies.
 
----
-
-**This document is intentionally open-ended. The right approach depends on measurements we haven't taken yet.**
+This document explores potential designs. It does not define supported configuration.
