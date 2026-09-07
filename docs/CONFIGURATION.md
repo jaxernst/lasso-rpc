@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Lasso is configured via YAML profile files in `config/profiles/`. Each profile defines chains, providers, routing policy, and rate limits. Multiple profiles enable isolated configurations for different environments or tenants.
+Lasso is configured via YAML profile files in `config/profiles/`. Each profile defines chains, providers, routing policy, and dashboard tester settings. Multiple profiles enable isolated configurations for different environments or tenants.
 
 ## Profile File Structure
 
@@ -11,8 +11,8 @@ Lasso is configured via YAML profile files in `config/profiles/`. Each profile d
 ---
 name: "My Profile"           # Display name
 slug: "my-profile"           # URL identifier (used in /rpc/profile/:slug/...)
-rps_limit: 100               # Requests per second limit
-burst_limit: 500             # Burst token bucket capacity
+rps_limit: 100               # Dashboard tester maximum RPS
+burst_limit: 500             # Metadata; not enforced by OSS
 ---
 
 # --- Body: Chain configurations ---
@@ -30,8 +30,10 @@ chains:
 |-------|------|----------|-------------|
 | `name` | string | Yes | Human-readable profile name |
 | `slug` | string | Yes | URL-safe identifier. Must be unique across profiles |
-| `rps_limit` | integer | No | Per-key requests/second limit (default: 100) |
-| `burst_limit` | integer | No | Token bucket burst capacity (default: 500) |
+| `rps_limit` | integer | No | Maximum RPS offered by dashboard tester controls (default: 100) |
+| `burst_limit` | integer | No | Profile metadata (default: 500); no OSS ingress enforcement |
+
+OSS does not authenticate clients or enforce per-client request quotas. Configure authentication and inbound rate limiting at your reverse proxy. Provider quota and circuit-breaker backoff are separate routing controls.
 
 ## Chain Configuration
 
@@ -263,6 +265,14 @@ config/profiles/
 ├── production.yml   # BYOK + own nodes
 └── staging.yml      # Subset for testing
 ```
+
+The dashboard lists configured profiles and links to this guide. It does not create database-backed profiles. To add a profile, create its YAML file in `config/profiles/` on each node and restart Lasso, or reload a running release:
+
+```bash
+_build/prod/rel/lasso/bin/lasso rpc 'Lasso.Config.ConfigStore.reload()'
+```
+
+Confirm the reload returns `:ok`, then refresh the dashboard. Each node reads its own files; distribute the same configuration to every node.
 
 Access via URL: `/rpc/profile/:slug/:chain`
 

@@ -6,7 +6,7 @@
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.3.1-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Version](https://img.shields.io/badge/version-0.3.2-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
 Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
@@ -62,7 +62,7 @@ Different providers excel at different workloads (hot reads vs archival queries 
 - **WebSocket subscriptions**: multiplexing with optional gap-filling via HTTP on upstream failure
 - **Profiles**: isolated configs/state/metrics (dev/staging/prod, multi-tenant, experiments)
 - **Cluster aggregation**: optional BEAM clustering aggregates metrics across geo-distributed nodes with regional drill-down
-- **LiveView dashboard**: provider status, routing decisions, latency metrics, and cluster-wide observability
+- **LiveView dashboard**: interactive topology, fresh provider status, routing decisions, latency metrics, cluster-wide observability, and an HTTP/WebSocket request tester
 
 ---
 
@@ -114,6 +114,8 @@ mix phx.server
 ```
 
 The application will be available at `http://localhost:4000` and the dashboard at `http://localhost:4000/dashboard`.
+
+The self-hosted dashboard uses YAML profiles, including your own nodes and provider credentials. [Configure profiles](docs/CONFIGURATION.md#multiple-profiles) to add or change them. Lasso Cloud provides hosted account, API-key, billing, and database-backed profile management; those controls are not part of the OSS dashboard.
 
 **Note**: The included `public` profile has free public providers (no API keys required), so you can start using it immediately.
 

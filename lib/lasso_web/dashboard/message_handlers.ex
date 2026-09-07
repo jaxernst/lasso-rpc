@@ -166,7 +166,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
         type: :ws_lifecycle,
         ts: format_time(ts),
         ts_ms: ts,
-        chain_id: chain_id,
+        chain: chain_id,
         provider_id: provider_id,
         event: event_kind,
         subscription_type: sub_type,
@@ -175,7 +175,7 @@ defmodule LassoWeb.Dashboard.MessageHandlers do
 
       uev =
         Helpers.as_event(:subscription,
-          chain_id: chain_id,
+          chain: chain_id,
           provider_id: provider_id,
           severity: subscription_event_severity(event_kind),
           message: subscription_event_label(event_kind, sub_type),

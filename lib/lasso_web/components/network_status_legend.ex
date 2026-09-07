@@ -2,10 +2,13 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
   @moduledoc """
   Network status legend component showing provider health indicators.
 
+  Transport is shown alongside status: a provider's connector is a single trace
+  for HTTP and a doubled trace when it also serves WebSocket subscriptions.
+
   Status hierarchy (ordered by severity):
   1. Circuit Open (red) - Complete failure, removed from rotation
   2. Rate Limited (purple) - Quota or rate cooldown
-  3. Degraded (orange) - Transient issues
+  3. Degraded (orange) - One or more routes are impaired; others may remain available
   4. Recovering (amber) - WS recovering or circuit testing recovery
   5. Lagging (blue) - Lagging blocks
   6. Healthy (green) - Fully operational
@@ -14,75 +17,85 @@ defmodule LassoWeb.Components.NetworkStatusLegend do
 
   def legend(assigns) do
     ~H"""
-    <div class="absolute bottom-4 right-4 flex items-center gap-3 lg:right-6 xl:left-1/2 xl:right-auto xl:-translate-x-1/2">
-      <div class="bg-gray-900/20 border-gray-700/50 rounded-lg border p-4 shadow-xl backdrop-blur-sm">
+    <div class="absolute bottom-4 right-4 hidden items-center gap-3 md:flex lg:right-6 xl:left-1/2 xl:right-auto xl:-translate-x-1/2">
+      <div class="bg-gray-900/20 border-gray-700/50 rounded-lg border px-4 py-2 shadow-xl backdrop-blur-sm">
         <div class="flex flex-wrap justify-end gap-3 xl:justify-center">
           <!-- Healthy Status -->
           <div
-            class="flex items-center space-x-1.5 text-xs text-gray-300"
-            title="All systems operational and synced"
+            class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
+            title="Available evidence shows no current impairment in the selected scope; this does not verify every RPC method"
           >
-            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-emerald-400"></div>
+            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-[2px] bg-emerald-400"></div>
             <span>Healthy</span>
           </div>
           
     <!-- Lagging Status -->
           <div
-            class="flex items-center space-x-1.5 text-xs text-gray-300"
-            title="Responsive but lagging blocks behind network"
+            class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
+            title="Fresh head evidence is behind the profile's qualified reference beyond its configured tolerance"
           >
-            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-sky-400"></div>
+            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-[2px] bg-sky-400"></div>
             <span>Lagging</span>
           </div>
           
     <!-- Recovering Status (covers both WS recovery and circuit half-open) -->
           <div
-            class="flex items-center space-x-1.5 text-xs text-gray-300"
+            class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
             title="Connection recovering or circuit testing recovery"
           >
-            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-amber-400"></div>
+            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-[2px] bg-amber-400"></div>
             <span>Recovering</span>
           </div>
           
     <!-- Degraded Status -->
           <div
-            class="flex items-center space-x-1.5 text-xs text-gray-300"
-            title="Experiencing issues but still trying"
+            class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
+            title="One or more regions or transports are impaired; other routes may remain available"
           >
-            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-orange-400"></div>
+            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-[2px] bg-orange-400"></div>
             <span>Degraded</span>
           </div>
           
     <!-- Rate Limited Status -->
           <div
-            class="flex items-center space-x-1.5 text-xs text-gray-300"
+            class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
             title="Rate limited or quota exhausted, in cooldown"
           >
-            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-purple-400"></div>
+            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-[2px] bg-purple-400"></div>
             <span>Rate Limited</span>
           </div>
           
     <!-- Circuit Open Status -->
           <div
-            class="flex items-center space-x-1.5 text-xs text-gray-300"
-            title="Circuit breaker open, provider removed from rotation"
+            class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
+            title="All supported routes in the selected scope have open circuits and are excluded from normal routing"
           >
-            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-red-500"></div>
+            <div class="h-2.5 w-2.5 flex-shrink-0 rounded-[2px] bg-red-500"></div>
             <span>Circuit Open</span>
           </div>
         </div>
       </div>
 
-      <div
-        class="flex items-center space-x-1.5 text-xs text-gray-300 pl-1"
-        title="Provider supports WebSocket subscriptions"
-      >
-        <div class="flex h-3 w-3 flex-shrink-0 items-center justify-center rounded-full bg-blue-600">
-          <svg class="h-2 w-2 text-white" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.94-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
+      <div class="bg-gray-900/20 border-gray-700/50 flex items-center gap-3 rounded-lg border px-3 py-2 shadow-xl backdrop-blur-sm">
+        <div
+          class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
+          title="HTTP only, no WebSocket subscriptions"
+        >
+          <svg class="h-2.5 w-4 flex-shrink-0" viewBox="0 0 16 10" aria-hidden="true">
+            <path d="M0 5h16" stroke="#9ca3af" stroke-width="1.5" />
           </svg>
+          <span>HTTP</span>
         </div>
-        <span>WS</span>
+
+        <div
+          class="flex items-center space-x-1.5 whitespace-nowrap text-xs text-gray-300"
+          title="WebSocket transport is configured, drawn as a doubled connector; subscription support is shown separately"
+        >
+          <svg class="h-2.5 w-4 flex-shrink-0" viewBox="0 0 16 10" aria-hidden="true">
+            <path d="M0 2.5h16M0 7.5h16" stroke="#9ca3af" stroke-width="1.5" />
+          </svg>
+          <span>WebSocket</span>
+        </div>
       </div>
     </div>
     """

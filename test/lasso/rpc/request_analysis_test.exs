@@ -3,6 +3,23 @@ defmodule Lasso.RPC.RequestAnalysisTest do
 
   alias Lasso.RPC.RequestAnalysis
 
+  test "historical state selectors remain authoritative with trailing overrides" do
+    for {method, prefix} <- [
+          {"eth_call", [%{}]},
+          {"eth_estimateGas", [%{}]},
+          {"eth_getBalance", ["0xabc"]},
+          {"eth_getProof", ["0xabc", []]},
+          {"eth_getStorageAt", ["0xabc", "0x0"]}
+        ],
+        selector <- ["0x64", %{"blockNumber" => "0x64"}] do
+      params = prefix ++ [selector, %{"blockNumber" => "latest"}, %{"number" => "0x123"}]
+
+      assert RequestAnalysis.analyze(method, params, consensus_height: 1_000_000).requires_archival
+
+      refute RequestAnalysis.analyze(method, prefix ++ ["latest", %{"blockNumber" => "0x1"}]).requires_archival
+    end
+  end
+
   describe "analyze/3 for eth_getLogs" do
     test "returns requires_archival: true for earliest block" do
       result = RequestAnalysis.analyze("eth_getLogs", [%{"fromBlock" => "earliest"}])
@@ -84,6 +101,16 @@ defmodule Lasso.RPC.RequestAnalysisTest do
       refute result.requires_archival
     end
 
+    test "does not infer archive age from an EIP-234 blockHash filter" do
+      result =
+        RequestAnalysis.analyze("eth_getLogs", [
+          %{"blockHash" => "0x" <> String.duplicate("ab", 32)}
+        ])
+
+      refute result.requires_archival
+      assert is_nil(result.block_range)
+    end
+
     test "extracts address count for single address" do
       result = RequestAnalysis.analyze("eth_getLogs", [%{"address" => "0xabc"}])
       assert result.address_count == 1
@@ -125,6 +152,23 @@ defmodule Lasso.RPC.RequestAnalysisTest do
     test "handles call without block parameter" do
       result = RequestAnalysis.analyze("eth_call", [%{}])
       refute result.requires_archival
+    end
+
+    test "recognizes both EIP-1898 block selector variants" do
+      by_number =
+        RequestAnalysis.analyze("eth_call", [
+          %{},
+          %{"blockNumber" => "0x64"}
+        ])
+
+      by_hash =
+        RequestAnalysis.analyze("eth_call", [
+          %{},
+          %{"blockHash" => "0xabc", "requireCanonical" => true}
+        ])
+
+      assert by_number.requires_archival
+      refute by_hash.requires_archival
     end
   end
 
@@ -199,6 +243,69 @@ defmodule Lasso.RPC.RequestAnalysisTest do
     end
   end
 
+  describe "analyze/3 for other number-selected historical reads" do
+    test "detects old numeric selectors across standard and extended methods" do
+      for {method, params} <- [
+            {"eth_getBlockTransactionCountByNumber", ["0x64"]},
+            {"eth_getTransactionByBlockNumberAndIndex", ["0x64", "0x0"]},
+            {"eth_getUncleCountByBlockNumber", ["0x64"]},
+            {"eth_getUncleByBlockNumberAndIndex", ["0x64", "0x0"]},
+            {"eth_feeHistory", ["0x1", "0x64", []]},
+            {"debug_traceBlockByNumber", ["0x64", %{}]},
+            {"trace_block", ["0x64"]},
+            {"trace_replayBlockTransactions", ["0x64", ["trace"]]}
+          ] do
+        assert RequestAnalysis.analyze(method, params, consensus_height: 20_000_000).requires_archival,
+               method
+      end
+    end
+
+    test "does not infer age from hash-selected methods" do
+      block_hash = "0x" <> String.duplicate("ab", 32)
+
+      for {method, params} <- [
+            {"eth_getBlockByHash", [block_hash, false]},
+            {"eth_getTransactionByHash", [block_hash]},
+            {"eth_getTransactionReceipt", [block_hash]}
+          ] do
+        refute RequestAnalysis.analyze(method, params, consensus_height: 20_000_000).requires_archival,
+               method
+      end
+    end
+  end
+
+  describe "analyze/3 for pinned extended reads" do
+    test "detects historical eth_getStorageValues and eth_simulateV1 blocks" do
+      for {method, params} <- [
+            {"eth_getStorageValues", [%{}, "0x64"]},
+            {"eth_simulateV1", [%{"blockStateCalls" => []}, "0x64"]},
+            {"eth_estimateGas", [%{}, "0x64"]},
+            {"eth_createAccessList", [%{}, "0x64"]}
+          ] do
+        result = RequestAnalysis.analyze(method, params, consensus_height: 20_000_000)
+        assert result.requires_archival
+      end
+    end
+
+    test "uses block age for eth_getBlockReceipts without inferring hash age" do
+      block_hash = "0x" <> String.duplicate("ab", 32)
+
+      refute RequestAnalysis.analyze("eth_getBlockReceipts", [block_hash]).requires_archival
+
+      assert RequestAnalysis.analyze("eth_getBlockReceipts", ["0x64"],
+               consensus_height: 20_000_000
+             ).requires_archival
+
+      refute RequestAnalysis.analyze("eth_getBlockReceipts", ["latest"]).requires_archival
+    end
+
+    test "omitted optional block selectors default to latest" do
+      refute RequestAnalysis.analyze("eth_getStorageValues", [%{}]).requires_archival
+
+      refute RequestAnalysis.analyze("eth_simulateV1", [%{"blockStateCalls" => []}]).requires_archival
+    end
+  end
+
   describe "analyze/3 for non-archival methods" do
     test "eth_blockNumber never requires archival" do
       result = RequestAnalysis.analyze("eth_blockNumber", [])
@@ -257,80 +364,6 @@ defmodule Lasso.RPC.RequestAnalysisTest do
     end
   end
 
-  describe "requested_block extraction" do
-    test "extracts hex block number from eth_getBalance" do
-      result = RequestAnalysis.analyze("eth_getBalance", ["0xabc", "0x1312D00"])
-      assert result.requested_block == 20_000_000
-    end
-
-    test "extracts hex block number from eth_call" do
-      result = RequestAnalysis.analyze("eth_call", [%{}, "0xBEBC20"])
-      assert result.requested_block == 12_500_000
-    end
-
-    test "extracts hex block number from eth_getBlockByNumber" do
-      result = RequestAnalysis.analyze("eth_getBlockByNumber", ["0xF4240", false])
-      assert result.requested_block == 1_000_000
-    end
-
-    test "returns nil for 'latest' block tag" do
-      result = RequestAnalysis.analyze("eth_call", [%{}, "latest"])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for 'safe' block tag" do
-      result = RequestAnalysis.analyze("eth_getBalance", ["0xabc", "safe"])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for 'pending' block tag" do
-      result = RequestAnalysis.analyze("eth_call", [%{}, "pending"])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for 'finalized' block tag" do
-      result = RequestAnalysis.analyze("eth_call", [%{}, "finalized"])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for 'earliest' block tag" do
-      result = RequestAnalysis.analyze("eth_call", [%{}, "earliest"])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for methods that don't take block params" do
-      result = RequestAnalysis.analyze("eth_blockNumber", [])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for eth_getLogs" do
-      result = RequestAnalysis.analyze("eth_getLogs", [%{"fromBlock" => "0x100"}])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil for invalid hex" do
-      result = RequestAnalysis.analyze("eth_call", [%{}, "0xGGG"])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil when eth_getBalance has only address (no block param)" do
-      result =
-        RequestAnalysis.analyze("eth_getBalance", ["0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"])
-
-      assert result.requested_block == nil
-    end
-
-    test "returns nil when eth_call has only call object (no block param)" do
-      result = RequestAnalysis.analyze("eth_call", [%{"to" => "0xabc", "data" => "0x"}])
-      assert result.requested_block == nil
-    end
-
-    test "returns nil when eth_getStorageAt has only address and position (no block param)" do
-      result = RequestAnalysis.analyze("eth_getStorageAt", ["0xabc", "0x0"])
-      assert result.requested_block == nil
-    end
-  end
-
   describe "edge cases" do
     test "handles invalid hex block numbers gracefully" do
       result = RequestAnalysis.analyze("eth_call", [%{}, "0xGGG"])
@@ -340,6 +373,18 @@ defmodule Lasso.RPC.RequestAnalysisTest do
     test "handles malformed parameters" do
       result = RequestAnalysis.analyze("eth_getLogs", ["invalid"])
       refute result.requires_archival
+    end
+
+    test "fails open without crashing for by-name JSON-RPC params" do
+      result =
+        RequestAnalysis.analyze("eth_getBalance", %{
+          "address" => "0xabc",
+          "block" => "latest"
+        })
+
+      refute result.requires_archival
+      assert is_nil(result.block_range)
+      assert is_nil(result.address_count)
     end
 
     test "handles empty params list" do

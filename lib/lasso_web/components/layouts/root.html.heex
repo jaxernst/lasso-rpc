@@ -4,7 +4,7 @@
     <% page_title = assigns[:page_title] || "Lasso RPC" %>
     <% page_description =
       assigns[:page_description] ||
-        "Lasso RPC is a high-performance RPC routing and profile platform for shipping reliable AI infrastructure." %>
+        "Self-hosted EVM JSON-RPC routing, provider failover, WebSocket continuity, and operational observability." %>
     <% site_url = LassoWeb.Endpoint.url() %>
     <% page_url = assigns[:page_url] || site_url %>
     <% robots = assigns[:robots] || "index,follow" %>
@@ -38,13 +38,14 @@
     <.live_title>
       {page_title}
     </.live_title>
+    <link rel="icon" type="image/svg+xml" href={~p"/favicon.svg"} />
     <link rel="icon" type="image/x-icon" href={~p"/favicon.ico"} />
     <link rel="apple-touch-icon" sizes="180x180" href={~p"/images/apple-touch-icon.png"} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}>
     </script>
   </head>
-  <body class="h-screen bg-[#171d2b] antialiased">
+  <body class="h-screen supports-[height:100dvh]:h-[100dvh] bg-[#171d2b] antialiased">
     {@inner_content}
   </body>
 </html>

@@ -266,7 +266,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       # Send provider unhealthy signal
       GenServer.cast(pid, {:provider_unhealthy, "provider_1", "provider_2"})
 
-      Process.sleep(10)
+      Lasso.Test.Eventually.assert_eventually(fn ->
+        get_coordinator_state(pid).failover_status == :active
+      end)
 
       # Verify replacement and backfill completed.
       state = get_coordinator_state(pid)
@@ -397,7 +399,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
 
       # Trigger failover - should proceed (not enter degraded mode)
       GenServer.cast(pid, {:provider_unhealthy, "p2", "p3"})
-      Process.sleep(10)
+
+      Lasso.Test.Eventually.assert_eventually(fn ->
+        get_coordinator_state(pid).failover_status == :active
+      end)
 
       # Test outcome: did not enter degraded mode and recovered.
       state = get_coordinator_state(pid)

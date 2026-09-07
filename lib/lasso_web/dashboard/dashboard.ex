@@ -29,7 +29,7 @@ defmodule LassoWeb.Dashboard do
   def mount(params, session, socket) do
     alias Lasso.Config.ConfigStore
 
-    socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
+    socket = assign(socket, :active_tab, valid_tab(Map.get(params, "tab", "overview")))
 
     profiles = available_profiles(ConfigStore.list_profiles())
     selected_profile = determine_initial_profile(params, session, profiles)
@@ -129,6 +129,19 @@ defmodule LassoWeb.Dashboard do
 
     :ok
   end
+
+  defp resolve_selected_chain(value, chains) do
+    chain =
+      case Integer.parse(to_string(value)) do
+        {id, ""} -> id
+        _ -> nil
+      end
+
+    if chain in chains, do: chain, else: nil
+  end
+
+  defp valid_tab(tab) when tab in ["overview", "metrics", "system"], do: tab
+  defp valid_tab(_tab), do: "overview"
 
   defp determine_initial_profile(params, session, profiles) do
     cond do
@@ -370,7 +383,7 @@ defmodule LassoWeb.Dashboard do
         time_since_update > @staleness_threshold_ms
 
     schedule_staleness_check()
-    {:noreply, assign(socket, :metrics_stale, stale)}
+    {:noreply, socket |> assign(:metrics_stale, stale) |> recompute_provider_statuses()}
   end
 
   @impl true
@@ -440,7 +453,7 @@ defmodule LassoWeb.Dashboard do
       />
       
     <!-- Content Section -->
-      <div class="grid-pattern animate-fade-in relative flex-1 overflow-hidden">
+      <div class="grid-pattern relative min-h-0 flex-1 overflow-hidden">
         <%= case @active_tab do %>
           <% "overview" -> %>
             <.dashboard_tab_content
@@ -515,7 +528,7 @@ defmodule LassoWeb.Dashboard do
       
     <!-- Fixed cluster status indicator -->
       <ClusterStatus.fixed_cluster_status
-        :if={@metrics_coverage}
+        :if={@metrics_coverage && @metrics_coverage.total > 1}
         responding={@metrics_coverage.responding}
         total={@metrics_coverage.total}
         stale={@metrics_stale}
@@ -531,7 +544,7 @@ defmodule LassoWeb.Dashboard do
   attr(:provider_events, :list)
   attr(:latest_blocks, :list)
   attr(:events, :list)
-  attr(:selected_chain, :string)
+  attr(:selected_chain, :integer)
   attr(:selected_provider, :string)
   attr(:selected_profile, :string, default: "public")
   attr(:details_collapsed, :boolean)
@@ -635,7 +648,7 @@ defmodule LassoWeb.Dashboard do
   # Floating details window wrapper (pinned top-right)
   attr(:selected_profile, :string)
   attr(:profile_display_name, :string)
-  attr(:selected_chain, :string)
+  attr(:selected_chain, :integer)
   attr(:selected_provider, :string)
   attr(:details_collapsed, :boolean)
   attr(:connections, :list)
@@ -666,7 +679,10 @@ defmodule LassoWeb.Dashboard do
 
     # Calculate system metrics
     total_connections = length(assigns.connections)
-    connected_providers = Enum.count(assigns.connections, &(&1.status == :connected))
+
+    connected_providers =
+      Enum.count(assigns.connections, &LassoWeb.Dashboard.ProviderStatusProjection.available?/1)
+
     total_chains = assigns.connections |> Enum.map(& &1.chain) |> Enum.uniq() |> length()
 
     # Determine status indicator
@@ -714,10 +730,16 @@ defmodule LassoWeb.Dashboard do
     ~H"""
     <.floating_window
       id="details-window"
+      mobile={:sheet}
       position={:top_right}
       collapsed={@details_collapsed}
       on_toggle={@on_toggle}
-      size={%{collapsed: "w-96", expanded: "w-[36rem] max-h-[80vh]"}}
+      size={
+        %{
+          collapsed: "w-full max-h-[38dvh] md:max-h-none md:w-96",
+          expanded: "w-full max-h-[60dvh] md:w-[36rem] md:max-h-[75vh]"
+        }
+      }
     >
       <:header>
         <.status_indicator status={@status} />
@@ -882,11 +904,11 @@ defmodule LassoWeb.Dashboard do
           end
       end
 
-    socket = assign(socket, :active_tab, Map.get(params, "tab", "overview"))
+    socket = assign(socket, :active_tab, valid_tab(Map.get(params, "tab", "overview")))
 
     socket =
-      case Map.get(params, "chain") do
-        chain when chain not in [nil, ""] ->
+      case resolve_selected_chain(Map.get(params, "chain"), socket.assigns.profile_chains) do
+        chain when is_integer(chain) ->
           socket
           |> assign(:selected_chain, chain)
           |> assign(:selected_provider, nil)
@@ -936,8 +958,10 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def handle_event("select_chain", %{"chain" => chain}, socket) do
+    chain = resolve_selected_chain(chain, socket.assigns.profile_chains)
+
     socket =
-      if chain == "" do
+      if is_nil(chain) do
         socket
         |> assign(:selected_chain, nil)
         |> assign(:details_collapsed, true)
@@ -1031,9 +1055,12 @@ defmodule LassoWeb.Dashboard do
   end
 
   @impl true
-  def handle_event("active_runs_update", %{"runs" => runs}, socket) do
-    # Forward to SimulatorControls component
-    send_update(Components.SimulatorControls, id: "simulator-controls", active_runs: runs)
+  def handle_event("sim_running", %{"running" => running}, socket) when is_boolean(running) do
+    send_update(Components.SimulatorControls,
+      id: "simulator-controls",
+      simulator_running: running
+    )
+
     {:noreply, socket}
   end
 
@@ -1215,7 +1242,10 @@ defmodule LassoWeb.Dashboard do
     new_statuses =
       NetworkTopology.compute_provider_statuses(
         socket.assigns.connections,
-        socket.assigns.cluster_circuit_states
+        socket.assigns.cluster_circuit_states,
+        available_node_ids: socket.assigns.available_node_ids,
+        cluster_blocks: socket.assigns.cluster_block_heights,
+        cluster_health: socket.assigns.cluster_health_counters
       )
 
     old_statuses = socket.assigns.provider_statuses
@@ -1487,7 +1517,9 @@ defmodule LassoWeb.Dashboard do
           meta: Map.drop(entry, [:ts, :ts_ms])
         )
 
-      buffer_event(sock, uev)
+      sock
+      |> buffer_event(uev)
+      |> push_event("chain-blocks", %{blocks: %{chain => bn}})
     end)
   end
 
@@ -1502,7 +1534,11 @@ defmodule LassoWeb.Dashboard do
   defp finalize_batch(socket, batch) do
     has_routing = batch.routing_events != []
     has_infrastructure = batch.circuit_events != [] or batch.provider_events != []
-    has_provider_data = batch.sync_updates != [] or batch.block_cache_updates != []
+
+    has_provider_data =
+      batch.sync_updates != [] or batch.block_cache_updates != [] or
+        map_size(batch.block_states) > 0
+
     has_connection_changes = has_infrastructure or has_provider_data
     has_circuit_changes = map_size(batch.circuit_states) > 0
 
@@ -1511,7 +1547,9 @@ defmodule LassoWeb.Dashboard do
     |> maybe_refresh_selection_once(batch)
     |> maybe_refresh_selected_chain_events(has_routing or has_infrastructure)
     |> maybe_recompute_topology(has_connection_changes)
-    |> maybe_recompute_provider_statuses(has_connection_changes or has_circuit_changes)
+    |> maybe_recompute_provider_statuses(
+      has_connection_changes or has_circuit_changes or batch.heartbeat
+    )
     |> maybe_send_activity_feed(has_routing)
     |> maybe_mark_not_stale(
       batch.heartbeat or has_routing or has_infrastructure or has_provider_data

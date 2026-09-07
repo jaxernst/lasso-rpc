@@ -12,6 +12,9 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   use GenServer
 
   @table :lasso_error_classification_store
+  @admission_table :lasso_error_classification_admission
+  @queue_limit 1_024
+  @metadata_byte_limit 2_048
 
   @default_config %{
     sample_all_codes: [-32_000],
@@ -49,6 +52,18 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   @spec count() :: non_neg_integer()
   def count, do: :ets.info(@table, :size)
 
+  @doc "Returns bounded diagnostic ingress counters."
+  @spec ingress_stats() :: %{
+          queued: non_neg_integer(),
+          dropped: non_neg_integer(),
+          limit: pos_integer()
+        }
+  def ingress_stats do
+    case :ets.lookup(@admission_table, :queue) do
+      [{:queue, queued, dropped}] -> %{queued: queued, dropped: dropped, limit: @queue_limit}
+    end
+  end
+
   @spec configure(map()) :: :ok
   def configure(new_config) when is_map(new_config) do
     GenServer.call(__MODULE__, {:configure, new_config})
@@ -58,6 +73,17 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   def init(_opts) do
     table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
 
+    admission =
+      :ets.new(@admission_table, [
+        :named_table,
+        :set,
+        :public,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
+
+    :ets.insert(admission, [{:config, @default_config, self()}, {:queue, 0, 0}])
+
     :telemetry.attach(
       "error-classification-store",
       [:lasso, :error_classification, :classified],
@@ -65,21 +91,49 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
       nil
     )
 
-    {:ok, %{table: table, config: @default_config}}
+    {:ok, %{table: table, admission: :ets.whereis(admission), config: @default_config}}
   end
 
   @spec handle_telemetry_event(term(), term(), map(), term()) :: :ok
   def handle_telemetry_event(_event, _measurements, metadata, _handler_config) do
-    GenServer.cast(__MODULE__, {:record, metadata})
+    admission = :ets.whereis(@admission_table)
+    [{:config, config, owner}] = :ets.lookup(admission, :config)
+
+    if should_sample?(metadata, config) do
+      metadata =
+        Map.take(metadata, [
+          :code,
+          :message_fingerprint,
+          :data_kind,
+          :provider_id,
+          :category,
+          :classification_path,
+          :control_category,
+          :shared_control?
+        ])
+
+      if :erlang.external_size(metadata) <= @metadata_byte_limit do
+        queued = :ets.update_counter(admission, :queue, {2, 1})
+
+        if queued <= @queue_limit do
+          GenServer.cast(owner, {:record_admitted, metadata})
+        else
+          :ets.update_counter(admission, :queue, [{2, -1}, {3, 1}])
+        end
+      else
+        :ets.update_counter(admission, :queue, {3, 1})
+      end
+    end
+
+    :ok
   rescue
     _ -> :ok
   end
 
   @impl true
-  def handle_cast({:record, metadata}, state) do
-    if should_sample?(metadata, state.config) do
-      record_entry(metadata, state)
-    end
+  def handle_cast({:record_admitted, metadata}, state) do
+    :ets.update_counter(state.admission, :queue, {2, -1})
+    record_entry(metadata, state)
 
     {:noreply, state}
   end
@@ -87,7 +141,16 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   @impl true
   def handle_call({:configure, new_config}, _from, state) do
     merged = Map.merge(state.config, new_config)
-    {:reply, :ok, %{state | config: merged}}
+
+    if is_integer(merged.max_entries) and merged.max_entries > 0 and
+         is_number(merged.random_sample_rate) and merged.random_sample_rate >= 0 and
+         merged.random_sample_rate <= 1 and
+         is_list(merged.sample_all_codes) and is_boolean(merged.enabled) do
+      :ets.insert(@admission_table, {:config, merged, self()})
+      {:reply, :ok, %{state | config: merged}}
+    else
+      {:reply, {:error, :invalid_config}, state}
+    end
   end
 
   defp should_sample?(_metadata, %{enabled: false}), do: false
@@ -95,6 +158,8 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
   defp should_sample?(%{code: code}, %{sample_all_codes: codes, random_sample_rate: rate}) do
     code in codes or :rand.uniform() < rate
   end
+
+  defp should_sample?(_, _), do: false
 
   defp record_entry(metadata, state) do
     fingerprint = metadata[:message_fingerprint]
@@ -141,7 +206,7 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
       oldest =
         :ets.tab2list(@table)
         |> Enum.sort_by(fn {_k, v} -> v.last_seen end)
-        |> Enum.take(div(max, 10))
+        |> Enum.take(max(div(max, 10), 1))
 
       Enum.each(oldest, fn {k, _v} -> :ets.delete(@table, k) end)
     end

@@ -3,6 +3,22 @@ defmodule LassoWeb.Dashboard.MetricsHelpersTest do
 
   alias LassoWeb.Dashboard.MetricsHelpers
 
+  test "subscription lifecycle events do not count as RPC requests" do
+    events = [%{type: :ws_lifecycle, ts_ms: System.system_time(:millisecond), chain: 1}]
+    assert MetricsHelpers.routing_sample_count(events) == 0
+    assert MetricsHelpers.rpc_calls_per_second(events) == 0.0
+    assert MetricsHelpers.success_rate_percent(events) == nil
+
+    metrics =
+      MetricsHelpers.get_chain_performance_metrics(
+        %{selected_profile: "public", routing_events: events, connections: []},
+        1
+      )
+
+    assert metrics.total_calls == 0
+    assert metrics.decision_share == []
+  end
+
   test "headline routing metrics exclude system-owned maintenance traffic" do
     now = System.system_time(:millisecond)
 

@@ -8,6 +8,27 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
   alias Lasso.RPC.ChainState
   require Logger
 
+  @doc false
+  def safe_endpoint(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{scheme: scheme, host: host} = uri
+      when scheme in ["http", "https", "ws", "wss"] and is_binary(host) ->
+        uri
+        |> Map.put(:userinfo, nil)
+        |> Map.put(:path, nil)
+        |> Map.put(:query, nil)
+        |> Map.put(:fragment, nil)
+        |> URI.to_string()
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  def safe_endpoint(_), do: nil
+
   def fetch_connections(profile) do
     chains = ConfigStore.list_chains_for_profile(profile)
 
@@ -88,8 +109,11 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
     {block_height, blocks_behind} =
       calculate_block_sync(chain_name, instance_id, consensus_height)
 
+    observation = read_observation(chain_id, instance_id)
+
     %{
       id: provider_id,
+      profile_id: profile,
       chain: chain_name,
       chain_id: chain_id,
       name: provider_name,
@@ -115,12 +139,21 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
       ws_connected: provider_type in [:websocket, :both] and ws_status.status == :connected,
       ws_status: ws_status.status,
       subscriptions: 0,
-      url: url,
-      ws_url: ws_url,
+      url: safe_endpoint(url),
+      ws_url: safe_endpoint(ws_url),
       block_height: block_height,
+      block_observed_at_ms: Map.get(observation, :observed_at_ms),
+      block_stale_after_ms: Map.get(observation, :stale_after_ms),
       consensus_height: consensus_height,
       blocks_behind: blocks_behind
     }
+  end
+
+  defp read_observation(chain_id, instance_id) do
+    case Lasso.BlockSync.Observation.read(chain_id, instance_id) do
+      {:ok, value} -> value
+      _ -> %{}
+    end
   end
 
   defp resolve_chain_id(profile, chain_name) do

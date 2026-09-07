@@ -55,12 +55,11 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     message = Map.get(error, "message", "Unknown error")
     raw_data = Map.get(error, "data")
 
-    # Normalize HTTP status codes to JSON-RPC error codes
-    code = normalize_code(raw_code)
+    code = raw_code
 
     # Unified classification with adapter priority
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, classifier_opts(opts))
+      ErrorClassifier.classify(code, message, Keyword.put(classifier_opts(opts), :data, raw_data))
 
     # Extract retry-after hint if this is a rate limit error
     data =
@@ -88,19 +87,24 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     context = Keyword.get(opts, :context, :transport)
     transport = Keyword.get(opts, :transport)
 
-    # Extract retry-after hint from payload and add to data
-    data = add_retry_after(payload, payload)
+    case extract_nested_error(payload, -32_005, "Rate limited by provider") do
+      {:json_rpc, code, message, data} ->
+        normalized_json_rpc_error(code, message, data, payload, opts)
 
-    JError.new(-32_005, "Rate limited by provider",
-      data: data,
-      provider_id: provider_id,
-      source: context,
-      transport: transport,
-      category: :rate_limit,
-      retriable?: true,
-      # Rate limits are temporary backpressure, not failures - don't trip circuit breaker
-      breaker_penalty?: false
-    )
+      {:raw, _code, _message} ->
+        data = payload |> public_transport_data() |> add_retry_after(payload)
+
+        JError.new(-32_005, "Rate limited by provider",
+          data: data,
+          provider_id: provider_id,
+          source: context,
+          transport: transport,
+          category: :rate_limit,
+          retriable?: true,
+          breaker_penalty?: false,
+          http_status: transport_status(payload)
+        )
+    end
   end
 
   # Network errors
@@ -174,30 +178,23 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     transport = Keyword.get(opts, :transport)
 
     # Try to extract nested JSON-RPC error from response body for better classification
-    {_, code, message} = extract_nested_error(payload, -32_002, "Server error")
+    case extract_nested_error(payload, -32_002, "Server error") do
+      {:json_rpc, code, message, data} ->
+        normalized_json_rpc_error(code, message, data, payload, opts)
 
-    # Unified classification with adapter priority
-    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, classifier_opts(opts))
-
-    # Extract retry-after hint if this is a rate limit error
-    data =
-      if category == :rate_limit do
-        add_retry_after(payload, payload)
-      else
-        payload
-      end
-
-    JError.new(code, message,
-      data: data,
-      provider_id: provider_id,
-      source: context,
-      transport: transport,
-      category: category,
-      retriable?: retriable?,
-      breaker_penalty?: breaker_penalty?,
-      original_code: code
-    )
+      {:raw, code, message} ->
+        JError.new(code, message,
+          data: payload,
+          provider_id: provider_id,
+          source: context,
+          transport: transport,
+          category: :server_error,
+          retriable?: true,
+          breaker_penalty?: true,
+          original_code: code,
+          http_status: transport_status(payload)
+        )
+    end
   end
 
   # Client errors (4xx HTTP, bad requests)
@@ -207,26 +204,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     transport = Keyword.get(opts, :transport)
 
     case extract_nested_error(payload, -32_003, "Client error") do
-      {:json_rpc, code, message} ->
+      {:json_rpc, code, message, data} ->
         # Body is a valid JSON-RPC error envelope — classify normally
-        %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-          ErrorClassifier.classify(code, message, classifier_opts(opts))
-
-        data =
-          payload
-          |> public_transport_data()
-          |> maybe_add_retry_after_for_category(category, payload)
-
-        JError.new(code, message,
-          data: data,
-          provider_id: provider_id,
-          source: context,
-          transport: transport,
-          category: category,
-          retriable?: retriable?,
-          breaker_penalty?: breaker_penalty?,
-          original_code: code
-        )
+        normalized_json_rpc_error(code, message, data, payload, opts)
 
       {:raw, _code, _message} ->
         # Body is NOT a JSON-RPC error envelope (e.g. gateway/proxy/CDN rejection).
@@ -247,7 +227,8 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
           category: :server_error,
           retriable?: true,
           breaker_penalty?: true,
-          original_code: -32_003
+          original_code: -32_003,
+          http_status: transport_status(payload)
         )
     end
   end
@@ -310,17 +291,19 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  def normalize({:ws_upgrade_error, 429, _headers}, opts) do
+  def normalize({:ws_upgrade_error, 429, headers}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
 
-    JError.new(429, "Rate limited",
+    JError.new(-32_005, "Rate limited",
+      data: websocket_retry_after_data(headers),
       provider_id: provider_id,
       source: :transport,
       transport: :ws,
       category: :rate_limit,
       retriable?: true,
       # Rate limits are temporary backpressure, not failures - don't trip circuit breaker
-      breaker_penalty?: false
+      breaker_penalty?: false,
+      original_code: 429
     )
   end
 
@@ -633,6 +616,21 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
   defp parse_retry_after_value(_), do: nil
 
+  defp websocket_retry_after_data(headers) when is_list(headers) do
+    retry_after =
+      Enum.find_value(headers, fn
+        {name, value} when is_binary(name) ->
+          if String.downcase(name) == "retry-after", do: parse_retry_after_value(value)
+
+        _other ->
+          nil
+      end)
+
+    if is_integer(retry_after), do: %{retry_after_ms: retry_after}, else: nil
+  end
+
+  defp websocket_retry_after_data(_headers), do: nil
+
   # Extract retry-after from provider-specific error messages
   # Examples: "Try again in 60 seconds", "Try again in 5 minutes"
   defp parse_retry_from_message(message) when is_binary(message) do
@@ -682,21 +680,6 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     end
   end
 
-  # Normalize HTTP status codes embedded in JSON-RPC responses to standard JSON-RPC codes
-  # Rate limit
-  defp normalize_code(429), do: -32_005
-  # Server error
-  defp normalize_code(code) when code >= 500 and code <= 599, do: -32_000
-  # Client error
-  defp normalize_code(code) when code >= 400 and code <= 499, do: -32_600
-  # JSON-RPC codes pass through
-  defp normalize_code(code), do: code
-
-  defp maybe_add_retry_after_for_category(data, :rate_limit, payload),
-    do: add_retry_after(data, payload)
-
-  defp maybe_add_retry_after_for_category(data, _category, _payload), do: data
-
   defp public_transport_data(payload) when is_map(payload) do
     payload
     |> Map.delete(:body)
@@ -704,6 +687,32 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   end
 
   defp public_transport_data(payload), do: payload
+
+  defp normalized_json_rpc_error(code, message, data, payload, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :jsonrpc)
+    transport = Keyword.get(opts, :transport)
+
+    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+      ErrorClassifier.classify(code, message, Keyword.put(classifier_opts(opts), :data, data))
+
+    JError.new(code, message,
+      data: data,
+      provider_id: provider_id,
+      source: context,
+      transport: transport,
+      category: category,
+      retriable?: retriable?,
+      breaker_penalty?: breaker_penalty?,
+      original_code: code,
+      http_status: transport_status(payload)
+    )
+  end
+
+  defp transport_status(payload) when is_map(payload),
+    do: Map.get(payload, :status) || Map.get(payload, "status")
+
+  defp transport_status(_payload), do: nil
 
   defp maybe_add_provider_id(%JError{provider_id: nil} = jerr, provider_id)
        when is_binary(provider_id),
@@ -718,22 +727,32 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   defp maybe_add_transport(jerr, _transport), do: jerr
 
   defp classifier_opts(opts) do
-    Keyword.take(opts, [:provider_id, :profile, :chain_id, :chain, :provider_capabilities])
+    Keyword.take(opts, [
+      :provider_id,
+      :profile,
+      :chain_id,
+      :chain,
+      :provider_capabilities,
+      :shared_instance?
+    ])
   end
 
   # Extract nested JSON-RPC error from HTTP error payload (e.g., 4xx/5xx with JSON body).
   #
   # Returns a tagged tuple:
-  #   {:json_rpc, code, message} — body contained a JSON-RPC error envelope
+  #   {:json_rpc, code, message, data} — body contained a JSON-RPC error envelope
   #   {:raw, code, message}      — body was not JSON-RPC; code/message are fallbacks
   defp extract_nested_error(%{body: body} = _payload, fallback_code, fallback_message)
        when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, %{"error" => %{"code" => code, "message" => message}}} when is_integer(code) ->
-        {:json_rpc, code, message}
-
-      {:ok, %{"error" => %{"message" => message}}} ->
-        {:json_rpc, fallback_code, message}
+      {:ok,
+       %{
+         "jsonrpc" => "2.0",
+         "id" => _id,
+         "error" => %{"code" => code, "message" => message} = error
+       }}
+      when is_integer(code) and is_binary(message) ->
+        {:json_rpc, code, message, Map.get(error, "data")}
 
       _ ->
         {:raw, fallback_code, fallback_message}

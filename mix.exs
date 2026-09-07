@@ -4,7 +4,7 @@ defmodule Lasso.MixProject do
   def project do
     [
       app: :lasso,
-      version: "0.3.1",
+      version: "0.3.2",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],

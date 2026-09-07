@@ -58,9 +58,9 @@ defmodule Lasso.JSONRPC.ErrorTest do
       assert jerr.breaker_penalty? == false
     end
 
-    test "HTTP 429 is normalized to -32_005 rate limit" do
+    test "upstream code 429 is preserved with rate-limit classification" do
       jerr = JError.new(429, "Too Many Requests")
-      assert jerr.code == -32_005
+      assert jerr.code == 429
       assert jerr.original_code == 429
       assert jerr.category == :rate_limit
       assert jerr.breaker_penalty? == false

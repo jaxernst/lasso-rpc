@@ -8,9 +8,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   use LassoWeb, :live_component
 
+  alias Lasso.BlockSync.Observation
   alias LassoWeb.Components.DetailPanelComponents
   alias LassoWeb.Components.RegionSelector
-  alias LassoWeb.Dashboard.{Formatting, Helpers, StatusHelpers}
+  alias LassoWeb.Dashboard.{Formatting, Helpers, ProviderStatusProjection, StatusHelpers}
 
   require Logger
 
@@ -73,9 +74,9 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       block_height: nil,
       consensus_height: nil,
       optimistic_lag: nil,
-      effective_lag: 0,
+      effective_lag: nil,
       height_estimated?: false,
-      sync_status: :healthy,
+      sync_status: :unknown,
       mode: :aggregate
     })
     |> assign(:metrics_data, %{
@@ -175,6 +176,16 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     |> assign(:metrics_data, metrics_data)
     |> assign(:circuit_data, circuit_data)
     |> assign(:filtered_events, filtered_events)
+    |> assign(
+      :status_projection,
+      ProviderStatusProjection.explain(provider_connection || %{},
+        scope: selected_region,
+        available_node_ids: available_node_ids,
+        cluster_circuits: cluster_circuits,
+        cluster_health: cluster_health_counters,
+        cluster_blocks: cluster_block_heights
+      )
+    )
   end
 
   defp get_cached_fallback(assigns, "aggregate") do
@@ -237,14 +248,12 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         block_lag
       end
 
-    effective_lag = resolve_effective_lag(current_raw_lag, optimistic_lag, conn)
+    fresh? = fresh_sync_evidence?(selected_region, conn, cluster_block_heights, provider_id)
+    effective_lag = if fresh?, do: resolve_effective_lag(current_raw_lag, optimistic_lag, conn)
+    optimistic_lag = if fresh?, do: optimistic_lag
+    block_height = if fresh?, do: block_height
 
-    display_block_height =
-      if is_integer(optimistic_lag) and is_integer(consensus_height) and is_integer(block_height) do
-        consensus_height + min(0, optimistic_lag)
-      else
-        block_height
-      end
+    display_block_height = block_height
 
     %{
       block_height: display_block_height,
@@ -255,6 +264,22 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
       sync_status: sync_status_level(effective_lag),
       mode: if(selected_region == "aggregate", do: :aggregate, else: :region)
     }
+  end
+
+  defp fresh_sync_evidence?(region, conn, blocks, provider_id) do
+    evidence =
+      Enum.filter(blocks, fn {{id, node}, _} ->
+        id == provider_id and (region == "aggregate" or region == node)
+      end)
+
+    if evidence == [] and region == "aggregate" do
+      Observation.fresh?(%{
+        observed_at_ms: conn[:block_observed_at_ms],
+        stale_after_ms: conn[:block_stale_after_ms]
+      })
+    else
+      Enum.any?(evidence, fn {_, observation} -> Observation.fresh?(observation) end)
+    end
   end
 
   defp resolve_block_heights(
@@ -319,7 +344,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     cond do
       is_integer(block_lag) and block_lag < 0 -> abs(block_lag)
       is_integer(block_lag) -> 0
-      true -> Map.get(conn, :blocks_behind, 0) || 0
+      true -> Map.get(conn, :blocks_behind)
     end
   end
 
@@ -466,6 +491,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     >
       <.provider_header
         provider_connection={@provider_connection}
+        status_projection={assigns[:status_projection] || %{status: :unknown}}
         provider_id={@provider_id}
         selected_profile={@selected_profile}
       />
@@ -514,6 +540,8 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   attr(:provider_id, :string, required: true)
   attr(:selected_profile, :string, required: true)
 
+  attr(:status_projection, :map, required: true)
+
   defp provider_header(assigns) do
     conn = assigns.provider_connection || %{}
 
@@ -531,14 +559,14 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
           <div class={[
             "flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-medium",
-            StatusHelpers.provider_status_badge_class(@provider_connection || %{})
+            StatusHelpers.status_badge_class(@status_projection.status)
           ]}>
             <div class={[
               "h-1.5 w-1.5 rounded-full animate-pulse",
-              StatusHelpers.provider_status_indicator_class(@provider_connection || %{})
+              StatusHelpers.status_indicator_class(@status_projection.status)
             ]}>
             </div>
-            <span>{StatusHelpers.provider_status_label(@provider_connection || %{})}</span>
+            <span>{ProviderStatusProjection.label(@status_projection)}</span>
           </div>
         </div>
 
@@ -1108,13 +1136,17 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   # --- Helper Functions ---
 
+  defp sync_status_level(nil), do: :unknown
   defp sync_status_level(blocks_behind) when blocks_behind <= 2, do: :healthy
   defp sync_status_level(blocks_behind) when blocks_behind <= 10, do: :degraded
   defp sync_status_level(_), do: :down
 
+  defp sync_color(:unknown), do: "text-gray-400"
   defp sync_color(:healthy), do: "text-emerald-400"
   defp sync_color(:degraded), do: "text-yellow-400"
   defp sync_color(:down), do: "text-red-400"
+
+  defp sync_label(nil, nil), do: "Awaiting evidence"
 
   defp sync_label(optimistic_lag, _effective_lag) when is_integer(optimistic_lag) do
     cond do
@@ -1128,11 +1160,12 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_label(nil, effective_lag) when effective_lag > 2, do: "-#{effective_lag}"
   defp sync_label(nil, _), do: "—"
 
+  defp sync_description(:unknown), do: "(no fresh head observation)"
   defp sync_description(:healthy), do: "(within range)"
   defp sync_description(:degraded), do: "(slightly behind)"
   defp sync_description(:down), do: "(significantly behind)"
 
-  defp sync_progress(_, nil), do: 100
+  defp sync_progress(_, nil), do: 0
   defp sync_progress(nil, _), do: 0
   defp sync_progress(_, 0), do: 100
 

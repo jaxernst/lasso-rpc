@@ -148,6 +148,25 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
+  def finalize_unary(
+        %Validated{
+          kind: :error,
+          id: nil,
+          error_code: code,
+          error_message: message,
+          error_data: data
+        },
+        _raw_bytes,
+        upstream_id,
+        _client_id
+      )
+      when not is_nil(upstream_id) do
+    case JError.new(code, message, data: data) do
+      %JError{category: :rate_limit} = error -> {:error, error}
+      %JError{} -> {:invalid, :id_mismatch}
+    end
+  end
+
   def finalize_unary(%Validated{}, _raw_bytes, _upstream_id, _client_id),
     do: {:invalid, :id_mismatch}
 

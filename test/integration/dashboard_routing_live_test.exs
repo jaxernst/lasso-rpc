@@ -63,7 +63,7 @@ defmodule LassoWeb.DashboardRoutingLiveTest do
     assert is_binary(render_click(view, "select_chain", %{"chain" => to_string(chain)}))
 
     assert %{socket: %{assigns: %{selected_chain: selected_chain}}} = :sys.get_state(view.pid)
-    assert selected_chain == to_string(chain)
+    assert selected_chain == chain
     assert Process.alive?(view.pid)
   end
 

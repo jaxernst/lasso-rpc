@@ -15,6 +15,53 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
     assert {:ok, %{"id" => 7, "result" => "0x1"}} = Jason.decode(response.raw_bytes)
   end
 
+  test "restores a fractional numeric client id" do
+    raw = ~s({"jsonrpc":"2.0","id":"internal","result":"0x1"})
+
+    assert {:ok, %Response.Success{id: 1.25, raw_bytes: restored}} =
+             UpstreamResponse.validate_unary(raw, "internal", 1.25)
+
+    assert {:ok, %{"id" => 1.25, "result" => "0x1"}} = Jason.decode(restored)
+  end
+
+  test "preserves a provider-defined positive JSON-RPC error code" do
+    raw =
+      ~s({"jsonrpc":"2.0","id":"internal","error":{"code":429,"message":"Provider rate limit"}})
+
+    assert {:error, %JError{code: 429, original_code: 429}} =
+             UpstreamResponse.validate_unary(raw, "internal", 7)
+  end
+
+  test "accepts an uncorrelated null-id response only for quota evidence" do
+    quota =
+      ~s({"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"You've reached the usage limit for your current plan."}})
+
+    assert {:error,
+            %JError{
+              code: -32_001,
+              category: :rate_limit,
+              retriable?: true,
+              breaker_penalty?: false
+            }} = UpstreamResponse.validate_unary(quota, "internal", 7)
+
+    generic =
+      ~s({"jsonrpc":"2.0","id":null,"error":{"code":-32001,"message":"Provider failed"}})
+
+    wrong_id_quota =
+      ~s({"jsonrpc":"2.0","id":"wrong","error":{"code":-32001,"message":"You've reached the usage limit for your current plan."}})
+
+    null_id_success = ~s({"jsonrpc":"2.0","id":null,"result":"0x1"})
+
+    assert {:invalid, :id_mismatch} =
+             UpstreamResponse.validate_unary(generic, "internal", 7)
+
+    assert {:invalid, :id_mismatch} =
+             UpstreamResponse.validate_unary(wrong_id_quota, "internal", 7)
+
+    assert {:invalid, :id_mismatch} =
+             UpstreamResponse.validate_unary(null_id_success, "internal", 7)
+  end
+
   test "captures an early top-level id span and falls back when result comes first" do
     canonical = ~s({"jsonrpc":"2.0","id":"internal","result":"0x1"})
 

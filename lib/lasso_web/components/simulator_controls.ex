@@ -3,6 +3,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   use LassoWeb, :live_component
   import LassoWeb.Components.FloatingWindow
   alias Lasso.Config.ProfileValidator
+  alias LassoWeb.Dashboard.EndpointHelpers
   alias LassoWeb.Dashboard.Helpers
 
   @impl true
@@ -14,12 +15,16 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   def update(assigns, socket) do
     socket =
       socket
+      |> maybe_handle_profile_change(assigns)
       |> assign(assigns)
       |> assign_new(:profile_name, fn -> ProfileValidator.default_profile() end)
-      |> assign_new(:rps_limit, fn -> nil end)
+      |> assign_new(:rps_limit, fn -> 50 end)
       |> assign_new(:selected_profile, fn -> ProfileValidator.default_profile() end)
       |> assign_new(:sim_stats, fn ->
-        %{http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0}, ws: %{open: 0}}
+        %{
+          http: %{success: 0, error: 0, avgLatencyMs: 0.0, inflight: 0},
+          ws: %{open: 0, pending: 0, established: 0, error: 0}
+        }
       end)
       |> assign_new(:sim_collapsed, fn -> true end)
       |> assign_new(:simulator_running, fn -> false end)
@@ -30,7 +35,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       |> assign_new(:load_types, fn -> %{http: true, ws: true} end)
       |> assign_new(:recent_calls, fn -> [] end)
       |> assign_new(:available_chains, fn -> [] end)
-      |> assign_new(:active_runs, fn -> [] end)
+      |> assign_new(:auto_start, fn -> false end)
+      |> assign_new(:auto_start_consumed, fn -> false end)
       |> assign_new(:preview_text, fn ->
         get_preview_text(%{
           strategy: "load-balanced",
@@ -38,21 +44,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           load_types: %{http: true, ws: true}
         })
       end)
-      |> maybe_update_simulator_running(assigns)
-      |> maybe_handle_profile_change(assigns)
-      |> then(&assign(&1, :quick_run_config, get_default_run_config(&1.assigns.selected_profile)))
+      |> then(&assign(&1, :quick_run_config, get_default_run_config(&1)))
 
     {:ok, socket}
   end
 
-  defp maybe_update_simulator_running(socket, %{active_runs: runs}) do
-    assign(socket, :simulator_running, runs != [])
-  end
-
-  defp maybe_update_simulator_running(socket, _assigns), do: socket
-
   defp maybe_handle_profile_change(socket, %{selected_profile: new_profile}) do
-    if socket.assigns[:selected_profile] != new_profile do
+    if socket.assigns[:selected_profile] && socket.assigns[:selected_profile] != new_profile do
       socket
       |> assign(:selected_profile, new_profile)
       |> assign(:selected_chains, [])
@@ -70,61 +68,27 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   @impl true
-  def handle_event("sim_http_start", _params, socket) do
-    opts = %{
-      chains: Enum.map(socket.assigns.available_chains, & &1.name),
-      methods: ["eth_blockNumber", "eth_getBalance"],
-      rps: 5,
-      concurrency: 4,
-      durationMs: 30_000
-    }
-
-    socket = push_event(socket, "sim_start_http", opts)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_http_stop", _params, socket) do
-    socket = push_event(socket, "sim_stop_http", %{})
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_ws_start", _params, socket) do
-    opts = %{
-      chains: Enum.map(socket.assigns.available_chains, & &1.name),
-      connections: 2,
-      topics: ["newHeads"],
-      durationMs: 30_000
-    }
-
-    socket = push_event(socket, "sim_start_ws", opts)
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_ws_stop", _params, socket) do
-    socket = push_event(socket, "sim_stop_ws", %{})
-    {:noreply, socket}
-  end
-
-  @impl true
   def handle_event("toggle_chain_selection", %{"chain" => chain}, socket) do
-    selected = socket.assigns.selected_chains
+    available_chains = socket.assigns.available_chains
+    selected = canonical_selected_chains(socket.assigns.selected_chains, available_chains)
 
-    new_selected =
-      if chain in selected do
-        Enum.reject(selected, &(&1 == chain))
-      else
-        [chain | selected]
-      end
+    case canonical_chain(chain, available_chains) do
+      nil ->
+        {:noreply, socket}
 
-    socket =
-      socket
-      |> assign(:selected_chains, new_selected)
-      |> update_preview_text()
+      chain ->
+        new_selected =
+          if chain in selected,
+            do: Enum.reject(selected, &(&1 == chain)),
+            else: [chain | selected]
 
-    {:noreply, socket}
+        socket =
+          socket
+          |> assign(:selected_chains, new_selected)
+          |> update_preview_text()
+
+        {:noreply, socket}
+    end
   end
 
   @impl true
@@ -162,75 +126,11 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   @impl true
-  def handle_event("sim_http_start_advanced", _params, socket) do
-    selected_chains = socket.assigns.selected_chains
-
-    chains =
-      if selected_chains != [] do
-        selected_chains
-      else
-        Enum.map(socket.assigns.available_chains, & &1.name)
-      end
-
-    strategy = socket.assigns.selected_strategy
-
-    opts = %{
-      chains: chains,
-      methods: ["eth_blockNumber", "eth_getBalance", "eth_getTransactionCount"],
-      rps: socket.assigns.request_rate,
-      concurrency: 4,
-      durationMs: 60_000
-    }
-
-    # Only include strategy if it's a valid non-empty string
-    opts =
-      if is_binary(strategy) and String.length(strategy) > 0 do
-        Map.put(opts, :strategy, strategy)
-      else
-        opts
-      end
-
-    socket =
-      socket
-      |> assign(:simulator_running, true)
-      |> push_event("sim_start_http_advanced", opts)
-
-    {:noreply, socket}
-  end
-
-  @impl true
-  def handle_event("sim_ws_start_advanced", _params, socket) do
-    selected_chains = socket.assigns.selected_chains
-
-    chains =
-      if selected_chains != [] do
-        selected_chains
-      else
-        Enum.map(socket.assigns.available_chains, & &1.name)
-      end
-
-    opts = %{
-      chains: chains,
-      connections: 3,
-      topics: ["newHeads", "logs"],
-      durationMs: 60_000
-    }
-
-    socket =
-      socket
-      |> assign(:simulator_running, true)
-      |> push_event("sim_start_ws_advanced", opts)
-
-    {:noreply, socket}
-  end
-
-  @impl true
   def handle_event("sim_stop_all", _params, socket) do
     socket =
       socket
       |> assign(:simulator_running, false)
-      |> push_event("sim_stop_http", %{})
-      |> push_event("sim_stop_ws", %{})
+      |> push_event("stop_all_runs", %{})
 
     {:noreply, socket}
   end
@@ -263,14 +163,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   @impl true
-  def handle_event("active_runs_update", %{"runs" => runs}, socket) do
-    is_running = runs != []
+  def handle_event("sim_running", %{"running" => running}, socket) when is_boolean(running) do
+    {:noreply, assign(socket, :simulator_running, running)}
+  end
 
-    socket =
-      socket
-      |> assign(:active_runs, runs)
-      |> assign(:simulator_running, is_running)
-
+  @impl true
+  def handle_event(event, _params, %{assigns: %{available_chains: []}} = socket)
+      when event in ["start_simulator_run", "quick_start"] do
     {:noreply, socket}
   end
 
@@ -292,6 +191,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
     socket =
       socket
+      |> assign(:auto_start_consumed, true)
+      |> assign(:sim_collapsed, false)
       |> assign(:simulator_running, true)
       |> push_event("start_simulator_run", config)
 
@@ -341,23 +242,48 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         :info
       end
 
-    assigns = assign(assigns, :status, status)
+    auto_start_js =
+      if assigns.auto_start && !assigns.auto_start_consumed do
+        JS.push("quick_start", target: assigns.myself)
+      else
+        %JS{}
+      end
+
+    assigns = assign(assigns, status: status, auto_start_js: auto_start_js)
 
     ~H"""
-    <div>
+    <div phx-mounted={@auto_start_js}>
       <.floating_window
         id="simulator-controls"
         position={:top_left}
         collapsed={@sim_collapsed}
         on_toggle="toggle_collapsed"
         on_toggle_target={@myself}
-        size={%{collapsed: "w-64 h-auto", expanded: "w-80 max-h-[80vh]"}}
+        size={
+          %{
+            collapsed: "w-64 h-auto",
+            expanded: "w-80 max-w-[calc(100vw-2rem)] max-h-[48dvh] md:max-h-[80vh]"
+          }
+        }
       >
         <:header>
-          <.status_indicator
-            status={@status}
-            animated={simulator_active?(@sim_stats, @simulator_running)}
-          />
+          <svg
+            class={[
+              "h-3 w-3 flex-shrink-0",
+              if(@status == :healthy, do: "text-emerald-300", else: "text-sky-300")
+            ]}
+            viewBox="0 0 16 16"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M5.5 3.5 10 8l-4.5 4.5"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
           <div class="truncate text-xs font-medium text-white">
             RPC Request Tester
           </div>
@@ -378,12 +304,14 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <.expanded_content
             sim_stats={@sim_stats}
             available_chains={@available_chains}
+            selected_profile={@selected_profile}
             selected_chains={@selected_chains}
             selected_strategy={@selected_strategy}
             request_rate={@request_rate}
             rps_limit={@rps_limit}
             load_types={@load_types}
             simulator_running={@simulator_running}
+            recent_calls={@recent_calls}
             myself={@myself}
           />
         </:body>
@@ -399,15 +327,14 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-1 text-[10px] text-gray-400">
             <span class="text-gray-300">{@profile_name}</span>
-            <%= if @rps_limit do %>
-              <span class="text-gray-400">&middot;</span>
-              <span class="text-gray-300">{@rps_limit} RPS limit</span>
-            <% end %>
+            <span class="text-gray-400">&middot;</span>
+            <span class="text-gray-300">Tester max: {@rps_limit} RPS</span>
           </div>
           <button
             phx-click="quick_start"
+            disabled={@available_chains == []}
             phx-target={@myself}
-            class="bg-emerald-600/20 border-emerald-500/40 text-[10px] rounded border px-2 py-0.5 font-medium text-emerald-300 transition-all duration-200 hover:bg-emerald-600/30"
+            class="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300 transition-colors hover:border-emerald-400/60 hover:bg-emerald-500/15 hover:text-emerald-200 focus:outline-none focus:ring-1 focus:ring-emerald-400/50"
           >
             Run
           </button>
@@ -446,7 +373,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
             <button
               phx-click="sim_stop_all"
               phx-target={@myself}
-              class="bg-red-600/20 border-red-500/40 text-[10px] rounded border px-2 py-0.5 font-medium text-red-300 transition-all duration-200 hover:bg-red-600/30"
+              class="rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[10px] font-medium text-red-300 transition-colors hover:border-red-400/60 hover:bg-red-500/15 hover:text-red-200 focus:outline-none focus:ring-1 focus:ring-red-400/50"
             >
               Stop
             </button>
@@ -460,9 +387,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   defp expanded_content(assigns) do
     ~H"""
     <div class="space-y-4 p-4">
-      <!-- Header Section -->
       <div class="flex items-center justify-between">
-        <h3 class="text-xs font-semibold text-white">Simulation Config</h3>
+        <h3 class="text-xs font-semibold text-white">Request test</h3>
         <%= if @simulator_running do %>
           <div class="flex items-center gap-1">
             <.status_indicator status={:healthy} animated={true} size="h-2 w-2" />
@@ -478,7 +404,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           <button
             phx-click="select_all_chains"
             phx-target={@myself}
-            class="text-[9px] border-sky-500/30 rounded border px-1.5 py-0.5 text-sky-400 transition-colors hover:border-sky-400/50 hover:text-sky-300"
+            class="text-[9px] text-sky-400 transition-colors hover:text-sky-300 focus:outline-none focus:ring-1 focus:ring-sky-400/50"
           >
             All
           </button>
@@ -493,9 +419,9 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
                 class={[
                   "text-[9px] rounded px-2 py-1 font-medium transition-all duration-200",
                   if(chain.name in (@selected_chains || []),
-                    do: "bg-sky-500/20 border border-sky-500 text-sky-300",
+                    do: "border border-sky-500/40 bg-sky-500/10 text-sky-300",
                     else:
-                      "border border-gray-600 text-gray-300 hover:border-sky-400 hover:text-sky-300"
+                      "border border-gray-700/70 text-gray-300 hover:border-sky-500/40 hover:text-sky-300"
                   )
                 ]}
               >
@@ -512,11 +438,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       <div class="space-y-2">
         <label class="text-[10px] font-medium text-gray-400">Routing Strategy</label>
         <div class="grid grid-cols-2 gap-1">
-          <%= for {strategy, label, icon} <- [
-            {"load-balanced", "Load Balanced", "🔄"},
-            {"fastest", "Fastest", "⚡"},
-            {"latency-weighted", "Latency Weighted", "⚖️"}
-          ] do %>
+          <%= for strategy <- EndpointHelpers.available_strategies() do %>
             <button
               phx-click="select_strategy"
               phx-value-strategy={strategy}
@@ -524,13 +446,12 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
               class={[
                 "text-[10px] rounded-lg p-2 text-left transition-all duration-200",
                 if(@selected_strategy == strategy,
-                  do: "bg-purple-500/20 border border-purple-500 text-purple-300",
-                  else:
-                    "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-purple-400/50"
+                  do: "border border-purple-500/40 bg-purple-500/10 text-purple-300",
+                  else: "border border-gray-700/70 text-gray-300 hover:border-purple-500/40"
                 )
               ]}
             >
-              <div class="font-medium">{icon} {label}</div>
+              <div class="font-medium">{EndpointHelpers.strategy_display_name(strategy)}</div>
             </button>
           <% end %>
         </div>
@@ -541,7 +462,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
         <label class="text-[10px] font-medium text-gray-400">Request Rate</label>
         <div class="flex gap-2">
           <%= for rate <- [5, 15, 30] do %>
-            <% allowed = is_nil(@rps_limit) or rate <= @rps_limit %>
+            <% allowed = rate <= @rps_limit %>
             <button
               phx-click={allowed && "set_rate"}
               phx-value-rate={rate}
@@ -551,13 +472,13 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
                 "text-[10px] rounded-lg px-3 py-2 font-medium transition-all duration-200",
                 cond do
                   !allowed ->
-                    "border-gray-700/40 bg-gray-800/20 border text-gray-600 cursor-not-allowed"
+                    "border border-gray-800/70 text-gray-600 cursor-not-allowed"
 
                   @request_rate == rate ->
-                    "bg-orange-500/20 border border-orange-500 text-orange-300"
+                    "border border-orange-500/40 bg-orange-500/10 text-orange-300"
 
                   true ->
-                    "border-gray-600/40 bg-gray-800/40 border text-gray-300 hover:border-orange-400/50"
+                    "border border-gray-700/70 text-gray-300 hover:border-orange-500/40"
                 end
               ]}
             >
@@ -568,8 +489,8 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       </div>
       
     <!-- Live Statistics -->
-      <div class="bg-gray-800/40 space-y-3 rounded-lg p-3">
-        <div class="text-xs font-medium text-gray-300">Live Metrics</div>
+      <div class="space-y-3 border-t border-gray-700/50 pt-3">
+        <div class="text-xs font-medium text-gray-300">Live metrics</div>
 
         <.metrics_grid cols={3} class="gap-2">
           <.metric_card
@@ -596,40 +517,41 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
           />
         </.metrics_grid>
 
-        <div class="text-[10px] border-gray-700/40 flex justify-between border-t pt-2">
+        <div class="flex items-center justify-between gap-4 border-t border-gray-700/40 pt-2 text-[10px]">
           <div>
             <span class="text-gray-400">HTTP:</span>
             <span class="font-mono ml-1 text-sky-400">
               {get_stat(@sim_stats, :http, "inflight", 0)} active
             </span>
           </div>
-          <div>
+          <div class="text-right">
             <span class="text-gray-400">WS:</span>
             <span class="font-mono ml-1 text-purple-400">
-              {get_stat(@sim_stats, :ws, "open", 0)} open
+              {get_stat(@sim_stats, :ws, "open", 0)} connected
             </span>
           </div>
         </div>
       </div>
       
     <!-- Control Actions -->
-      <div class="space-y-2">
+      <div class="space-y-2 pt-2">
         <%= if not @simulator_running do %>
           <button
             phx-click="start_simulator_run"
+            disabled={@available_chains == []}
             phx-target={@myself}
-            class="bg-emerald-600/20 border-emerald-500/40 flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium text-emerald-300 transition-all duration-200 hover:bg-emerald-600/30"
+            class="flex w-full items-center justify-center gap-2 rounded border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm font-medium text-emerald-300 transition-colors hover:border-emerald-400/60 hover:bg-emerald-500/15 hover:text-emerald-200"
           >
             <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M8 5v14l11-7z" />
             </svg>
-            <span>Run Simulation</span>
+            <span>Run requests</span>
           </button>
         <% else %>
           <button
             phx-click="sim_stop_all"
             phx-target={@myself}
-            class="bg-red-600/20 border-red-500/40 flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium text-red-300 transition-all duration-200 hover:bg-red-600/30"
+            class="flex w-full items-center justify-center gap-2 rounded border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-medium text-red-300 transition-colors hover:border-red-400/60 hover:bg-red-500/15 hover:text-red-200"
           >
             <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
               <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
@@ -666,16 +588,17 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
     end
   end
 
-  defp get_default_run_config(profile) do
+  defp get_default_run_config(socket) do
     %{
       type: "custom",
-      duration: 30_000,
-      profile: profile,
+      duration: socket.assigns.run_duration * 1000,
+      profile: socket.assigns.selected_profile,
+      chains: Enum.map(socket.assigns.available_chains, & &1.name),
       strategy: "load-balanced",
       http: %{
         enabled: true,
         methods: ["eth_blockNumber", "eth_getBalance"],
-        rps: 5,
+        rps: min(5, socket.assigns.rps_limit),
         concurrency: 4
       },
       ws: %{enabled: true, connections: 2, topics: ["newHeads"]}
@@ -688,7 +611,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
     config = %{
       type: "custom",
-      duration: 30_000,
+      duration: socket.assigns.run_duration * 1000,
       profile: profile,
       chains: get_selected_chains(socket),
       http: %{
@@ -705,6 +628,19 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
       else: config
   end
 
+  defp canonical_selected_chains(selected, available_chains) do
+    selected
+    |> Enum.map(&canonical_chain(&1, available_chains))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+  end
+
+  defp canonical_chain(chain, available_chains) do
+    Enum.find_value(available_chains, fn available_chain ->
+      if to_string(available_chain.name) == to_string(chain), do: available_chain.name
+    end)
+  end
+
   defp get_selected_chains(socket) do
     case socket.assigns.selected_chains || [] do
       [] -> Enum.map(socket.assigns.available_chains, & &1.name)
@@ -713,13 +649,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
   end
 
   defp get_preview_text(%{strategy: strategy, chains: chains}) do
-    strategy_label =
-      case strategy do
-        "load-balanced" -> "Load Balanced"
-        "fastest" -> "Fastest"
-        "latency-weighted" -> "Latency Weighted"
-        _ -> "Load Balanced"
-      end
+    strategy_label = EndpointHelpers.strategy_display_name(strategy)
 
     chains_text =
       case length(chains) do

@@ -16,7 +16,7 @@ defmodule LassoWeb.Components.FloatingWindow do
   ## Core Components
 
   - `container/1` - Outer positioned wrapper
-  - `window/1` - Main window with glass morphism styling
+  - `window/1` - Main window with solid panel styling
   - `header/1` - Collapsible header with status indicators
   - `body/1` - Scrollable content area
   - `footer/1` - Fixed footer for actions
@@ -56,6 +56,13 @@ defmodule LassoWeb.Components.FloatingWindow do
   @type size :: :sm | :md | :lg | :xl | :auto
   @type status :: :healthy | :degraded | :error | :info
 
+  @mobile_doc """
+  How the window behaves below the `md` breakpoint. `:float` keeps the
+  positioned overlay at every width. `:sheet` docks it full-bleed to the
+  bottom edge as a drawer, reverting to `position` from `md` up. Both the
+  container and the frame need the same value.
+  """
+
   # ============================================================================
   # Main Floating Window Component
   # ============================================================================
@@ -87,6 +94,7 @@ defmodule LassoWeb.Components.FloatingWindow do
   )
 
   attr(:collapsed, :boolean, default: false)
+  attr(:mobile, :atom, default: :float, values: [:float, :sheet])
   attr(:on_toggle, :string, default: nil)
   attr(:on_toggle_target, :string, default: nil)
   attr(:size, :map, default: %{collapsed: "w-96 h-12", expanded: "w-[36rem] max-h-[80vh]"})
@@ -109,8 +117,15 @@ defmodule LassoWeb.Components.FloatingWindow do
 
   def floating_window(assigns) do
     ~H"""
-    <.window_container id={@id} position={@position} z_index={@z_index} class={@class}>
+    <.window_container
+      id={@id}
+      position={@position}
+      mobile={@mobile}
+      z_index={@z_index}
+      class={@class}
+    >
       <.window_frame
+        mobile={@mobile}
         collapsed={@collapsed}
         collapsed_size={@size.collapsed}
         expanded_size={@size.expanded}
@@ -159,13 +174,20 @@ defmodule LassoWeb.Components.FloatingWindow do
   attr(:position, :atom, default: :top_right)
   attr(:z_index, :string, default: "z-30")
   attr(:class, :string, default: "")
+  attr(:mobile, :atom, default: :float, values: [:float, :sheet], doc: @mobile_doc)
   slot(:inner_block, required: true)
 
   def window_container(assigns) do
     ~H"""
     <div
       id={@id <> "-container"}
-      class={["pointer-events-none absolute", position_class(@position), @z_index, @class]}
+      data-floating-window={@id}
+      class={[
+        "pointer-events-none absolute",
+        container_position_class(@mobile, @position),
+        @z_index,
+        @class
+      ]}
     >
       {render_slot(@inner_block)}
     </div>
@@ -173,18 +195,20 @@ defmodule LassoWeb.Components.FloatingWindow do
   end
 
   @doc """
-  Main window frame with glass morphism styling and size transitions.
+  Main window frame with solid panel styling and size transitions.
   """
   attr(:collapsed, :boolean, default: false)
   attr(:collapsed_size, :string, default: "w-96 h-12")
   attr(:expanded_size, :string, default: "w-[36rem] max-h-[80vh]")
   attr(:class, :string, default: "")
+  attr(:mobile, :atom, default: :float, values: [:float, :sheet], doc: @mobile_doc)
   slot(:inner_block, required: true)
 
   def window_frame(assigns) do
     ~H"""
     <div class={[
-      "border-gray-600/40 bg-[#121a28ed] pointer-events-auto overflow-hidden rounded-xl border shadow-2xl backdrop-blur-md transition-all duration-300",
+      "border-gray-600/40 bg-[#121a28] pointer-events-auto flex flex-col overflow-hidden shadow-lg shadow-black/20 transition-all duration-300",
+      frame_chrome_class(@mobile),
       if(@collapsed, do: @collapsed_size, else: @expanded_size),
       @class
     ]}>
@@ -216,7 +240,7 @@ defmodule LassoWeb.Components.FloatingWindow do
           <button
             phx-click={@on_toggle}
             phx-target={@on_toggle_target}
-            class="bg-gray-800/60 rounded px-2 py-1 text-xs text-gray-200 transition-all hover:bg-gray-700/60"
+            class="rounded px-2 py-1 text-xs text-gray-300 transition-colors hover:text-white focus:outline-none focus:ring-1 focus:ring-gray-500/60"
           >
             <div class="transition-opacity duration-200">
               {if @collapsed, do: @collapsed_arrow, else: @expanded_arrow}
@@ -355,9 +379,9 @@ defmodule LassoWeb.Components.FloatingWindow do
 
   def metric_card(assigns) do
     ~H"""
-    <div class={["bg-gray-800/50 overflow-hidden rounded-lg p-3 text-center", @class]}>
-      <div class="text-[11px] truncate leading-tight text-gray-400">{@label}</div>
-      <div class="flex h-6 items-center justify-center">
+    <div class={["overflow-hidden p-2 text-left", @class]}>
+      <div class="truncate text-[11px] leading-tight text-gray-400">{@label}</div>
+      <div class="flex h-6 items-center">
         <div class={["text-lg font-bold", @value_class]}>{@value}</div>
       </div>
     </div>
@@ -428,11 +452,38 @@ defmodule LassoWeb.Components.FloatingWindow do
   # to avoid `assign/3` which marks computed values as "changed" and produces
   # redundant WebSocket diffs on every re-render.
 
+  defp container_position_class(:float, position), do: position_class(position)
+
+  defp container_position_class(:sheet, position),
+    do: ["inset-x-0 bottom-0", sheet_position_class(position)]
+
   defp position_class(:top_left), do: "top-4 left-4"
   defp position_class(:top_right), do: "top-4 right-4"
   defp position_class(:bottom_left), do: "bottom-4 left-4"
   defp position_class(:bottom_right), do: "bottom-4 right-4"
   defp position_class(:center), do: "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
+
+  # Mobile-first counterparts of `position_class/1`: the sheet owns the
+  # bottom edge below `md`, then hands positioning back to the desktop
+  # anchor. Written out literally so Tailwind's content scanner sees them.
+  defp sheet_position_class(:top_left), do: "md:inset-x-auto md:bottom-auto md:top-4 md:left-4"
+  defp sheet_position_class(:top_right), do: "md:inset-x-auto md:bottom-auto md:top-4 md:right-4"
+  defp sheet_position_class(:bottom_left), do: "md:inset-x-auto md:left-4 md:bottom-4"
+  defp sheet_position_class(:bottom_right), do: "md:inset-x-auto md:right-4 md:bottom-4"
+
+  defp sheet_position_class(:center),
+    do:
+      "md:inset-x-auto md:bottom-auto md:top-1/2 md:left-1/2 md:-translate-x-1/2 md:-translate-y-1/2"
+
+  defp frame_chrome_class(:float), do: "rounded-xl border"
+
+  defp frame_chrome_class(:sheet) do
+    [
+      "rounded-t-2xl rounded-b-none border-t border-x-0 border-b-0",
+      "pb-[env(safe-area-inset-bottom)]",
+      "md:rounded-t-xl md:rounded-b-xl md:border-x md:border-b md:pb-0"
+    ]
+  end
 
   defp collapsed_arrow(:top_left), do: "↘"
   defp collapsed_arrow(:top_right), do: "↙"

@@ -184,7 +184,9 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     success_rate = get_windowed_success_rate_from_ets(profile, chain_name, window_ms)
 
     # "Live feel" metrics from routing_events buffer
-    chain_events = Enum.filter(assigns.routing_events, &(&1[:chain] == chain_name))
+    chain_events =
+      Enum.filter(client_routing_events(assigns.routing_events), &(&1[:chain] == chain_name))
+
     failovers_recent = Enum.count(chain_events, fn e -> (e[:failovers] || 0) > 0 end)
 
     # Decision share from buffer (real-time routing patterns)
@@ -285,8 +287,10 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     calls_last_minute = Map.get(real_time_stats, :calls_last_minute, 0)
 
     # Provider events from buffer (for live feel metrics)
-    provider_events = Enum.filter(routing_events, &(&1[:provider_id] == provider_id))
-    chain_events = Enum.filter(routing_events, &(&1[:chain] == chain))
+    provider_events =
+      Enum.filter(client_routing_events(routing_events), &(&1[:provider_id] == provider_id))
+
+    chain_events = Enum.filter(client_routing_events(routing_events), &(&1[:chain] == chain))
 
     # Provider pick share from buffer (shows real-time routing patterns)
     pick_share =
@@ -328,7 +332,8 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
     profile = assigns.selected_profile
 
     # Chain-specific routing events (from 100-item buffer - used for "live feel" metrics)
-    chain_events = Enum.filter(assigns.routing_events, &(&1.chain == chain_name))
+    chain_events =
+      Enum.filter(client_routing_events(assigns.routing_events), &(&1[:chain] == chain_name))
 
     # Time window for ETS queries
     window_ms = Constants.metrics_window_5min()
@@ -556,7 +561,9 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   end
 
   defp client_routing_events(events) do
-    Enum.reject(events, fn event -> event[:request_origin] in [:system, "system"] end)
+    Enum.reject(events, fn event ->
+      event[:request_origin] in [:system, "system"] or event[:type] == :ws_lifecycle
+    end)
   end
 
   defp recent_client_routing_events(events) do

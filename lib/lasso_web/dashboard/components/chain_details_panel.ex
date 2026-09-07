@@ -251,7 +251,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
       assigns
       |> assign(:p50, format_latency(Map.get(metrics, :p50_latency)))
       |> assign(:p95, format_latency(Map.get(metrics, :p95_latency)))
-      |> assign(:success, if(success_rate > 0, do: "#{success_rate}%", else: "—"))
+      |> assign(:success, if(is_number(success_rate), do: "#{success_rate}%", else: "—"))
       |> assign(:success_class, success_color(success_rate))
       |> assign(:rps, format_rps(Map.get(metrics, :rps, 0.0)))
 

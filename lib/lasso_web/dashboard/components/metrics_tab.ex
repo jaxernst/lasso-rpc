@@ -15,7 +15,7 @@ defmodule LassoWeb.Dashboard.Components.MetricsTab do
         socket.assigns[:selected_profile] != assigns.selected_profile
 
     chain_config =
-      if chain_changed do
+      if chain_changed and not is_nil(assigns.metrics_selected_chain) do
         case Lasso.Config.ConfigStore.get_chain(
                assigns.selected_profile,
                assigns.metrics_selected_chain
