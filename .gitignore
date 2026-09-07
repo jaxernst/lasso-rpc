@@ -50,3 +50,6 @@ deployment/.env.staging
 
 # Internal working docs (keep local, don't commit)
 /docs/internal/
+
+# Python verification tools
+__pycache__/

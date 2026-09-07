@@ -1,0 +1,27 @@
+services:
+  lasso:
+    image: ${LASSO_IMAGE:-ghcr.io/jaxernst/lasso-rpc:v0.3.4}
+    ports:
+      - "127.0.0.1:${LASSO_PORT:-4000}:4000"
+    env_file:
+      - .env
+    environment:
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?Set SECRET_KEY_BASE in .env}
+      RELEASE_COOKIE: ${RELEASE_COOKIE:?Set RELEASE_COOKIE in .env}
+      LASSO_NODE_ID: ${LASSO_NODE_ID:-docker-local}
+      PHX_HOST: localhost
+      PHX_SCHEME: http
+    volumes:
+      - lasso-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  lasso-data:
