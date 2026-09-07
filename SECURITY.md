@@ -23,10 +23,10 @@ When deploying Lasso RPC in production, follow these security best practices:
 
 ### 1. Environment Variables & Secrets
 
-- **Never commit API keys** to version control
-- Use proper secrets management (HashiCorp Vault, AWS Secrets Manager, etc.)
-- Rotate API keys regularly
-- Use `.env` files for local development only (never in production)
+- Keep provider credentials, `SECRET_KEY_BASE`, and `RELEASE_COOKIE` out of version control, images, and logs.
+- The Compose installation uses a private `.env` file. Keep it outside web-served directories, restrict it to the operator (`chmod 600 .env`), and protect backups.
+- For managed deployments, inject these environment variables through your platform's secret manager. Docker administrators can inspect container environment variables; restrict host and Docker access.
+- Preserve signing and distribution secrets across restarts. Rotate credentials deliberately; cluster members must share the same distribution cookie.
 
 ### 2. Network Security
 

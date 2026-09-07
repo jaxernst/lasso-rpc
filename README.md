@@ -1,6 +1,6 @@
 <img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
 
-### Smart RPC aggregation for fault-tolerant and performant blockchain apps.
+### Resilient Ethereum RPC over HTTP and WebSocket
 
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](docs/API_REFERENCE.md)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
@@ -9,91 +9,32 @@
 [![Version](https://img.shields.io/badge/version-0.3.4-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
-Lasso is a smart proxy/router that turns your node infrastructure and RPC providers into a **fast, observable, configurable, and resilient** multi-chain JSON-RPC layer.
+Lasso is a multi-chain Ethereum JSON-RPC proxy with health checks, retries,
+failover, and a live dashboard. Route requests across your own nodes and RPC
+providers by pointing your client at Lasso's URL.
 
-It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RPC API with expressive routing control (strategies, provider overrides, and profiles).
+Run it on your own infrastructure with YAML configuration. The included public
+providers let you try it without API keys.
 
-Point your client at a Lasso URL instead of a provider's, and failover, retries, and provider selection happen behind it. No SDK, no client library, no application changes.
-
-Run Lasso on your own infrastructure and configure upstreams in YAML.
-
----
-
-## Table of Contents
-
-- [Why Lasso](#why-lasso)
-- [Features](#features)
-- [Endpoints](#endpoints)
-- [Quick Start](#quick-start)
-  - [Docker Compose (recommended)](#docker-compose-recommended)
-  - [Run from source](#run-from-source)
-  - [Multi-Node Deployment (Cluster)](#multi-node-deployment-cluster)
-- [Try It](#try-it)
-- [Configuration](#configuration)
-- [How it works](#how-it-works)
-- [Built with Elixir/OTP](#built-with-elixirotp)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [Security](#security)
-- [License](#license-apache-20)
-
----
-
-## Why Lasso
-
-Choosing a single RPC provider has real UX and reliability consequences, but the tradeoffs (latency, uptime, quotas, features, cost, rate limits) are opaque and shift over time. Performance varies by region, method, and hour, and API inconsistencies make a "one URL" setup brittle.
-
-Lasso makes the RPC layer programmable and resilient. It's designed to run as a **geo-distributed proxy** where RPC requests are routed to the closest Lasso node. Each node independently measures real latencies and health, routing each call to the best provider for that region, chain, method, and transport. You get redundancy without brittle application code, and you can scale throughput by adding providers instead of replatforming.
-
-For multi-region deployments, Lasso nodes form a cluster that aggregates observability data across all regions—giving you unified visibility into provider performance and health without adding latency to the routing hot path.
-
-Different providers excel at different workloads (hot reads vs archival queries vs subscriptions). Lasso lets you express those preferences and enforce them automatically.
-
----
+[Quick Start](#quick-start) · [Configuration](#configuration) ·
+[Endpoints](#endpoints) · [Troubleshooting](#troubleshooting) ·
+[Run from source](#run-from-source) · [Documentation](#documentation)
 
 ## Features
 
-- **Multi-provider, multi-chain** Ethereum JSON-RPC proxy for **HTTP + WebSocket**
-- **Routing strategies**: `fastest`, `load-balanced`, `latency-weighted`, plus provider override routes
-- **Method-aware benchmarking**: latency tracked per **provider × method × transport**
-- **Resilience**: circuit breakers, retries, and transport-aware failover
-- **WebSocket subscriptions**: multiplexing with optional gap-filling via HTTP on upstream failure
-- **Profiles**: separate routing configurations and dashboard views (dev/staging/prod, experiments); identical upstreams can share runtime state
-- **Cluster aggregation**: optional BEAM clustering aggregates metrics across geo-distributed nodes with regional drill-down
-- **LiveView dashboard**: interactive topology, fresh provider status, routing decisions, latency metrics, cluster-wide observability, and an HTTP/WebSocket request tester
-
----
-
-## Endpoints
-
-HTTP (POST):
-
-- `/rpc/:chain` (default strategy)
-- `/rpc/fastest/:chain`
-- `/rpc/load-balanced/:chain`
-- `/rpc/latency-weighted/:chain`
-- `/rpc/provider/:provider_id/:chain` (provider override)
-
-WebSocket:
-
-- `/ws/rpc/:chain`
-- `/ws/rpc/:strategy/:chain`
-- `/ws/rpc/provider/:provider_id/:chain`
-
-Profiles (namespaced routing configs):
-
-- HTTP: `/rpc/profile/:profile/...`
-- WS: `/ws/rpc/profile/:profile/...`
-
-Routes without `/profile/:profile` use the included `public` profile. Use a namespaced route to select any other profile. The legacy `default` profile name remains an alias for `public`.
-
----
+- **Routing control:** `fastest`, `load-balanced`, `latency-weighted`, and direct provider routes.
+- **Method-aware measurements:** latency tracked per provider, RPC method, and transport.
+- **Provider resilience:** circuit breakers, retries, and failover based on health and declared capabilities.
+- **WebSocket subscriptions:** multiplexed `newHeads` and `logs`, with bounded recovery and HTTP gap-filling.
+- **YAML profiles:** separate chain, provider, and routing configurations; identical upstreams can share runtime state.
+- **Live dashboard:** provider topology, health, latency, routing activity, and an HTTP/WebSocket request tester.
+- **Optional clustering:** aggregate observability across nodes while each node routes independently.
 
 ## Quick Start
 
 ### Docker Compose (recommended)
 
-You need Docker with the Compose plugin and OpenSSL. Start in an empty directory:
+You need Docker with the Compose plugin, curl, and OpenSSL. Start in an empty directory:
 
 ```bash
 mkdir lasso && cd lasso
@@ -103,21 +44,143 @@ docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
 ```
 
-Open **<http://localhost:4000/dashboard>**. The included public providers require
-no API keys. The prebuilt image supports Linux AMD64 and ARM64; no application
-build tools or source checkout are needed.
+Open **<http://localhost:4000/dashboard>**. The prebuilt image supports Linux AMD64
+and ARM64 and requires no source checkout or application build tools.
 
-Keep `.env` across restarts. Compose binds localhost and preserves profiles and
-history in a named volume. `docker compose down` stops the service and retains
-that data. See the [deployment guide](docs/DEPLOYMENT.md#docker) for custom
-providers, image verification, upgrades, and rollback.
+Compose binds localhost and keeps profiles and history in a named volume.
+Preserve `.env` across restarts. `docker compose down` stops Lasso and retains its
+data; adding `--volumes` deletes it. See [Deployment](docs/DEPLOYMENT.md#docker)
+for image verification, custom providers, upgrades, and rollback.
 
-The dashboard uses YAML profiles, including your own nodes and provider
-credentials. [Configure profiles](docs/CONFIGURATION.md#multiple-profiles) to add
-or change them. Lasso has no built-in client authentication; protect externally
-accessible RPC, metrics, and dashboard endpoints with your network or reverse proxy.
+Lasso has no built-in client authentication or incoming RPC quotas. Protect
+externally accessible RPC, metrics, and dashboard endpoints with your network or
+reverse proxy. The dashboard tester sends real upstream requests.
 
-### Run from source
+## Try It
+
+Request the latest Ethereum block number:
+
+```bash
+curl --fail-with-body --silent --show-error http://localhost:4000/rpc/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+A successful response contains a hexadecimal block number; the value changes:
+
+```json
+{"jsonrpc":"2.0","id":1,"result":"0x18ba3fb"}
+```
+
+The health endpoint checks the application. This RPC request also exercises an
+upstream provider. Public providers have their own availability and rate limits.
+
+For WebSocket subscriptions, use the dashboard tester or run
+[`wscat`](https://github.com/websockets/wscat) with Node.js and npm:
+
+```bash
+npx --yes wscat -c ws://localhost:4000/ws/rpc/ethereum
+```
+
+At its `>` prompt, send:
+
+```json
+{"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
+```
+
+Expect a subscription ID followed by `eth_subscription` notifications as blocks
+arrive. Press Ctrl+C to disconnect.
+
+To inspect routing decisions, add `?include_meta=headers` to an HTTP request URL
+and `-i` to curl. See the [API reference](docs/API_REFERENCE.md#observability-metadata)
+for metadata fields and error responses.
+
+![Lasso RPC v0.3.4 dashboard showing chain topology, provider health, routing activity, and the request tester](docs/images/dashboard-v0.3.4.png)
+
+## Configuration
+
+Profiles are YAML files. In Docker, follow the
+[host-mounted profile setup](docs/DEPLOYMENT.md#custom-profiles-and-credentials);
+in a source checkout, edit `config/profiles/`. Keep a valid `public.yml` and match
+each additional filename to its `slug`.
+
+For example, save this as `my-app.yml` in your profiles directory:
+
+```yaml
+---
+name: My App
+slug: my-app
+---
+chains:
+  ethereum:
+    chain_id: 1
+    providers:
+      - id: publicnode
+        url: https://ethereum-rpc.publicnode.com
+        ws_url: wss://ethereum-rpc.publicnode.com
+      - id: drpc
+        url: https://eth.drpc.org
+        ws_url: wss://eth.drpc.org
+```
+
+This example uses public endpoints for both HTTP and subscriptions. Replace them
+with your own upstreams as needed. Provider URLs and authentication headers
+support `${ENV_VAR}` substitution; unresolved variables reject the configuration.
+See [provider credentials](docs/CONFIGURATION.md#provider-credentials) and the
+[bundled profile](config/profiles/public.yml) for capability and limit settings.
+
+After adding a profile, recreate the container:
+
+```bash
+docker compose up -d --force-recreate --wait
+```
+
+Then use `http://localhost:4000/rpc/profile/my-app/ethereum` or
+`ws://localhost:4000/ws/rpc/profile/my-app/ethereum`.
+For YAML edits to existing profiles, use
+[configuration reload](docs/DEPLOYMENT.md#custom-profiles-and-credentials).
+A failed reload preserves the active configuration. New profiles and environment
+changes require container recreation.
+
+Profiles are configuration boundaries, not access controls. The dashboard reads
+them from YAML; edit the files to create or change profiles. Profile `rps_limit`
+controls the dashboard tester and does not rate-limit incoming RPC traffic.
+
+## Endpoints
+
+| Route | HTTP (POST) | WebSocket |
+|-------|-------------|-----------|
+| Default | `/rpc/:chain` | `/ws/rpc/:chain` |
+| Strategy | `/rpc/:strategy/:chain` | `/ws/rpc/:strategy/:chain` |
+| Provider override | `/rpc/provider/:provider_id/:chain` | `/ws/rpc/provider/:provider_id/:chain` |
+| Profile | `/rpc/profile/:profile/:chain` | `/ws/rpc/profile/:profile/:chain` |
+
+The default strategy is `load-balanced`. Strategy routes accept `fastest`,
+`load-balanced`, or `latency-weighted`. Profiles also support strategy and provider
+routes; see the [API reference](docs/API_REFERENCE.md).
+
+Use a configured chain name such as `ethereum` or its decimal EIP-155 ID, `1`.
+Routes without a profile use `public`; `default` remains an alias for `public`.
+Subscription recovery depends on eligible WebSocket upstreams and configured
+[recovery limits](docs/CONFIGURATION.md#websocket).
+
+## Troubleshooting
+
+Start with container status and recent logs:
+
+```bash
+docker compose ps -a
+docker compose logs --tail=100 lasso
+```
+
+| Symptom | Check |
+|---------|-------|
+| Container fails to start | Check logs for missing environment variables or invalid YAML. Keep `public.yml`; profile filenames must match their slugs. |
+| Port 4000 is in use | Set `LASSO_PORT=4001` in `.env`, run `docker compose up -d --wait`, and use port 4001 in URLs. |
+| Health passes but RPC fails | Check provider status in the dashboard, upstream credentials, and network access. Health does not verify upstream availability. |
+| Profile changes have no effect | Reload existing profiles on each node. After adding a profile or changing `.env` or mounts, run `docker compose up -d --force-recreate --wait`. |
+
+## Run from source
 
 For development, use Elixir 1.18.4 and Erlang/OTP 28 (the CI versions), plus
 Node.js 18 or newer for asset compilation:
@@ -131,209 +194,45 @@ mix assets.build
 mix phx.server
 ```
 
-The application runs at `http://localhost:4000`. To build a production container
-from a source checkout, use `docker compose up --build -d` with `SECRET_KEY_BASE`
-set, or the foreground `./run-docker.sh` helper. The source checkout's Compose file
-and the downloadable release Compose file support these separate build/install paths.
-
-### Multi-Node Deployment (Cluster)
-
-For geo-distributed deployments with aggregated observability:
-
-```bash
-# Node 1 (us-east)
-export LASSO_NODE_ID=us-east
-export CLUSTER_DNS_QUERY="lasso.internal"
-export CLUSTER_NODE_BASENAME="lasso"
-mix phx.server
-
-# Node 2 (eu-west)
-export LASSO_NODE_ID=eu-west
-export CLUSTER_NODE_BASENAME="lasso"
-export CLUSTER_DNS_QUERY="lasso.internal"
-mix phx.server
-```
-
-This enables:
-
-- Nodes discover each other via DNS
-- Dashboard aggregates metrics across all lasso nodes (multi-region)
-- Drill down by node/region to compare provider performance
-- Each node makes independent routing decisions based on local latency
-
-**Note:** Clustering is optional. A single node works great standalone.
-
----
-
-## Try It
-
-```bash
-curl -sS -X POST http://localhost:4000/rpc/ethereum \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
-```
-
-WebSocket subscription:
-
-```bash
-wscat -c ws://localhost:4000/ws/rpc/ethereum
-> {"jsonrpc":"2.0","method":"eth_subscribe","params":["newHeads"],"id":1}
-```
-
-Return routing metadata with your request:
-
-```bash
-curl -sS -X POST 'http://localhost:4000/rpc/ethereum?include_meta=headers' \
-  -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' -i | sed -n '1,15p'
-```
-
----
-
-## Configuration
-
-Profiles live in `config/profiles/*.yml`. Each profile defines chains, providers, routing policy, and tester settings. `${ENV_VAR}` substitution is supported (and unresolved placeholders will fail startup).
-
-A profile's YAML `slug` is its routing identity. Treat it as opaque in integrations. Chain routing accepts the configured name (such as `ethereum`) or its decimal EIP-155 ID (such as `1`); Lasso resolves either form to a positive integer internally. The `default` route remains an alias for the included `public` profile.
-
-Reload configuration with `Lasso.Config.ConfigStore.reload/0`. A malformed YAML reload is rejected and the last known-good configuration continues serving requests. On a cold restart, configuration is loaded from the YAML files before routing starts, so ensure required environment variables and profile files are available first.
-
-See the [configuration reference](docs/CONFIGURATION.md) for supported options and [`config/profiles/public.yml`](config/profiles/public.yml) for a complete example.
-
-### Ready to Use: Public Profile
-
-The included `public.yml` profile is configured with free public providers (no API keys required). Start `mix phx.server` and you have a working multi-provider RPC proxy.
-
-Good for:
-
-- **Getting started** without setting up API keys
-- **Local development** with instant redundancy
-- **Production fallback** when combined with your own nodes
-- **Testing Lasso's routing** before configuring custom providers
-
-Minimal example:
-
-```yaml
-# config/profiles/public.yml
----
-name: "Public RPC"
-slug: "public"
-rps_limit: 100  # Dashboard tester maximum
----
-chains:
-  ethereum:
-    chain_id: 1
-    providers:
-      - id: "ethereum_llamarpc"
-        name: "LlamaRPC"
-        url: "https://eth.llamarpc.com"
-        ws_url: "wss://eth.llamarpc.com"
-
-      - id: "ethereum_publicnode"
-        name: "PublicNode Ethereum"
-        url: "https://ethereum-rpc.publicnode.com"
-        ws_url: "wss://ethereum-rpc.publicnode.com"
-```
-
-Multiple profiles:
-
-```yaml
-# config/profiles/production.yml
----
-name: "Production"
-slug: "production"
-rps_limit: 1000  # Dashboard tester maximum
----
-chains:
-  ethereum:
-    chain_id: 1
-    providers:
-      - id: "your_erigon"
-        url: "http://your-erigon-node:8545"
-        priority: 1
-      - id: "alchemy_fallback"
-        url: "https://..."
-        priority: 2
-```
-
-Access it via:
-
-- `POST /rpc/profile/production/ethereum`
-- `ws://localhost:4000/ws/rpc/profile/production/ethereum`
-
----
+Open <http://localhost:4000/dashboard>. See [Contributing](CONTRIBUTING.md) for tests
+and code quality checks. To build a production container from the checkout, set
+`SECRET_KEY_BASE` and run `docker compose up --build -d`, or use `./run-docker.sh`.
+The checkout's Compose file builds locally; the release attachment pulls the image.
 
 ## How it works
 
-Request pipeline:
+Lasso filters providers by method, transport, capabilities, and health, ranks
+eligible candidates using the selected strategy, then executes with bounded
+retries and failover. Measurements feed subsequent routing and the dashboard.
+Elixir/OTP supervision manages provider connections; ETS holds routing and
+benchmark state. See [Architecture](docs/ARCHITECTURE.md) for the runtime design.
 
-1. Build candidates (method + transport aware)
-2. Filter unhealthy channels (breakers / health)
-3. Execute request
-4. On failure: retry/failover
-5. Record benchmarking + telemetry
-
-For deeper implementation details (supervision tree, BenchmarkStore, capabilities system, streaming internals), start with:
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-
----
-
-## Built with Elixir/OTP
-
-Lasso runs on the BEAM (Erlang VM) to take advantage of its strengths for high-concurrency, failure-prone networking systems.
-
-- **Massive concurrency**: lightweight processes and message passing make it natural to model per-request, per-provider, and per-connection workflows without shared-memory complexity.
-- **Fault isolation + self-healing**: OTP supervision trees keep failures contained and allow fast restarts, which is ideal when upstream providers are flaky or rate-limited.
-- **Distributed by design**: the runtime supports clustering and remote messaging, making it straightforward to scale Lasso horizontally and keep components decoupled.
-- **Fast in-memory state**: ETS provides efficient shared state for hot-path lookups (routing decisions, benchmarks, breaker state) without turning every read into a bottleneck.
-
----
+A single node works standalone. For multiple regions, your DNS or load balancer
+routes clients to a Lasso node. Optional [clustering](docs/DEPLOYMENT.md#multi-node-clustering)
+shares observability; each node routes from its local measurements. Cluster setup
+requires named Erlang nodes, a shared cookie, DNS discovery, and private connectivity.
 
 ## Documentation
 
-Documentation for this release:
-
-- **[CONFIGURATION.md](docs/CONFIGURATION.md)** - Profile YAML reference, strategies, provider capabilities
-- **[API_REFERENCE.md](docs/API_REFERENCE.md)** - HTTP/WebSocket endpoints, headers, errors
-- **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Production deployment, clustering, env vars
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System design + components
-- **[OBSERVABILITY.md](docs/OBSERVABILITY.md)** - Logging/metrics
-- **[RPC_STANDARDS.md](docs/RPC_STANDARDS.md)** - RPC compliance details
-- **[TESTING.md](docs/TESTING.md)** - Dev workflow
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history
-
----
+- [Configuration](docs/CONFIGURATION.md) — YAML, provider credentials, capabilities, and strategies
+- [API reference](docs/API_REFERENCE.md) — routes, metadata, subscriptions, and errors
+- [Deployment](docs/DEPLOYMENT.md) — containers, persistence, upgrades, and clustering
+- [Observability](docs/OBSERVABILITY.md) — logs and metrics
+- [RPC standards](docs/RPC_STANDARDS.md) — compatibility and supported methods
+- [Testing](docs/TESTING.md) — verification commands
+- [Changelog](CHANGELOG.md) — release history
 
 ## Contributing
 
-Contributions welcome! Please see [Contributing Guide](CONTRIBUTING.md) for details on:
-
-- Development setup
-- Code style and quality standards
-- Testing requirements
-- Pull request process
-
-**Before contributing**, please:
-
-1. Read [CONTRIBUTING.md](CONTRIBUTING.md)
-2. Check existing [issues](https://github.com/jaxernst/lasso-rpc/issues) and [pull requests](https://github.com/jaxernst/lasso-rpc/pulls)
-3. For major changes, open an issue first to discuss your approach
-
----
+See [Contributing](CONTRIBUTING.md) for development setup and checks. Report bugs
+through [GitHub issues](https://github.com/jaxernst/lasso-rpc/issues); discuss major
+changes there before opening a pull request.
 
 ## Security
 
-For security concerns, please review our [Security Policy](SECURITY.md).
-
----
+See the [Security Policy](SECURITY.md) for deployment guidance and private
+vulnerability reporting.
 
 ## License: Apache-2.0
 
-Lasso RPC is licensed under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0). It permits use, modification, distribution, self-hosting, and commercial embedding subject to the license terms.
-
-See [LICENSE.md](LICENSE.md) for full terms.
-
----
-
-Built by [jaxer.eth](https://farcaster.xyz/jaxer.eth)
+[Apache License 2.0](LICENSE.md). Built by [jaxer.eth](https://farcaster.xyz/jaxer.eth).
