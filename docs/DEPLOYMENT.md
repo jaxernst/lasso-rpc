@@ -35,77 +35,156 @@ ALCHEMY_API_KEY=your-key-here
 
 ### Docker
 
-From a checkout of the release you intend to run:
+The primary distribution is `ghcr.io/jaxernst/lasso-rpc`, with native Linux AMD64
+and ARM64 images. Use the Compose attachment from the release you select. It
+requires Docker Compose and OpenSSL for generating local secrets:
 
 ```bash
-export SECRET_KEY_BASE="$(openssl rand -hex 64)"
-docker compose up --build -d
+mkdir lasso && cd lasso
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.3.4/compose.yml --output compose.yml
+(umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
+docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
+curl --fail http://localhost:4000/rpc/ethereum \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 ```
 
-Open <http://localhost:4000/dashboard>. The included Compose file builds the image
-locally; it does not pull an officially published registry image. Keep the same
-secret in your deployment's environment or secret manager across restarts.
+Open <http://localhost:4000/dashboard>. Preserve `.env` across restarts and keep it
+private; it contains the signing and Erlang distribution secrets. Compose passes
+its values into the container, including provider credentials you add. Changing
+`.env` requires container recreation with `docker compose up -d --force-recreate
+--wait`; reloading YAML does not change a running container's environment.
 
 Compose binds port 4000 to localhost, runs as UID/GID `10001:10001`, and keeps the
 root filesystem read-only. `/tmp` is temporary; the named `/data` volume retains
 profiles and benchmark history. `docker compose down` retains that volume;
-`docker compose down --volumes` deletes it.
+`docker compose down --volumes` deletes it. Set `LASSO_PORT` in `.env` to choose
+another local port and `LASSO_NODE_ID` to give the instance a stable identity.
 
-The foreground helper `./run-docker.sh` also builds locally, generates a secret
-when one is not supplied, and persists data in its own `lasso-rpc-data` volume.
-It sets `LASSO_NODE_ID=docker-local` unless you provide one.
+#### Verify or pin the image
 
-#### Profile and history storage
+Each release attaches `container-release.json`, native verification reports, and
+`container-verification.md` with its immutable image digest. Version tags are
+never replaced with different contents. For a digest-pinned installation, set
+this in `.env`, using the digest from the selected release:
 
-The image defaults `LASSO_DATA_DIR` to `/data`. An empty data volume is seeded
-with bundled profiles in `/data/config/profiles`. Existing files are preserved
-on restart and upgrade. Benchmark snapshots use `/data/benchmark_snapshots`.
-
-To use configuration maintained on the host instead, mount an existing directory
-containing profile YAML files and set `LASSO_PROFILES_DIR`:
-
-```bash
-docker run --rm --name lasso-rpc \
-  --publish 127.0.0.1:4000:4000 \
-  --env SECRET_KEY_BASE --env LASSO_NODE_ID=docker-local \
-  --env PHX_HOST=localhost --env PHX_SCHEME=http \
-  --env LASSO_PROFILES_DIR=/profiles \
-  --mount type=bind,source="$(pwd)/config/profiles",target=/profiles,readonly \
-  --volume lasso-rpc-history:/data \
-  lasso-rpc:local
+```dotenv
+LASSO_IMAGE=ghcr.io/jaxernst/lasso-rpc@sha256:DIGEST
 ```
 
-The `lasso-rpc:local` image is produced by the Compose build above. Mounted files
-must be readable by UID 10001; host directories used for writable storage must
-also be writable by that UID. `LASSO_PROFILES_DIR` overrides profile seeding and
-selection. `LASSO_SNAPSHOTS_DIR` independently overrides the history directory at
-runtime. A read-only profile mount supports loading/reloading configuration;
-application-side configuration saves require a writable mount.
-
-Reload after editing YAML:
+Then run `docker compose pull` and `docker compose up -d --wait`. To verify the
+signed publication attestation, install the GitHub CLI and run:
 
 ```bash
-docker compose exec lasso /app/bin/lasso rpc 'Lasso.Config.ConfigStore.reload()'
+gh attestation verify oci://ghcr.io/jaxernst/lasso-rpc@sha256:DIGEST \
+  --repo jaxernst/lasso-rpc
 ```
+
+The signed attestation identifies the publication workflow. Platform BuildKit
+provenance records the pinned public source used for the build; the index also
+contains SBOMs. Source and publication-tooling revisions are recorded separately
+in `container-release.json`. See [Releasing](RELEASING.md) for the verification
+scope, first-publication access setup, and retry behavior.
+
+#### Custom profiles and credentials
+
+An empty data volume is seeded with bundled profiles in
+`/data/config/profiles`. Existing files are preserved on restart and upgrade.
+Benchmark snapshots use `/data/benchmark_snapshots`.
+
+To maintain profiles on the host, copy the starting configuration from the
+running container:
+
+```bash
+mkdir profiles
+docker compose cp lasso:/data/config/profiles/. ./profiles
+```
+
+Create `compose.override.yml` next to `compose.yml`:
+
+```yaml
+services:
+  lasso:
+    environment:
+      LASSO_PROFILES_DIR: /profiles
+    volumes:
+      - type: bind
+        source: ./profiles
+        target: /profiles
+        read_only: true
+```
+
+Edit the YAML in `profiles/`, retaining a valid `public.yml`. Additional profiles
+need matching filenames and frontmatter slugs. See [Configuration](CONFIGURATION.md)
+for supported settings. Files must be readable by UID 10001 and directories
+traversable by that UID; host directories used for writable history must also be
+writable by UID 10001. Keep credential values in `.env` and reference them as
+`${VARIABLE_NAME}` in provider URLs or headers.
+
+Apply the mount or environment changes:
+
+```bash
+docker compose up -d --force-recreate --wait
+```
+
+For subsequent YAML-only changes, reload the running node:
+
+```bash
+docker compose exec -T lasso /app/bin/lasso rpc 'IO.inspect(Lasso.Config.ConfigStore.reload())'
+```
+
+A successful reload prints `:ok`. A rejected reload reports its error and keeps
+the active configuration. Fix the file before restarting: a cold start cannot
+recover the prior in-memory configuration. Invalid files are logged during startup
+retries and prevent the service becoming ready. Use `docker compose logs lasso`
+to see the specific rejected field. A read-only mount supports loading
+and reloading; application-side configuration saves need a writable mount.
+`LASSO_PROFILES_DIR` overrides profile seeding and selection.
+`LASSO_SNAPSHOTS_DIR` independently overrides the history directory at runtime.
 
 #### Upgrade and rollback
 
-1. Back up the profile files and any history you intend to retain.
-2. Read the target release's changelog and select its Git tag before rebuilding.
-3. Run `docker compose up --build -d` and verify health, a real RPC request, and the dashboard.
+1. Preserve `.env` and back up profiles and any history you need. For the default
+   volume layout, `docker compose cp lasso:/data/config/profiles ./profiles-backup`
+   and `docker compose cp lasso:/data/benchmark_snapshots ./history-backup` copy
+   them out of the running container.
+2. Read the target release's compatibility notes. Select its exact image tag or
+   digest using `LASSO_IMAGE` in `.env`, and retain the previous value for rollback.
+3. Run `docker compose pull`, then `docker compose up -d --wait`. Check health,
+   an upstream-backed RPC request, and the dashboard.
 4. Existing volume profiles are not replaced by newer bundled defaults. Compare
-   provider changes with `config/profiles/` in the target release and merge them deliberately.
-5. To roll back, select the previous release's Git tag and rebuild with the same
-   environment. Review its storage layout and restore the corresponding backup
-   if the target release changed that layout.
+   provider changes with the target release's example profiles and merge them
+   deliberately. YAML validation rejects unknown settings; check custom profiles
+   before an upgrade rather than relying on formerly ignored options.
+5. To roll back, restore the previous `LASSO_IMAGE`, pull, and recreate the
+   container with the same environment. If the release changed the storage
+   format, restore the matching backup according to its compatibility notes.
+
+Do not run `down --volumes` as an upgrade step.
+
+When migrating the v0.3.3 example profiles to v0.3.4, remove the ignored provider
+fields `type` and `api_key_required`. Replace the old
+`adapter_config.max_block_range` with `capabilities.limits.max_block_range`.
+Preserve your own provider URLs, credentials, and supported settings. The target
+release's bundled profiles show the supported shape.
 
 Images built before the persistent `/data` layout used `/app/config/profiles`
-and `/app/priv/benchmark_snapshots`. Copy any customized configuration or history
+and `/app/priv/benchmark_snapshots`. Copy customized configuration and history
 out of the old container before replacing it; a new empty volume cannot recover
-files from a deleted container. Existing volumes created by a root-running image
-may also need their writable directories assigned to UID/GID `10001:10001` before
-upgrading. Preserve a backup before changing volume contents or ownership.
+files from a deleted container. Restore the profiles into a readable host mount
+and the history into the new data volume, with ownership suitable for UID/GID
+`10001:10001`. Keep the old container/data and backups until the new deployment
+passes verification.
+
+#### Building locally
+
+The source repository's `compose.yml` builds from its checkout. From the selected
+Git tag, set `SECRET_KEY_BASE` and run `docker compose up --build -d`. Its local
+image is `lasso-rpc:local`; the downloadable Compose attachment uses the registry
+image instead. The foreground helper `./run-docker.sh` also builds locally and
+persists data in its own `lasso-rpc-data` volume. These source-build paths are
+useful for development or independently rebuilding a release.
 
 ---
 
