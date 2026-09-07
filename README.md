@@ -15,7 +15,7 @@ It proxies Ethereum JSON-RPC over **HTTP + WebSocket** and gives you a single RP
 
 Point your client at a Lasso URL instead of a provider's, and failover, retries, and provider selection happen behind it. No SDK, no client library, no application changes.
 
-This repository contains the self-hosted routing core. For a managed deployment, visit [Lasso Cloud](https://lasso.sh).
+This repository contains the self-hosted routing core. For a managed deployment, visit [lasso.sh](https://lasso.sh).
 
 ---
 
