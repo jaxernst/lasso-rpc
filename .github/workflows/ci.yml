@@ -54,6 +54,9 @@ jobs:
       - name: Run tests
         run: mix test
 
+      - name: Verify container publication guards
+        run: python3 -m unittest discover -s scripts/distribution -p "test_*.py"
+
   integration:
     name: Hermetic Integration Test
     runs-on: ubuntu-latest

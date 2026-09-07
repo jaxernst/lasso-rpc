@@ -1,48 +1,108 @@
 # Releasing Lasso RPC
 
-This checklist is for maintainers preparing a public release. It intentionally separates release preparation from publishing a tag, so version selection and publication stay explicit decisions.
+Source releases and container publication are separate steps. A container is built
+from an exact published Git commit and promoted only after both native platforms
+pass installation checks. A green build alone is not distribution verification.
 
-## Prepare the release candidate
+## Prepare and verify the source release
 
-1. Start from a clean checkout of the intended commit and review `git status`.
-2. Review every entry in `CHANGELOG.md` under `Unreleased`. Move it into a new versioned section only after choosing the release version and date.
-3. Update `version` in `mix.exs`, the README version badge, and the comparison links at the end of `CHANGELOG.md` together.
-4. Confirm the public surface: README quick start, `docs/API_REFERENCE.md`, `docs/CONFIGURATION.md`, `docs/DEPLOYMENT.md`, and `SECURITY.md` accurately describe the current release.
-5. Verify that no credentials, `.env` files, local database files, or machine metadata are staged.
+1. Start from a clean checkout; review the changes since the previous release.
+2. Update `mix.exs`, the README version badge, and the changelog/version comparison
+   links together. Describe any configuration or storage compatibility changes.
+3. Review public setup, API, configuration, deployment, and security guidance.
+   Keep private operational material, credentials, `.env` files, local data, and
+   generated build artifacts out of the commit.
+4. Run `mix format` before committing Elixir changes. Run the repository CI checks
+   and any focused regressions needed for the change. Container publication reuses
+   successful CI for the exact release commit; it does not repeat the full suite.
+5. Merge the release PR and require the merged commit's CI to pass before tagging.
+6. Create an annotated version tag and publish the GitHub source release with its
+   finalized changelog and compatibility notes. Keep previous tags unchanged.
 
-## Verify
-
-Run these from the repository root:
-
-```bash
-mix deps.get
-mix compile --warnings-as-errors
-mix format --check-formatted
-mix credo --strict
-mix test --include integration
-MIX_ENV=prod mix assets.setup
-MIX_ENV=prod mix assets.deploy
-MIX_ENV=prod mix release
-docker build --pull --no-cache --tag lasso-rpc:rc .
+```sh
+git tag -a vX.Y.Z RELEASE_COMMIT -m 'Lasso RPC vX.Y.Z'
+git push jaxernst refs/tags/vX.Y.Z
+gh release create vX.Y.Z --repo jaxernst/lasso-rpc --verify-tag \
+  --title 'Lasso RPC vX.Y.Z' --notes-file release-notes.md
 ```
 
-Then boot the release or container with `SECRET_KEY_BASE`, `LASSO_NODE_ID`, `PHX_HOST`, and `PHX_SERVER=true` configured. Confirm:
+A release containing `publish-container.yml` starts container publication when
+published. To publish an existing source release, or retry explicitly:
 
-- `GET /api/health` returns `200`.
-- `GET /api/chains` lists the expected public chains.
-- An HTTP request to `/rpc/ethereum` succeeds.
-- The dashboard loads at `/dashboard` and the profile selector works.
-- An invalid profile and invalid provider override return clear client errors.
+```sh
+gh workflow run publish-container.yml --repo jaxernst/lasso-rpc --ref main -f tag=vX.Y.Z
+gh run list --repo jaxernst/lasso-rpc --workflow publish-container.yml
+```
 
-## Publish
+## Container publication contract
 
-1. Commit the release-version and changelog changes.
-2. Create and push an annotated tag: `git tag -a vX.Y.Z -m "Lasso RPC vX.Y.Z"`.
-3. Create the GitHub release from that tag using the finalized changelog section as release notes.
-4. Announce the release with its compatibility notes, Docker image/reference if published, and the security boundary: Lasso OSS has no built-in client authentication.
+The workflow has five stages:
 
-## Post-release
+1. **Resolve source:** require a stable published release, a matching application
+   version, and successful main-branch CI at the exact tagged commit.
+2. **Build:** native Linux AMD64 and ARM64 runners build the pinned public Git
+   source, embedding version/revision labels, BuildKit provenance, and SBOMs.
+   Platform images are pushed by digest using the workflow's `GITHUB_TOKEN`.
+3. **Assemble:** combine the recorded digests into a candidate multi-platform
+   index and sign a GitHub publication attestation for that index. The source
+   revision and publication-tooling revision are recorded separately.
+4. **Verify:** fresh native runners pull that index without registry credentials,
+   verify its signed attestation, and run `scripts/distribution/verify.py` against
+   the downloadable Compose recipe. Failures preserve available JSON evidence.
+5. **Promote:** create the version tag only after both architectures pass. An
+   existing version with a different digest is rejected. `latest` moves only when
+   the selected version is GitHub's current latest release. Attach `compose.yml`,
+   the release manifest, and verification reports to the source release.
 
-1. Verify the published source archive and release/container boot from a clean environment.
-2. Watch health, provider failures, and dashboard errors during the launch window.
-3. Open a new `Unreleased` section and record any follow-ups discovered during the release.
+The acceptance suite requires Docker Compose, Python 3, and Node.js 22 or newer
+for its built-in WebSocket client. These are verification-tool dependencies;
+end users need Docker Compose and the downloaded configuration.
+
+### First publication and package access
+
+GHCR packages initially default to private. After the first candidate is built,
+open the repository-linked `lasso-rpc` package settings and make that specific OSS
+package public. Do not change visibility of other packages. Then rerun failed
+verification jobs. An authenticated push is not evidence that a user can pull.
+
+If package access or runner capacity blocks a stage, retain the run and report the
+actual blocker. Do not bypass anonymous verification or publish version tags to
+make a failed run appear complete.
+
+### Retries and immutable versions
+
+A failed verification can be rerun against its already assembled digest using
+GitHub's **Re-run failed jobs**. Rerunning all jobs rebuilds images and may yield a
+different digest. If a version was already promoted, a rebuild with different
+contents requires a new source version; never overwrite the existing version.
+Use the run's retained platform digests, `container-release.json`, and native
+verification reports to distinguish build, access, acceptance, and promotion
+failures. Candidate tags are not supported installation references.
+
+## Verify the delivered artifact
+
+Download the source archive and compare its contents to the tag. For the container,
+use the immutable reference recorded in `container-release.json`:
+
+```sh
+docker pull ghcr.io/jaxernst/lasso-rpc@sha256:DIGEST
+gh attestation verify oci://ghcr.io/jaxernst/lasso-rpc@sha256:DIGEST \
+  --repo jaxernst/lasso-rpc
+```
+
+Follow the public setup instructions from an empty directory, without a checkout
+or existing Docker login. Verify health, an upstream-backed request such as
+`eth_blockNumber` or `eth_getBalance`, and the browser dashboard. `eth_chainId`
+can be answered locally and is not sufficient evidence of upstream connectivity.
+The deterministic suite uses a controlled upstream so public-provider outages do
+not masquerade as packaging failures; record live-provider checks separately.
+
+Confirm custom profile mounts, environment substitution, reload rejection,
+container replacement, history persistence, and rollback instructions against the
+actual installed version. Inspect available SBOMs and dependency advisories;
+record exclusions and limits rather than claiming zero vulnerabilities.
+
+Link the image reference and attached verification evidence from the release
+notes. Maintain an `Unreleased` changelog section for follow-ups. Document only
+behavior established by source review or executed checks; keep broad capacity,
+continuity, and security claims within their separately measured scope.
