@@ -1,6 +1,8 @@
 defmodule Lasso.Providers.CatalogTest do
   use ExUnit.Case, async: false
 
+  @moduletag capture_log: true
+
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.BoundedIdentifier
@@ -25,6 +27,89 @@ defmodule Lasso.Providers.CatalogTest do
       display_name: "Test Chain #{chain_id}",
       providers: providers
     })
+  end
+
+  test "owner restart rebuilds a dead catalog without a configuration mutation" do
+    register_chain(@profile_a, @chain_id, [
+      %{
+        id: "recovery-provider",
+        name: "Recovery",
+        url: "https://recovery.example.invalid",
+        priority: 1
+      }
+    ])
+
+    :ok = Catalog.build_from_config()
+    before = Catalog.snapshot()
+    instance_id = Catalog.lookup_instance_id(@profile_a, @chain_id, "recovery-provider")
+    assert is_binary(instance_id)
+    owner = Process.whereis(Catalog.Owner)
+    :ok = Supervisor.terminate_child(Lasso.Supervisor, Catalog.Owner)
+    {:ok, _restarted} = Supervisor.restart_child(Lasso.Supervisor, Catalog.Owner)
+
+    recovered =
+      Enum.reduce_while(1..100, false, fn _, _ ->
+        snapshot = Catalog.snapshot()
+
+        if snapshot.table != before.table and
+             Catalog.lookup_instance_id(@profile_a, @chain_id, "recovery-provider") == instance_id do
+          {:halt, true}
+        else
+          Process.sleep(10)
+          {:cont, false}
+        end
+      end)
+
+    assert recovered
+    assert Process.whereis(Catalog.Owner) != owner
+  end
+
+  test "failed crash recovery discards the unpublished table and retries" do
+    register_chain(@profile_a, @chain_id, [
+      %{id: "retry-provider", name: "Retry", url: "https://retry.example.invalid", priority: 1}
+    ])
+
+    :ok = Catalog.build_from_config()
+    snapshot = Catalog.snapshot()
+    original_barrier = Application.get_env(:lasso, :catalog_publication_barrier)
+    ref = make_ref()
+    :ok = Supervisor.terminate_child(Lasso.Supervisor, Catalog.Owner)
+    Application.put_env(:lasso, :catalog_publication_barrier, {self(), ref})
+
+    try do
+      {:ok, owner} = Supervisor.restart_child(Lasso.Supervisor, Catalog.Owner)
+      assert_receive {:catalog_publication_phase, ^owner, ^ref, :after_catalog_populate, _}, 1_000
+
+      [unpublished] =
+        Enum.filter(:ets.all(), fn table ->
+          :ets.info(table, :owner) == owner and :ets.info(table, :name) == :lasso_provider_catalog
+        end)
+
+      :ets.insert(unpublished, {{:routing_plan, "invalid-test-plan", @chain_id}, :invalid})
+      Application.put_env(:lasso, :catalog_publication_barrier, original_barrier)
+      send(owner, {:catalog_publication_continue, ref, :after_catalog_populate})
+      :sys.get_state(owner)
+      assert :ets.info(unpublished, :size) == :undefined
+      assert Catalog.snapshot().table == snapshot.table
+
+      recovered =
+        Enum.reduce_while(1..200, false, fn _, _ ->
+          if is_binary(Catalog.lookup_instance_id(@profile_a, @chain_id, "retry-provider")) do
+            {:halt, true}
+          else
+            Process.sleep(10)
+            {:cont, false}
+          end
+        end)
+
+      assert recovered
+      assert Process.whereis(Catalog.Owner) == owner
+    after
+      Application.put_env(:lasso, :catalog_publication_barrier, original_barrier)
+
+      if owner = Process.whereis(Catalog.Owner),
+        do: send(owner, {:catalog_publication_continue, ref, :after_catalog_populate})
+    end
   end
 
   describe "build_from_config/0" do
