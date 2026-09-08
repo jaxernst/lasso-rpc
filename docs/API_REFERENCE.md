@@ -237,7 +237,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 
 Response preserves request order as a JSON array.
 
-**Provider pinning**: a single provider is selected before routing any batch items, so all items in the batch read from the same upstream. Individual items can still failover to a different provider if the pinned provider returns an error for that specific request.
+Each item is validated and routed independently with bounded concurrency and its own execution deadline. A batch does not imply one provider or an atomic state snapshot. Valid notifications produce no response item; an all-notification batch returns HTTP 204.
 
 ---
 
@@ -273,7 +273,7 @@ Response preserves request order as a JSON array.
 
 ### Unsupported Methods
 
-Write methods (`eth_sendRawTransaction`, `eth_sendTransaction`) are not currently supported. Subscription methods (`eth_subscribe`) are rejected over HTTP with a WebSocket URL hint.
+`eth_sendRawTransaction` is routable with one upstream dispatch under one deadline. A lost response can mean the transaction was accepted; clients reconcile its hash. `eth_sendTransaction`, `eth_accounts`, `eth_sign`, `eth_signTransaction`, and `personal_sign` are globally disallowed. Provider capability policy can impose additional restrictions. Subscription methods are rejected over HTTP with a WebSocket URL hint. See [Method support](RPC_STANDARDS.md) for the released Core contract.
 
 ---
 
@@ -305,23 +305,14 @@ The `websocket_url` mirrors the HTTP request path — for example, a request to
 | `-32601` | Method not found or not supported on this transport |
 | `-32602` | Invalid params (unsupported chain, missing chain_id) |
 | `-32603` | Internal error |
-| `-32000` | Server error (rate limit, strategy access denied, quota exceeded) |
+| `-32000` | Server error (for example, upstream rate limiting or exhausted routing) |
 
-### Rate Limiting
+### Upstream rate limits
 
-When rate limited, the error includes retry information:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "error": {
-    "code": -32000,
-    "message": "Rate limit exceeded. Limit: 100 requests per second.",
-    "data": {"retry_after_ms": 150, "rate_limit": 100}
-  }
-}
-```
+RPC Core has no built-in client authentication or incoming per-client quotas.
+Provider rate limits can cause cooldowns, failover, or an RPC error. Configure
+incoming admission at your reverse proxy. Profile `rps_limit` controls the
+dashboard tester maximum; `burst_limit` is metadata, not ingress enforcement.
 
 ---
 
@@ -374,5 +365,6 @@ All origins are allowed (`*`). Allowed headers:
 - `X-Requested-With`
 - `X-Lasso-Provider`
 - `X-Lasso-Transport`
+- `X-Lasso-Include-Meta`
 
 Preflight responses are cached for 24 hours.
