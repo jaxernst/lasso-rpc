@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-07
+
+### Fixed
+
+- New profiles can subscribe through shared WebSocket upstreams after configuration reload without restarting the node. Routing eligibility reads the physical connection state instead of requiring a pre-existing profile channel cache entry.
+- Exclude disconnected WebSocket upstreams even when profile channel caches still contain their wrappers; publish connected state before notifying consumers.
+- Container acceptance checks cover subscription acknowledgment, block delivery, and unsubscribe for newly reloaded profiles sharing existing connections.
+
+### Compatibility
+
+- No YAML schema or storage migration. Distribute and reload profile files on each node; environment and mount changes still require recreation. Existing v0.3.4 installations should retain the restart workaround until upgraded.
+
 ### Distribution
 
 - Publish versioned AMD64/ARM64 container images with anonymous installation checks, build provenance, SBOMs, and signed publication attestations.
@@ -180,7 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.1...v0.3.2

@@ -204,6 +204,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       Process.sleep(25)
       assert get_pool_state(chain_id).keys[{:newHeads}].status == :establishing
 
+      set_ws_status(profile, chain_id, provider, :connected)
+
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
         Lasso.Topics.ws_connection(profile, chain_id),
@@ -242,6 +244,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       :ok = wait_until_key_active(chain_id, {:newHeads})
       [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id})
       send(manager_pid, {:ws_disconnected, instance_id, %{reason: :recovery_test}})
+      set_ws_status(profile, chain_id, provider, :disconnected)
       :ets.delete(:transport_channel_cache, {profile, chain_id, provider, :ws})
 
       Phoenix.PubSub.broadcast(
@@ -257,6 +260,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
       assert_receive {:subscription_terminated, ^subscription_id, :continuity_exhausted}, 1_000
       assert TestHelper.eventually(fn -> get_pool_state(chain_id).keys == %{} end)
+
+      set_ws_status(profile, chain_id, provider, :connected)
 
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
@@ -295,6 +300,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       provider: provider,
       profile: profile
     } do
+      set_ws_status(profile, chain_id, provider, :disconnected)
       :ets.delete(:transport_channel_cache, {profile, chain_id, provider, :ws})
 
       client_pid = self()
@@ -324,6 +330,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       bounded_entry = get_pool_state(chain_id).keys[{:newHeads}]
       assert bounded_entry.readiness_retries <= 4
 
+      set_ws_status(profile, chain_id, provider, :connected)
+
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
         Lasso.Topics.ws_connection(profile, chain_id),
@@ -340,6 +348,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       provider: provider,
       profile: profile
     } do
+      set_ws_status(profile, chain_id, provider, :disconnected)
       :ets.delete(:transport_channel_cache, {profile, chain_id, provider, :ws})
 
       client_pid = self()
@@ -359,6 +368,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
       Process.sleep(25)
       assert get_pool_state(chain_id).keys[pool_key].status == :establishing
+
+      set_ws_status(profile, chain_id, provider, :connected)
 
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
@@ -480,6 +491,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       provider: provider,
       profile: profile
     } do
+      set_ws_status(profile, chain_id, provider, :disconnected)
       :ets.delete(:transport_channel_cache, {profile, chain_id, provider, :ws})
 
       deadline_us = System.monotonic_time(:microsecond) + 100_000
@@ -496,6 +508,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
                )
 
       assert get_pool_state(chain_id).keys == %{}
+
+      set_ws_status(profile, chain_id, provider, :connected)
 
       Phoenix.PubSub.broadcast(
         Lasso.PubSub,
@@ -856,6 +870,11 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
     assert_receive {:subscription_terminated, ^subscription_id, :continuity_exhausted}, 1_000
     assert TestHelper.eventually(fn -> get_pool_state(chain_id).keys == %{} end)
+  end
+
+  defp set_ws_status(profile, chain_id, provider, status) do
+    instance_id = Lasso.Providers.Catalog.lookup_instance_id(profile, chain_id, provider)
+    :ets.insert(:lasso_instance_state, {{:ws_status, instance_id}, %{status: status}})
   end
 
   defp get_pool_state(chain_id, profile \\ @default_profile) do

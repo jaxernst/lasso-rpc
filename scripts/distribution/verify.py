@@ -172,12 +172,19 @@ ws.onmessage = event => {
   const data = JSON.parse(event.data);
   if(data.id === 1) { assert.equal(data.result, '0x1'); ordinary = true; ws.send(JSON.stringify({jsonrpc:'2.0',id:2,method:'eth_subscribe',params:['newHeads']})); }
   if(data.id === 2) { assert.equal(typeof data.result, 'string', JSON.stringify(data)); subscription = true; }
-  if(data.method === 'eth_subscription') { assert.ok(ordinary && subscription); assert.equal(data.params.result.number, '0x1000'); clearTimeout(timer); ws.close(); }
+  if(data.id === 3) { assert.equal(data.result, true); clearTimeout(timer); ws.close(); }
+  if(data.method === 'eth_subscription') { assert.ok(ordinary && subscription); assert.equal(data.params.result.number, '0x1000'); ws.send(JSON.stringify({jsonrpc:'2.0',id:3,method:'eth_unsubscribe',params:[data.params.subscription]})); }
 };
 ws.onerror = () => { console.error('WebSocket error'); process.exit(1); };
 '''
             run(["node", "-e", ws, f"ws://127.0.0.1:{port}/ws/rpc/profile/custom/provider/second/ethereum"], timeout=25)
-            record("WebSocket RPC, subscription acknowledgment, and newHeads delivery")
+            record("WebSocket RPC, subscription acknowledgment, newHeads delivery, and unsubscribe")
+            write_profile("shared", profile("shared"))
+            assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
+            for slug in ["shared", "public", "custom"]:
+                assert json.loads(request(f"/rpc/profile/{slug}/ethereum", payload)[1])["result"] == "0x0"
+                run(["node", "-e", ws, f"ws://127.0.0.1:{port}/ws/rpc/profile/{slug}/ethereum"], timeout=25)
+            record("New profile reload reuses connected upstreams for HTTP and subscriptions; existing profiles remain available")
             for path, expected in [("/rpc/profile/missing/ethereum", 404), ("/rpc/provider/missing/ethereum", 400)]:
                 status, body = request(path, payload)
                 assert status == expected and "error" in json.loads(body)

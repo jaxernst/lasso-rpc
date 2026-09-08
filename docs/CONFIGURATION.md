@@ -276,9 +276,9 @@ config/profiles/
 └── staging.yml      # Subset for testing
 ```
 
-The dashboard lists configured profiles and links to this guide. To add a profile, create its YAML file in the profiles directory on each node and restart Lasso. For containers, follow the [deployment instructions](DEPLOYMENT.md#custom-profiles-and-credentials). In v0.3.4, reload alone can leave a newly added profile's WebSocket subscriptions unavailable.
+The dashboard lists configured profiles and links to this guide. To add a profile, create its YAML file in the profiles directory on each node and reload Lasso. For containers, follow the [deployment instructions](DEPLOYMENT.md#custom-profiles-and-credentials). v0.3.5 supports new profiles reusing connected WebSocket upstreams after reload. On v0.3.4, restart after adding a profile to avoid unavailable subscriptions.
 
-For YAML edits to existing profiles, reload the running release:
+For new profiles and YAML edits, reload the running release:
 
 ```bash
 _build/prod/rel/lasso/bin/lasso rpc 'Lasso.Config.ConfigStore.reload()'

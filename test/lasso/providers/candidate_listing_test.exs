@@ -763,6 +763,29 @@ defmodule Lasso.Providers.CandidateListingTest do
     end
   end
 
+  describe "WebSocket instance liveness" do
+    test "a connected shared upstream is eligible before a profile channel is cached" do
+      provider =
+        Catalog.get_profile_providers(@profile, @chain) |> Enum.find(&(&1.provider_id == "p2"))
+
+      assert :ets.lookup(:transport_channel_cache, {@profile, @chain, "p2", :ws}) == []
+      :ets.insert(@instance_table, {{:ws_status, provider.instance_id}, %{status: :connected}})
+      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
+
+      assert [%{id: "p2", transports: [:ws]}] =
+               CandidateListing.list_routing_candidates_from_plan(plan, %{protocol: :ws})
+    end
+
+    test "a cached profile channel does not make a disconnected upstream eligible" do
+      key = {@profile, @chain, "p2", :ws}
+      :ets.insert(:transport_channel_cache, {key, :stale_channel})
+      on_exit(fn -> :ets.delete(:transport_channel_cache, key) end)
+      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
+
+      assert CandidateListing.list_routing_candidates_from_plan(plan, %{protocol: :ws}) == []
+    end
+  end
+
   # Helpers
 
   defp register_chain(profile, chain, providers) do
@@ -820,6 +843,7 @@ defmodule Lasso.Providers.CandidateListingTest do
       :ets.delete(Storage.snapshot_table(), {pp.instance_id, :ws})
       :ets.delete(@instance_table, {:rate_limit, pp.instance_id, :http})
       :ets.delete(@instance_table, {:rate_limit, pp.instance_id, :ws})
+      :ets.delete(@instance_table, {:ws_status, pp.instance_id})
       :ets.delete(@instance_table, {:health_probe, pp.instance_id})
       :ets.delete(@instance_table, {:health_block_sync, pp.instance_id})
       :ets.delete(@instance_table, {:health_routing, pp.instance_id})

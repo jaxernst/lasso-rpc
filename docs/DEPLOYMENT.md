@@ -41,7 +41,7 @@ requires Docker Compose and OpenSSL for generating local secrets:
 
 ```bash
 mkdir lasso && cd lasso
-curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.3.4/compose.yml --output compose.yml
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.3.5/compose.yml --output compose.yml
 (umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
 docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
@@ -122,15 +122,16 @@ traversable by that UID; host directories used for writable history must also be
 writable by UID 10001. Keep credential values in `.env` and reference them as
 `${VARIABLE_NAME}` in provider URLs or headers.
 
-Apply new profiles, mount changes, or environment changes:
+Apply mount changes or environment changes:
 
 ```bash
 docker compose up -d --force-recreate --wait
 ```
 
-In v0.3.4, adding a profile through reload alone can leave its WebSocket
-subscriptions unavailable. Recreate the container after adding profiles.
-For YAML-only edits to existing profiles, reload the running node:
+In v0.3.5, new profiles can reuse connected WebSocket upstreams after reload.
+If you remain on v0.3.4, recreate the container after adding profiles to avoid
+unavailable subscriptions. For new profiles and YAML-only edits in v0.3.5, reload
+the running node:
 
 ```bash
 docker compose exec -T lasso /app/bin/lasso rpc 'IO.inspect(Lasso.Config.ConfigStore.reload())'
@@ -277,8 +278,7 @@ For each release/container instance, set:
 Replace the example IP and DNS name with your network's values. For a second
 node at `10.0.0.12`, use `RELEASE_NODE=lasso@10.0.0.12` and a different
 `LASSO_NODE_ID`; keep the cookie, DNS query, and basename the same. Supply matching
-profile YAML to every node. Recreate nodes after adding profiles; reload each
-node for edits to existing profiles.
+profile YAML to every node. Reload each node after adding or editing profiles.
 
 In Compose, put these values in each instance's `.env` and recreate its container
 with `docker compose up -d --force-recreate --wait`. Nodes poll DNS every five
