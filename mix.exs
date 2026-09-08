@@ -4,7 +4,7 @@ defmodule Lasso.MixProject do
   def project do
     [
       app: :lasso,
-      version: "0.3.5",
+      version: "0.3.6",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],
@@ -17,7 +17,15 @@ defmodule Lasso.MixProject do
         # Cowlib has no patched release for these encoder-only advisories. Lasso and its
         # Cowboy/Plug stack do not call cow_cookie:cookie/1, cow_link:link/1, or Cowlib's
         # structured-header encoders.
-        ignore_advisories: ["CVE-2026-43966", "CVE-2026-43969", "CVE-2026-43971"]
+        # Decimal's advisory feed omits its fixed 3.0.0 boundary. DecimalSecurityTest
+        # guards this exception against the reviewed 3.1.1 version and input/output bounds.
+        # See docs/DECIMAL_ADVISORY.md for sources and the removal condition.
+        ignore_advisories: [
+          "CVE-2026-43966",
+          "CVE-2026-43969",
+          "CVE-2026-43971",
+          "CVE-2026-32686"
+        ]
       ]
     ]
   end

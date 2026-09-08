@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-08
+
+### Fixed
+
+- Restore the routing catalog automatically after its owner restarts. Failed recovery publications discard their unfinished tables and retry without requiring a configuration reload.
+
 ## [0.3.5] - 2026-09-07
 
 ### Fixed
@@ -192,7 +198,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.2...v0.3.3

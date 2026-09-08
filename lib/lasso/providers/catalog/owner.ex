@@ -52,9 +52,7 @@ defmodule Lasso.Providers.Catalog.Owner do
   # which can be hours of degraded routing in the worst case. On a
   # fresh boot (no persistent_term entry) `InfrastructureStarter`
   # handles the initial population, so this self-heal is a no-op.
-  # Rebuild attempts are tolerated to fail (ConfigStore may not be up
-  # yet on a co-restart) — the InfrastructureStarter path still runs
-  # afterwards on first boot.
+  # Failed crash-recovery rebuilds retry while the published table is dead.
   @impl true
   def handle_continue(:self_heal_catalog, state) do
     case Catalog.snapshot() do
@@ -62,21 +60,15 @@ defmodule Lasso.Providers.Catalog.Owner do
         :ok
 
       %{table: tid} ->
-        try do
-          _ = :ets.info(tid, :size)
-          :ok
-        rescue
-          ArgumentError ->
-            try do
-              do_rebuild()
-              Logger.info("Catalog.Owner self-healed catalog after a crash restart")
-            rescue
-              e ->
-                Logger.warning(
-                  "Catalog.Owner self-heal deferred to InfrastructureStarter: " <>
-                    Exception.message(e)
-                )
-            end
+        if :ets.info(tid, :size) == :undefined do
+          try do
+            do_rebuild()
+            Logger.info("Catalog.Owner self-healed catalog after a crash restart")
+          rescue
+            e ->
+              Logger.warning("Catalog.Owner self-heal failed: " <> Exception.message(e))
+              Process.send_after(self(), :retry_self_heal_catalog, 1_000)
+          end
         end
     end
 
@@ -87,6 +79,11 @@ defmodule Lasso.Providers.Catalog.Owner do
   def handle_call(:rebuild, _from, state) do
     do_rebuild()
     {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_info(:retry_self_heal_catalog, state) do
+    handle_continue(:self_heal_catalog, state)
   end
 
   @impl true
@@ -104,20 +101,17 @@ defmodule Lasso.Providers.Catalog.Owner do
 
   defp do_rebuild do
     new_table = :ets.new(:lasso_provider_catalog, [:public, :set, read_concurrency: true])
-    generation = ConfigStore.route_generation()
 
     try do
+      generation = ConfigStore.route_generation()
       Catalog.populate(new_table, generation)
       publication_barrier(:after_catalog_populate, generation)
-    rescue
-      e ->
-        # Drop the half-built table so it doesn't leak; `:persistent_term`
-        # still points at the previous good table, so readers are unaffected.
-        :ets.delete(new_table)
-        reraise e, __STACKTRACE__
+      continue_rebuild(new_table, generation)
+    catch
+      kind, reason ->
+        if :ets.info(new_table, :owner) == self(), do: :ets.delete(new_table)
+        :erlang.raise(kind, reason, __STACKTRACE__)
     end
-
-    continue_rebuild(new_table, generation)
   end
 
   defp continue_rebuild(new_table, generation) do
