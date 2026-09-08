@@ -6,7 +6,7 @@
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.3.4-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Version](https://img.shields.io/badge/version-0.3.5-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
 Lasso is a multi-chain Ethereum JSON-RPC proxy with health checks, retries,
@@ -38,7 +38,7 @@ You need Docker with the Compose plugin, curl, and OpenSSL. Start in an empty di
 
 ```bash
 mkdir lasso && cd lasso
-curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.3.4/compose.yml --output compose.yml
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.3.5/compose.yml --output compose.yml
 (umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
 docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
@@ -137,10 +137,10 @@ docker compose up -d --force-recreate --wait
 
 Then use `http://localhost:4000/rpc/profile/my-app/ethereum` or
 `ws://localhost:4000/ws/rpc/profile/my-app/ethereum`.
-For YAML edits to existing profiles, use
+For new profiles and YAML edits, use
 [configuration reload](docs/DEPLOYMENT.md#custom-profiles-and-credentials).
-A failed reload preserves the active configuration. New profiles and environment
-changes require container recreation.
+A failed reload preserves the active configuration. Environment or mount changes
+require container recreation.
 
 Profiles are configuration boundaries, not access controls. The dashboard reads
 them from YAML; edit the files to create or change profiles. Profile `rps_limit`

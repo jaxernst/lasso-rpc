@@ -4,7 +4,7 @@ defmodule Lasso.Providers.CandidateListing do
 
   Implements a 9-stage filter pipeline using shared ETS state:
   1. Transport availability (provider config has url/ws_url)
-  2. WS liveness (channel cache for WS presence)
+  2. WS liveness (shared upstream connection state)
   3. Circuit breaker state
   4. Rate limit state
   5. Lag filtering (BlockSync.Registry + ChainState)
@@ -357,7 +357,7 @@ defmodule Lasso.Providers.CandidateListing do
   defp build_candidate(provider, learned_scope, plan, protocol, workload_key, mode) do
     instance_id = provider.instance_id
     routing_instance_id = provider.routing_instance_id
-    transports = live_transports(provider, protocol, plan.profile, plan.chain_id)
+    transports = live_transports(provider, protocol)
 
     include_learned? = not learned_scope.degraded?
 
@@ -436,11 +436,11 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp live_transports(provider, protocol, profile, chain_id) do
+  defp live_transports(provider, protocol) do
     provider.transports
     |> Enum.filter(fn
       :http -> protocol in [:http, :both, nil]
-      :ws -> protocol in [:ws, :both, nil] and ws_channel_live?(profile, chain_id, provider.id)
+      :ws -> protocol in [:ws, :both, nil] and ws_instance_connected?(provider.instance_id)
     end)
   end
 
@@ -496,11 +496,8 @@ defmodule Lasso.Providers.CandidateListing do
       rate_limit_ok?(candidate, protocol, filters)
   end
 
-  defp ws_channel_live?(profile, chain_id, provider_id) do
-    case :ets.lookup(:transport_channel_cache, {profile, chain_id, provider_id, :ws}) do
-      [{_, _channel}] -> true
-      [] -> false
-    end
+  defp ws_instance_connected?(instance_id) do
+    InstanceState.read_ws_status(instance_id).status == :connected
   end
 
   defp circuit_breaker_ready?(candidate, protocol, include_half_open) do

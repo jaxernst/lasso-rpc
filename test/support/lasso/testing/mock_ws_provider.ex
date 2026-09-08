@@ -109,6 +109,8 @@ defmodule Lasso.Testing.MockWSProvider do
         }
       })
 
+      :ets.insert(:lasso_instance_state, {{:ws_status, instance_id}, %{status: :connected}})
+
       start_instance_subscription_manager(chain_id, instance_id)
 
       connection_id =
@@ -607,6 +609,7 @@ defmodule Lasso.Testing.MockWSProvider do
           end
         end
 
+        :ets.delete(:lasso_instance_state, {:ws_status, instance_id})
         :ets.delete(:lasso_instance_state, {:health_probe, instance_id})
         :ets.delete(:lasso_instance_state, {:health_block_sync, instance_id})
         :ets.delete(:lasso_instance_state, {:health_routing, instance_id})

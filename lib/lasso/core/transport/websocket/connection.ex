@@ -1043,11 +1043,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         schedule_stability_check(state)
       end
 
+    write_ws_status(state.instance_id, :connected, state.reconnect_attempts)
+
     broadcast_conn_event(state, fn provider_id ->
       {:ws_connected, provider_id, connection_id}
     end)
-
-    write_ws_status(state.instance_id, :connected, state.reconnect_attempts)
 
     state = schedule_heartbeat(state)
     {:noreply, state}
