@@ -141,6 +141,9 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
     request("upstream_response", fact, %{"attempt" => attempt})
   end
 
+  defp encode_fact(%RequestTerminal.LocalSuccess{} = fact),
+    do: request("local_success", fact, %{"reason" => "published_block"})
+
   defp encode_fact(%RequestTerminal.LocalFailure{} = fact),
     do: request("local_failure", fact, %{"reason" => Atom.to_string(fact.reason)})
 
@@ -337,6 +340,9 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
     end
   end
 
+  defp decode_request("local_success", attrs, %{"reason" => "published_block"}),
+    do: {:ok, RequestTerminal.LocalSuccess.new(attrs, :published_block)}
+
   defp decode_request("local_failure", attrs, map),
     do: {:ok, RequestTerminal.LocalFailure.new(attrs, local_reason(map["reason"]))}
 
@@ -463,6 +469,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
         ],
         cancellation_reason: [:caller_abandoned, :socket_closed, :owner_shutdown, :superseded],
         local_reason: [
+          :block_publication,
           :invalid_request,
           :unsupported_method,
           :configuration,

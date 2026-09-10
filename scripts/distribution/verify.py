@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify a container through the downloadable Compose recipe; never build the app."""
 import argparse
+import base64
 import json
 import os
 from pathlib import Path
@@ -65,12 +66,13 @@ def main():
             checks.append(name)
             print("PASS " + name, flush=True)
 
-        def request(path, payload=None):
+        def request(path, payload=None, with_headers=False):
             data = json.dumps(payload).encode() if payload is not None else None
             req = urllib.request.Request(f"http://127.0.0.1:{port}" + path, data=data, headers={"Content-Type": "application/json"})
             try:
                 with urllib.request.urlopen(req, timeout=20) as response:
-                    return response.status, response.read().decode()
+                    body = response.read().decode()
+                    return (response.status, body, response.headers) if with_headers else (response.status, body)
             except urllib.error.HTTPError as error:
                 return error.code, error.read().decode()
 
@@ -219,6 +221,91 @@ ws.onerror = () => { console.error('WebSocket error'); process.exit(1); };
             assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
             assert json.loads(request("/rpc/profile/custom/ethereum", payload)[1])["result"] == "0x0"
             record("Read-only host-managed profiles boot, reload, and route successfully")
+            assert rpc('IO.puts(is_nil(Process.whereis(Lasso.BlockPublication.Repo)))') == "true"
+            record("Policy-off installation requires no PostgreSQL process or server")
+
+            # Upgrade the same installed artifact to its optional journal configuration.
+            override["services"]["publication-db"] = {
+                "image": "postgres:16",
+                "environment": {"POSTGRES_PASSWORD": credential, "POSTGRES_DB": "publication"},
+                "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U postgres -d publication"],
+                                "interval": "1s", "timeout": "5s", "retries": 30}}
+            override["services"]["lasso"]["environment"].update({
+                "LASSO_BLOCK_PUBLICATION_DATABASE_URL": f"postgresql://postgres:{credential}@publication-db/publication",
+                "LASSO_BLOCK_PUBLICATION_MEMBERS": "docker-local"})
+            (root / "test.override.json").write_text(json.dumps(override))
+            (root / "test.override.json").chmod(0o600)
+            dc("up", "--detach", "--wait", "--wait-timeout", "90", "publication-db")
+            migration = 'case Lasso.BlockPublication.Storage.migrate() do {:ok, _, _} -> IO.puts("journal-ready"); other -> raise inspect(other) end'
+            for _ in range(2):
+                assert "journal-ready" in dc("run", "--rm", "--no-deps", "lasso", "eval", migration)
+            dc("up", "--detach", "--no-build", "--force-recreate", "--wait", "--wait-timeout", "90", "lasso")
+            cid = dc("ps", "--quiet", "lasso")
+            healthy()
+            record("Optional journal installation and idempotent migrations from the release command")
+
+            def set_global(enabled):
+                contents = profile("custom")
+                if enabled:
+                    contents = contents.replace("    chain_id: 1", "    chain_id: 1\n    head_policy: global")
+                (profiles / "custom.yml").write_text(contents)
+                assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
+
+            def choice(minimum):
+                call = {"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", False], "id": 91}
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    status, body, headers = request("/rpc/profile/custom/ethereum?include_meta=headers", call, with_headers=True)
+                    result = json.loads(body)
+                    if status == 200 and result.get("result") and int(result["result"]["number"], 16) >= minimum:
+                        encoded = headers["x-lasso-meta"]
+                        meta = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+                        assert meta["head_policy"]["policy"] == "global"
+                        assert meta["head_policy"]["scope"] == "profile_chain_fleet"
+                        assert meta["head_policy"]["block_hash"] == result["result"]["hash"]
+                        assert meta["service_profile_id"] == "custom"
+                        return result["result"]
+                    time.sleep(0.25)
+                raise AssertionError("No qualified publication at the expected floor")
+
+            upstream.height += 1
+            set_global(True)
+            first = choice(upstream.height)
+            selector = {"blockHash": first["hash"], "requireCanonical": True}
+            pinned = dict(payload, params=[payload["params"][0], selector])
+            assert json.loads(request("/rpc/profile/custom/ethereum", pinned)[1])["result"] == "0x0"
+            assert ("pinned", "eth_getBalance", selector) in upstream.events
+            unknown = dict(payload, params=[payload["params"][0], {"blockHash": "0x" + "f" * 64, "requireCanonical": True}])
+            assert "error" in json.loads(request("/rpc/profile/custom/ethereum", unknown)[1])
+            record("File-profile global publication, correlated metadata, pinned execution and unknown-hash rejection")
+            dc("stop", "publication-db")
+            assert choice(int(first["number"], 16))["hash"] == first["hash"]
+            dc("start", "publication-db")
+            upstream.height += 1
+            second = choice(upstream.height)
+            assert int(second["number"], 16) > int(first["number"], 16)
+            record("Database connection recovery preserves the floor and permits subsequent advancement")
+            old_boot = rpc('IO.puts(Lasso.BlockPublication.Gate.boot())')
+            dc("up", "--detach", "--no-build", "--force-recreate", "--wait", "--wait-timeout", "90", "lasso")
+            cid = dc("ps", "--quiet", "lasso")
+            healthy()
+            assert rpc('IO.puts(Lasso.BlockPublication.Gate.boot())') != old_boot
+            assert int(choice(upstream.height)["number"], 16) >= int(second["number"], 16)
+            record("Graceful container replacement recovers retained publication and admits a new boot")
+            set_global(False)
+            rpc('case Lasso.BlockPublication.Operator.disable({"custom", 1}) do {:ok, _} -> :ok; other -> raise inspect(other) end')
+            for _ in range(120):
+                if rpc('state = Lasso.BlockPublication.Postgres.get({"custom", 1}); IO.puts(state["phase"])') == "disabled":
+                    break
+                time.sleep(0.25)
+            else:
+                raise AssertionError("Coordinated disable did not complete")
+            assert rpc('IO.puts(Lasso.BlockPublication.Postgres.get({"custom", 1})["minimum_height"])') == str(upstream.height)
+            set_global(True)
+            rpc('case Lasso.BlockPublication.Postgres.configure({"custom", 1}, "global", 12_000) do {:ok, _} -> :ok; other -> raise inspect(other) end')
+            assert int(choice(upstream.height)["number"], 16) >= int(second["number"], 16)
+            record("Disable and reenable retain the acknowledged floor")
+
             logs = subprocess.run(["docker", "logs", cid], text=True, capture_output=True, check=True)
             surfaces = request("/dashboard/custom")[1] + logs.stdout + logs.stderr
             assert all(value not in surfaces for value in [credential, secret, cookie])

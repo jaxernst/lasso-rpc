@@ -91,6 +91,9 @@ defmodule Lasso.RPC.ExecutionProjector do
   def project(%RequestTerminal.UpstreamResponse{}, 1),
     do: projection(false, :return_response, :none, :neutral, :request_returned)
 
+  def project(%RequestTerminal.LocalSuccess{}, 1),
+    do: projection(false, :return_response, :none, :neutral, :request_returned)
+
   def project(%RequestTerminal.LocalFailure{}, 1),
     do: projection(false, :return_local_error, :none, :neutral, :local_failure)
 

@@ -381,14 +381,12 @@ defmodule LassoWeb.RPCController do
       Jason.encode!(%{
         "jsonrpc" => "2.0",
         "id" => request_id,
-        "result" => "0x" <> Integer.to_string(chain_id, 16)
+        "result" => Lasso.JSONRPC.Quantity.encode(chain_id)
       })
 
-    ctx =
-      Lasso.RPC.RequestContext.new(chain_id, "eth_chainId", [],
-        strategy: conn.assigns[:provider_strategy],
-        plug_start_time: RequestTimingPlug.get_start_time(conn)
-      )
+    opts = RequestOptionsBuilder.from_conn(conn, "eth_chainId")
+    ctx = Lasso.RPC.RequestContext.new(chain_id, "eth_chainId", [], opts)
+    ctx = %{ctx | opts: opts}
 
     {:ok, %Response.Success{id: request_id, jsonrpc: "2.0", raw_bytes: raw_bytes},
      %{ctx | status: :success}}
@@ -530,18 +528,7 @@ defmodule LassoWeb.RPCController do
         jsonrpc_id_present?: id_present?
       )
     else
-      Logger.debug("Getting chain ID", chain_id: chain_id)
-      hex_chain_id = "0x" <> Integer.to_string(chain_id, 16)
-      raw_bytes = Jason.encode!(%{"jsonrpc" => "2.0", "id" => req_id, "result" => hex_chain_id})
-
-      ctx =
-        Lasso.RPC.RequestContext.new(chain_id, "eth_chainId", [],
-          strategy: conn.assigns[:provider_strategy],
-          plug_start_time: RequestTimingPlug.get_start_time(conn)
-        )
-
-      {:ok, %Response.Success{id: req_id, jsonrpc: "2.0", raw_bytes: raw_bytes},
-       %{ctx | status: :success}}
+      local_chain_id_result(req_id, chain_id, conn)
     end
   end
 

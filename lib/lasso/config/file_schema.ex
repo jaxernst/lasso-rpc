@@ -61,6 +61,7 @@ defmodule Lasso.Config.FileSchema do
     "url_aliases" => {:list, :string},
     "aliases" => {:list, :string},
     "block_time_ms" => :positive,
+    "head_policy" => {:enum, ["off", "local", "global"]},
     "providers" => {:list, @provider},
     "monitoring" => @monitoring,
     "selection" => %{"max_lag_blocks" => :nonnegative, "archival_threshold" => :nonnegative},

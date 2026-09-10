@@ -14,6 +14,7 @@ defmodule Lasso.Config.ChainConfig do
           display_name: String.t() | nil,
           url_aliases: [String.t()],
           block_time_ms: non_neg_integer() | nil,
+          head_policy: String.t(),
           providers: [__MODULE__.Provider.t()],
           selection: __MODULE__.Selection.t() | nil,
           monitoring: __MODULE__.Monitoring.t(),
@@ -31,6 +32,7 @@ defmodule Lasso.Config.ChainConfig do
     :monitoring,
     :websocket,
     :topology,
+    head_policy: "off",
     url_aliases: []
   ]
 

@@ -240,6 +240,9 @@ defmodule LassoWeb.Dashboard.TrafficCounters do
        ),
        do: {1, 0, Map.fetch!(fact, :elapsed_us), failovers}
 
+  defp counter_delta(%RequestTerminal.LocalSuccess{} = fact, failovers),
+    do: {1, 0, Map.fetch!(fact, :elapsed_us), failovers}
+
   defp counter_delta(fact, failovers),
     do: {0, 1, Map.fetch!(fact, :elapsed_us), failovers}
 

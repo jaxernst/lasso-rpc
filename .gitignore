@@ -24,6 +24,7 @@ lasso-*.tar
 
 # Node modules
 /assets/node_modules/
+/examples/logical-read/node_modules/
 
 # Generated assets (compiled from source)
 /priv/static/assets/

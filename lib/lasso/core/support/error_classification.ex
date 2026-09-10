@@ -257,6 +257,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "is limited to",
     # Archival/historical data
     "archive node required",
+    "archive requests require a personal token",
     "requires archival",
     "archival data not available",
     "archival not available",

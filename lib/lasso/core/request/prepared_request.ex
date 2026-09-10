@@ -9,12 +9,13 @@ defmodule Lasso.RPC.PreparedRequest do
 
   alias Lasso.Core.Transport.UpstreamResponse
 
-  @enforce_keys [:transport_id, :client_id, :encoded]
+  @enforce_keys [:transport_id, :client_id, :method, :encoded]
   defstruct @enforce_keys
 
   @type t :: %__MODULE__{
           transport_id: String.t(),
           client_id: term(),
+          method: String.t(),
           encoded: binary()
         }
 
@@ -22,6 +23,7 @@ defmodule Lasso.RPC.PreparedRequest do
   def new(rpc_request, transport_id)
       when is_map(rpc_request) and is_binary(transport_id) do
     client_id = Map.get(rpc_request, "id")
+    method = Map.get(rpc_request, "method")
 
     cond do
       not UpstreamResponse.transport_id?(transport_id) ->
@@ -30,6 +32,9 @@ defmodule Lasso.RPC.PreparedRequest do
       not valid_client_id?(client_id) ->
         {:error, :invalid_client_id}
 
+      not is_binary(method) ->
+        {:error, :invalid_method}
+
       true ->
         case encode_request(Map.put(rpc_request, "id", transport_id)) do
           {:ok, encoded} ->
@@ -37,6 +42,7 @@ defmodule Lasso.RPC.PreparedRequest do
              %__MODULE__{
                transport_id: transport_id,
                client_id: client_id,
+               method: method,
                encoded: encoded
              }}
 
@@ -55,7 +61,7 @@ defmodule Lasso.RPC.PreparedRequest do
   end
 
   defp valid_client_id?(client_id),
-    do: is_binary(client_id) or is_integer(client_id) or is_nil(client_id)
+    do: is_binary(client_id) or is_number(client_id) or is_nil(client_id)
 
   defp encode_request(rpc_request) do
     {:ok, rpc_request |> :json.encode(&encode_json_value/2) |> IO.iodata_to_binary()}

@@ -6,6 +6,7 @@ import socket
 import select
 import struct
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -16,6 +17,8 @@ class Upstream:
         self.calls = {"/first": 0, "/second": 0}
         self.authenticated = 0
         self.events = []
+        self.height = 4096
+        self.blocks = {}
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -107,14 +110,32 @@ class Upstream:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.port = self.server.server_port
 
-    @staticmethod
-    def block():
-        return {"number": "0x1000", "hash": "0x" + "a" * 64, "parentHash": "0x" + "b" * 64, "timestamp": "0x65000000", "transactions": []}
+    def block(self, height=None):
+        height = self.height if height is None else height
+        if height not in self.blocks:
+            self.blocks[height] = {
+                "number": hex(height), "hash": "0x" + format(height, "064x"),
+                "parentHash": "0x" + format(height - 1, "064x"),
+                "timestamp": hex(int(time.time())), "transactions": []}
+        return self.blocks[height]
 
     def reply(self, request):
         method = request.get("method")
-        values = {"eth_chainId": "0x1", "eth_blockNumber": "0x1000", "net_version": "1", "eth_syncing": False, "eth_getLogs": [], "eth_getBalance": "0x0", "eth_call": "0x", "eth_subscribe": "0xfeed", "eth_unsubscribe": True}
-        result = self.block() if method in ["eth_getBlockByNumber", "eth_getBlockByHash"] else values.get(method, "0x0")
+        params = request.get("params", [])
+        values = {"eth_chainId": "0x1", "eth_blockNumber": hex(self.height), "net_version": "1", "eth_syncing": False, "eth_getLogs": [], "eth_getBalance": "0x0", "eth_call": "0x", "eth_subscribe": "0xfeed", "eth_unsubscribe": True}
+        if method == "eth_getBlockByNumber":
+            selector = params[0]
+            height = self.height if selector in ["latest", "safe", "finalized", "pending"] else int(selector, 16)
+            result = self.block(height) if height <= self.height else None
+        elif method == "eth_getBlockByHash":
+            result = next((block for block in list(self.blocks.values()) if block["hash"] == params[0]), None)
+        else:
+            result = values.get(method, "0x0")
+            target = params[-1] if params else None
+            if isinstance(target, dict) and "blockHash" in target:
+                self.events.append(("pinned", method, target))
+                if not any(block["hash"] == target["blockHash"] for block in list(self.blocks.values())):
+                    return {"jsonrpc": "2.0", "id": request.get("id"), "error": {"code": -32001, "message": "Block not found"}}
         return {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
 
     def close(self):
