@@ -34,8 +34,21 @@ defmodule Lasso.Test.BlockPublicationPeer do
       available(fn -> Durable.command(key, command) end)
     end
 
-    def compare_and_apply(key, snapshot, command),
-      do: available(fn -> Durable.compare_and_apply(key, snapshot, command) end)
+    def compare_and_apply(key, snapshot, command) do
+      case {command, :persistent_term.get({__MODULE__, :blocked_closures}, nil)} do
+        {{:closed, _, _, _}, owner} when is_pid(owner) ->
+          send(owner, {:closure_waiting, node(), self(), key})
+
+          receive do
+            :continue -> available(fn -> Durable.compare_and_apply(key, snapshot, command) end)
+          after
+            5_000 -> {:error, :journal_unavailable}
+          end
+
+        _ ->
+          available(fn -> Durable.compare_and_apply(key, snapshot, command) end)
+      end
+    end
 
     defp available(fun) do
       if :persistent_term.get({__MODULE__, :available}, true),
@@ -43,6 +56,8 @@ defmodule Lasso.Test.BlockPublicationPeer do
         else: {:error, :journal_unavailable}
     end
   end
+
+  def block_closures(owner), do: :persistent_term.put({Journal, :blocked_closures}, owner)
 
   def journal_available(value), do: :persistent_term.put({Journal, :available}, value)
 
