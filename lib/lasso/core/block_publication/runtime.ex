@@ -85,7 +85,9 @@ defmodule Lasso.BlockPublication.Runtime do
       {:error, :shutdown_timeout}
     else
       task =
-        Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn -> fence_serving_boots(state) end)
+        Task.Supervisor.async_nolink(Lasso.BlockPublication.TaskSupervisor, fn ->
+          fence_serving_boots(state)
+        end)
 
       remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
@@ -326,7 +328,7 @@ defmodule Lasso.BlockPublication.Runtime do
       snapshot = Map.fetch!(state.snapshots, key)
 
       task =
-        Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
+        Task.Supervisor.async_nolink(Lasso.BlockPublication.TaskSupervisor, fn ->
           {key, apply_command(journal, key, snapshot, command)}
         end)
 
@@ -378,7 +380,8 @@ defmodule Lasso.BlockPublication.Runtime do
   end
 
   defp task(state, key, fun) do
-    task = Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn -> {key, fun.()} end)
+    task =
+      Task.Supervisor.async_nolink(Lasso.BlockPublication.TaskSupervisor, fn -> {key, fun.()} end)
 
     %{
       state

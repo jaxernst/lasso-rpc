@@ -42,7 +42,7 @@ defmodule Lasso.Test.BlockPublicationPeer do
           receive do
             :continue -> available(fn -> Durable.compare_and_apply(key, snapshot, command) end)
           after
-            5_000 -> {:error, :journal_unavailable}
+            30_000 -> {:error, :journal_unavailable}
           end
 
         _ ->
@@ -68,7 +68,7 @@ defmodule Lasso.Test.BlockPublicationPeer do
     Application.put_env(:lasso, :node_id, member)
     :persistent_term.put({Lasso.Cluster.Topology, :self_node_id}, member)
     set_height(key, 100)
-    :ok = Supervisor.terminate_child(Lasso.Supervisor, Runtime)
+    :ok = Supervisor.terminate_child(Lasso.Supervisor, Lasso.BlockPublication.Supervisor)
 
     Application.put_env(:lasso, :block_publication,
       members: members,
@@ -77,7 +77,7 @@ defmodule Lasso.Test.BlockPublicationPeer do
       interval_ms: 100
     )
 
-    {:ok, _} = Supervisor.restart_child(Lasso.Supervisor, Runtime)
+    {:ok, _} = Supervisor.restart_child(Lasso.Supervisor, Lasso.BlockPublication.Supervisor)
     :ok
   end
 
@@ -106,9 +106,15 @@ defmodule Lasso.Test.BlockPublicationPeer do
 
   def restart_worker do
     old_boot = Gate.boot()
-    :ok = Supervisor.terminate_child(Lasso.Supervisor, Runtime)
-    {:ok, _} = Supervisor.restart_child(Lasso.Supervisor, Runtime)
+    :ok = Supervisor.terminate_child(Lasso.Supervisor, Lasso.BlockPublication.Supervisor)
+    {:ok, _} = Supervisor.restart_child(Lasso.Supervisor, Lasso.BlockPublication.Supervisor)
     old_boot == Gate.boot()
+  end
+
+  def crash_worker do
+    pid = Process.whereis(Runtime)
+    Process.exit(pid, :kill)
+    pid
   end
 
   def suspend, do: :sys.suspend(Runtime)

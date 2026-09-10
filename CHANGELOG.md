@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Acknowledge closed publication gates concurrently across scopes, with at most four acknowledgment tasks independent of provider probes. Cross-region database latency no longer accumulates serially across all closing scopes. Gates still require durable acknowledgment before a newer publication can open; request deadlines and selectors are unchanged.
 
+- Supervise the coordinator and its background tasks together, so a coordinator crash stops blocked tasks before replacement work starts.
+
 ### Compatibility
 
 - No configuration or journal migration changes. Upgrade from v0.4.0 using the existing graceful replacement procedure and retain acknowledged history. Binaries predating global publication remain unsafe after enrollment.
