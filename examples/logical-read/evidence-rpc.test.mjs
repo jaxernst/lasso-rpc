@@ -186,8 +186,11 @@ test("deadline cancels in-flight fetch and prohibits subsequent RPCs", async () 
 test("an expired query cannot dispatch again when the wall clock still precedes its deadline", async t => {
   const now = Date.now();
   t.mock.method(Date, "now", () => now);
-  const timeout = new AbortController();
-  t.mock.method(AbortSignal, "timeout", () => timeout.signal);
+  let timeout;
+  t.mock.method(AbortSignal, "timeout", () => {
+    timeout = new AbortController();
+    return timeout.signal;
+  });
   let dispatched = 0;
   const rpc = evidenceRpc({ ...scope, deadline: now + 30, fetch: (_url, { signal }) => {
     dispatched++;
@@ -197,8 +200,10 @@ test("an expired query cannot dispatch again when the wall clock still precedes 
     });
   } });
   await assert.rejects(publishedBlockQuery(rpc), /timeout/i);
-  await assert.rejects(publishedBlockQuery(rpc), /deadline exceeded/);
+  const next = publishedBlockQuery(rpc);
+  await assert.rejects(next);
   assert.equal(dispatched, 1);
+  await assert.rejects(next, /deadline exceeded/);
   assert.equal(rpc.evidence().completed, 1);
 });
 
