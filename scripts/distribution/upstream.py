@@ -86,7 +86,11 @@ class Upstream:
                             self.frame(payload, 10)
                         elif opcode == 1:
                             request = json.loads(payload)
+                            owner.calls[self.path] = owner.calls.get(self.path, 0) + 1
                             owner.events.append((self.path, request.get("method")))
+                            if owner.fail_first and self.path == "/first":
+                                self.close_connection = True
+                                return
                             self.frame(json.dumps(owner.reply(request)).encode())
                             if request.get("method") == "eth_subscribe":
                                 subscribed = True

@@ -33,7 +33,11 @@ def main():
     parser.add_argument("--revision", required=True)
     parser.add_argument("--report", required=True)
     parser.add_argument("--compose", default=str(Path(__file__).resolve().parents[2] / "deployment/compose.release.yml"))
+    parser.add_argument("--previous-image", help="Immutable previous release image for a policy-off upgrade check")
+    parser.add_argument("--previous-version", help="Expected health version of the previous release")
     args = parser.parse_args()
+    if bool(args.previous_image) != bool(args.previous_version):
+        parser.error("--previous-image and --previous-version must be provided together")
     credential = secrets.token_hex(24)
     upstream = Upstream(credential)
     project = "lasso-dist-" + secrets.token_hex(4)
@@ -76,11 +80,11 @@ def main():
             except urllib.error.HTTPError as error:
                 return error.code, error.read().decode()
 
-        def healthy():
+        def healthy(version=args.version):
             for _ in range(60):
                 try:
                     status, body = request("/api/health")
-                    if status == 200 and json.loads(body).get("version") == args.version:
+                    if status == 200 and json.loads(body).get("version") == version:
                         return
                 except (OSError, ValueError):
                     pass
@@ -124,8 +128,40 @@ chains:
           X-Release-Test: ${{LASSO_TEST_CREDENTIAL}}
 '''
 
+        def install(image, version):
+            env_file = root / ".env"
+            lines = env_file.read_text().splitlines()
+            env_file.write_text("\n".join(
+                "LASSO_IMAGE=" + image if line.startswith("LASSO_IMAGE=") else line
+                for line in lines) + "\n")
+            dc("up", "--detach", "--no-build", "--force-recreate", "--wait", "--wait-timeout", "90")
+            healthy(version)
+            return dc("ps", "--quiet", "lasso")
+
         try:
             dc("config", "--quiet")
+            if args.previous_image:
+                assert "@sha256:" in args.previous_image, "Previous release must use an immutable digest"
+                cid = install(args.previous_image, args.previous_version)
+                previous_info = json.loads(run(["docker", "inspect", cid]))[0]
+                previous_labels = previous_info["Config"].get("Labels", {})
+                assert previous_labels["org.opencontainers.image.version"] == "v" + args.previous_version
+                report["upgrade_from"] = {
+                    "image": args.previous_image, "version": args.previous_version,
+                    "revision": previous_labels["org.opencontainers.image.revision"]}
+                write_profile("custom", profile("custom"))
+                assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
+                before_upgrade = {"jsonrpc": "2.0", "method": "eth_getBalance",
+                                  "params": ["0x0000000000000000000000000000000000000001", "latest"], "id": 9}
+                assert json.loads(request("/rpc/profile/custom/ethereum", before_upgrade)[1])["result"] == "0x0"
+                assert rpc('Lasso.Benchmarking.Persistence.save_snapshot("custom", "ethereum", %{upgrade_probe: true}); IO.puts("saved")') == "saved"
+                for image, version in [(args.image, args.version),
+                                       (args.previous_image, args.previous_version),
+                                       (args.image, args.version)]:
+                    cid = install(image, version)
+                    assert json.loads(request("/rpc/profile/custom/ethereum", before_upgrade)[1])["result"] == "0x0"
+                    assert rpc('entries = Lasso.Benchmarking.Persistence.load_snapshots("custom", "ethereum", 10); IO.puts(Enum.any?(entries, &(&1["data"]["upgrade_probe"] == true)))') == "true"
+                record("Previous release upgrade, policy-off rollback and forward recovery preserve profiles, routing and history")
             dc("up", "--detach", "--no-build", "--wait", "--wait-timeout", "90")
             cid = dc("ps", "--quiet", "lasso")
             healthy()
@@ -162,7 +198,7 @@ chains:
                 assert status == 200 and json.loads(body).get("result") == "0x0", (status, body)
             assert upstream.calls["/second"] > before
             upstream.fail_first = False
-            record("HTTP routing remains available with one upstream returning 503")
+            record("HTTP ingress remains available with one provider failing HTTP and WebSocket dispatch")
             # Node's built-in WebSocket client requires no installed npm dependencies.
             ws = r'''
 const assert = require('node:assert/strict');
