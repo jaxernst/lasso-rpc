@@ -1,6 +1,6 @@
 # RPC Core method support
 
-This page describes the self-hosted **v0.3.6** runtime. Lasso Cloud has a separate
+This page describes the self-hosted **v0.4.0** runtime. Lasso Cloud has a separate
 [compatibility contract](https://docs.lasso.sh/cloud/json-rpc-compatibility).
 Do not infer parity from a shared method name or product version.
 
@@ -33,7 +33,7 @@ Do not treat a profile as an authentication or authorization boundary.
 
 ## Stateful filters and extensions
 
-RPC Core v0.3.6 can forward provider-local filter methods when capability policy
+RPC Core v0.4.0 can forward provider-local filter methods when capability policy
 permits them. They receive one dispatch per request and have **no cross-request
 affinity guarantee**. A filter ID created on one upstream may be invalid on a
 later selected upstream. Prefer `eth_getLogs` or supported WebSocket subscriptions;
@@ -65,7 +65,7 @@ replay and a replacement live stream. Recovery beyond its time, replay, attempt,
 or buffer limits terminates the affected downstream connection explicitly; it
 does not promise unbounded or lossless delivery through arbitrary outages.
 
-In Core v0.3.6, `subscribe_new_heads` controls automatic block monitoring **and**
+In Core v0.4.0, `subscribe_new_heads` controls automatic block monitoring **and**
 client `newHeads` eligibility. Set it to `true` on intended providers. New profiles
 can reuse an already-connected upstream after a successful configuration reload.
 See [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md).

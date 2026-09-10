@@ -24,6 +24,34 @@ defmodule LassoWeb.RPCControllerWireContractTest do
 
   @endpoint LassoWeb.Endpoint
 
+  test "browser metadata attributes local chain identity for single and batch requests", %{
+    chain: chain
+  } do
+    setup_providers([%{id: "local-chain-metadata", behavior: :healthy}])
+    request = %{"jsonrpc" => "2.0", "id" => 1, "method" => "eth_chainId", "params" => []}
+
+    for payload <- [request, [request]] do
+      conn =
+        build_conn()
+        |> Plug.Conn.put_req_header("content-type", "application/json")
+        |> Plug.Conn.put_req_header("origin", "https://app.example")
+        |> Plug.Conn.put_req_header("x-lasso-include-meta", "headers")
+        |> post("/rpc/#{chain}", Jason.encode!(payload))
+
+      [encoded] = Plug.Conn.get_resp_header(conn, "x-lasso-meta")
+      metadata = encoded |> Base.url_decode64!(padding: false) |> Jason.decode!()
+      assert metadata["chain_id"] == chain
+      assert metadata["service_profile_id"] == "public"
+      assert metadata["profile_id"] == "public"
+      assert Plug.Conn.get_resp_header(conn, "x-lasso-request-id") == [metadata["request_id"]]
+
+      assert hd(Plug.Conn.get_resp_header(conn, "access-control-expose-headers")) =~
+               "x-lasso-meta"
+
+      refute Map.has_key?(metadata, "executed_channel")
+    end
+  end
+
   describe "JSON-RPC wire contract" do
     test "empty batch returns Invalid Request", %{chain: chain} do
       setup_providers([%{id: "batch-local", behavior: :healthy, profile: "public"}])

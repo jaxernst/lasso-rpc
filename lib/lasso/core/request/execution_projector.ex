@@ -91,6 +91,9 @@ defmodule Lasso.RPC.ExecutionProjector do
   def project(%RequestTerminal.UpstreamResponse{}, 1),
     do: projection(false, :return_response, :none, :neutral, :request_returned)
 
+  def project(%RequestTerminal.LocalSuccess{}, 1),
+    do: projection(false, :return_response, :none, :neutral, :request_returned)
+
   def project(%RequestTerminal.LocalFailure{}, 1),
     do: projection(false, :return_local_error, :none, :neutral, :local_failure)
 
@@ -108,6 +111,13 @@ defmodule Lasso.RPC.ExecutionProjector do
 
   def project(_fact, version),
     do: raise(ArgumentError, "unsupported projector version: #{inspect(version)}")
+
+  @doc "Qualifies response usability without changing the committed transport fact."
+  @spec qualify(t(), :accepted | :policy_rejected) :: t()
+  def qualify(%__MODULE__{} = projection, :accepted), do: projection
+
+  def qualify(%__MODULE__{diagnostic: :upstream_success}, :policy_rejected),
+    do: projection(false, :finish_request, :none, :neutral, :policy_rejected)
 
   defp retryable_projection(safety, breaker, evidence, diagnostic),
     do: retryable_projection(safety, :dispatched, breaker, evidence, diagnostic)

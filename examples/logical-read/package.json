@@ -1,0 +1,16 @@
+{
+  "name": "lasso-logical-read-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "@seljs/env": "1.4.0",
+    "@seljs/runtime": "1.4.0",
+    "viem": "2.47.6"
+  },
+  "devDependencies": {
+    "solc": "0.8.30"
+  }
+}

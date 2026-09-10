@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-10
+
+### Added
+
+- Opt-in `global` block continuity: profile/chain block choices use a durable fleet publication, with local serving grants and no per-request PostgreSQL lookup. Repeated heights are allowed; stale or unavailable publication returns an error.
+- Optional PostgreSQL journal, explicit install/upgrade command, and release-console operations for membership, graceful replacement and retained-floor recovery. Ordinary `off` and instance-only `local` deployments require no database server.
+- Standard hash-pinned logical-read guide and executable viem/SEL/Multicall/worker example, including query deadlines, bounded routing evidence and whole-query reorg recovery.
+- Browser-readable profile, request and routing metadata for local and upstream responses.
+
+### Compatibility
+
+- The policy covers `eth_blockNumber` and `eth_getBlockByNumber("latest", ...)`. State reads retain their original number/hash/tag; applications propagate one hash through the complete logical request.
+- Global deployments must retain one journal and a complete, explicitly managed instance roster. Do not delete or restore older journal history while serving the same protected profile identities. See the publication operations guide before enabling or rolling back.
+- Provider-observed canonicality is not finality or proof of arbitrary `eth_call` execution. One provider is supported without provider redundancy.
+
+
 ## [0.3.6] - 2026-09-08
 
 ### Fixed
@@ -198,7 +214,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.6...v0.4.0
 [0.3.6]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.3...v0.3.4

@@ -1,5 +1,7 @@
 import Config
 
+config :lasso, :block_publication_repo, Lasso.BlockPublication.Repo
+
 # Configure Phoenix
 config :lasso, LassoWeb.Endpoint,
   url: [host: "localhost"],

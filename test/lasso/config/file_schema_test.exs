@@ -28,6 +28,19 @@ defmodule Lasso.Config.FileSchemaTest do
     """
   end
 
+  test "block continuity modes survive file loading and reject unknown values", ctx do
+    for mode <- ["off", "local", "global"] do
+      write_profile(ctx, body("url: https://rpc.example.com", "head_policy: #{mode}"))
+      assert {:ok, spec} = FileBackend.load(ctx.backend, "public")
+      assert spec.chains["local"].head_policy == mode
+    end
+
+    for mode <- ["false", "null", "GLOBAL", "fresh"] do
+      write_profile(ctx, body("url: https://rpc.example.com", "head_policy: #{mode}"))
+      assert {:error, {:invalid_profile_config, _, _}} = FileBackend.load(ctx.backend, "public")
+    end
+  end
+
   test "shipped profiles pass strict validation", _ctx do
     assert {:ok, profiles} = FileBackend.load_all(%{profiles_dir: "config/profiles"})
     assert Enum.any?(profiles, &(&1.slug == "public"))

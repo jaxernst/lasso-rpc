@@ -4,6 +4,7 @@ defmodule Lasso.Application do
   @moduledoc false
 
   use Application
+  require Logger
 
   alias Lasso.Core.Support.CircuitBreaker.Storage, as: CircuitBreakerStorage
 
@@ -38,6 +39,8 @@ defmodule Lasso.Application do
     ])
 
     CircuitBreakerStorage.create_tables!()
+    Lasso.RPC.HeadPolicy.create_table!()
+    Lasso.BlockPublication.Gate.create_table!()
 
     :ets.new(:block_sync_registry, [
       :set,
@@ -147,6 +150,7 @@ defmodule Lasso.Application do
 
         # Supervised bootstrap loads profiles and starts shared infrastructure.
         Lasso.Boot.InfrastructureStarter,
+        Lasso.BlockPublication.Runtime,
 
         # Start Phoenix endpoint
         LassoWeb.Endpoint,
@@ -156,6 +160,8 @@ defmodule Lasso.Application do
         {Plug.Cowboy.Drainer, refs: [LassoWeb.Endpoint.HTTP], shutdown: 30_000}
       ]
 
+    children = publication_storage_children() ++ children
+
     # See https://hexdocs.pm/elixir/Supervisor.html
     opts = [strategy: :one_for_one, name: Lasso.Supervisor]
 
@@ -164,6 +170,34 @@ defmodule Lasso.Application do
 
       {:ok, supervisor}
     end
+  end
+
+  @impl true
+  def prep_stop(state) do
+    if Process.whereis(Lasso.BlockPublication.Runtime) do
+      case Lasso.BlockPublication.Runtime.quiesce() do
+        :ok -> :ok
+        {:error, _} -> warn_unfenced_shutdown()
+      end
+    end
+
+    state
+  catch
+    :exit, _ ->
+      warn_unfenced_shutdown()
+      state
+  end
+
+  defp warn_unfenced_shutdown do
+    Logger.warning(
+      "Block publication shutdown could not record every boot fence; replacement requires recovery"
+    )
+  end
+
+  defp publication_storage_children do
+    if Application.get_env(:lasso, :block_publication, [])[:journal],
+      do: [Lasso.BlockPublication.Repo],
+      else: []
   end
 
   @doc false

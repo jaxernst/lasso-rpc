@@ -4,7 +4,7 @@ defmodule Lasso.MixProject do
   def project do
     [
       app: :lasso,
-      version: "0.3.6",
+      version: "0.4.0",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],
@@ -73,6 +73,8 @@ defmodule Lasso.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dotenvy, "~> 0.8.0"},
       {:jason, "~> 1.4.5"},
+      {:ecto_sql, "~> 3.13"},
+      {:postgrex, "~> 0.21"},
       {:mint_web_socket, "~> 1.0"},
       {:phoenix, "~> 1.8"},
       {:phoenix_pubsub, "~> 2.1"},

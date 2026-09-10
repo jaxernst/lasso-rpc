@@ -522,6 +522,7 @@ defmodule Lasso.RPC.RequestProjection do
   end
 
   defp request_terminal?(%RequestTerminal.UpstreamResponse{}), do: true
+  defp request_terminal?(%RequestTerminal.LocalSuccess{}), do: true
   defp request_terminal?(%RequestTerminal.LocalFailure{}), do: true
   defp request_terminal?(%RequestTerminal.Deadline{}), do: true
   defp request_terminal?(%RequestTerminal.CallerAbandonment{}), do: true
@@ -530,6 +531,7 @@ defmodule Lasso.RPC.RequestProjection do
   defp request_terminal?(_fact), do: false
 
   defp result(%RequestTerminal.UpstreamResponse{attempt: %{kind: :success}}), do: :success
+  defp result(%RequestTerminal.LocalSuccess{}), do: :success
   defp result(_fact), do: :error
 
   defp route_value(nil, _key), do: nil

@@ -42,6 +42,7 @@ defmodule LassoWeb.Plugs.ProfileResolverPlug do
         case ConfigStore.get_profile(validated_slug) do
           {:ok, profile_meta} ->
             conn
+            |> put_resp_header("x-lasso-profile", validated_slug)
             |> assign(:profile_slug, validated_slug)
             |> assign(:profile_id, profile_meta.profile_id)
             |> assign(:profile, profile_meta)

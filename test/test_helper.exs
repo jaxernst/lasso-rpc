@@ -56,7 +56,7 @@ Application.put_env(:lasso, :http_client, Lasso.Testing.BehaviorHttpClient)
 # Ensure test isolation by resetting benchmark store between tests
 # By default, exclude slow-running tests (integration, real providers)
 ExUnit.configure(
-  exclude: [:skip, :integration, :real_providers, :slow],
+  exclude: [:skip, :integration, :real_providers, :slow, :publication_db, :anvil],
   timeout: 60_000,
   max_cases: 1
 )

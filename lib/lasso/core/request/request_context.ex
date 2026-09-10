@@ -20,6 +20,7 @@ defmodule Lasso.RPC.RequestContext do
   }
 
   @type channel_identity :: %{
+          profile: String.t(),
           provider_id: binary(),
           instance_id: binary() | nil,
           transport: :http | :ws,
@@ -86,6 +87,7 @@ defmodule Lasso.RPC.RequestContext do
           # Execution parameters (immutable throughout pipeline)
           rpc_request: map() | nil,
           prepared_request: PreparedRequest.t() | nil,
+          head_policy: map() | nil,
           timeout_ms: timeout() | nil,
           execution_envelope: ExecutionEnvelope.t() | nil,
           opts: RequestOptions.t() | nil,
@@ -134,6 +136,7 @@ defmodule Lasso.RPC.RequestContext do
             error: nil,
             rpc_request: nil,
             prepared_request: nil,
+            head_policy: nil,
             timeout_ms: nil,
             execution_envelope: nil,
             opts: nil,
@@ -547,6 +550,7 @@ defmodule Lasso.RPC.RequestContext do
 
   defp channel_identity(channel) do
     %{
+      profile: BoundedIdentifier.encode(channel.profile),
       provider_id: BoundedIdentifier.encode(channel.provider_id),
       instance_id: BoundedIdentifier.encode_optional(channel.instance_id),
       transport: channel.transport,

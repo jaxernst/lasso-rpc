@@ -80,6 +80,7 @@ chains:
 |-------|------|----------|-------------|
 | `chain_id` | integer | Yes | EIP-155 chain ID |
 | `name` | string | No | Display name (defaults to chain key) |
+| `head_policy` | string | No | `off` (default), `local` (one running instance), or `global` ([durable fleet setup](BLOCK_CONTINUITY_OPERATIONS.md)). Covers block choice, not automatic pinning of state reads. |
 | `block_time_ms` | integer | No | Average block time in milliseconds. Used for optimistic lag calculation |
 
 ### Monitoring

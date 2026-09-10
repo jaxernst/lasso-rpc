@@ -108,3 +108,34 @@ Link the image reference and attached verification evidence from the release
 notes. Maintain an `Unreleased` changelog section for follow-ups. Document only
 behavior established by source review or executed checks; keep broad capacity,
 continuity, and security claims within their separately measured scope.
+
+## Block continuity qualification
+
+The container acceptance suite also upgrades its initially database-free install
+with a disposable PostgreSQL journal, runs the release migration command twice,
+enables a file profile, and checks publication evidence and hash selectors through
+actual HTTP and WebSocket RPC. It interrupts database connections, replaces the application
+container and disables/reenables the scope while retaining the floor. The
+controlled upstream is a packaging fixture; Anvil and three-BEAM tests in source
+CI independently exercise logical-query reorg handling and fleet coordination.
+
+Record these results for each native platform alongside ordinary install/upgrade
+checks. Cloud and Core release records must identify both exact source commits
+and shared-publication parity; one repository's green CI does not attest the
+other. No destructive journal rollback is part of an ordinary binary rollback.
+
+For a previous-version upgrade check, provide the prior public image by digest:
+
+```sh
+python3 scripts/distribution/verify.py \
+  --image CURRENT_IMAGE --version CURRENT_VERSION --revision CURRENT_COMMIT \
+  --previous-image ghcr.io/jaxernst/lasso-rpc@sha256:PREVIOUS_DIGEST \
+  --previous-version PREVIOUS_VERSION --report upgrade-verification.json
+```
+
+This first installs the old version, saves a custom profile and benchmark history,
+then upgrades, rolls back, and recovers forward before enabling continuity. It
+verifies ordinary RPC after each replacement. This rollback check applies only
+before global publication has been enrolled; a pre-feature binary cannot enforce
+an existing global guarantee. After enrollment, retain the journal and use a
+compatible binary or the documented coordinated disable procedure.

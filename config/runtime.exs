@@ -174,3 +174,31 @@ if config_env() == :prod do
     url: [host: host, scheme: scheme],
     secret_key_base: secret_key_base
 end
+
+if config_env() != :test do
+  publication_members =
+    System.get_env("LASSO_BLOCK_PUBLICATION_MEMBERS", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+
+  publication_url = System.get_env("LASSO_BLOCK_PUBLICATION_DATABASE_URL")
+
+  if length(publication_members) != length(Enum.uniq(publication_members)) or
+       Enum.any?(publication_members, &(&1 == "")),
+     do: raise("LASSO_BLOCK_PUBLICATION_MEMBERS must contain unique nonblank instance IDs")
+
+  if publication_members != [] and publication_url in [nil, ""],
+    do: raise("Global block publication requires LASSO_BLOCK_PUBLICATION_DATABASE_URL")
+
+  if publication_url not in [nil, ""] do
+    config :lasso, Lasso.BlockPublication.Repo,
+      url: publication_url,
+      pool_size: 4,
+      timeout: 5_000
+
+    config :lasso, :block_publication,
+      journal: Lasso.BlockPublication.Postgres,
+      members: publication_members,
+      interval_ms: 1_000
+  end
+end

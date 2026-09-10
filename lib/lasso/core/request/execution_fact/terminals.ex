@@ -250,6 +250,7 @@ defmodule Lasso.RPC.RequestTerminal do
 
   @type t ::
           Lasso.RPC.RequestTerminal.UpstreamResponse.t()
+          | Lasso.RPC.RequestTerminal.LocalSuccess.t()
           | Lasso.RPC.RequestTerminal.LocalFailure.t()
           | Lasso.RPC.RequestTerminal.Deadline.t()
           | Lasso.RPC.RequestTerminal.CallerAbandonment.t()
@@ -372,10 +373,48 @@ defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
   end
 end
 
+defmodule Lasso.RPC.RequestTerminal.LocalSuccess do
+  @moduledoc false
+  alias Lasso.RPC.RequestTerminal.Common
+
+  @enforce_keys [
+    :request_id,
+    :profile,
+    :chain_id,
+    :execution_safety,
+    :routing_intent,
+    :workload_key,
+    :elapsed_us,
+    :candidate_admission_count,
+    :dispatch_count,
+    :reason
+  ]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  @type t :: %__MODULE__{}
+
+  @spec new(keyword(), :published_block) :: t()
+  def new(attrs, :published_block) do
+    normalized = Common.normalize(attrs)
+
+    if normalized.dispatch_count != 0,
+      do: raise(ArgumentError, "a local response cannot claim an upstream dispatch")
+
+    struct!(__MODULE__, Map.put(normalized, :reason, :published_block))
+  end
+end
+
 defmodule Lasso.RPC.RequestTerminal.LocalFailure do
   @moduledoc false
   alias Lasso.RPC.{ExecutionFact, RequestTerminal.Common}
-  @reasons [:invalid_request, :unsupported_method, :configuration, :capacity, :internal]
+
+  @reasons [
+    :invalid_request,
+    :unsupported_method,
+    :configuration,
+    :capacity,
+    :block_publication,
+    :internal
+  ]
   @enforce_keys [
     :request_id,
     :profile,

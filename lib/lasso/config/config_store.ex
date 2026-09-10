@@ -1371,6 +1371,15 @@ defmodule Lasso.Config.ConfigStore do
       length(ids) != length(Enum.uniq(ids)) ->
         {:error, :duplicate_chain_id}
 
+      Enum.any?(chains, fn {_, chain} ->
+        not Lasso.RPC.HeadPolicy.valid_mode?(Map.get(chain, :head_policy, "off"))
+      end) ->
+        {:error, :invalid_head_policy}
+
+      Enum.any?(chains, fn {_, chain} -> Map.get(chain, :head_policy) == "global" end) and
+          not Lasso.BlockPublication.Runtime.configured?() ->
+        {:error, :global_publication_unconfigured}
+
       true ->
         validate_chain_aliases(chains, MapSet.new(ids))
     end
@@ -1894,6 +1903,8 @@ defmodule Lasso.Config.ConfigStore do
 
     %ChainConfig{
       chain_id: chain_id,
+      head_policy: Map.get(attrs, :head_policy, Map.get(attrs, "head_policy", "off")),
+      block_time_ms: Map.get(attrs, :block_time_ms, Map.get(attrs, "block_time_ms")),
       name: display_name,
       display_name: display_name,
       url_aliases:

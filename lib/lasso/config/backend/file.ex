@@ -267,6 +267,7 @@ defmodule Lasso.Config.Backend.File do
       display_name: chain_data["name"] || chain_name,
       url_aliases: parse_url_aliases(chain_name, chain_data),
       block_time_ms: chain_data["block_time_ms"],
+      head_policy: Map.get(chain_data, "head_policy", "off"),
       providers: parse_providers(chain_data["providers"] || []),
       selection: parse_selection(chain_data["selection"]),
       monitoring: parse_monitoring(chain_data["monitoring"]),

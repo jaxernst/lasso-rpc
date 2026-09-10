@@ -126,6 +126,7 @@ defmodule LassoWeb.Endpoint do
   plug(CORSPlug,
     origin: "*",
     max_age: 86_400,
+    expose: ["x-lasso-meta", "x-lasso-profile", "x-lasso-request-id", "x-request-id"],
     methods: ["GET", "POST", "OPTIONS"],
     headers: [
       "Content-Type",
