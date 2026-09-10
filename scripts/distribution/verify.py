@@ -278,6 +278,30 @@ ws.onerror = () => { console.error('WebSocket error'); process.exit(1); };
             unknown = dict(payload, params=[payload["params"][0], {"blockHash": "0x" + "f" * 64, "requireCanonical": True}])
             assert "error" in json.loads(request("/rpc/profile/custom/ethereum", unknown)[1])
             record("File-profile global publication, correlated metadata, pinned execution and unknown-hash rejection")
+            ws_pinned = r'''
+const assert = require('node:assert/strict');
+const ws = new WebSocket(process.argv[1]);
+const hash = process.argv[2], number = process.argv[3];
+const timer = setTimeout(() => { console.error('Pinned WebSocket query timed out'); process.exit(1); }, 15000);
+const send = (id, method, params) => ws.send(JSON.stringify({jsonrpc:'2.0', id, method, params}));
+ws.onopen = () => send(1, 'eth_getBlockByNumber', ['latest', false]);
+ws.onmessage = event => {
+  const data = JSON.parse(event.data);
+  if (data.id === 1) {
+    assert.equal(data.result?.hash, hash); assert.equal(data.result.number, number);
+    send(2, 'eth_getBalance', ['0x0000000000000000000000000000000000000001', {blockHash:hash,requireCanonical:true}]);
+  } else if (data.id === 2) {
+    assert.equal(data.result, '0x0');
+    send(3, 'eth_getBalance', ['0x0000000000000000000000000000000000000001', {blockHash:'0x'+'f'.repeat(64),requireCanonical:true}]);
+  } else if (data.id === 3) {
+    assert.ok(data.error && data.error.code < 0); clearTimeout(timer); ws.close();
+  } else { throw new Error('Unexpected WebSocket response'); }
+};
+ws.onerror = () => { console.error('Pinned WebSocket error'); process.exit(1); };
+'''
+            run(["node", "-e", ws_pinned, f"ws://127.0.0.1:{port}/ws/rpc/profile/custom/ethereum", first["hash"], first["number"]], timeout=20)
+            record("WebSocket published block choice, pinned state and unknown-hash rejection")
+
             dc("stop", "publication-db")
             assert choice(int(first["number"], 16))["hash"] == first["hash"]
             dc("start", "publication-db")

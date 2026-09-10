@@ -19,8 +19,8 @@ defmodule Lasso.Test.BlockPublicationPeer do
     def ensure(key, members, age), do: available(fn -> Durable.ensure(key, members, age) end)
 
     def command(key, command) do
-      case :persistent_term.get({__MODULE__, :blocked_history}, nil) do
-        {keys, owner} when is_map_key(keys, key) ->
+      case {command, :persistent_term.get({__MODULE__, :blocked_history}, nil)} do
+        {{:fence, _, _, _}, {keys, owner}} when is_map_key(keys, key) ->
           send(owner, {:fencing_history, self(), key})
 
           receive do

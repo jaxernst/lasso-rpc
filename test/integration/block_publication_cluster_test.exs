@@ -182,15 +182,21 @@ defmodule Lasso.BlockPublication.ClusterTest do
     end)
 
     Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
-      for retained_key <- retained_keys do
-        assert {:ok, _} = BlockPublicationJournal.ensure(retained_key, ["c"], 60_000)
+      assert {:ok, _} =
+               Repo.transaction(fn ->
+                 for retained_key <- retained_keys do
+                   assert {:ok, _} = BlockPublicationJournal.ensure(retained_key, ["c"], 60_000)
 
-        assert {:ok, _} =
-                 BlockPublicationJournal.command(retained_key, {:join, "c", replacement_boot, 90})
+                   assert {:ok, _} =
+                            BlockPublicationJournal.command(
+                              retained_key,
+                              {:join, "c", replacement_boot, 90}
+                            )
 
-        assert {:ok, %{"phase" => "disabled"}} =
-                 BlockPublicationJournal.command(retained_key, :disable)
-      end
+                   assert {:ok, %{"phase" => "disabled"}} =
+                            BlockPublicationJournal.command(retained_key, :disable)
+                 end
+               end)
     end)
 
     :erpc.call(c, Peer, :block_history, [retained_keys, self()])
