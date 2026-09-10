@@ -3,7 +3,7 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.{Error, Quantity}
-  alias Lasso.RPC.{Observability, RequestOptions, RequestPipeline, Response}
+  alias Lasso.RPC.{AttemptProjection, Observability, RequestOptions, RequestPipeline, Response}
 
   setup %{chain: chain} do
     :ok = ConfigStore.register_chain_runtime("public", chain, %{head_policy: "local"})
@@ -37,8 +37,9 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     ])
 
     serve("head-a", header(100))
-    assert {:ok, response, _} = request(chain)
+    assert {:ok, response, first_ctx} = request(chain)
     assert result(response) == "0x64"
+    assert usable_successes(first_ctx) == 1
     assert_receive {:head_request, "head-a", ["latest", false]}
     serve("head-a", header(99))
     serve("head-b", header(100))
@@ -46,6 +47,8 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     assert {:ok, response, ctx} = request(chain)
     assert result(response) == "0x64"
     assert ctx.execution_envelope.dispatch_count == 2
+    assert usable_successes(first_ctx) == 1
+    assert usable_successes(ctx) == 1
     assert_receive {:head_request, "head-a", ["latest", false]}
     assert_receive {:head_request, "head-b", ["0x64", false]}
   end
@@ -265,6 +268,21 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
   defp set_behavior(id, behavior) do
     [{pid, _}] = Registry.lookup(Lasso.Registry, {:http_provider, id})
     :sys.replace_state(pid, &%{&1 | behavior: behavior})
+  end
+
+  defp usable_successes(ctx) do
+    identity = ctx.terminal_attempt_fact.identity
+    scope = AttemptProjection.scope_state(identity.profile, identity.chain_id)
+
+    case AttemptProjection.route_state(
+           scope,
+           identity.upstream_instance_id,
+           identity.transport,
+           identity.workload_key
+         ) do
+      nil -> 0
+      row -> row.usable_successes
+    end
   end
 
   defp result(response) do

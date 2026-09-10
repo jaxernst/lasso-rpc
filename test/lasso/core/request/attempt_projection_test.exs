@@ -53,6 +53,54 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     refute inspect(payload) =~ "response body"
   end
 
+  test "policy-rejected success keeps its transport fact and emits only neutral evidence" do
+    generation = publish_routes(["projection-instance"])
+    accepted = success_event(100, "projection-instance", generation)
+    assert :ok = AttemptProjection.apply_control(accepted)
+    scope = AttemptProjection.scope_state(@profile, @chain_id)
+    before = AttemptProjection.route_state(scope, "projection-instance", :http)
+    fact = accepted.fact
+
+    rejected =
+      %{
+        AttemptProjection.new(fact, "provider", "eth_call", :policy_rejected)
+        | emitted_at_us: 200
+      }
+
+    assert rejected.fact == fact
+    assert {:ok, payload} = AttemptProjection.encode(rejected)
+    assert {:ok, ^rejected} = AttemptProjection.decode(payload)
+    assert :ok = AttemptProjection.apply_control(rejected)
+    after_rejection = AttemptProjection.route_state(scope, "projection-instance", :http)
+    assert after_rejection.usable_successes == before.usable_successes
+    assert after_rejection.comparable_attempts == before.comparable_attempts
+    assert after_rejection.total_failures == before.total_failures
+    assert after_rejection.successful_mean_latency_ms == before.successful_mean_latency_ms
+
+    assert {:ok,
+            %{outcome: :neutral_error, elapsed_io_ms: 0.01, error_category: :block_not_available}} =
+             AttemptProjection.to_attempt_event(rejected)
+
+    parent = self()
+
+    start_supervised!(
+      {ProjectionDispatcher,
+       name: @healthy_dispatcher,
+       lanes: [
+         diagnostics: diagnostic_lane(fn _scope, bytes -> send(parent, {:rejected, bytes}) end)
+       ]}
+    )
+
+    assert {:ok, _} = AttemptProjection.enqueue_diagnostic(rejected, @healthy_dispatcher)
+    assert_receive {:rejected, ^payload}
+    refute_receive {:rejected, _}, 10
+
+    assert :ok = AttemptProjection.apply_control(%{accepted | emitted_at_us: 300})
+
+    assert AttemptProjection.route_state(scope, "projection-instance", :http).usable_successes ==
+             before.usable_successes + 1
+  end
+
   test "healthy one-attempt completion submits only its request terminal diagnostic" do
     parent = self()
 

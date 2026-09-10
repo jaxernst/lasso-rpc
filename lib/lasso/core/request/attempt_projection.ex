@@ -37,15 +37,18 @@ defmodule Lasso.RPC.AttemptProjection do
   ]
 
   @enforce_keys [:version, :fact, :provider_id, :method, :emitted_at_us]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [qualification: :accepted]
 
   @type t :: %__MODULE__{
           version: 1,
           fact: AttemptTerminal.t(),
           provider_id: binary(),
           method: binary(),
-          emitted_at_us: integer()
+          emitted_at_us: integer(),
+          qualification: qualification()
         }
+
+  @type qualification :: :accepted | :policy_rejected
 
   @type scope_state :: %{
           profile: binary(),
@@ -73,11 +76,12 @@ defmodule Lasso.RPC.AttemptProjection do
           observed_at_us: integer()
         }
 
-  @spec new(AttemptTerminal.t(), binary(), binary()) :: t()
-  def new(fact, provider_id, method) do
+  @spec new(AttemptTerminal.t(), binary(), binary(), qualification()) :: t()
+  def new(fact, provider_id, method, qualification \\ :accepted) do
     %__MODULE__{
       version: @version,
       fact: fact,
+      qualification: qualification,
       provider_id: bounded(provider_id),
       method: bounded(method),
       emitted_at_us: System.monotonic_time(:microsecond)
@@ -121,10 +125,13 @@ defmodule Lasso.RPC.AttemptProjection do
       match?(%AttemptTerminal.PredispatchFailure{}, event.fact) ->
         :not_dispatched
 
+      event.qualification == :policy_rejected ->
+        :ok
+
       true ->
         key = route_key(identity)
 
-        delta = control_delta(event.fact)
+        delta = control_delta(event)
 
         result =
           update_route(
@@ -155,7 +162,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @spec enqueue_diagnostic(t(), atom()) :: term()
   def enqueue_diagnostic(%__MODULE__{} = event, dispatcher \\ @dispatcher)
       when is_atom(dispatcher) do
-    if diagnostic_attempt?(event.fact) do
+    if diagnostic_attempt?(event) do
       ProjectionDispatcher.enqueue_lazy(
         dispatcher,
         :diagnostics,
@@ -590,7 +597,7 @@ defmodule Lasso.RPC.AttemptProjection do
 
   def to_attempt_event(%__MODULE__{} = event) do
     identity = identity(event.fact)
-    fields = attempt_event_fields(event.fact)
+    fields = attempt_event_fields(event)
 
     {:ok,
      struct!(AttemptEvent,
@@ -981,6 +988,9 @@ defmodule Lasso.RPC.AttemptProjection do
     do: %{row | last_error_category: :rate_limit}
 
   defp apply_latest_outcome(row, %{kind: :neutral}), do: row
+
+  defp control_delta(%__MODULE__{qualification: :policy_rejected}), do: %{kind: :neutral}
+  defp control_delta(%__MODULE__{fact: fact}), do: control_delta(fact)
 
   defp control_delta(%AttemptTerminal.Response{kind: :success, io_duration_us: us}),
     do: %{kind: :success, latency_ms: us / 1_000}
@@ -1759,6 +1769,8 @@ defmodule Lasso.RPC.AttemptProjection do
   defp routing_evidence_stale?(observed_at_us, now_us),
     do: now_us - observed_at_us >= @routing_evidence_max_age_us
 
+  defp diagnostic_attempt?(%__MODULE__{qualification: :policy_rejected}), do: true
+  defp diagnostic_attempt?(%__MODULE__{fact: fact}), do: diagnostic_attempt?(fact)
   defp diagnostic_attempt?(%AttemptTerminal.Response{kind: :success}), do: false
   defp diagnostic_attempt?(_fact), do: true
 
@@ -1811,6 +1823,18 @@ defmodule Lasso.RPC.AttemptProjection do
       )
     end
   end
+
+  defp attempt_event_fields(%__MODULE__{
+         qualification: :policy_rejected,
+         fact: %AttemptTerminal.Response{io_duration_us: us}
+       }),
+       do: %{
+         outcome: :neutral_error,
+         elapsed_io_ms: us / 1_000,
+         error_category: :block_not_available
+       }
+
+  defp attempt_event_fields(%__MODULE__{fact: fact}), do: attempt_event_fields(fact)
 
   defp attempt_event_fields(%AttemptTerminal.Response{kind: :success, io_duration_us: us}),
     do: %{outcome: :usable_success, elapsed_io_ms: us / 1_000, error_category: nil}
@@ -1874,7 +1898,10 @@ defmodule Lasso.RPC.AttemptProjection do
       event.version == @version and
         event.provider_id == bounded(event.provider_id) and
         event.method == bounded(event.method) and
-        is_integer(event.emitted_at_us) and is_struct(event.fact)
+        is_integer(event.emitted_at_us) and is_struct(event.fact) and
+        (event.qualification == :accepted or
+           (event.qualification == :policy_rejected and
+              match?(%AttemptTerminal.Response{kind: :success}, event.fact)))
 
     if valid?, do: event, else: raise(ArgumentError, "invalid attempt projection")
   end

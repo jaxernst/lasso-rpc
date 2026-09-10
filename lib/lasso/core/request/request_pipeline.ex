@@ -653,15 +653,23 @@ defmodule Lasso.RPC.RequestPipeline do
         caller_guard_options(caller_guard)
       )
 
-    _control_result = CircuitBreaker.report_canonical(receipt, outcome.fact, outcome.projection)
+    {decision, ctx} = qualify_response(outcome, ctx)
+
+    qualification =
+      if elem(decision, 0) in [:error, :retry], do: :policy_rejected, else: :accepted
+
+    projection = ExecutionProjector.qualify(outcome.projection, qualification)
+
+    _control_result = CircuitBreaker.report_canonical(receipt, outcome.fact, projection)
 
     _projection_result =
       AttemptProjection.process(
-        AttemptProjection.new(outcome.fact, channel.provider_id, ctx.method)
+        AttemptProjection.new(outcome.fact, channel.provider_id, ctx.method, qualification)
       )
 
     ctx = commit_attempt_context(ctx, channel, identity.upstream_instance_id, outcome)
-    handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard)
+    ctx = %{ctx | terminal_attempt_projection: projection}
+    handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision)
   end
 
   @doc false
@@ -803,18 +811,32 @@ defmodule Lasso.RPC.RequestPipeline do
     }
   end
 
+  defp qualify_response(
+         %{fact: %AttemptTerminal.Response{kind: :success}, result: {:ok, result, _io_ms}},
+         ctx
+       ) do
+    {disposition, value, ctx} = HeadPolicy.accept(result, ctx)
+    {{disposition, value}, ctx}
+  end
+
+  defp qualify_response(_outcome, ctx), do: {{:continue, nil}, ctx}
+
   defp handle_owner_outcome(
-         %{fact: %AttemptTerminal.Response{kind: :success} = fact, result: {:ok, result, _io_ms}},
+         %{
+           fact: %AttemptTerminal.Response{kind: :success} = fact,
+           result: {:ok, _result, _io_ms}
+         },
          channel,
          rest_channels,
          ctx,
-         caller_guard
+         caller_guard,
+         decision
        ) do
-    case HeadPolicy.accept(result, ctx) do
-      {:error, error, ctx} ->
+    case decision do
+      {:error, error} ->
         finalize_error(error, ctx)
 
-      {:ok, result, ctx} ->
+      {:ok, result} ->
         case if(ctx.head_policy, do: request_open(ctx, caller_guard), else: :ok) do
           :ok ->
             handle_success(result, fact_latency_ms(fact), channel, ctx)
@@ -826,7 +848,7 @@ defmodule Lasso.RPC.RequestPipeline do
             finalize_bounded_error(ctx, :deadline_exhausted)
         end
 
-      {:retry, error, ctx} ->
+      {:retry, error} ->
         ctx =
           ctx
           |> RequestContext.add_upstream_latency(fact_latency_ms(fact))
@@ -837,7 +859,7 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard) do
+  defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, {:continue, nil}) do
     if outcome.projection.fallback_eligible do
       handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
     else

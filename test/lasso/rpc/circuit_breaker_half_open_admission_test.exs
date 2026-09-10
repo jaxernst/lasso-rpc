@@ -105,6 +105,42 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
              :sys.get_state(breaker_pid)
   end
 
+  test "policy rejection releases a live half-open lease without declaring recovery" do
+    {id, breaker_pid} = start_half_open_breaker()
+    assert {:ok, receipt} = CircuitBreaker.admit(id, deadline_us())
+    assert :ok = CircuitBreaker.activate_attempt(receipt, self())
+
+    identity =
+      AttemptIdentity.new(
+        request_id: "half-open-route-request",
+        attempt_id: "half-open-route-attempt",
+        profile: "public",
+        chain_id: 1,
+        upstream_instance_id: elem(id, 0),
+        transport: :http,
+        route_generation: ConfigStore.route_generation(),
+        circuit_scope: :broad,
+        circuit_epoch: receipt.epoch,
+        execution_safety: :replay_safe,
+        routing_intent: "default",
+        workload_key: "default",
+        request_budget_ms: 100,
+        candidate_admission_count: 1,
+        dispatch_count: 1
+      )
+
+    fact = AttemptTerminal.Response.new(identity, :success, 10)
+    projection = ExecutionProjector.qualify(ExecutionProjector.project(fact), :policy_rejected)
+    assert projection.breaker_effect == :none
+    assert projection.evidence_qualification == :neutral
+    assert fact.kind == :success
+    assert :ok = CircuitBreaker.report_canonical(receipt, fact, projection)
+    await_no_lease(id)
+
+    assert %{state: :half_open, inflight_count: 0, success_count: 0, failure_count: 0} =
+             :sys.get_state(breaker_pid)
+  end
+
   test "restart publishes a fresh conservative epoch and recovers a live lease" do
     {id, breaker_pid} = start_half_open_breaker()
 

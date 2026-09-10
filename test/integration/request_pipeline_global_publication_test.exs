@@ -194,6 +194,21 @@ defmodule Lasso.RPC.RequestPipelineGlobalPublicationTest do
              request(chain, "eth_getBlockByNumber", ["latest", true])
 
     assert ctx.execution_envelope.dispatch_count > 0
+    assert %Lasso.RPC.AttemptTerminal.Response{kind: :success} = ctx.terminal_attempt_fact
+    assert ctx.terminal_attempt_projection.evidence_qualification == :neutral
+    assert ctx.terminal_attempt_projection.breaker_effect == :none
+    identity = ctx.terminal_attempt_fact.identity
+    scope = Lasso.RPC.AttemptProjection.scope_state(identity.profile, identity.chain_id)
+
+    row =
+      Lasso.RPC.AttemptProjection.route_state(
+        scope,
+        identity.upstream_instance_id,
+        identity.transport,
+        identity.workload_key
+      )
+
+    assert is_nil(row) or row.usable_successes == 0
 
     assert %RequestTerminal.LocalFailure{reason: :block_publication} =
              terminal =
