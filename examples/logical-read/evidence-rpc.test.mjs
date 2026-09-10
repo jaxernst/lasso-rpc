@@ -183,6 +183,25 @@ test("deadline cancels in-flight fetch and prohibits subsequent RPCs", async () 
   assert.equal(rpc.evidence().completed, 1);
 });
 
+test("an expired query cannot dispatch again when the wall clock still precedes its deadline", async t => {
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const timeout = new AbortController();
+  t.mock.method(AbortSignal, "timeout", () => timeout.signal);
+  let dispatched = 0;
+  const rpc = evidenceRpc({ ...scope, deadline: now + 30, fetch: (_url, { signal }) => {
+    dispatched++;
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      timeout.abort(new DOMException("Query timeout", "TimeoutError"));
+    });
+  } });
+  await assert.rejects(publishedBlockQuery(rpc), /timeout/i);
+  await assert.rejects(publishedBlockQuery(rpc), /deadline exceeded/);
+  assert.equal(dispatched, 1);
+  assert.equal(rpc.evidence().completed, 1);
+});
+
 test("worker handoff preserves hash and deadline; cache identity separates forks and scopes", async () => {
   const rpc = evidenceRpc({ ...scope, fetch: transport().fetch });
   const query = await publishedBlockQuery(rpc);

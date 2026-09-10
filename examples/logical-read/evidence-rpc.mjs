@@ -13,17 +13,19 @@ export function evidenceRpc({ url, apiKey, profile, profileId, chainId, deadline
   const entries = [];
   const slots = concurrencySlots(maxConcurrency);
   const lifetime = new AbortController();
+  let deadlineSignal;
   let started = 0, completed = 0, missing = 0, omitted = 0, bytes = 0;
 
   async function request({ method, params = [], signal: parentSignal }) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error("Logical query deadline exceeded");
+    if (remaining <= 0 || deadlineSignal?.aborted) throw new Error("Logical query deadline exceeded");
+    deadlineSignal ??= AbortSignal.timeout(remaining);
     lifetime.signal.throwIfAborted();
     if (started >= maxRequests) throw new Error("Logical query RPC limit exceeded");
     const id = ++started;
     const entry = { sequence: id, method, outcome: "transport_error", metadataStatus: "missing" };
     const controller = new AbortController();
-    const signal = AbortSignal.any([lifetime.signal, controller.signal, AbortSignal.timeout(remaining), ...(parentSignal ? [parentSignal] : [])]);
+    const signal = AbortSignal.any([lifetime.signal, controller.signal, deadlineSignal, ...(parentSignal ? [parentSignal] : [])]);
     const supplied = stateBlockSelector({ method, params });
     if (supplied?.blockHash) entry.blockHash = supplied.blockHash;
     let release, response, reader, pending;
