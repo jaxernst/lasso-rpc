@@ -267,6 +267,86 @@ defmodule Lasso.BlockPublication.ClusterTest do
     eventually(fn -> :erpc.call(a, Peer, :read, [key]) == :unmanaged end)
   end
 
+  test "four scopes close concurrently without blocking the runtime or opening before durable acknowledgments" do
+    {_output, 0} = System.cmd("epmd", ["-daemon"])
+    :ok = LocalCluster.start()
+
+    endpoint =
+      Application.get_env(:lasso, LassoWeb.Endpoint)
+      |> Keyword.put(:server, false)
+      |> Keyword.put(:http, ip: {127, 0, 0, 1}, port: 0)
+
+    {:ok, cluster} =
+      LocalCluster.start_link(2,
+        prefix: "closure#{System.unique_integer([:positive])}",
+        applications: [:lasso],
+        environment: [
+          lasso: [
+            {LassoWeb.Endpoint, endpoint},
+            {Repo,
+             Keyword.put(Application.get_env(:lasso, Repo), :pool, DBConnection.ConnectionPool)},
+            {:block_publication, [journal: Lasso.BlockPublication.Postgres]}
+          ]
+        ]
+      )
+
+    on_exit(fn -> if Process.alive?(cluster), do: GenServer.stop(cluster, :normal, 30_000) end)
+    {:ok, nodes} = LocalCluster.nodes(cluster)
+    keys = for _ <- 1..4, do: {"cluster-" <> Ecto.UUID.generate(), 1}
+    profiles = Enum.map(keys, &elem(&1, 0))
+    members = ["a", "b"]
+
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+      for key <- keys, do: assert({:ok, _} = BlockPublicationJournal.ensure(key, members, 60_000))
+    end)
+
+    on_exit(fn ->
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete_all(from(p in BlockPublicationJournal, where: p.profile in ^profiles))
+      end)
+    end)
+
+    for {node, member} <- Enum.zip(nodes, members) do
+      for key <- keys, do: :erpc.call(node, Peer, :set_height, [key, 100])
+      assert :ok == :erpc.call(node, Peer, :configure, [member, members, hd(keys)])
+    end
+
+    eventually(fn -> Enum.all?(keys, &(reads(nodes, &1) == [ok: 100, ok: 100])) end)
+    for node <- nodes, do: :erpc.call(node, Peer, :block_closures, [self()])
+
+    try do
+      for node <- nodes, key <- keys, do: :erpc.call(node, Peer, :set_height, [key, 101])
+
+      workers =
+        for _ <- 1..8 do
+          assert_receive {:closure_waiting, node, pid, key}, 2_000
+          {node, pid, key}
+        end
+
+      assert MapSet.new(Enum.map(workers, fn {node, _, key} -> {node, key} end)) ==
+               MapSet.new(for node <- nodes, key <- keys, do: {node, key})
+
+      for node <- nodes do
+        state = :erpc.call(node, :sys, :get_state, [Lasso.BlockPublication.Runtime, 1_000])
+        assert map_size(state.closure_tasks) == 4
+        send({Lasso.BlockPublication.Runtime, node}, :publication_changed)
+      end
+
+      for key <- keys,
+          do:
+            assert(
+              reads(nodes, key) == [error: :publication_changing, error: :publication_changing]
+            )
+
+      refute_receive {:closure_waiting, _, _, _}, 150
+      for node <- nodes, do: :erpc.call(node, Peer, :block_closures, [nil])
+      for {_, pid, _} <- workers, do: send(pid, :continue)
+      eventually(fn -> Enum.all?(keys, &(reads(nodes, &1) == [ok: 101, ok: 101])) end)
+    after
+      for node <- nodes, do: :erpc.call(node, Peer, :block_closures, [nil])
+    end
+  end
+
   defp reads(nodes, key), do: Enum.map(nodes, &:erpc.call(&1, Peer, :read, [key]))
   defp eventually(fun, attempts \\ 150)
   defp eventually(fun, 0), do: assert(fun.())

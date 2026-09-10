@@ -37,6 +37,7 @@ defmodule Lasso.BlockPublication.Runtime do
       probe: Keyword.get(config, :probe, Probe),
       interval: Keyword.get(config, :interval_ms, 1_000),
       tasks: %{},
+      closure_tasks: %{},
       snapshots: %{},
       timer: nil,
       next_probe: %{},
@@ -60,7 +61,11 @@ defmodule Lasso.BlockPublication.Runtime do
   @impl true
   def handle_call({:quiesce, deadline}, _from, state) when is_integer(deadline) do
     Gate.retire()
-    Enum.each(state.tasks, fn {ref, _} -> Process.demonitor(ref, [:flush]) end)
+
+    Enum.each(Map.merge(state.tasks, state.closure_tasks), fn {ref, _} ->
+      Process.demonitor(ref, [:flush])
+    end)
+
     state = %{state | retired: true}
 
     result = fence_before_deadline(state, deadline)
@@ -141,12 +146,19 @@ defmodule Lasso.BlockPublication.Runtime do
 
   def handle_info({ref, {key, result}}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
-    state = %{state | tasks: Map.delete(state.tasks, ref)}
+    state = finish_task(state, ref)
 
     state =
       case result do
-        {:ok, publication} -> install(state, key, publication)
-        _ -> state
+        {:ok, publication} ->
+          install(state, key, publication)
+
+        {:error, :stale_revision} ->
+          send(self(), :publication_changed)
+          state
+
+        _ ->
+          state
       end
 
     {:noreply, state}
@@ -156,7 +168,7 @@ defmodule Lasso.BlockPublication.Runtime do
     if reason != :normal,
       do: Logger.warning("Block publication background task failed: #{inspect(reason)}")
 
-    {:noreply, %{state | tasks: Map.delete(state.tasks, ref)}}
+    {:noreply, finish_task(state, ref)}
   end
 
   defp reconcile(state) do
@@ -246,7 +258,7 @@ defmodule Lasso.BlockPublication.Runtime do
 
       publication["phase"] in ["closing", "disabling"] and publication["closed"][member] != boot ->
         # install/3 has synchronously closed the gate before this durable ACK.
-        command(state, key, {:closed, publication["epoch"], member, boot})
+        acknowledge_closure(state, key, {:closed, publication["epoch"], member, boot})
 
       map_size(state.tasks) >= 4 or key in Map.values(state.tasks) ->
         state
@@ -305,15 +317,34 @@ defmodule Lasso.BlockPublication.Runtime do
     end
   end
 
-  defp command(state, key, cmd) do
-    result =
-      if function_exported?(state.journal, :compare_and_apply, 3),
-        do: state.journal.compare_and_apply(key, Map.fetch!(state.snapshots, key), cmd),
-        else: state.journal.command(key, cmd)
+  # Closure writes have independent slots so provider probes cannot delay the barrier.
+  defp acknowledge_closure(state, key, command) do
+    if map_size(state.closure_tasks) >= 4 or key in Map.values(state.closure_tasks) do
+      state
+    else
+      journal = state.journal
+      snapshot = Map.fetch!(state.snapshots, key)
 
-    case result do
+      task =
+        Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
+          {key, apply_command(journal, key, snapshot, command)}
+        end)
+
+      %{state | closure_tasks: Map.put(state.closure_tasks, task.ref, key)}
+    end
+  end
+
+  defp finish_task(state, ref) do
+    %{
+      state
+      | tasks: Map.delete(state.tasks, ref),
+        closure_tasks: Map.delete(state.closure_tasks, ref)
+    }
+  end
+
+  defp command(state, key, cmd) do
+    case apply_command(state.journal, key, Map.fetch!(state.snapshots, key), cmd) do
       {:ok, publication} ->
-        Phoenix.PubSub.broadcast(Lasso.PubSub, @topic, :publication_changed)
         install(state, key, publication)
 
       {:error, :stale_revision} ->
@@ -323,6 +354,18 @@ defmodule Lasso.BlockPublication.Runtime do
       _ ->
         state
     end
+  end
+
+  defp apply_command(journal, key, snapshot, command) do
+    result =
+      if function_exported?(journal, :compare_and_apply, 3),
+        do: journal.compare_and_apply(key, snapshot, command),
+        else: journal.command(key, command)
+
+    if match?({:ok, _}, result),
+      do: Phoenix.PubSub.broadcast(Lasso.PubSub, @topic, :publication_changed)
+
+    result
   end
 
   defp publish_command(state, key, cmd) do
