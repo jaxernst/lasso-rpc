@@ -1,8 +1,7 @@
 # Operating block continuity
 
 `global` mode stores the monotonic floor, selected block and admitted instance
-boots in PostgreSQL. Serving requests read local ETS grants. PubSub accelerates
-committed journal snapshots; background reconciliation recovers missed messages.
+boots in PostgreSQL. Serving requests read local ETS grants. Runtime publication writes transport committed journal snapshots over PubSub; background reconciliation recovers missed messages.
 PostgreSQL is required when enabling global continuity. Ordinary Core routing
 requires no database.
 
@@ -11,7 +10,10 @@ progress the cutover locally. Every serving boot still closes before its durable
 acknowledgment; a rejected acknowledgment retries from a newer received revision
 or waits for reconciliation. Cached work can progress through a failed inventory
 read, but writes still require PostgreSQL and only successful reconciliation
-completes cold bootstrap.
+completes cold bootstrap. Direct operator commands, configuration changes and
+shutdown fencing retain their existing mutation paths; peers discover them through
+reconciliation. A stalled inventory read can delay those changes, so operators must
+verify that the requested state has reached every serving instance.
 
 Committed snapshots and invalidations use separate topics. Older runtimes receive
 invalidations, while current runtimes recover older peers' writes through periodic
