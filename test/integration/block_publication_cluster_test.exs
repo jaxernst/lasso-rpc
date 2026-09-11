@@ -234,6 +234,7 @@ defmodule Lasso.BlockPublication.ClusterTest do
     end)
 
     :erpc.call(c, Peer, :journal_available, [false])
+    :erpc.call(c, Peer, :notifications_available, [false])
 
     Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
       assert {:ok, _} = BlockPublicationJournal.command(key, :disable)
@@ -374,7 +375,7 @@ defmodule Lasso.BlockPublication.ClusterTest do
     end
   end
 
-  test "unchanged heads and completed preparation do not contend on the durable row" do
+  test "unchanged evidence avoids writes and committed publications survive journal read failure" do
     {_output, 0} = System.cmd("epmd", ["-daemon"])
     :ok = LocalCluster.start()
 
@@ -449,12 +450,61 @@ defmodule Lasso.BlockPublication.ClusterTest do
     for node <- nodes, do: :erpc.call(node, Peer, :set_anchor, [key, anchor])
     :erpc.call(b, Peer, :set_height, [key, 101])
     eventually(fn -> reads(nodes, key) == [ok: 101, ok: 101] end)
+
+    :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, "block_publications")
+    :erpc.call(b, Peer, :changes_available, [false])
+    for node <- nodes, do: :erpc.call(node, Peer, :block_closures, [self()])
+    for node <- nodes, do: :erpc.call(node, Peer, :set_height, [key, 102])
+
+    assert_receive {:closure_waiting, ^a, a_worker, ^key}, 2_000
+    assert_receive {:closure_waiting, ^b, b_worker, ^key}, 2_000
+    :ok = :erpc.call(b, Peer, :delay_reconciliation, [30_000])
+    assert_receive {:reconciliation_delayed, ^b}, 1_000
+    flush_commands(key)
+    send(a_worker, :continue)
+
+    eventually(fn ->
+      state = :erpc.call(b, :sys, :get_state, [Lasso.BlockPublication.Runtime])
+      is_binary(state.snapshots[key]["closed"]["a"])
+    end)
+
+    send(b_worker, :continue)
+    assert_receive {:closure_waiting, ^b, retry_worker, ^key}, 2_000
+    refute retry_worker == b_worker
+    assert reads(nodes, key) == [error: :publication_changing, error: :publication_changing]
+    send(retry_worker, :continue)
+    eventually(fn -> reads(nodes, key) == [ok: 102, ok: 102] end)
+    refute_received {:journal_changes, ^b, [^key]}
+    assert_receive :publication_changed, 1_000
+    refute_received {:publication_committed, ^key, _}
+
+    for node <- nodes, do: :erpc.call(node, Peer, :block_closures, [nil])
+    :erpc.call(b, Peer, :changes_available, [true])
+    :erpc.call(b, Peer, :block_changes, [self()])
+    :erpc.call(b, :erlang, :send, [Lasso.BlockPublication.Runtime, :reconcile])
+    assert_receive {:journal_changes_waiting, ^b, read_worker, {:ok, stale_publications}}, 2_000
+
+    try do
+      assert Map.new(stale_publications)[key]["published"]["height"] == 102
+      for node <- nodes, do: :erpc.call(node, Peer, :set_height, [key, 103])
+      eventually(fn -> reads(nodes, key) == [ok: 103, ok: 103] end, 20)
+      refute_received {:journal_changes_waiting, ^b, _, _}
+    after
+      :erpc.call(b, Peer, :block_changes, [nil])
+      send(read_worker, :continue)
+    end
+
+    eventually(fn ->
+      state = :erpc.call(b, :sys, :get_state, [Lasso.BlockPublication.Runtime])
+      is_nil(state.reconciliation) and state.snapshots[key]["published"]["height"] == 103
+    end)
   end
 
   defp flush_commands(key) do
     receive do
       {:journal_command, _, ^key, _} -> flush_commands(key)
       {:provider_probe, _, ^key, _} -> flush_commands(key)
+      {:journal_changes, _, [^key]} -> flush_commands(key)
     after
       0 -> :ok
     end

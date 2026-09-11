@@ -1,7 +1,8 @@
 defmodule Lasso.BlockPublication.Runtime do
   @moduledoc """
   Background journal reconciliation and regional preparation. PubSub carries
-  invalidations; only the durable journal can authorize a serving grant.
+  committed journal results; only the durable journal authorizes serving grants.
+  Reconciliation recovers missed notifications.
   """
   use GenServer
   require Logger
@@ -9,7 +10,8 @@ defmodule Lasso.BlockPublication.Runtime do
   alias Lasso.Config.ConfigStore
   alias Lasso.RPC.HeadPolicy
 
-  @topic "block_publications"
+  @commit_topic "block_publication_commits"
+  @invalidation_topic "block_publications"
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
@@ -38,6 +40,7 @@ defmodule Lasso.BlockPublication.Runtime do
       interval: Keyword.get(config, :interval_ms, 1_000),
       tasks: %{},
       closure_tasks: %{},
+      reconciliation: nil,
       snapshots: %{},
       timer: nil,
       next_probe: %{},
@@ -52,7 +55,7 @@ defmodule Lasso.BlockPublication.Runtime do
       unless is_atom(state.journal) and not is_nil(state.journal),
         do: raise(ArgumentError, "block publication requires a durable journal adapter")
 
-      Phoenix.PubSub.subscribe(Lasso.PubSub, @topic)
+      Phoenix.PubSub.subscribe(Lasso.PubSub, @commit_topic)
       send(self(), :reconcile)
       {:ok, state}
     end
@@ -66,6 +69,7 @@ defmodule Lasso.BlockPublication.Runtime do
       Process.demonitor(ref, [:flush])
     end)
 
+    if state.reconciliation, do: Process.demonitor(state.reconciliation, [:flush])
     state = %{state | retired: true}
 
     result = fence_before_deadline(state, deadline)
@@ -130,7 +134,7 @@ defmodule Lasso.BlockPublication.Runtime do
   @impl true
   def handle_info(:reconcile, state) do
     if state.timer, do: Process.cancel_timer(state.timer)
-    state = reconcile(state)
+    state = state |> reconcile() |> progress_snapshots()
 
     {:noreply,
      %{state | timer: Process.send_after(self(), :reconcile, state.interval), urgent: false}}
@@ -146,6 +150,33 @@ defmodule Lasso.BlockPublication.Runtime do
     end
   end
 
+  def handle_info({:publication_committed, key, publication}, state) do
+    {:noreply, state |> install(key, publication) |> advance(key)}
+  end
+
+  def handle_info({ref, {:inventory, result}}, %{reconciliation: ref} = state)
+      when is_reference(ref) do
+    Process.demonitor(ref, [:flush])
+    state = %{state | reconciliation: nil}
+
+    state =
+      case result do
+        {:ok, publications} ->
+          state =
+            Enum.reduce(publications, state, fn {key, publication}, acc ->
+              install(acc, key, publication)
+            end)
+
+          Gate.bootstrapped()
+          state
+
+        {:error, _} ->
+          state
+      end
+
+    {:noreply, progress_snapshots(state)}
+  end
+
   def handle_info({ref, {key, result}}, state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
     state = finish_task(state, ref)
@@ -153,7 +184,17 @@ defmodule Lasso.BlockPublication.Runtime do
     state =
       case result do
         {:ok, publication} ->
-          install(state, key, publication)
+          state |> install(key, publication) |> advance(key)
+
+        {:error, {:stale_revision, attempted_revision}} ->
+          case Map.get(state.snapshots, key) do
+            %{"revision" => current} when current > attempted_revision ->
+              advance(state, key)
+
+            _ ->
+              send(self(), :publication_changed)
+              state
+          end
 
         {:error, :stale_revision} ->
           send(self(), :publication_changed)
@@ -173,37 +214,33 @@ defmodule Lasso.BlockPublication.Runtime do
     {:noreply, finish_task(state, ref)}
   end
 
-  defp reconcile(state) do
-    ensure_configured_scopes(state)
+  defp reconcile(%{retired: true} = state), do: state
+  defp reconcile(%{reconciliation: ref} = state) when is_reference(ref), do: state
 
+  defp reconcile(state) do
     revisions =
       Map.new(state.snapshots, fn {key, publication} -> {key, publication["revision"]} end)
 
-    case state.journal.changes(revisions) do
-      {:ok, publications} ->
-        state =
-          Enum.reduce(publications, state, fn {key, publication}, acc ->
-            install(acc, key, publication)
-          end)
+    task =
+      Task.Supervisor.async_nolink(Lasso.BlockPublication.TaskSupervisor, fn ->
+        ensure_configured_scopes(state)
+        {:inventory, state.journal.changes(revisions)}
+      end)
 
-        state =
-          state.snapshots
-          |> Enum.sort_by(fn {key, _} ->
-            case Map.fetch(state.next_probe, key) do
-              :error -> {0, 0, key}
-              {:ok, next_probe} -> {1, next_probe, key}
-            end
-          end)
-          |> Enum.reduce(state, fn {key, publication}, acc ->
-            progress(acc, key, publication)
-          end)
+    %{state | reconciliation: task.ref}
+  end
 
-        Gate.bootstrapped()
-        state
-
-      {:error, _} ->
-        state
-    end
+  defp progress_snapshots(state) do
+    state.snapshots
+    |> Enum.sort_by(fn {key, _} ->
+      case Map.fetch(state.next_probe, key) do
+        :error -> {0, 0, key}
+        {:ok, next_probe} -> {1, next_probe, key}
+      end
+    end)
+    |> Enum.reduce(state, fn {key, publication}, acc ->
+      progress(acc, key, publication)
+    end)
   end
 
   defp ensure_configured_scopes(state) do
@@ -233,6 +270,13 @@ defmodule Lasso.BlockPublication.Runtime do
       else
         %{state | snapshots: Map.put(state.snapshots, key, publication)}
       end
+    end
+  end
+
+  defp advance(state, key) do
+    case Map.fetch(state.snapshots, key) do
+      {:ok, publication} -> progress(state, key, publication)
+      :error -> state
     end
   end
 
@@ -342,7 +386,13 @@ defmodule Lasso.BlockPublication.Runtime do
 
       task =
         Task.Supervisor.async_nolink(Lasso.BlockPublication.TaskSupervisor, fn ->
-          {key, apply_command(journal, key, snapshot, command)}
+          result =
+            case apply_command(journal, key, snapshot, command) do
+              {:error, :stale_revision} -> {:error, {:stale_revision, snapshot["revision"]}}
+              result -> result
+            end
+
+          {key, result}
         end)
 
       %{state | closure_tasks: Map.put(state.closure_tasks, task.ref, key)}
@@ -353,7 +403,8 @@ defmodule Lasso.BlockPublication.Runtime do
     %{
       state
       | tasks: Map.delete(state.tasks, ref),
-        closure_tasks: Map.delete(state.closure_tasks, ref)
+        closure_tasks: Map.delete(state.closure_tasks, ref),
+        reconciliation: if(state.reconciliation == ref, do: nil, else: state.reconciliation)
     }
   end
 
@@ -377,20 +428,27 @@ defmodule Lasso.BlockPublication.Runtime do
         do: journal.compare_and_apply(key, snapshot, command),
         else: journal.command(key, command)
 
-    if match?({:ok, _}, result),
-      do: Phoenix.PubSub.broadcast(Lasso.PubSub, @topic, :publication_changed)
-
-    result
+    notify_commit(key, result)
   end
 
   defp publish_command(state, key, cmd) do
     result = state.journal.command(key, cmd)
 
-    if match?({:ok, _}, result),
-      do: Phoenix.PubSub.broadcast(Lasso.PubSub, @topic, :publication_changed)
+    notify_commit(key, result)
+  end
 
+  defp notify_commit(key, {:ok, publication} = result) do
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      @commit_topic,
+      {:publication_committed, key, publication}
+    )
+
+    Phoenix.PubSub.broadcast(Lasso.PubSub, @invalidation_topic, :publication_changed)
     result
   end
+
+  defp notify_commit(_key, result), do: result
 
   defp task(state, key, fun) do
     task =

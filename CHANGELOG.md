@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Propagate committed publication snapshots between runtimes and retry stale closure acknowledgments from already received revisions, avoiding extra journal reads at cutover. Preserve periodic recovery, boot checks, durable closure, and the invalidation topic used by older runtimes; no schema or configuration changes are required.
+
 - Avoid serialized journal transactions for locally ineligible block proposals and unchanged readiness evidence. Provider checks continue so anchor, provider, floor and freshness changes can still drive publication; observation timestamps alone no longer repeat readiness writes. No configuration or journal migration is required.
 
 ## [0.4.1] - 2026-09-10

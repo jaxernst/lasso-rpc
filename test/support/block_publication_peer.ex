@@ -15,7 +15,34 @@ defmodule Lasso.Test.BlockPublicationPeer do
       end)
     end
 
-    def changes(revisions), do: available(fn -> Durable.changes(revisions) end)
+    def changes(revisions) do
+      Lasso.Test.BlockPublicationPeer.observe({:journal_changes, node(), Map.keys(revisions)})
+
+      blocked = :persistent_term.get({__MODULE__, :blocked_changes}, nil)
+
+      revisions =
+        if is_pid(blocked), do: Map.new(revisions, fn {key, _} -> {key, -1} end), else: revisions
+
+      result =
+        if :persistent_term.get({__MODULE__, :changes_available}, true),
+          do: available(fn -> Durable.changes(revisions) end),
+          else: {:error, :journal_unavailable}
+
+      case blocked do
+        owner when is_pid(owner) ->
+          send(owner, {:journal_changes_waiting, node(), self(), result})
+
+          receive do
+            :continue -> result
+          after
+            30_000 -> {:error, :journal_unavailable}
+          end
+
+        _ ->
+          result
+      end
+    end
+
     def ensure(key, members, age), do: available(fn -> Durable.ensure(key, members, age) end)
 
     def command(key, command) do
@@ -68,7 +95,40 @@ defmodule Lasso.Test.BlockPublicationPeer do
     end
   end
 
+  def block_changes(owner), do: :persistent_term.put({Journal, :blocked_changes}, owner)
+
   def block_closures(owner), do: :persistent_term.put({Journal, :blocked_closures}, owner)
+
+  def delay_reconciliation(delay_ms) do
+    :sys.replace_state(Runtime, fn state ->
+      if state.timer, do: Process.cancel_timer(state.timer)
+
+      receive do
+        :reconcile -> :ok
+      after
+        0 -> :ok
+      end
+
+      observe({:reconciliation_delayed, node()})
+      %{state | timer: Process.send_after(self(), :reconcile, delay_ms)}
+    end)
+
+    :ok
+  end
+
+  def notifications_available(value) do
+    :sys.replace_state(Runtime, fn state ->
+      if value,
+        do: Phoenix.PubSub.subscribe(Lasso.PubSub, "block_publication_commits"),
+        else: Phoenix.PubSub.unsubscribe(Lasso.PubSub, "block_publication_commits")
+
+      state
+    end)
+
+    :ok
+  end
+
+  def changes_available(value), do: :persistent_term.put({Journal, :changes_available}, value)
 
   def journal_available(value), do: :persistent_term.put({Journal, :available}, value)
 
