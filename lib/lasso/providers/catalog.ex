@@ -441,12 +441,9 @@ defmodule Lasso.Providers.Catalog do
   end
 
   defp route_head_freshness_ms(chain_config) do
-    monitoring = chain_config.monitoring || %ChainConfig.Monitoring{}
-    websocket = chain_config.websocket || %ChainConfig.Websocket{}
-
     %{
-      http: max(1, monitoring.probe_interval_ms * 3),
-      ws: max(1, websocket.new_heads_timeout_ms)
+      http: max(1, chain_config.monitoring.probe_interval_ms * 3),
+      ws: max(1, chain_config.websocket.new_heads_timeout_ms)
     }
   end
 
