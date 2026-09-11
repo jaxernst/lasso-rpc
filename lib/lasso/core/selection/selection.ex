@@ -536,7 +536,8 @@ defmodule Lasso.RPC.Selection do
           candidate_labels: if(limit > 0, do: ["#{candidate.id}:#{transport}"], else: [])
         }
 
-        if selection_snapshot_current?(snapshot, [candidate]) do
+        if selection_snapshot_current?(snapshot, [candidate]) and
+             preferred_head?(candidate, transport, plan.chain_id, opts) do
           {:ok,
            CandidateCursor.new_ranked(
              snapshot,
@@ -578,6 +579,25 @@ defmodule Lasso.RPC.Selection do
   end
 
   defp fastest_hint(:full, _plan), do: nil
+
+  defp preferred_head?(candidate, transport, chain_id, opts) do
+    case Keyword.get(opts, :preferred_head_height) do
+      nil ->
+        true
+
+      height ->
+        case Lasso.BlockSync.Observation.read_transport(
+               chain_id,
+               candidate.instance_id,
+               transport,
+               System.system_time(:millisecond),
+               get_in(candidate, [:head_freshness_ms, transport])
+             ) do
+          {:ok, %{height: observed}} -> observed >= height
+          _unknown -> false
+        end
+    end
+  end
 
   defp ranking_channel(plan, candidate, transport) do
     %Channel{

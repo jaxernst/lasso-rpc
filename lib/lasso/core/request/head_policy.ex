@@ -13,7 +13,7 @@ defmodule Lasso.RPC.HeadPolicy do
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.{Error, Quantity}
   alias Lasso.Providers.Catalog
-  alias Lasso.RPC.{PreparedRequest, RequestContext}
+  alias Lasso.RPC.{HeadRecovery, PreparedRequest, RequestContext}
   alias Lasso.RPC.Response.Success
 
   @table :lasso_accepted_heads
@@ -51,6 +51,10 @@ defmodule Lasso.RPC.HeadPolicy do
     if ctx.opts.request_origin == :client and acquisition?(ctx.method, ctx.params) do
       case ConfigStore.get_chain(ctx.opts.profile, ctx.chain_id) do
         {:ok, %{head_policy: mode} = chain} when mode in ["local", "global"] ->
+          key = {ctx.opts.profile, ctx.chain_id}
+          floor = if mode == "local", do: snapshot_floor(key)
+          recovery = if mode == "local", do: HeadRecovery.read(key)
+
           block_time =
             if is_integer(chain.block_time_ms) and chain.block_time_ms > 0,
               do: chain.block_time_ms,
@@ -59,11 +63,14 @@ defmodule Lasso.RPC.HeadPolicy do
           %{
             ctx
             | head_policy: %{
-                key: {ctx.opts.profile, ctx.chain_id},
+                key: key,
                 mode: mode,
+                floor: floor,
+                generation: generation(),
+                recovery: recovery,
                 max_head_age_ms: max(60_000, 4 * block_time),
                 target: nil,
-                minimum_height: nil,
+                minimum_height: if(is_map(floor), do: floor.height),
                 reference_height: nil,
                 last_error: nil,
                 evidence: nil
@@ -89,6 +96,20 @@ defmodule Lasso.RPC.HeadPolicy do
     {"eth_getBlockByNumber", ["latest", full]}
   end
 
+  @doc "A recovered height affects preference, never local admission."
+  @spec selection_options(RequestContext.t()) :: keyword()
+  def selection_options(%{head_policy: %{mode: "local"} = policy}) do
+    case policy.recovery do
+      %{height: height} when is_nil(policy.minimum_height) or height > policy.minimum_height ->
+        [preferred_head_height: height]
+
+      _no_higher_recovered_floor ->
+        []
+    end
+  end
+
+  def selection_options(_ctx), do: []
+
   @spec prepare_attempt(RequestContext.t()) :: RequestContext.t()
   def prepare_attempt(%{head_policy: nil} = ctx), do: ctx
 
@@ -97,10 +118,8 @@ defmodule Lasso.RPC.HeadPolicy do
 
   def prepare_attempt(ctx) do
     policy = ctx.head_policy
-    floor = floor_height(policy.key)
     reference = reference_height(ctx.opts.profile, ctx.chain_id)
-    minimum = Enum.max(Enum.filter([floor, reference], &is_integer/1), fn -> nil end)
-    target = if is_nil(policy.last_error), do: nil, else: minimum
+    target = if is_nil(policy.last_error), do: nil, else: policy.minimum_height
     full = if ctx.method == "eth_getBlockByNumber", do: Enum.at(ctx.params, 1), else: false
 
     request = %{
@@ -117,7 +136,6 @@ defmodule Lasso.RPC.HeadPolicy do
         head_policy: %{
           policy
           | target: target,
-            minimum_height: minimum,
             reference_height: reference
         }
     }
@@ -151,8 +169,9 @@ defmodule Lasso.RPC.HeadPolicy do
          true <- valid_hash?(hash),
          :ok <- validate_target(height, policy.target),
          :ok <- validate_minimum(height, policy.minimum_height),
+         :ok <- validate_snapshot_hash(policy.floor, height, hash),
          :ok <- validate_age(timestamp * 1_000, now, policy.max_head_age_ms),
-         :ok <- advance(policy.key, height, hash, @max_cas_attempts) do
+         :ok <- advance(policy, height, hash, @max_cas_attempts) do
       evidence = %{
         policy: "local",
         scope: "profile_chain_instance",
@@ -163,6 +182,9 @@ defmodule Lasso.RPC.HeadPolicy do
         block_age_ms: max(0, now - timestamp * 1_000),
         max_head_age_ms: policy.max_head_age_ms,
         reference_height: policy.reference_height,
+        minimum_height: policy.minimum_height,
+        recovery_height: policy.recovery && policy.recovery.height,
+        recovery_gap_blocks: recovery_gap(policy.recovery, height),
         upstream_method: "eth_getBlockByNumber"
       }
 
@@ -204,7 +226,7 @@ defmodule Lasso.RPC.HeadPolicy do
           policy: "local",
           scope: "profile_chain_instance",
           reason: bounded_reason(reason),
-          minimum_height: floor_height(policy.key),
+          minimum_height: policy.minimum_height,
           target_height: policy.target,
           max_head_age_ms: policy.max_head_age_ms
         }
@@ -238,6 +260,16 @@ defmodule Lasso.RPC.HeadPolicy do
   defp validate_minimum(height, minimum) when height >= minimum, do: :ok
   defp validate_minimum(_, _), do: {:error, :head_regression}
 
+  defp validate_snapshot_hash(%{height: height, hash: hash}, height, candidate)
+       when is_binary(hash) do
+    if String.downcase(candidate) == hash, do: :ok, else: {:error, :block_hash_changed}
+  end
+
+  defp validate_snapshot_hash(_, _, _), do: :ok
+
+  defp recovery_gap(nil, _height), do: nil
+  defp recovery_gap(%{height: recovered}, height), do: max(0, recovered - height)
+
   defp validate_age(timestamp, now, max_age) do
     cond do
       timestamp > now + @future_tolerance_ms -> {:error, :head_in_future}
@@ -248,62 +280,71 @@ defmodule Lasso.RPC.HeadPolicy do
 
   defp advance(_key, _height, _hash, 0), do: {:error, :floor_contention}
 
-  defp advance(key, height, hash, attempts) do
+  defp advance(%{floor: :unavailable}, _height, _hash, _attempts),
+    do: {:error, :floor_unavailable}
+
+  defp advance(policy, height, hash, attempts) do
+    key = policy.key
+    epoch = policy.floor.epoch
     hash = String.downcase(hash)
 
-    case :ets.lookup(@table, key) do
-      [{^key, :fenced, _}] ->
+    case {generation() == policy.generation, :ets.lookup(@table, key)} do
+      {true, [{^key, :fenced, _, _}]} ->
         {:error, :floor_unavailable}
 
-      [{^key, floor, _}] when height < floor ->
-        {:error, :head_regression}
-
-      [{^key, ^height, previous_hash}] when hash != previous_hash ->
-        {:error, :block_hash_changed}
-
-      [{^key, ^height, ^hash}] ->
+      {true, [{^key, floor, _, ^epoch}]} when is_integer(floor) and height < floor ->
         :ok
 
-      [{^key, _, _} = previous] ->
-        case :ets.select_replace(@table, [{previous, [], [{:const, {key, height, hash}}]}]) do
+      {true, [{^key, ^height, previous_hash, ^epoch}]} when hash != previous_hash ->
+        {:error, :block_hash_changed}
+
+      {true, [{^key, ^height, ^hash, ^epoch}]} ->
+        :ok
+
+      {true, [{^key, _, _, ^epoch} = previous]} ->
+        case :ets.select_replace(@table, [{previous, [], [{:const, {key, height, hash, epoch}}]}]) do
           1 -> :ok
-          0 -> advance(key, height, hash, attempts - 1)
+          0 -> advance(policy, height, hash, attempts - 1)
         end
 
-      [] ->
-        if :ets.insert_new(@table, {key, height, hash}),
-          do: :ok,
-          else: advance(key, height, hash, attempts - 1)
+      _unavailable ->
+        {:error, :floor_unavailable}
     end
   rescue
     ArgumentError -> {:error, :floor_unavailable}
   end
 
-  defp floor_height(key) do
+  defp snapshot_floor(key) do
+    :ets.insert_new(@table, {key, nil, nil, make_ref()})
+
     case :ets.lookup(@table, key) do
-      [{^key, :fenced, height}] -> height
-      [{^key, height, _}] -> height
-      [] -> nil
+      [{^key, :fenced, _, _}] -> :unavailable
+      [{^key, height, hash, epoch}] -> %{height: height, hash: hash, epoch: epoch}
+      [] -> :unavailable
     end
   rescue
-    ArgumentError -> nil
+    ArgumentError -> :unavailable
   end
 
   @doc "Atomically closes the local floor and returns its last accepted height."
   @spec fence_local({String.t(), pos_integer()}) :: non_neg_integer() | nil
   def fence_local(key) do
     case :ets.lookup(@table, key) do
-      [{^key, :fenced, height}] ->
+      [{^key, :fenced, {height, _hash}, _}] ->
         height
 
-      [{^key, height, _} = old] ->
-        case :ets.select_replace(@table, [{old, [], [{:const, {key, :fenced, height}}]}]) do
+      [{^key, height, hash, _} = old] ->
+        case :ets.select_replace(@table, [
+               {old, [], [{:const, {key, :fenced, {height, hash}, make_ref()}}]}
+             ]) do
           1 -> height
           0 -> fence_local(key)
         end
 
       [] ->
-        if :ets.insert_new(@table, {key, :fenced, nil}), do: nil, else: fence_local(key)
+        if :ets.insert_new(@table, {key, :fenced, {nil, nil}, make_ref()}),
+          do: nil,
+          else: fence_local(key)
     end
   end
 
@@ -311,19 +352,20 @@ defmodule Lasso.RPC.HeadPolicy do
   @spec release_local({String.t(), pos_integer()}, map() | nil) :: :ok | true | non_neg_integer()
   def release_local(key, published) do
     case :ets.lookup(@table, key) do
-      [{^key, :fenced, _} = old] ->
-        if published do
-          :ets.select_replace(@table, [
-            {old, [], [{:const, {key, published["height"], published["hash"]}}]}
-          ])
-        else
-          :ets.delete_object(@table, old)
-        end
+      [{^key, :fenced, remembered, epoch} = old] ->
+        {height, hash} = restored_floor(remembered, published)
+        :ets.select_replace(@table, [{old, [], [{:const, {key, height, hash, epoch}}]}])
 
       _ ->
         :ok
     end
   end
+
+  defp restored_floor({height, _hash}, %{"height" => published, "hash" => hash})
+       when is_nil(height) or published > height,
+       do: {published, String.downcase(hash)}
+
+  defp restored_floor(remembered, _publication), do: remembered
 
   defp generation do
     :ets.lookup_element(@table, :generation, 2)

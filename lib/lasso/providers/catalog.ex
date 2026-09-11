@@ -417,6 +417,7 @@ defmodule Lasso.Providers.Catalog do
           capabilities: provider.capabilities,
           archival: provider.archival,
           subscribe_new_heads: provider.subscribe_new_heads,
+          head_freshness_ms: route_head_freshness_ms(chain_config),
           transports: available_transports(config)
         }
       end)
@@ -436,6 +437,13 @@ defmodule Lasso.Providers.Catalog do
       max_lag_blocks: max_lag_blocks,
       archival_threshold:
         selection.archival_threshold || ChainConfig.Selection.default_archival_threshold()
+    }
+  end
+
+  defp route_head_freshness_ms(chain_config) do
+    %{
+      http: max(1, chain_config.monitoring.probe_interval_ms * 3),
+      ws: max(1, chain_config.websocket.new_heads_timeout_ms)
     }
   end
 

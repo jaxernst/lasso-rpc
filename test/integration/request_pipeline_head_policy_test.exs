@@ -7,7 +7,12 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
 
   setup %{chain: chain} do
     :ok = ConfigStore.register_chain_runtime("public", chain, %{head_policy: "local"})
-    on_exit(fn -> :ets.delete(:lasso_accepted_heads, {"public", chain}) end)
+
+    on_exit(fn ->
+      :ets.delete(:lasso_accepted_heads, {"public", chain})
+      :ets.delete(:lasso_recovered_heads, {"public", chain})
+    end)
+
     :ok
   end
 
@@ -176,7 +181,7 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     assert_receive {"eth_blockNumber", []}
   end
 
-  test "a slower concurrent acquisition cannot commit below a completed acquisition", %{
+  test "overlapping responses may finish out of order while later requests retain the maximum", %{
     chain: chain
   } do
     setup_providers([
@@ -226,7 +231,125 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
 
     assert result(response) == "0x65"
     send(provider, :release_head)
-    assert {:error, %Error{data: %{reason: "head_regression"}}, _} = Task.await(slow)
+    assert {:ok, response, ctx} = Task.await(slow)
+    assert result(response) == "0x64"
+    assert ctx.execution_envelope.dispatch_count == 1
+    assert ctx.head_policy.evidence.block_number == "0x64"
+
+    serve("slow-head", header(100))
+    serve("fast-head", header(100))
+    assert {:error, %Error{data: %{minimum_height: 101}}, _} = request(chain)
+  end
+
+  test "a recovered height prefers observed providers without removing a lagging fallback", %{
+    chain: chain
+  } do
+    setup_providers([
+      %{id: "behind", priority: 1, behavior: :healthy},
+      %{id: "ahead", priority: 2, behavior: :healthy}
+    ])
+
+    for {id, height} <- [{"behind", 99}, {"ahead", 100}] do
+      instance_id = Lasso.Providers.Catalog.lookup_instance_id("public", chain, id)
+      Lasso.BlockSync.Registry.put_height(chain, instance_id, height, :http)
+      serve(id, header(height))
+    end
+
+    :ets.insert(:lasso_recovered_heads, {{"public", chain}, 100, header(100)["hash"], 0})
+    assert {:ok, response, ctx} = request(chain)
+    assert result(response) == "0x64"
+    assert ctx.selected_provider.id == "ahead"
+    assert ctx.head_policy.evidence.recovery_gap_blocks == 0
+    refute_received {:head_request, "behind", _}
+  end
+
+  test "an unreachable remote target cannot poison a single provider local floor", %{chain: chain} do
+    setup_providers([%{id: "head", priority: 1, behavior: :healthy}])
+    :ets.insert(:lasso_recovered_heads, {{"public", chain}, 1_000, header(1_000)["hash"], 0})
+    serve("head", header(100))
+    assert {:ok, response, ctx} = request(chain)
+    assert result(response) == "0x64"
+    assert ctx.execution_envelope.dispatch_count == 1
+    assert ctx.head_policy.evidence.recovery_gap_blocks == 900
+
+    serve("head", header(99))
+    assert {:error, %Error{data: %{minimum_height: 100}}, _} = request(chain)
+  end
+
+  test "a failed preferred provider retains a valid lower fallback", %{chain: chain} do
+    setup_providers([
+      %{id: "behind", priority: 1, behavior: :healthy},
+      %{id: "ahead", priority: 2, behavior: :healthy}
+    ])
+
+    for {id, height} <- [{"behind", 99}, {"ahead", 100}] do
+      instance = Lasso.Providers.Catalog.lookup_instance_id("public", chain, id)
+      Lasso.BlockSync.Registry.put_height(chain, instance, height, :http)
+    end
+
+    :ets.insert(:lasso_recovered_heads, {{"public", chain}, 100, header(100)["hash"], 0})
+    serve("ahead", nil)
+    serve("behind", header(99))
+    assert {:ok, response, ctx} = request(chain)
+    assert result(response) == "0x63"
+    assert ctx.execution_envelope.dispatch_count == 2
+    assert ctx.head_policy.evidence.recovery_gap_blocks == 1
+    assert_receive {:head_request, "ahead", ["latest", false]}
+    assert_receive {:head_request, "behind", ["latest", false]}
+  end
+
+  test "canceling enrollment preserves the remembered floor and hash", %{chain: chain} do
+    setup_providers([%{id: "head", priority: 1, behavior: :healthy}])
+    serve("head", header(100))
+    assert {:ok, _, _} = request(chain)
+
+    for publication <- [
+          nil,
+          %{"height" => 99, "hash" => header(99)["hash"]},
+          %{"height" => 100, "hash" => header(101)["hash"]}
+        ] do
+      assert 100 == Lasso.RPC.HeadPolicy.fence_local({"public", chain})
+      assert 100 == Lasso.RPC.HeadPolicy.fence_local({"public", chain})
+      Lasso.RPC.HeadPolicy.release_local({"public", chain}, publication)
+
+      serve("head", header(99))
+      assert {:error, %Error{data: %{minimum_height: 100}}, _} = request(chain)
+      serve("head", Map.put(header(100), "hash", header(101)["hash"]))
+      assert {:error, %Error{data: %{reason: "block_hash_changed"}}, _} = request(chain)
+      serve("head", header(100))
+      assert {:ok, _, _} = request(chain)
+    end
+  end
+
+  test "fencing and releasing invalidates an earlier local request snapshot", %{chain: chain} do
+    setup_providers([%{id: "head", priority: 1, behavior: :healthy}])
+    observer = self()
+
+    set_behavior(
+      "head",
+      {:conditional,
+       fn _, _, _ ->
+         send(observer, {:blocked_head, self()})
+
+         receive do
+           :release_head -> {:ok, header(100)}
+         after
+           2_000 -> {:error, :timeout}
+         end
+       end}
+    )
+
+    pending = Task.async(fn -> request(chain) end)
+    assert_receive {:blocked_head, provider}
+    assert nil == Lasso.RPC.HeadPolicy.fence_local({"public", chain})
+
+    Lasso.RPC.HeadPolicy.release_local({"public", chain}, %{
+      "height" => 101,
+      "hash" => header(101)["hash"]
+    })
+
+    send(provider, :release_head)
+    assert {:error, %Error{data: %{reason: "floor_unavailable"}}, _} = Task.await(pending)
   end
 
   defp request(chain, method \\ "eth_blockNumber", params \\ []) do
