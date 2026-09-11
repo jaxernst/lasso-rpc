@@ -19,6 +19,8 @@ defmodule Lasso.Test.BlockPublicationPeer do
     def ensure(key, members, age), do: available(fn -> Durable.ensure(key, members, age) end)
 
     def command(key, command) do
+      Lasso.Test.BlockPublicationPeer.observe({:journal_command, node(), key, command})
+
       case {command, :persistent_term.get({__MODULE__, :blocked_history}, nil)} do
         {{:fence, _, _, _}, {keys, owner}} when is_map_key(keys, key) ->
           send(owner, {:fencing_history, self(), key})
@@ -57,6 +59,15 @@ defmodule Lasso.Test.BlockPublicationPeer do
     end
   end
 
+  def observe_commands(owner), do: :persistent_term.put({__MODULE__, :observer}, owner)
+
+  def observe(event) do
+    case :persistent_term.get({__MODULE__, :observer}, nil) do
+      owner when is_pid(owner) -> send(owner, event)
+      _ -> :ok
+    end
+  end
+
   def block_closures(owner), do: :persistent_term.put({Journal, :blocked_closures}, owner)
 
   def journal_available(value), do: :persistent_term.put({Journal, :available}, value)
@@ -82,15 +93,25 @@ defmodule Lasso.Test.BlockPublicationPeer do
   end
 
   def set_height(key, height), do: :persistent_term.put({__MODULE__, key}, height)
-  def latest(key, _), do: {:ok, block(:persistent_term.get({__MODULE__, key})), nil}
+
+  def set_anchor(key, hash), do: :persistent_term.put({__MODULE__, key, :anchor}, hash)
+
+  def latest(key, _) do
+    observe({:provider_probe, node(), key, :latest})
+    {:ok, block(:persistent_term.get({__MODULE__, key})), nil}
+  end
 
   def prepare(key, candidate, published, _) do
+    observe({:provider_probe, node(), key, :prepare})
+
     if :persistent_term.get({__MODULE__, key}) >= candidate["height"] do
       {:ok,
        %{
          "block_hash" => candidate["hash"],
-         "anchor_hash" => published && published["hash"],
-         "provider_id" => "regional-fixture"
+         "anchor_hash" =>
+           :persistent_term.get({__MODULE__, key, :anchor}, published && published["hash"]),
+         "provider_id" => "regional-fixture",
+         "observed_at_ms" => System.system_time(:millisecond)
        }}
     else
       {:error, :provider_behind}

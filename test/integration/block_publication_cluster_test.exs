@@ -374,6 +374,92 @@ defmodule Lasso.BlockPublication.ClusterTest do
     end
   end
 
+  test "unchanged heads and completed preparation do not contend on the durable row" do
+    {_output, 0} = System.cmd("epmd", ["-daemon"])
+    :ok = LocalCluster.start()
+
+    endpoint =
+      Application.get_env(:lasso, LassoWeb.Endpoint)
+      |> Keyword.put(:server, false)
+      |> Keyword.put(:http, ip: {127, 0, 0, 1}, port: 0)
+
+    {:ok, cluster} =
+      LocalCluster.start_link(2,
+        prefix: "idle#{System.unique_integer([:positive])}",
+        applications: [:lasso],
+        environment: [
+          lasso: [
+            {LassoWeb.Endpoint, endpoint},
+            {Repo,
+             Keyword.merge(Application.get_env(:lasso, Repo),
+               pool: DBConnection.ConnectionPool,
+               pool_size: 4
+             )},
+            {:block_publication, [journal: Lasso.BlockPublication.Postgres]}
+          ]
+        ]
+      )
+
+    on_exit(fn -> if Process.alive?(cluster), do: GenServer.stop(cluster, :normal, 30_000) end)
+    {:ok, [a, b] = nodes} = LocalCluster.nodes(cluster)
+    key = {"idle-" <> Ecto.UUID.generate(), 1}
+    {profile, _} = key
+
+    Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+      assert {:ok, _} = BlockPublicationJournal.ensure(key, ["a", "b"], 60_000)
+    end)
+
+    on_exit(fn ->
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        Repo.delete_all(from(p in BlockPublicationJournal, where: p.profile == ^profile))
+      end)
+    end)
+
+    for {node, member} <- Enum.zip(nodes, ["a", "b"]),
+        do: assert(:ok == :erpc.call(node, Peer, :configure, [member, ["a", "b"], key]))
+
+    eventually(fn -> reads(nodes, key) == [ok: 100, ok: 100] end)
+    for node <- nodes, do: :erpc.call(node, Peer, :observe_commands, [self()])
+
+    for _ <- 1..4 do
+      assert_receive {:provider_probe, ^a, ^key, :latest}, 1_000
+      assert_receive {:provider_probe, ^b, ^key, :latest}, 1_000
+    end
+
+    refute_receive {:journal_command, _, ^key, {:propose, _, _, _}}, 100
+
+    :erpc.call(a, Peer, :set_height, [key, 101])
+
+    eventually(fn ->
+      Ecto.Adapters.SQL.Sandbox.unboxed_run(Repo, fn ->
+        state = BlockPublicationJournal.get(key)
+        state["phase"] == "preparing" and Map.has_key?(state["ready"], "a")
+      end)
+    end)
+
+    :erpc.call(a, Peer, :observe_commands, [nil])
+    # Flush the single successful preparation recorded before observation resumes.
+    flush_commands(key)
+    :erpc.call(a, Peer, :observe_commands, [self()])
+    for _ <- 1..4, do: assert_receive({:provider_probe, ^b, ^key, :prepare}, 1_000)
+    refute_receive {:journal_command, ^a, ^key, {:ready, _, _, _, _}}, 100
+    assert_receive {:provider_probe, ^a, ^key, :prepare}, 1_000
+    assert reads(nodes, key) == [ok: 100, ok: 100]
+    anchor = "0x" <> String.duplicate("1", 64)
+    for node <- nodes, do: :erpc.call(node, Peer, :set_anchor, [key, anchor])
+    :erpc.call(b, Peer, :set_height, [key, 101])
+    eventually(fn -> reads(nodes, key) == [ok: 101, ok: 101] end)
+  end
+
+  defp flush_commands(key) do
+    receive do
+      {:journal_command, _, ^key, _} -> flush_commands(key)
+      {:provider_probe, _, ^key, _} -> flush_commands(key)
+    after
+      0 -> :ok
+    end
+  end
+
   defp reads(nodes, key), do: Enum.map(nodes, &:erpc.call(&1, Peer, :read, [key]))
   defp eventually(fun, attempts \\ 150)
   defp eventually(fun, 0), do: assert(fun.())

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Avoid serialized journal transactions for locally ineligible block proposals and unchanged readiness evidence. Provider checks continue so anchor, provider, floor and freshness changes can still drive publication; observation timestamps alone no longer repeat readiness writes. No configuration or journal migration is required.
+
 ## [0.4.1] - 2026-09-10
 
 ### Fixed
