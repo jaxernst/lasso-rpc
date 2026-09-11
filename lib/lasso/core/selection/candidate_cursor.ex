@@ -19,6 +19,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
           }
   end
 
+  alias Lasso.BlockSync.Observation
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
 
@@ -48,6 +49,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defstruct @enforce_keys ++
               [
                 candidate_labels: [],
+                preferred_head_height: nil,
                 deferred_ranking: nil,
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
@@ -124,7 +126,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       filters: filters,
       consensus_height: consensus_height,
       learned_scope: deferred_scope(deferred_ranking),
-      descriptors: descriptors,
+      descriptors:
+        prefer_heads(descriptors, Keyword.get(opts, :preferred_head_height), plan.chain_id),
+      preferred_head_height: Keyword.get(opts, :preferred_head_height),
       deferred_ranking: deferred_ranking,
       limit: limit,
       candidate_labels: candidate_labels
@@ -173,7 +177,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       filters: filters,
       consensus_height: consensus_height,
       learned_scope: learned_scope_fun.(),
-      descriptors: descriptors,
+      descriptors:
+        prefer_heads(descriptors, Keyword.get(opts, :preferred_head_height), plan.chain_id),
+      preferred_head_height: Keyword.get(opts, :preferred_head_height),
       limit: limit,
       candidate_labels: []
     }
@@ -249,7 +255,13 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         |> reject_deferred_providers(cursor.excluded_provider_ids)
 
       cursor = append_resolved_labels(cursor, descriptors, next_deferred)
-      scan(%{cursor | descriptors: descriptors, deferred_ranking: next_deferred})
+
+      scan(%{
+        cursor
+        | descriptors:
+            prefer_heads(descriptors, cursor.preferred_head_height, cursor.plan.chain_id),
+          deferred_ranking: next_deferred
+      })
     else
       :stale
     end
@@ -260,7 +272,13 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
        ) do
     if current?(cursor) do
       descriptors = rank_deferred(deferred)
-      scan(%{cursor | descriptors: descriptors, deferred_ranking: nil})
+
+      scan(%{
+        cursor
+        | descriptors:
+            prefer_heads(descriptors, cursor.preferred_head_height, cursor.plan.chain_id),
+          deferred_ranking: nil
+      })
     else
       :stale
     end
@@ -293,6 +311,31 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       :stale
     end
   end
+
+  defp prefer_heads(descriptors, nil, _chain_id), do: descriptors
+
+  defp prefer_heads(descriptors, height, chain_id) do
+    {preferred, remaining} =
+      Enum.split_with(descriptors, fn descriptor ->
+        {provider, transport} = head_route(descriptor)
+
+        case Observation.read_transport(
+               chain_id,
+               provider.instance_id,
+               transport,
+               System.system_time(:millisecond),
+               get_in(provider, [:head_freshness_ms, transport])
+             ) do
+          {:ok, %{height: observed}} -> observed >= height
+          _unknown -> false
+        end
+      end)
+
+    preferred ++ remaining
+  end
+
+  defp head_route({:ranked, candidate, transport}), do: {candidate, transport}
+  defp head_route({provider, transport}), do: {provider, transport}
 
   defp materialize(cursor, {provider, transport}) do
     filters = %{SelectionFilters.to_map(cursor.filters) | protocol: transport}

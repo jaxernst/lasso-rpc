@@ -727,6 +727,112 @@ defmodule Lasso.RPC.SelectionTest do
       assert :done = CandidateCursor.next(cursor)
     end
 
+    test "a higher recovered head bypasses a lagging fastest winner while retaining fallbacks", %{
+      chain: chain
+    } do
+      profile = "public"
+
+      setup_providers([
+        %{id: "winner", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "ahead", priority: 20, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      now_us = System.monotonic_time(:microsecond)
+
+      for {id, latency, height} <- [{"winner", 10_000, 99}, {"ahead", 20_000, 100}] do
+        record_selection_successes(
+          chain,
+          profile,
+          id,
+          generation,
+          now_us,
+          latency,
+          "client"
+        )
+
+        Lasso.BlockSync.Registry.put_height(
+          chain,
+          Catalog.lookup_instance_id(profile, chain, id),
+          height,
+          :http
+        )
+      end
+
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http
+        )
+
+      assert {:ok, %{provider_id: "winner"}, _} = CandidateCursor.next(cursor)
+
+      recovered =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          preferred_head_height: 100
+        )
+
+      assert {:ok, %{provider_id: "ahead"}, recovered} = CandidateCursor.next(recovered)
+      assert {:ok, %{provider_id: "winner"}, recovered} = CandidateCursor.next(recovered)
+      assert :done = CandidateCursor.next(recovered)
+
+      ahead = Catalog.lookup_instance_id(profile, chain, "ahead")
+
+      assert :ok =
+               AttemptProjection.apply_control(
+                 selection_quota_event(chain, profile, "ahead", ahead, generation, now_us + 20)
+               )
+
+      limited =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http,
+          preferred_head_height: 100
+        )
+
+      assert {:ok, %{provider_id: "winner"}, _} = CandidateCursor.next(limited)
+    end
+
+    test "recovery preference honors the captured route freshness window", %{chain: chain} do
+      setup_providers([
+        %{id: "behind", priority: 1, behavior: :healthy},
+        %{id: "ahead", priority: 2, behavior: :healthy}
+      ])
+
+      snapshot = Catalog.snapshot()
+      {:ok, plan} = Catalog.get_routing_plan(snapshot, "public", chain)
+
+      plan = %{
+        plan
+        | providers:
+            Enum.map(
+              plan.providers,
+              &Map.put(&1, :head_freshness_ms, %{http: 90_000, ws: 90_000})
+            )
+      }
+
+      Lasso.BlockSync.Registry.clear_chain(chain)
+
+      for {id, height} <- [{"behind", 99}, {"ahead", 100}] do
+        :ets.insert(:block_sync_registry, {
+          {:height, chain, Catalog.lookup_instance_id("public", chain, id)},
+          {height, System.system_time(:millisecond) - 45_000, :http, %{}}
+        })
+      end
+
+      cursor =
+        CandidateCursor.new(snapshot, plan, "eth_blockNumber",
+          strategy: :priority,
+          transport: :http,
+          preferred_head_height: 100
+        )
+
+      assert {:ok, %{provider_id: "ahead"}, cursor} = CandidateCursor.next(cursor)
+      assert {:ok, %{provider_id: "behind"}, _} = CandidateCursor.next(cursor)
+    end
+
     test "fastest winner defers construction of fallback candidates", %{chain: chain} do
       profile = "public"
 

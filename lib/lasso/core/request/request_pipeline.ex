@@ -298,12 +298,18 @@ defmodule Lasso.RPC.RequestPipeline do
     fn %RequestContext{chain_id: chain_id} = ctx ->
       {method, params} = HeadPolicy.selection_request(ctx)
 
-      Selection.select_channel_candidates(profile, chain_id, method,
-        strategy: opts.strategy,
-        transport: opts.transport || :both,
-        limit: @max_channel_candidates,
-        params: params,
-        request_origin: opts.request_origin
+      Selection.select_channel_candidates(
+        profile,
+        chain_id,
+        method,
+        HeadPolicy.selection_options(ctx) ++
+          [
+            strategy: opts.strategy,
+            transport: opts.transport || :both,
+            limit: @max_channel_candidates,
+            params: params,
+            request_origin: opts.request_origin
+          ]
       )
     end
   end

@@ -47,6 +47,39 @@ defmodule Lasso.BlockSync.Observation do
     end
   end
 
+  @doc "Reads a matching stored transport using the captured route freshness window."
+  @spec read_transport(pos_integer(), String.t(), :http | :ws, integer(), pos_integer()) ::
+          {:ok, t()} | {:error, :not_found | {:stale, t()}}
+  def read_transport(chain_id, instance_id, transport, now_ms, compiled_freshness_ms)
+      when transport in [:http, :ws] and is_integer(compiled_freshness_ms) and
+             compiled_freshness_ms > 0 do
+    case Registry.get_height(chain_id, instance_id) do
+      {:ok, {height, observed_at_ms, ^transport, metadata}} ->
+        stale_after_ms =
+          Enum.max([
+            compiled_freshness_ms,
+            positive(Map.get(metadata, :stale_after_ms), 0),
+            3 * positive(Map.get(metadata, :sample_interval_ms), 0)
+          ])
+
+        observation = %{
+          height: height,
+          observed_at_ms: observed_at_ms,
+          source: transport,
+          metadata: metadata,
+          stale_after_ms: stale_after_ms,
+          age_ms: max(0, now_ms - observed_at_ms)
+        }
+
+        if fresh?(observation, now_ms),
+          do: {:ok, observation},
+          else: {:error, {:stale, observation}}
+
+      _missing_transport ->
+        {:error, :not_found}
+    end
+  end
+
   @spec fresh?(map(), integer()) :: boolean()
   def fresh?(observation, now_ms \\ System.system_time(:millisecond))
       when is_map(observation) and is_integer(now_ms) do

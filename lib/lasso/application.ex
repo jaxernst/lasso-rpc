@@ -40,6 +40,7 @@ defmodule Lasso.Application do
 
     CircuitBreakerStorage.create_tables!()
     Lasso.RPC.HeadPolicy.create_table!()
+    Lasso.RPC.HeadRecovery.create_table!()
     Lasso.BlockPublication.Gate.create_table!()
 
     :ets.new(:block_sync_registry, [
@@ -151,6 +152,7 @@ defmodule Lasso.Application do
         # Supervised bootstrap loads profiles and starts shared infrastructure.
         Lasso.Boot.InfrastructureStarter,
         Lasso.BlockPublication.Supervisor,
+        Lasso.RPC.HeadRecovery,
 
         # Start Phoenix endpoint
         LassoWeb.Endpoint,

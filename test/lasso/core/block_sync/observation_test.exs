@@ -42,6 +42,25 @@ defmodule Lasso.BlockSync.ObservationTest do
              Observation.read(chain_id, instance_id)
   end
 
+  test "route freshness requires matching transport evidence", %{chain_id: chain_id} do
+    instance_id = "route-freshness"
+    now_ms = System.system_time(:millisecond)
+
+    :ets.insert(:block_sync_registry, {
+      {:height, chain_id, instance_id},
+      {100, now_ms - 45_000, :http, %{}}
+    })
+
+    assert {:ok, %{height: 100}} =
+             Observation.read_transport(chain_id, instance_id, :http, now_ms, 90_000)
+
+    assert {:error, {:stale, _}} =
+             Observation.read_transport(chain_id, instance_id, :http, now_ms, 10_000)
+
+    assert {:error, :not_found} =
+             Observation.read_transport(chain_id, instance_id, :ws, now_ms, 90_000)
+  end
+
   test "rejects observations beyond their stored freshness contract", %{chain_id: chain_id} do
     instance_id = "stale-observation"
     observed_at_ms = System.system_time(:millisecond) - 90_001
