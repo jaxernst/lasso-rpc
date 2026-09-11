@@ -339,6 +339,33 @@ defmodule Lasso.BlockPublication.ClusterTest do
             )
 
       refute_receive {:closure_waiting, _, _, _}, 150
+
+      [restarting | _] = nodes
+      retired_workers = for {^restarting, pid, _} <- workers, do: pid
+      monitors = Enum.map(retired_workers, &Process.monitor/1)
+      :erpc.call(restarting, Peer, :crash_worker, [])
+
+      for monitor <- monitors do
+        assert_receive {:DOWN, ^monitor, :process, _, _}, 2_000
+      end
+
+      replacements =
+        for _ <- 1..4 do
+          assert_receive {:closure_waiting, ^restarting, pid, key}, 2_000
+          refute pid in retired_workers
+          {restarting, pid, key}
+        end
+
+      assert MapSet.new(Enum.map(replacements, &elem(&1, 2))) == MapSet.new(keys)
+
+      for key <- keys,
+          do:
+            assert(
+              reads(nodes, key) == [error: :publication_changing, error: :publication_changing]
+            )
+
+      refute_receive {:closure_waiting, _, _, _}, 150
+      workers = Enum.reject(workers, fn {node, _, _} -> node == restarting end) ++ replacements
       for node <- nodes, do: :erpc.call(node, Peer, :block_closures, [nil])
       for {_, pid, _} <- workers, do: send(pid, :continue)
       eventually(fn -> Enum.all?(keys, &(reads(nodes, &1) == [ok: 101, ok: 101])) end)

@@ -150,7 +150,7 @@ defmodule Lasso.Application do
 
         # Supervised bootstrap loads profiles and starts shared infrastructure.
         Lasso.Boot.InfrastructureStarter,
-        Lasso.BlockPublication.Runtime,
+        Lasso.BlockPublication.Supervisor,
 
         # Start Phoenix endpoint
         LassoWeb.Endpoint,

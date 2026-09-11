@@ -100,7 +100,8 @@ not change an existing floor or reservation. These conservative limits bound
 background work; they are not a high-throughput or broad-fleet certification.
 Each runtime permits at most four provider-probe tasks and four independent
 closure-acknowledgment tasks, with at most one closure task per scope. Gates
-close locally before those acknowledgment writes start.
+close locally before those acknowledgment writes start. The coordinator and its
+task supervisor restart together, stopping old tasks before replacement work.
 Measure your provider costs, publication age and request error rate before
 expanding rollout. Do not remove the capacity constraints as a rollout shortcut.
 
