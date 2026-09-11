@@ -20,15 +20,6 @@ providers let you try it without API keys.
 [Endpoints](#endpoints) · [Troubleshooting](#troubleshooting) ·
 [Run from source](#run-from-source) · [Documentation](#documentation)
 
-For query-wide state consistency, see [Read at one block](docs/READ_AT_ONE_BLOCK.md)
-and the opt-in [Block continuity policy](docs/BLOCK_CONTINUITY.md).
-
-Use `head_policy: local` for monotonic choices on each running instance, with
-best-effort recovery from connected BEAM peers and no publication database.
-The separate `global` mode retains a durable coordinated fleet-wide contract.
-Both require providers capable of serving the selected block and state; see the
-policy guide for restart, freshness and availability limits.
-
 ## Features
 
 - **Routing control:** `fastest`, `load-balanced`, `latency-weighted`, and direct provider routes.
