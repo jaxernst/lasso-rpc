@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.2] - 2026-09-11
 
+### Changed
+
+- Local block continuity captures the mandatory floor once per request and atomically retains the greatest accepted height. Sequential nonoverlapping requests within one application generation remain nondecreasing; overlapping responses can complete out of height order.
+- Connected BEAM instances exchange accepted-height hints through bounded background work. Hints prefer suitable providers without raising the local admission floor or removing valid fallbacks. Local mode requires no publication database or peer acknowledgment. Recovery after an application restart or node switch is best effort, with no promised time or block-gap bound.
+- Provider preference uses transport observations with the captured route's freshness settings. Existing health, capability, explicit override and fallback-group rules retain precedence; a stalled preferred provider leaves time for a valid fallback within the existing request deadline.
+
 ### Fixed
 
 - Propagate committed publication snapshots between runtimes and retry stale closure acknowledgments from already received revisions, avoiding extra journal reads at cutover. Preserve periodic recovery, boot checks, durable closure, and the invalidation topic used by older runtimes; no schema or configuration changes are required.
@@ -16,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reconcile journal inventory in one supervised background task, allowing committed updates to proceed while a read is slow. Stale inventory results cannot regress a newer publication; cold bootstrap still requires a successful inventory.
 
 - Avoid serialized journal transactions for locally ineligible block proposals and unchanged readiness evidence. Provider checks continue so anchor, provider, floor and freshness changes can still drive publication; observation timestamps alone no longer repeat readiness writes. No configuration or journal migration is required.
+
+### Compatibility
+
+- Existing `off`, `local` and `global` configuration values remain valid. Global retains its durable coordinated contract and journal/membership requirements. Explicit number/hash state reads retain their targets. Local floors and hints are volatile application state; losing all copies loses that history.
+- Local choices still require an eligible provider response and can fail when a provider regresses and every fallback is unavailable or quota-limited. This release does not add a retained-response cache or certify any customer's provider capacity.
 
 ## [0.4.1] - 2026-09-10
 
