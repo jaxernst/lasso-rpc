@@ -5,7 +5,7 @@ defmodule Lasso.BlockPublication.Runtime do
   """
   use GenServer
   require Logger
-  alias Lasso.BlockPublication.{Block, Gate, Probe}
+  alias Lasso.BlockPublication.{Block, Gate, Probe, Publication}
   alias Lasso.Config.ConfigStore
   alias Lasso.RPC.HeadPolicy
 
@@ -272,28 +272,7 @@ defmodule Lasso.BlockPublication.Runtime do
       publication["phase"] == "preparing" ->
         floor = HeadPolicy.fence_local(key)
 
-        task(state, key, fn ->
-          candidate = publication["candidate"]
-
-          if Block.fresh?(
-               candidate["timestamp_ms"],
-               System.system_time(:millisecond),
-               publication["max_age_ms"]
-             ) == :ok do
-            with {:ok, evidence} <-
-                   worker.probe.prepare(
-                     key,
-                     candidate,
-                     publication["published"],
-                     publication["max_age_ms"]
-                   ) do
-              evidence = Map.put(evidence, "minimum_height", floor || 0)
-              publish_command(worker, key, {:ready, publication["epoch"], member, boot, evidence})
-            end
-          else
-            publish_command(worker, key, {:abort, publication["epoch"]})
-          end
-        end)
+        task(state, key, fn -> prepare(worker, key, publication, member, boot, floor) end)
 
       publication["phase"] == "active" ->
         task(state, key, fn ->
@@ -309,13 +288,47 @@ defmodule Lasso.BlockPublication.Runtime do
                do: {:ok, publication["published"], nil},
                else: worker.probe.latest(key, publication["max_age_ms"])
 
-          with {:ok, block, _} <- candidate do
-            publish_command(worker, key, {:propose, member, boot, block})
+          with {:ok, block, _} <- candidate,
+               proposal = {:propose, member, boot, block},
+               {:ok, _} <- Publication.apply(publication, proposal) do
+            publish_command(worker, key, proposal)
           end
         end)
 
       true ->
         state
+    end
+  end
+
+  defp prepare(worker, key, publication, member, boot, floor) do
+    candidate = publication["candidate"]
+
+    if Block.fresh?(
+         candidate["timestamp_ms"],
+         System.system_time(:millisecond),
+         publication["max_age_ms"]
+       ) == :ok do
+      with {:ok, evidence} <-
+             worker.probe.prepare(
+               key,
+               candidate,
+               publication["published"],
+               publication["max_age_ms"]
+             ) do
+        evidence = Map.put(evidence, "minimum_height", floor || 0)
+
+        previous = Map.get(publication["ready"], member, %{})
+
+        if Map.delete(evidence, "observed_at_ms") != Map.delete(previous, "observed_at_ms") do
+          publish_command(
+            worker,
+            key,
+            {:ready, publication["epoch"], member, boot, evidence}
+          )
+        end
+      end
+    else
+      publish_command(worker, key, {:abort, publication["epoch"]})
     end
   end
 
