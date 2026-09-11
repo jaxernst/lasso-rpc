@@ -2,8 +2,23 @@
 
 `global` mode stores the monotonic floor, selected block and admitted instance
 boots in PostgreSQL. Serving requests read local ETS grants. PubSub accelerates
-updates; background reconciliation recovers missed messages. PostgreSQL is an
-optional dependency for this policy, not for ordinary Core routing.
+committed journal snapshots; background reconciliation recovers missed messages.
+PostgreSQL is required when enabling global continuity. Ordinary Core routing
+requires no database.
+
+Peers apply revision and boot checks before installing committed snapshots, then
+progress the cutover locally. Every serving boot still closes before its durable
+acknowledgment; a rejected acknowledgment retries from a newer received revision
+or waits for reconciliation. Cached work can progress through a failed inventory
+read, but writes still require PostgreSQL and only successful reconciliation
+completes cold bootstrap.
+
+Committed snapshots and invalidations use separate topics. Older runtimes receive
+invalidations, while current runtimes recover older peers' writes through periodic
+reconciliation during rolling replacement. Snapshot transport uses the existing
+journal state and scope bounds. This changes neither the public continuity contract
+nor the one-second request wait; geographic availability still needs qualification
+on the intended serving fleet.
 
 Read the [builder contract](BLOCK_CONTINUITY.md) before enabling it. Global mode
 can return an availability error to preserve continuity. It does not choose one
@@ -175,3 +190,10 @@ These tests do not certify your database provider's infrastructure failover.
 For rollback, coordinate disable and verify it before deploying a binary that
 cannot read this journal or honor its gates. Preserve journal tables and rows.
 An ordinary routing health check does not prove the continuity policy is active.
+
+Journal reconciliation runs in at most one supervised background task per runtime.
+A slow inventory read therefore cannot block committed notifications or closure
+ACKs. The first successful inventory still gates cold bootstrap. Inventory results
+use the same revision check as notifications, so an older reply cannot reopen a
+closed gate or replace a newer published block. Failed reads keep cached work
+progressing; they never create a grant.
