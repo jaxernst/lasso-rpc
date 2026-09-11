@@ -1,129 +1,153 @@
-# Block continuity
+# Block regression protection
 
-Keep each query at one block, and keep later block choices from going backwards.
+RPC providers can disagree about the latest block. For example, a block-height
+poll might return 100 from one provider, then 99 from a provider that is behind.
+Block regression protection prevents that step backwards for sequential
+latest-block requests handled by the same running Lasso server.
 
-Set `head_policy: global` for a chain in your file profile after
-[configuring the publication journal and serving fleet](BLOCK_CONTINUITY_OPERATIONS.md). Choose a
-block once with `eth_getBlockByNumber("latest", false)` and pass its hash to
-every state read in your query. Your existing RPC endpoint and standard Ethereum
-methods stay the same.
+Use it when polling chain progress or fetching the latest block for your
+application. Your Ethereum JSON-RPC requests and responses stay the same.
 
-This works for queries that combine proxy resolution, storage and code reads,
-Multicall, and dependent `eth_call` rounds. Follow the
-[read at one block guide](READ_AT_ONE_BLOCK.md) to integrate it.
+The following sections describe `local` mode. See
+[strict fleet-wide coordination](#optional-strict-fleet-wide-coordination) for
+the separate durable `global` contract.
 
-## Local choices with peer recovery hints
+## Enable protection
 
-Set `head_policy: local` to preserve sequential nondecreasing block choices
-within each application generation. This mode needs no publication journal.
-Overlapping choices may complete out of order; each must meet the local floor
-captured when it starts. A lower provider response triggers bounded retry or an
-explicit error, and same-height hash conflicts remain errors.
+In an existing chain entry in your file profile, set `head_policy: local`:
 
-A background worker shares accepted heights with connected peers. A recovered
-height prefers providers with fresh observations at that height or higher while
-retaining valid lower fallbacks. Opt-in metadata reports `minimum_height`,
-`recovery_height` and `recovery_gap_blocks`. Remote hints never raise the mandatory
-local minimum or add a database hop to a request.
-
-Worker restart retains learned hints. Application or machine replacement starts
-a new generation and recovers asynchronously from surviving peers. Cross-instance
-regressions remain possible during cold startup, partitions, message loss or total
-memory loss. This is a soft recovery aid, not the global contract below. Hash-pinned
-queries retain their ordinary behavior in either mode. See the
-[design and qualification boundary](adr/0006-local-head-recovery.md).
-
-## What the global setting guarantees
-
-After a successful block choice returns height **N**, a later block choice
-returns **N or higher**, or an error. Returning the same height is allowed.
-
-The guarantee is shared by all callers and enrolled serving instances on the
-same profile and chain. Different profiles and chains have independent floors.
-It applies when the later request starts after the earlier response completes;
-overlapping requests can finish out of height order.
-
-| Request | Behavior with Block continuity enabled |
-| --- | --- |
-| `eth_blockNumber []` | Returns the retained block number. |
-| `eth_getBlockByNumber ["latest", false]` | Returns the retained block, including its number and hash. Use this to start a query. |
-| `eth_getBlockByNumber ["latest", true]` | Returns the selected block with full transactions, or an error if unavailable. |
-| State reads with an explicit number or hash | Keep the requested target through routing and retries, including targets below the latest floor. |
-| State reads using `latest` or an omitted selector | Use ordinary provider routing. Separate reads can observe different blocks. |
-
-The setting does not group requests into a query. Your application carries the
-chosen hash through discovery, independent calls, and dependent rounds. A
-JSON-RPC batch alone does not select a shared block. `safe`, `finalized`,
-`pending`, log ranges, and subscriptions retain their usual semantics.
-
-## One query, one block identity
-
-For state reads, use the standard
-[EIP-1898 selector](https://eips.ethereum.org/EIPS/eip-1898):
-
-```js
-{ blockHash: block.hash, requireCanonical: true }
+```yaml
+chains:
+  ethereum:
+    head_policy: local
+    # Keep the chain's existing providers and other settings.
 ```
 
-A number identifies a height; a hash identifies the particular block at that
-height. During a reorg, the same number can refer to a different block. If you
-start with a number, resolve it to a hash **once**, before the first state read.
+This is the behavior labeled **Block regression protection: On** in Lasso Cloud.
+`head_policy: off` is the default. Connected RPC Core instances automatically
+share progress to help preserve continuity when requests move between them.
+There is no additional peer-sharing switch and no publication database is
+required for this mode. Configure [clustering](DEPLOYMENT.md#multi-node-clustering) to connect
+self-hosted instances.
 
-Use providers that support the method, hash selector and required state history.
-Lasso keeps the hash during failover and returns an error if the read cannot be
-completed. Provider capability evidence guides routing; it does not certify that
-every backend behind an endpoint can execute the request.
-Your query can therefore finish at block 100 while a newer query reads block 101.
+For example, continue polling with your existing request:
 
-## Freshness and provider lag
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "eth_blockNumber",
+  "params": []
+}
+```
 
-Lasso retains its selected block even if providers subsequently report lower
-heights. It can return 101 again after observing 101, without accepting a later
-provider response of 100.
+If a protected response returns `"0x64"` (100), the next request on the same
+running Lasso server returns 100 or higher, or an error. Returning 100 again is
+allowed. You do not need to change your state reads or collect metadata to use
+this setting.
 
-That block expires after the greater of **60 seconds or four configured block
-intervals**, measured from its timestamp. Repeating it does not renew its age.
-If Lasso cannot provide a fresh block at or above the floor, it returns an error.
-This bounds staleness; it does not promise the newest block on the network.
-Executing state reads still requires a provider with the selected state.
+## Which requests are protected?
 
-Block choices normally use the retained block locally. During a publication
-change, a choice can wait up to one second within its request deadline before
-failing. Reads already pinned to a hash continue without that publication wait.
+The setting applies to these latest-block requests:
 
-A provider URL can sit in front of several nodes with different heads. Lasso
-keeps the hash on every attempt; a lagging node must serve that state or return
-an error. A successful head probe alone does not establish state availability.
+| Method | Parameters | Result |
+| --- | --- | --- |
+| `eth_blockNumber` | `[]` | A block number. |
+| `eth_getBlockByNumber` | `["latest", false]` | A block with transaction hashes. |
+| `eth_getBlockByNumber` | `["latest", true]` | A block with full transactions. |
 
-One provider is enough to enable the policy. It provides no provider failover or
-independent verification; reads fail if that provider cannot serve the chosen state.
+It protects the returned **block height**, not values such as balances or
+contract results. For example, `eth_getBalance(address, "latest")` and
+`eth_call(transaction, "latest")` still use ordinary provider routing, as do
+state reads with an omitted block selector. Separate state reads can observe
+different blocks.
 
-## Reorgs and failures
+Requests for an explicit number or hash keep that target through routing and
+retries, even if it is older than the latest protected height. This works with
+protection On or Off. Other requests, including `safe`, `finalized`, `pending`,
+log ranges and subscriptions, keep their existing semantics.
 
-With `requireCanonical: true`, a provider must reject a block it knows is no
-longer canonical. Lasso surfaces that conflict; it does not silently replace
-the query's hash. Discard the incomplete query and retry the whole operation
-within your deadline if a fresh result is still useful.
+## What the setting guarantees
 
-Detected replacements at the previous selected height appear in routing
-metadata as `anchor_hash_changed`. This does not detect every reorg, and missing
-state alone is not evidence of one. The height floor never resets downward,
-including during a reorg, so recovery can temporarily prevent new block choices.
+Protection applies to requests for the **same profile and chain on the same
+running Lasso server**. All API keys and callers using that profile and chain
+share the protected height; different profiles and chains are independent.
+Here, a Lasso server is the instance routing your request, not an upstream RPC
+provider. Changing providers within that instance preserves the protection.
 
-Canonicality reflects provider observations at the time of a read. A block can
-be reorganized later. Lasso does not cryptographically verify arbitrary
-`eth_call` results: a provider that silently ignores the selector can return
-incorrect data without revealing that in its response. Provider head checks
-and routing evidence do not prove execution correctness or finality.
+The next request must start after the previous response finishes. Concurrent
+requests can finish out of height order. The protected height is retained for
+the lifetime of the running application; it survives an internal recovery-worker
+restart, but not loss of the application itself. Calls made while protection is
+Off are outside the guarantee.
 
-## Return the block and routing evidence
+After a Lasso server switch or application restart, recovery is **best effort**:
+a lower height remains possible. Servers share progress in the background to
+help choose a suitable provider. Those updates do not impose a mandatory minimum
+on another server. There is no promised recovery time or block-gap bound, and
+disconnected servers or lost history can reduce continuity across the fleet.
 
-Add `?include_meta=headers` to collect Lasso's request ID and routing metadata
-without changing the JSON-RPC result. Return the chosen number, hash, and
-collected evidence alongside your application's query result. The
-[guide](READ_AT_ONE_BLOCK.md#3-return-results-with-evidence) shows what to retain.
+## Provider lag, errors and latency
 
-The continuity floor survives service restarts using the shared PostgreSQL journal.
-[Coordinated disabling](BLOCK_CONTINUITY_OPERATIONS.md#changing-or-disabling-the-policy) suspends
-protection; reenabling it retains the floor but cannot cover reads made while
-it was disabled.
+Lasso remembers a minimum accepted height, called the **floor**. Each protected
+request checks a provider response against the floor captured when that request
+starts. If the response is lower, Lasso can try another eligible provider within
+the request's deadline and retry budget. If none succeeds, the request fails
+rather than returning a lower height.
+
+Each protected request fetches a provider response. Advancing the floor adds no
+synchronous database lookup or wait for peer acknowledgments. Local processing,
+provider retries and cold connection setup can still add latency.
+
+A protected block must be no older than the greater of **60 seconds or four
+configured block intervals**, measured from its timestamp. Returning the same
+block again does not renew its age. This does not promise the newest block on
+the network. One provider is enough to enable protection, but it provides no
+fallback if that provider cannot serve an acceptable block.
+
+Protection also rejects a conflicting hash at the captured floor height. A
+chain reorganization can temporarily prevent new protected responses; the floor
+does not reset downwards. Protection does not detect every reorganization,
+establish finality or verify the correctness of a provider's execution results.
+
+## Read several values at the same block
+
+If a page needs a balance and transaction count from the same block, specify
+that block on both reads. Protection does not pin those calls automatically,
+and putting them in a JSON-RPC batch does not select a shared block.
+
+The separate [Read at one block](READ_AT_ONE_BLOCK.md) guide shows this standard
+Ethereum JSON-RPC pattern. It works with protection Off; turning protection On
+also protects the latest-block requests used to start later refreshes.
+
+## Optional: inspect protection metadata
+
+Add `?include_meta=headers` to inspect routing decisions without changing the
+JSON-RPC response body. Protected responses report `head_policy.policy=local`,
+the configuration name for protection with automatic fleet sharing.
+See [protection metadata](OBSERVABILITY.md#block-protection-metadata) for the
+accepted height, server identity and recovery fields. Metadata is diagnostic;
+collecting it is not required for protection.
+
+## Optional: strict fleet-wide coordination
+
+`head_policy: global` provides a different contract: sequential protected
+latest-block requests share a durable floor across all admitted serving
+instances for the same profile and chain. The floor survives application
+restarts. Configure its PostgreSQL journal and serving fleet before enabling it;
+follow the [operating guide](BLOCK_CONTINUITY_OPERATIONS.md).
+
+Global mode can return the retained block number or block with transaction
+hashes without an upstream request. Full-transaction responses still fetch the
+published hash from a provider. The same block-age limit applies. Advancement
+requires coordination, and requests can wait up to one second within their
+deadline during a publication change. Unavailable members or coordination can
+prevent advancement or cause errors. Explicit state reads keep their targets
+and do not wait for publication.
+
+Global publication can report a replacement at the previous selected height as
+`anchor_hash_changed`; this is a provider observation, not complete reorg
+detection or finality. Before changing away from an enrolled Global policy,
+complete coordinated shutdown and retain the journal and member configuration
+as described in the operating guide. A configuration edit alone cannot discard
+its durable contract.
