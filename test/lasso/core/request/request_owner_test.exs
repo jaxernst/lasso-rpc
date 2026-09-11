@@ -429,6 +429,21 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     end)
 
     send(task, :report_late_negative)
+    late_proof_us = deadline_us + 1
+
+    await_mailbox(owner, fn messages ->
+      Enum.any?(messages, fn
+        {_ref,
+         %RequestOwner.AttemptCompletion{
+           terminal_candidate: {:ok, %{kind: :predispatch_failure, event_us: ^late_proof_us}}
+         }} ->
+          true
+
+        _ ->
+          false
+      end)
+    end)
+
     assert :erlang.resume_process(owner)
 
     assert_receive {:negative_owner_outcome, outcome}, 1_000
