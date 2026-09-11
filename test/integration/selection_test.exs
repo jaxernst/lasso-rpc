@@ -748,7 +748,7 @@ defmodule Lasso.RPC.SelectionTest do
           generation,
           now_us,
           latency,
-          "client_basic"
+          "client"
         )
 
         Lasso.BlockSync.Registry.put_height(
