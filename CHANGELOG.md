@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-11
+
 ### Fixed
 
 - Avoid serialized journal transactions for locally ineligible block proposals and unchanged readiness evidence. Provider checks continue so anchor, provider, floor and freshness changes can still drive publication; observation timestamps alone no longer repeat readiness writes. No configuration or journal migration is required.
@@ -230,7 +232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.6...v0.4.0
 [0.3.6]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.5...v0.3.6
