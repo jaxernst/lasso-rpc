@@ -1,4 +1,34 @@
-# Operating block continuity
+# Operating block regression protection
+
+Use `head_policy: local` for protection with automatic peer sharing. It requires
+no publication database. Use `head_policy: global` only when you need a durable
+floor across every admitted serving instance and accept its coordination costs.
+See [Block regression protection](BLOCK_CONTINUITY.md) for the affected
+JSON-RPC methods and guarantees.
+
+## Protection with automatic peer recovery
+
+Set `head_policy: local` in each chain's file profile to enable protection with
+automatic progress sharing across connected peers.
+Local routing needs no PostgreSQL publication database. Each application retains
+its accepted floor in memory; connected BEAM peers exchange height hints in the
+background. Those hints prefer suitable providers without blocking requests or
+removing valid fallback providers.
+
+A worker restart retains application-owned state. A complete application restart,
+node switch, partition or loss of all copies can lose continuity. Recovery has no
+promised time or block-gap bound, and the total profile/chain inventory affects
+propagation. Qualify actual provider capacity: a protected latest-block request
+still fails
+when every eligible provider is unavailable. If your application also reads
+state at a chosen hash, qualify selector support and retained state for those
+methods separately.
+
+If this installation previously enrolled Global scopes, complete the coordinated
+disable procedure below before changing their contract. Retain its journal and
+member configuration so old durable history continues to be reconciled.
+
+## Strict fleet coordination
 
 `global` mode stores the monotonic floor, selected block and admitted instance
 boots in PostgreSQL. Serving requests read local ETS grants. Runtime publication writes transport committed journal snapshots over PubSub; background reconciliation recovers missed messages.
@@ -22,9 +52,11 @@ journal state and scope bounds. This changes neither the public continuity contr
 nor the one-second request wait; geographic availability still needs qualification
 on the intended serving fleet.
 
-Read the [builder contract](BLOCK_CONTINUITY.md) before enabling it. Global mode
-can return an availability error to preserve continuity. It does not choose one
+Read the [request behavior](BLOCK_CONTINUITY.md) before enabling Global mode.
+Global mode can return an availability error to preserve continuity. It does not choose one
 block automatically for unrelated state calls.
+
+The remaining procedures apply to Global mode.
 
 ## Install the journal
 
@@ -84,15 +116,16 @@ chains:
 
 Distribute/reload the file on every enrolled instance. First enrollment happens
 in the background; a successful config load is not proof that a grant is ready.
-Qualify the providers for the actual methods and EIP-1898 hash selectors across
-the freshness window plus your maximum query duration. A recent head probe alone
-does not prove state availability.
+Verify that your providers can serve protected latest-block requests within the
+freshness limit. If your application also reads state at a selected block hash,
+separately verify selector support and availability of that state.
 
 Request `eth_getBlockByNumber` with `["latest", false]` and
 `?include_meta=headers` through each instance's real ingress. Check the same
 profile/chain, `head_policy.policy=global`, `scope=profile_chain_fleet`, number,
-hash and serving instance. Decode the base64url `x-lasso-meta` header. Then run
-[the complete logical read](READ_AT_ONE_BLOCK.md) through multiple instances.
+hash and serving instance. Decode the base64url `x-lasso-meta` header. If your
+application also reads several values at one block, test
+[Read at one block](READ_AT_ONE_BLOCK.md) through multiple instances.
 Missing metadata means evidence is incomplete, not that a different block was
 selected. HTTP batch headers contain only one context.
 
@@ -184,7 +217,8 @@ publication resumes. Normal state requests retain their selectors and ordinary
 provider retry budgets.
 
 Before release, exercise journal interruption, worker restart, graceful and
-unfenced process replacement, disable/re-enable and actual hash-pinned queries.
+unfenced process replacement, and disable/re-enable. Include hash-pinned state
+reads if your application uses them.
 The repository CI runs PostgreSQL-backed three-BEAM tests and an Anvil/viem/SEL
 workflow with an actual branch replacement. It preserves correlated HTTP evidence.
 These tests do not certify your database provider's infrastructure failover.

@@ -98,3 +98,36 @@ interval; WebSocket observations remain direct evidence. Stale evidence is
 excluded, and consensus does not advance beyond an observed upstream height.
 See [Configuration](CONFIGURATION.md) for probe intervals, routing lag limits,
 and the dashboard lag status threshold.
+
+## Block protection metadata
+
+These optional fields help diagnose [Block regression protection](BLOCK_CONTINUITY.md).
+They are not required to enable protection or read several values at one block.
+When `head_policy.policy` is `local`, a protected latest-block response can include:
+
+| Field in `head_policy` | Meaning |
+| --- | --- |
+| `block_number`, `block_hash`, `block_age_ms` | The accepted block and its age. |
+| `instance`, `generation` | The serving Lasso instance and application lifetime. A replacement application starts a new generation. |
+| `minimum_height` | The local floor captured when the request started. |
+| `recovery_height` | A best-effort recovery height hint, or `null` if none was available. |
+| `recovery_gap_blocks` | The gap below the recovered height. A nonzero gap is allowed; hints are not mandatory minimums. |
+
+Compare nonoverlapping requests within the same service profile, chain, instance
+and generation to assess local protection. These fields do not prove that a
+particular number of peers received an update or predict recovery time.
+Global policies report `policy=global` and can include attributed
+chain-change observations. Their retained number/header responses have no
+executing upstream provider.
+
+Explicit-number/hash requests can legitimately have no `head_policy` object.
+State-read results do not independently attest which block the provider used
+to execute them. For correlation, use `x-lasso-request-id`, or `x-request-id`
+when no routing context was created. `service_profile_id` identifies the service profile and `profile_id` identifies
+the effective route. Core currently uses the same file-profile identity for
+both fields; treat them as opaque values.
+
+HTTP batch headers expose only one item's routing context. Oversized metadata
+can be omitted. If complete per-request diagnostics are required, use individual
+HTTP requests and record missing metadata explicitly; this is a diagnostics
+choice, not a requirement for consistent reads.
