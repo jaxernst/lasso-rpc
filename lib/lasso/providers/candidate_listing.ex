@@ -386,6 +386,7 @@ defmodule Lasso.Providers.CandidateListing do
       instance_id: instance_id,
       route_generation: plan.generation,
       config: provider.config,
+      head_freshness_ms: Map.get(provider, :head_freshness_ms),
       transports: transports,
       routing_states: %{http: http_routing, ws: ws_routing},
       workload_key: workload_key,

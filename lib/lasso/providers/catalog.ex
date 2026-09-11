@@ -417,6 +417,7 @@ defmodule Lasso.Providers.Catalog do
           capabilities: provider.capabilities,
           archival: provider.archival,
           subscribe_new_heads: provider.subscribe_new_heads,
+          head_freshness_ms: route_head_freshness_ms(chain_config, provider.provider_id),
           transports: available_transports(config)
         }
       end)
@@ -436,6 +437,26 @@ defmodule Lasso.Providers.Catalog do
       max_lag_blocks: max_lag_blocks,
       archival_threshold:
         selection.archival_threshold || ChainConfig.Selection.default_archival_threshold()
+    }
+  end
+
+  defp route_head_freshness_ms(chain_config, provider_id) do
+    provider = Enum.find(chain_config.providers, &(&1.id == provider_id))
+    monitoring = chain_config.monitoring || %ChainConfig.Monitoring{}
+    websocket = chain_config.websocket || %ChainConfig.Websocket{}
+
+    poll_interval_ms =
+      case provider && provider.block_poll_interval_ms do
+        interval_ms when is_integer(interval_ms) and interval_ms > 0 ->
+          max(monitoring.probe_interval_ms, interval_ms)
+
+        _default ->
+          monitoring.probe_interval_ms
+      end
+
+    %{
+      http: max(1, poll_interval_ms * 3),
+      ws: max(1, websocket.new_heads_timeout_ms)
     }
   end
 

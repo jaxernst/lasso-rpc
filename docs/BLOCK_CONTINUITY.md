@@ -12,7 +12,28 @@ This works for queries that combine proxy resolution, storage and code reads,
 Multicall, and dependent `eth_call` rounds. Follow the
 [read at one block guide](READ_AT_ONE_BLOCK.md) to integrate it.
 
-## What the setting guarantees
+## Local choices with peer recovery hints
+
+Set `head_policy: local` to preserve sequential nondecreasing block choices
+within each application generation. This mode needs no publication journal.
+Overlapping choices may complete out of order; each must meet the local floor
+captured when it starts. A lower provider response triggers bounded retry or an
+explicit error, and same-height hash conflicts remain errors.
+
+A background worker shares accepted heights with connected peers. A recovered
+height prefers providers with fresh observations at that height or higher while
+retaining valid lower fallbacks. Opt-in metadata reports `minimum_height`,
+`recovery_height` and `recovery_gap_blocks`. Remote hints never raise the mandatory
+local minimum or add a database hop to a request.
+
+Worker restart retains learned hints. Application or machine replacement starts
+a new generation and recovers asynchronously from surviving peers. Cross-instance
+regressions remain possible during cold startup, partitions, message loss or total
+memory loss. This is a soft recovery aid, not the global contract below. Hash-pinned
+queries retain their ordinary behavior in either mode. See the
+[design and qualification boundary](adr/0006-local-head-recovery.md).
+
+## What the global setting guarantees
 
 After a successful block choice returns height **N**, a later block choice
 returns **N or higher**, or an error. Returning the same height is allowed.
