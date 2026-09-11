@@ -6,7 +6,7 @@
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
-[![Version](https://img.shields.io/badge/version-0.4.1-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
+[![Version](https://img.shields.io/badge/version-0.4.2-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
 Lasso is a multi-chain Ethereum JSON-RPC proxy with health checks, retries,
@@ -22,6 +22,12 @@ providers let you try it without API keys.
 
 For query-wide state consistency, see [Read at one block](docs/READ_AT_ONE_BLOCK.md)
 and the opt-in [Block continuity policy](docs/BLOCK_CONTINUITY.md).
+
+Use `head_policy: local` for monotonic choices on each running instance, with
+best-effort recovery from connected BEAM peers and no publication database.
+The separate `global` mode retains a durable coordinated fleet-wide contract.
+Both require providers capable of serving the selected block and state; see the
+policy guide for restart, freshness and availability limits.
 
 ## Features
 
@@ -41,7 +47,7 @@ You need Docker with the Compose plugin, curl, and OpenSSL. Start in an empty di
 
 ```bash
 mkdir lasso && cd lasso
-curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.4.1/compose.yml --output compose.yml
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.4.2/compose.yml --output compose.yml
 (umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
 docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
