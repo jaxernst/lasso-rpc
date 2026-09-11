@@ -392,16 +392,17 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
 
   test "a negative proof after D cannot erase D-1 ambiguity" do
     test_pid = self()
-    deadline_us = deadline_after(50)
 
     owner =
       spawn(fn ->
+        deadline_us = deadline_after(1_000)
+
         outcome =
           RequestOwner.execute(identity(:unknown), deadline_us, fn ->
             context = AttemptProtocol.context()
             assert :ok = AttemptProtocol.send_started_at(context, deadline_us - 1)
-            send(test_pid, {:negative_transport_ready, self()})
-            assert_receive :report_late_negative
+            send(test_pid, {:negative_transport_ready, self(), deadline_us})
+            assert_receive :report_late_negative, 2_000
 
             assert :ok =
                      AttemptProtocol.observe_at(
@@ -417,7 +418,9 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
         send(test_pid, {:negative_owner_outcome, outcome})
       end)
 
-    assert_receive {:negative_transport_ready, task}
+    on_exit(fn -> if Process.alive?(owner), do: Process.exit(owner, :kill) end)
+
+    assert_receive {:negative_transport_ready, task, deadline_us}, 1_500
     assert :erlang.suspend_process(owner)
     wait_past(deadline_us)
 
