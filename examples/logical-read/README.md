@@ -9,13 +9,26 @@ same transport. Lasso does not infer a logical query from a connection or batch.
 ```js
 const rpc = evidenceRpc({ url: rpcUrl, apiKey, profile: profileSlug, chainId: 1 });
 const query = await publishedBlockQuery(rpc);
-assertPublishedChoice(query, rpc);
 const client = createPublicClient({ transport: custom(query, { retryCount: 0 }) });
 // Give this client to discovery and the complete logical operation.
 const result = await executeLogicalRead(client);
 if (Date.now() >= rpc.deadline) throw new Error("Logical query deadline exceeded");
 return { result, block: query.identity, evidence: rpc.evidence() };
 ```
+
+`publishedBlockQuery` uses the standard latest-block request. The configured
+`head_policy` determines continuity: `local` protects sequential choices within
+one running application generation and uses best-effort peer recovery; `global`
+requires durable fleet publication. `off` still supports one-hash logical reads
+without a monotonic-choice guarantee. The helper preserves the chosen hash in all
+three modes.
+
+`assertPublishedChoice(query, rpc)` is an optional **Global-only** evidence check.
+Use it immediately after selection when the operation specifically requires
+Global publication. For Local, inspect `head_policy.policy`, `generation`,
+`minimum_height`, `recovery_height` and `recovery_gap_blocks`; a peer hint is not a
+mandatory minimum or a guarantee across restarts. The HTTP fixture below
+specifically exercises Global publication and reorg recovery.
 
 `evidenceRpc` owns one query's HTTP requests, deadline and evidence. It sends
 individual JSON-RPC envelopes, including when the query helper batches
