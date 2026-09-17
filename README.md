@@ -222,6 +222,11 @@ requires named Erlang nodes, a shared cookie, DNS discovery, and private connect
 - [Testing](docs/TESTING.md) — verification commands
 - [Changelog](CHANGELOG.md) — release history
 
+For the separate hosted product, see [Lasso Cloud adoption paths](https://docs.lasso.sh/cloud/adoption),
+[the two-provider evaluation guide](https://docs.lasso.sh/cloud/bring-your-own-rpc),
+and [agent workflows and availability](https://docs.lasso.sh/cloud/agent-flows).
+Cloud account, billing, and management workflows are separate from this self-hosted RPC Core.
+
 ## Contributing
 
 See [Contributing](CONTRIBUTING.md) for development setup and checks. Report bugs
