@@ -26,6 +26,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   alias Lasso.RPC.{
     AttemptProjection,
     Channel,
+    ExecutionEnvelope,
     RequestAnalysis,
     RoutingPlan,
     SelectionFilters,
@@ -34,7 +35,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RoutingEvidence.Workload
-  alias Lasso.RPC.Strategies.Fastest
+  alias Lasso.RPC.Strategies.{Fastest, LoadBalanced}
 
   @enforce_keys [
     :snapshot,
@@ -53,8 +54,15 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 deferred_ranking: nil,
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
+                diversity_seen: nil,
+                diversity_ordered_tiers: MapSet.new(),
                 supported?: false,
-                supported_deferred: %{2 => :queue.new(), 3 => :queue.new(), 4 => :queue.new()},
+                supported_deferred: %{
+                  1 => :queue.new(),
+                  2 => :queue.new(),
+                  3 => :queue.new(),
+                  4 => :queue.new()
+                },
                 unsupported_deferred: %{
                   1 => :queue.new(),
                   2 => :queue.new(),
@@ -131,7 +139,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       preferred_head_height: Keyword.get(opts, :preferred_head_height),
       deferred_ranking: deferred_ranking,
       limit: limit,
-      candidate_labels: candidate_labels
+      candidate_labels: candidate_labels,
+      diversity_seen: diversity_seen(Keyword.get(opts, :strategy), method, opts)
     }
   end
 
@@ -181,7 +190,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         prefer_heads(descriptors, Keyword.get(opts, :preferred_head_height), plan.chain_id),
       preferred_head_height: Keyword.get(opts, :preferred_head_height),
       limit: limit,
-      candidate_labels: []
+      candidate_labels: [],
+      diversity_seen: diversity_seen(strategy, method, opts)
     }
   end
 
@@ -214,7 +224,13 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
     case materialize(cursor, descriptor) do
       {:ok, channel, tier, true} when tier == 1 ->
-        return(channel, %{cursor | supported?: true, unsupported_deferred: empty_unsupported()})
+        cursor = %{cursor | supported?: true, unsupported_deferred: empty_unsupported()}
+
+        if defer_alternate?(cursor, channel) do
+          cursor |> defer(:supported_deferred, 1, channel) |> scan()
+        else
+          return(channel, cursor)
+        end
 
       {:ok, channel, tier, true} ->
         cursor
@@ -285,14 +301,49 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   defp scan(%__MODULE__{supported?: true} = cursor),
-    do: pop_deferred(cursor, :supported_deferred, [2, 3, 4])
+    do: pop_deferred(cursor, :supported_deferred, [1, 2, 3, 4])
 
   defp scan(%__MODULE__{} = cursor),
     do: pop_deferred(cursor, :unsupported_deferred, [1, 2, 3, 4])
 
+  defp diversity_seen(:load_balanced, method, opts) do
+    if is_nil(Keyword.get(opts, :preferred_head_height)) and
+         ExecutionEnvelope.classify(method) == :replay_safe,
+       do: MapSet.new(Keyword.get(opts, :attempted_instances, []))
+  end
+
+  defp diversity_seen(_strategy, _method, _opts), do: nil
+
+  defp defer_alternate?(%{diversity_seen: nil}, _channel), do: false
+
+  defp defer_alternate?(cursor, channel) do
+    MapSet.member?(cursor.diversity_seen, channel.instance_id) and
+      :queue.len(cursor.supported_deferred[1]) < cursor.limit - cursor.returned
+  end
+
+  defp order_deferred(%{diversity_seen: nil} = cursor, _field, _tier), do: cursor
+
+  defp order_deferred(cursor, field, tier) do
+    key = {field, tier}
+
+    if MapSet.member?(cursor.diversity_ordered_tiers, key) do
+      cursor
+    else
+      queues = Map.fetch!(cursor, field)
+
+      channels =
+        LoadBalanced.distinct_instances_first(:queue.to_list(queues[tier]), cursor.diversity_seen)
+
+      cursor
+      |> Map.put(field, Map.put(queues, tier, :queue.from_list(channels)))
+      |> Map.put(:diversity_ordered_tiers, MapSet.put(cursor.diversity_ordered_tiers, key))
+    end
+  end
+
   defp pop_deferred(cursor, _field, []), do: if(current?(cursor), do: :done, else: :stale)
 
   defp pop_deferred(cursor, field, [tier | rest]) do
+    cursor = order_deferred(cursor, field, tier)
     queues = Map.fetch!(cursor, field)
 
     case :queue.out(Map.fetch!(queues, tier)) do
@@ -306,7 +357,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp return(channel, cursor) do
     if current?(cursor) do
-      {:ok, channel, %{cursor | returned: cursor.returned + 1}}
+      seen = cursor.diversity_seen && MapSet.put(cursor.diversity_seen, channel.instance_id)
+      {:ok, channel, %{cursor | returned: cursor.returned + 1, diversity_seen: seen}}
     else
       :stale
     end

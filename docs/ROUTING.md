@@ -24,17 +24,22 @@ Strategies control the initial ordering of providers. Select via URL path segmen
 **URL**: `/rpc/load-balanced/:chain`
 **Module**: `Lasso.RPC.Strategies.LoadBalanced`
 
-Random distribution across available providers. After shuffling, the tiering pipeline reorders based on circuit breaker state and rate limit status.
+Starts from a randomized candidate order. For replay-safe unary reads, fallback
+tries distinct physical provider instances before sibling transports within each
+availability tier. Alternate transports remain available; a healthy alternate
+still precedes a different provider in a lower availability tier. The lazy cursor
+bounds healthy-sibling deferral by its remaining candidate limit, and explicit
+recovered-head preference takes precedence over diversity.
 
-**Use When**:
-- Maximizing throughput across multiple providers
-- Avoiding rate limits through even distribution
-- You have multiple providers of similar quality
+Unsafe or unknown methods retain their shuffled order and existing replay limits.
+This ordering does not increase the three-dispatch budget or deadline, infer
+archive capabilities, or guarantee successful historical reads. A hash selector
+can leave more distinct providers eligible than the budget can cover. Trying
+another provider first can also delay a working alternate transport on the
+previous provider.
 
-**Behavior**:
-- Shuffles providers randomly on each request
-- No preference for any provider absent health signals
-- Combined with tiering, healthy providers still receive more traffic
+The strategy provides statistical distribution over time, not exact shares,
+capacity awareness, or cluster-global balancing.
 
 ### Fastest
 

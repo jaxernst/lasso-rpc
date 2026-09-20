@@ -33,6 +33,7 @@ defmodule Lasso.RPC.Selection do
   }
 
   alias Lasso.RPC.Selection.CandidateCursor.DeferredRanking
+  alias Lasso.RPC.Strategies.LoadBalanced
   alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
   # Selection should be transport-policy agnostic. Transport constraints
   # should be provided by the caller via opts.
@@ -244,7 +245,8 @@ defmodule Lasso.RPC.Selection do
         method,
         plan,
         Keyword.get(opts, :timeout, 30_000),
-        workload_key
+        workload_key,
+        opts
       )
 
     selected = final_channels |> Enum.take(limit)
@@ -634,14 +636,24 @@ defmodule Lasso.RPC.Selection do
          _method,
          plan,
          _timeout,
-         workload_key
+         workload_key,
+         _opts
        )
        when strategy in [:fastest, :priority, :load_balanced, :latency_weighted] do
     maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
     [channel]
   end
 
-  defp order_capable_channels(channels, candidates, strategy, method, plan, timeout, workload_key) do
+  defp order_capable_channels(
+         channels,
+         candidates,
+         strategy,
+         method,
+         plan,
+         timeout,
+         workload_key,
+         opts
+       ) do
     circuit_state_map =
       candidates
       |> Enum.flat_map(fn %{id: provider_id} = candidate ->
@@ -671,7 +683,15 @@ defmodule Lasso.RPC.Selection do
         StrategyRegistry.resolve(strategy)
       )
 
-    tier_channels(ordered_channels, circuit_state_map, rate_limit_map)
+    tier_channels(ordered_channels, circuit_state_map, rate_limit_map, fn tier, seen ->
+      if strategy == :load_balanced do
+        seen = MapSet.union(seen, MapSet.new(Keyword.get(opts, :attempted_instances, [])))
+        ordered = LoadBalanced.order_fallbacks(tier, method, seen)
+        {ordered, Enum.reduce(ordered, seen, &MapSet.put(&2, &1.instance_id))}
+      else
+        {tier, seen}
+      end
+    end)
   end
 
   defp rank_capable_channels(
@@ -688,6 +708,18 @@ defmodule Lasso.RPC.Selection do
     maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
     [channel]
   end
+
+  defp rank_capable_channels(
+         channels,
+         _candidates,
+         :load_balanced,
+         _method,
+         _plan,
+         _timeout,
+         _workload_key,
+         LoadBalanced
+       ),
+       do: Enum.shuffle(channels)
 
   defp rank_capable_channels(
          channels,
@@ -977,26 +1009,36 @@ defmodule Lasso.RPC.Selection do
   @doc false
   @spec tier_channels([Channel.t()], map(), map()) :: [Channel.t()]
   def tier_channels(channels, circuit_state_map, rate_limit_map) do
-    channels
-    |> Enum.flat_map(fn channel ->
-      circuit_state =
-        Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
+    tier_channels(channels, circuit_state_map, rate_limit_map, fn tier, seen -> {tier, seen} end)
+  end
 
-      rate_limited =
-        rate_limit_map
-        |> Map.get(channel.provider_id, %{http: false, ws: false})
-        |> Map.get(channel.transport, false)
+  defp tier_channels(channels, circuit_state_map, rate_limit_map, order_tier) do
+    {tiers, _seen} =
+      channels
+      |> Enum.flat_map(fn channel ->
+        circuit_state =
+          Map.get(circuit_state_map, {channel.provider_id, channel.transport}, :closed)
 
-      case {circuit_state, rate_limited} do
-        {:closed, false} -> [{1, channel}]
-        {:half_open, false} -> [{2, channel}]
-        {:closed, true} -> [{3, channel}]
-        {:half_open, true} -> [{4, channel}]
-        _unavailable -> []
-      end
-    end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.map(&elem(&1, 1))
+        rate_limited =
+          rate_limit_map
+          |> Map.get(channel.provider_id, %{http: false, ws: false})
+          |> Map.get(channel.transport, false)
+
+        case {circuit_state, rate_limited} do
+          {:closed, false} -> [{1, channel}]
+          {:half_open, false} -> [{2, channel}]
+          {:closed, true} -> [{3, channel}]
+          {:half_open, true} -> [{4, channel}]
+          _unavailable -> []
+        end
+      end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.chunk_by(&elem(&1, 0))
+      |> Enum.map_reduce(MapSet.new(), fn tier, seen ->
+        order_tier.(Enum.map(tier, &elem(&1, 1)), seen)
+      end)
+
+    List.flatten(tiers)
   end
 
   # Channel building helpers

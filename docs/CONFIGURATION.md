@@ -215,7 +215,7 @@ All strategies are subject to health-based tiering after initial ranking. The pi
 3. **Tier 3**: Closed circuit + rate-limited
 4. **Tier 4**: Half-open circuit + rate-limited
 
-Open-circuit providers are excluded entirely. Within each tier, the strategy's original ranking is preserved.
+Open-circuit providers are excluded entirely. Within each tier, the strategy's ranking is preserved; load-balanced replay-safe fallback gives distinct physical instances a first pass before alternate transports, subject to the cursor's candidate bound and explicit recovered-head preference. See [load-balanced semantics](ROUTING.md#load-balanced-default) for limits and tradeoffs.
 
 This ensures healthy providers receive traffic first while allowing recovering providers to gradually reintegrate. See [ROUTING.md](ROUTING.md#health-based-tiering) for detailed behavior and examples.
 
