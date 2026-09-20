@@ -539,11 +539,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case CircuitBreaker.admit(breaker_id, ctx.execution_envelope.deadline_us) do
       {:ok, receipt} ->
-        case ChainIdentity.check(
-               instance_id,
-               channel.transport,
-               channel.route_generation
-             ) do
+        case ChainIdentity.check(instance_id, channel.transport) do
           :ok ->
             reserve_admitted_channel(
               channel,

@@ -496,12 +496,12 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
 
     identity =
-      Lasso.Providers.ChainIdentity.check(instance_id, :http, Catalog.active_generation())
+      Lasso.Providers.ChainIdentity.check(instance_id, :http)
 
     assert identity ==
              if(expected_status == :healthy, do: :ok, else: {:error, :chain_identity_rejected})
 
-    assert Lasso.Providers.ChainIdentity.check(instance_id, :ws, Catalog.active_generation()) ==
+    assert Lasso.Providers.ChainIdentity.check(instance_id, :ws) ==
              :ok
 
     assert CandidateListing.list_candidates(@profile, @chain, %{protocol: :http}) == []

@@ -92,9 +92,10 @@ provider's circuit is closed; requests can fail over to another eligible route.
 A later matching probe clears the identity rejection without resetting circuit
 state. Transport errors, rate limits, and JSON-RPC errors cannot clear it.
 
-Identity observations are local to the physical endpoint and configuration
-generation. A new generation starts without an identity verdict; providers that
-have not yet been observed keep normal admission behavior. This is protection
+Identity observations are local to the physical endpoint (chain, URLs, and
+authentication). Rejection survives unrelated configuration changes; stale probe
+completions cannot clear it. A changed or newly configured endpoint has no identity
+verdict and keeps normal admission behavior until observed. This is protection
 against observed misconfiguration, not mandatory verification before first use.
 HTTP observations do not establish the identity of a separate WebSocket URL.
 

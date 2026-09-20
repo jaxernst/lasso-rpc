@@ -107,6 +107,65 @@ defmodule Lasso.RPC.RequestPipelineChainIdentityTest do
     assert ctx.execution_envelope.dispatch_count == 1
   end
 
+  test "unrelated configuration publication cannot clear a physical endpoint rejection", %{
+    chain: chain
+  } do
+    setup_providers([%{id: "persistent", priority: 1, behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "persistent")
+    old_snapshot = Catalog.snapshot()
+    stale_probe = ChainIdentity.capture(id, old_snapshot)
+    ChainIdentity.record(ChainIdentity.capture(id, old_snapshot), :rejected)
+
+    unrelated_chain = chain + 100_000_000
+
+    :ok =
+      Lasso.Config.ConfigStore.register_chain_runtime("public", unrelated_chain, %{
+        chain_id: unrelated_chain,
+        name: "Unrelated",
+        providers: []
+      })
+
+    Catalog.build_from_config()
+
+    on_exit(fn ->
+      Lasso.Config.ConfigStore.unregister_chain_runtime("public", unrelated_chain)
+      Catalog.build_from_config()
+    end)
+
+    assert Catalog.active_generation() > old_snapshot.generation
+    assert Catalog.lookup_instance_id("public", chain, "persistent") == id
+    ChainIdentity.record(stale_probe, :verified)
+    assert {:error, _, ctx} = request(chain, "persistent")
+    assert ctx.execution_envelope.dispatch_count == 0
+
+    ChainIdentity.record(ChainIdentity.capture(id, Catalog.snapshot()), :verified)
+    assert {:ok, _, ctx} = request(chain, "persistent")
+    assert ctx.execution_envelope.dispatch_count == 1
+  end
+
+  test "identity rejection abandons an acquired half-open lease", %{chain: chain} do
+    setup_providers([%{id: "probation", priority: 1, behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "probation")
+    breaker_id = {id, :http}
+    breaker_pid = GenServer.whereis(Lasso.Core.Support.CircuitBreaker.via_name(breaker_id))
+    :sys.replace_state(breaker_pid, &%{&1 | state: :half_open})
+    {:ok, snapshot} = Snapshot.lookup(breaker_id)
+    Snapshot.put(%{snapshot | state: :half_open, half_open_inflight: 0})
+
+    ChainIdentity.record(ChainIdentity.capture(id, Catalog.snapshot()), :rejected)
+    assert {:error, _, ctx} = request(chain, "probation")
+    assert ctx.execution_envelope.dispatch_count == 0
+    assert ctx.execution_envelope.candidate_admission_count > 0
+    assert %{state: :half_open, inflight_count: 0} = :sys.get_state(breaker_pid)
+
+    deadline = System.monotonic_time(:microsecond) + 1_000_000
+
+    assert {:ok, %{kind: :half_open} = receipt} =
+             Lasso.Core.Support.CircuitBreaker.admit(breaker_id, deadline)
+
+    assert :ok = Lasso.Core.Support.CircuitBreaker.abandon_unclaimed(receipt, self())
+  end
+
   defp request(chain, provider) do
     RequestPipeline.execute_via_channels(chain, "eth_blockNumber", [], %RequestOptions{
       profile: "public",

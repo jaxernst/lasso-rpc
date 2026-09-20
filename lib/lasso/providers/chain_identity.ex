@@ -1,6 +1,9 @@
 defmodule Lasso.Providers.ChainIdentity do
   @moduledoc """
-  Observed HTTP chain identity, scoped to a physical endpoint and route generation.
+  Observed HTTP chain identity, scoped to a physical endpoint.
+
+  Configuration generation fences probe writes; rejection survives unrelated
+  configuration changes until a matching probe or physical endpoint teardown.
 
   Unknown identity preserves normal admission. An explicit malformed or mismatched
   `eth_chainId` response rejects HTTP admission until a later matching probe.
@@ -49,14 +52,14 @@ defmodule Lasso.Providers.ChainIdentity do
     :ok
   end
 
-  @spec check(String.t(), :http | :ws, non_neg_integer()) ::
+  @spec check(String.t(), :http | :ws) ::
           :ok | {:error, :chain_identity_rejected}
-  def check(instance_id, :http, generation) do
+  def check(instance_id, :http) do
     case :ets.lookup(@table, {:chain_identity, instance_id, :http}) do
-      [{_, ^generation, _, :rejected}] -> {:error, :chain_identity_rejected}
+      [{_, _, _, :rejected}] -> {:error, :chain_identity_rejected}
       _ -> :ok
     end
   end
 
-  def check(_instance_id, :ws, _generation), do: :ok
+  def check(_instance_id, :ws), do: :ok
 end
