@@ -58,8 +58,7 @@ defmodule Lasso.URLMask do
         |> URI.to_string()
     end
   rescue
-    # Masking is a security boundary for URL-shaped values. A malformed URL
-    # must not turn a logging/Sentry failure into plaintext credential output.
+    # Keep malformed URL handling conservative for legacy callers.
     _ -> if url_shaped?(url), do: "[FILTERED_URL]", else: url
   end
 
@@ -122,11 +121,7 @@ defmodule Lasso.URLMask do
     end)
   end
 
-  # Lowered from >20 to >8: real provider keys often live in shorter
-  # path slots (QuickNode `/8-char/32-char/`, Tenderly node ids ≤20,
-  # Ankr `/<key>` directly under host). Keep the no-dot guard so we
-  # don't elide hostnames or filename-like segments accidentally
-  # matched by a routing-style URL.
+  # Token-shaped paths are retained only as a legacy endpoint-shape heuristic.
   defp maskable_path_segment?(segment) when is_binary(segment) do
     len = String.length(segment)
 
@@ -150,9 +145,7 @@ defmodule Lasso.URLMask do
     |> URI.encode_query()
   end
 
-  # Names that almost always carry a credential — mask regardless of
-  # length so `?key=foo` doesn't slip through. Also still mask any
-  # value > 4 chars defensively (was 10).
+  # Legacy shape detection retains prefixes even for short credential values.
   @credential_param_names ~w(
     key apikey api_key apiKey api-key access_token accessToken
     auth authorization token secret pass password
