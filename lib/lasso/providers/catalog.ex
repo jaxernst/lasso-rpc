@@ -521,10 +521,10 @@ defmodule Lasso.Providers.Catalog do
       profile: profile,
       chain_id: chain_id,
       provider_id: provider.id,
-      existing_url: Lasso.URLMask.mask(existing.url),
-      existing_ws_url: Lasso.URLMask.mask(Map.get(existing, :ws_url)),
-      new_url: Lasso.URLMask.mask(new.url),
-      new_ws_url: Lasso.URLMask.mask(Map.get(new, :ws_url))
+      existing_url: Lasso.URLMask.redact(existing.url),
+      existing_ws_url: Lasso.URLMask.redact(Map.get(existing, :ws_url)),
+      new_url: Lasso.URLMask.redact(new.url),
+      new_ws_url: Lasso.URLMask.redact(Map.get(new, :ws_url))
     )
 
     :telemetry.execute(

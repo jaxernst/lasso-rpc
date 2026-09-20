@@ -1,24 +1,45 @@
 defmodule Lasso.URLMask do
   @moduledoc """
-  URL credential masking shared across leak surfaces.
+  URL projections for diagnostic output and legacy endpoint heuristics.
 
-  Provider URLs frequently embed credentials in the path
-  (`https://eth-mainnet.g.alchemy.com/v2/<KEY>`,
-  `https://mainnet.infura.io/v3/<KEY>`) or as query params. Anywhere a
-  URL might end up in a log line, a Sentry event, a YAML export, or a
-  rendered template, it should be threaded through `mask/1` first.
+  Use `redact/1` for a URL known to contain secrets and `mask_in_string/1`
+  for diagnostic text. These retain only the origin: credentials can occupy
+  any path segment or query value, regardless of length or punctuation.
 
-  The mask preserves the scheme + host (operationally useful for
-  diagnosis) and elides any path segment or query value that looks
-  high-entropy. Idempotent — masking an already-masked URL is a no-op.
+  `mask/1` is a legacy shape heuristic, not a security boundary. It retains
+  credential prefixes and some entire values. Do not use it for output or to
+  determine endpoint ownership or authorization.
   """
 
   @doc """
-  Returns the URL with high-entropy path segments and long query values
-  replaced by a 4-char prefix + `***`.
+  Projects an HTTP or WebSocket URL to its scheme, host and port.
 
-  Returns `nil` for `nil` and the original value for non-binary input
-  so callers can pass arbitrary values defensively.
+  User information, the entire path, query and fragment are omitted. Invalid
+  or unsupported inputs become a safe placeholder; nil remains nil. Hostnames
+  remain visible for diagnosis, so credentials must not be embedded in hosts.
+  """
+  @spec redact(any()) :: String.t() | nil
+  def redact(nil), do: nil
+
+  def redact(url) when is_binary(url) do
+    case URI.new(url) do
+      {:ok, %URI{scheme: scheme, host: host} = uri}
+      when scheme in ["http", "https", "ws", "wss"] and is_binary(host) and host != "" ->
+        %{uri | userinfo: nil, path: nil, query: nil, fragment: nil}
+        |> URI.to_string()
+
+      _ ->
+        "[FILTERED_URL]"
+    end
+  rescue
+    _ -> "[FILTERED_URL]"
+  end
+
+  def redact(_), do: "[FILTERED_URL]"
+
+  @doc """
+  Legacy endpoint-shape heuristic that preserves short values and prefixes.
+  This is not credential redaction; use `redact/1` for diagnostic output.
   """
   @spec mask(any()) :: any()
   def mask(nil), do: nil
@@ -30,31 +51,33 @@ defmodule Lasso.URLMask do
 
       %URI{} = uri ->
         uri
+        |> Map.put(:userinfo, nil)
         |> Map.put(:path, mask_path(uri.path))
         |> Map.put(:query, mask_query(uri.query))
+        |> Map.put(:fragment, nil)
         |> URI.to_string()
     end
   rescue
-    # Any URI parse oddity → return as-is rather than risk crashing the
-    # caller (typically a logging or Sentry path that must not raise).
-    _ -> url
+    # Masking is a security boundary for URL-shaped values. A malformed URL
+    # must not turn a logging/Sentry failure into plaintext credential output.
+    _ -> if url_shaped?(url), do: "[FILTERED_URL]", else: url
   end
 
   def mask(other), do: other
 
   @doc """
   Scans a freeform string for embedded `http(s)://` and `ws(s)://` URLs and
-  replaces each with its masked form via `mask/1`.
+  replaces each with its origin via `redact/1`.
 
   Use this on exception messages, log lines, and other text where a URL may
   appear inline among other content. Returns the input unchanged when it
   contains no recognizable URL.
   """
-  @url_pattern ~r{(?:https?|wss?)://[^\s\"\'<>\)\]\}]+}
+  @url_pattern ~r{(?:https?|wss?)://[^\s<>]+}i
 
   @spec mask_in_string(any()) :: any()
   def mask_in_string(string) when is_binary(string) do
-    Regex.replace(@url_pattern, string, fn matched -> mask(matched) end)
+    Regex.replace(@url_pattern, string, fn matched -> redact(matched) end)
   end
 
   def mask_in_string(other), do: other
@@ -80,6 +103,10 @@ defmodule Lasso.URLMask do
   end
 
   def host(_, fallback), do: fallback
+
+  defp url_shaped?(url) do
+    String.starts_with?(url, ["http://", "https://", "ws://", "wss://"])
+  end
 
   defp mask_path(nil), do: nil
 

@@ -28,6 +28,12 @@ When deploying Lasso RPC in production, follow these security best practices:
 - For managed deployments, inject these environment variables through your platform's secret manager. Docker administrators can inspect container environment variables; restrict host and Docker access.
 - Preserve signing and distribution secrets across restarts. Rotate credentials deliberately; cluster members must share the same distribution cookie.
 
+Provider catalog collision diagnostics retain only URL scheme, hostname and
+port. Path segments, query values, user information and fragments are omitted.
+Use `Lasso.URLMask.redact/1` for diagnostic URL fields and `mask_in_string/1`
+for diagnostic text. `mask/1` is a legacy shape heuristic and does not provide
+credential redaction. Hostnames remain visible; do not embed secrets in them.
+
 ### 2. Network Security
 
 - Deploy behind a reverse proxy (nginx, Caddy, Traefik)
