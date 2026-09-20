@@ -5,6 +5,7 @@ defmodule Lasso.Providers.ChainIdentityTest do
 
   setup do
     id = "identity-#{System.unique_integer([:positive])}"
+    Catalog.build_from_config()
     snapshot = Catalog.snapshot()
     on_exit(fn -> InstanceState.clear(id) end)
     %{id: id, snapshot: snapshot}
