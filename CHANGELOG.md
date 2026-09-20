@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Give distinct physical provider instances a first pass within each availability tier for load-balanced replay-safe unary fallback, before alternate HTTP/WebSocket routes consume the attempt budget. Alternate transports remain available, and lazy and eager selection follow the same tier ordering.
 
+### Documentation
+
+- Clarify the existing latency-weighted fallback: recent latency measurements receive weighted ordering before shuffled unmeasured routes when no candidate qualifies.
+
 ### Compatibility
 
 - No configuration or journal migration is required. The three-dispatch replay-safe budget, original request deadline, candidate admission limits, and existing dispatch rules for transactions, stateful methods, and unknown methods are unchanged.
