@@ -8,7 +8,7 @@ Thank you for your interest in contributing to Lasso RPC! This document provides
 
 - **Elixir**: 1.18.4 (CI version) (check with `elixir --version`)
 - **Erlang/OTP**: 28 (CI version) (check with `erl -version`)
-- **Node.js**: 18+ (for asset compilation)
+- **Node.js**: 22 (CI version, for JavaScript contract and logical-read fixture tests)
 - **Git**: For version control
 
 ### Quick Start
@@ -46,14 +46,19 @@ Provider credentials are only used when referenced in a configured YAML URL or h
 mix test
 
 # Run specific test file
-mix test test/lasso/rpc/request_analysis_test.exs
+mix test test/lasso/core/request/request_pipeline_test.exs
 
 # Run with coverage
 mix test --cover
 
-# Run the complete hermetic suite with local mock providers
+# Run local mock-provider integration tests
 mix test --include integration
 ```
+
+The full CI integration job also uses PostgreSQL 16 and Anvil v1.4.4.
+Follow [the test guide](docs/TESTING.md#full-ci-integration-suite) for service setup,
+fixture dependencies, and evidence verification. These services are not required
+for the default suite or mock-provider integration tests.
 
 ### Code Quality Tools
 
@@ -182,7 +187,7 @@ Provider credentials must be supplied by the operator through configuration.
 ### Test Guidelines
 
 - Use descriptive test names
-- One assertion per test when possible
+- Assert observable outcomes and invariants; use multiple assertions when needed to establish one contract
 - Use fixtures for complex test data
 - Use `:integration` for hermetic integration tests, `:real_providers` for live upstreams, and `:slow` for expensive tests
 
