@@ -30,16 +30,18 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
   end
 
   @doc "Orders replay-safe fallbacks by physical instance without changing unsafe-method order."
-  @spec order_fallbacks([Channel.t()], String.t(), MapSet.t()) :: [Channel.t()]
-  def order_fallbacks(channels, method, seen \\ MapSet.new()) do
+  @spec order_fallbacks([Channel.t()], String.t(), MapSet.t() | nil) :: [Channel.t()]
+  def order_fallbacks(channels, method, seen \\ nil) do
     if ExecutionEnvelope.classify(method) == :replay_safe,
       do: distinct_instances_first(channels, seen),
       else: channels
   end
 
   @doc "Stably places one route from each unseen physical instance before alternate routes."
-  @spec distinct_instances_first([Channel.t()], MapSet.t()) :: [Channel.t()]
-  def distinct_instances_first(channels, seen \\ MapSet.new()) do
+  @spec distinct_instances_first([Channel.t()], MapSet.t() | nil) :: [Channel.t()]
+  def distinct_instances_first(channels, seen \\ nil) do
+    seen = seen || MapSet.new()
+
     {first, alternates, _seen} =
       Enum.reduce(channels, {[], [], seen}, fn channel, {first, alternates, seen} ->
         key = channel.instance_id || {channel.profile, channel.chain_id, channel.provider_id}
