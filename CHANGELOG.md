@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-09-20
+
+### Fixed
+
+- Reject HTTP dispatch to a physical provider endpoint after a malformed or mismatched `eth_chainId` probe. A later matching probe restores admission; ordinary request successes cannot clear the rejection. Probe results are fenced by configuration generation and observation order, and unrelated configuration reloads retain the rejection.
+- Drain buffered orphan log additions and removals in their original per-log order before replacement-block additions during WebSocket recovery, including replacements at different block heights.
+- Remove URL user information, paths, queries and fragments from provider diagnostics and catalog endpoint projections. Diagnostic origins still contain the scheme, host and port.
+- Update Mint to 1.10.1.
+
+### Documentation and maintenance
+
+- Clarify local/global block protection, hash-pinned state reads, routing metadata, and the boundary between self-hosted Core and hosted Lasso Cloud.
+- Document the default mock-backed test suite and the separate PostgreSQL/Anvil integration checks; remove an unused failover policy module.
+
+### Compatibility
+
+- No configuration or journal migration is required. Retain the existing journal and follow the documented replacement procedure for global continuity deployments.
+- Unknown HTTP identity keeps normal admission until a probe provides evidence. The guard does not infer WebSocket identity from an HTTP endpoint or attest arbitrary provider responses.
+- Core deduplicates positive and removed logs separately. Repeated removal and re-addition of the same log within the deduplication window is not fully modeled; this release does not guarantee recovery through every repeated reorg sequence.
+- Historical state availability and provider capacity remain provider-dependent. These fixes do not qualify hosted Public or Premium profiles for archive workloads.
+
 ## [0.4.2] - 2026-09-11
 
 ### Changed
@@ -247,7 +268,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.3.6...v0.4.0
