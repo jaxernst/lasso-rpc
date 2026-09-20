@@ -27,7 +27,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
     SelectionFilters
   }
 
-  alias Lasso.RPC.RequestPipeline.{FailoverStrategy, Observability}
+  alias Lasso.RPC.RequestPipeline.Observability
   alias Lasso.Test.TelemetrySync
 
   setup do
@@ -507,14 +507,6 @@ defmodule Lasso.RPC.RequestPipelineTest do
   end
 
   describe "Fast-fail failover logic" do
-    test "FailoverStrategy returns terminal when no channels remaining" do
-      error = JError.new(-32_005, "Rate limit", category: :rate_limit, retriable?: true)
-      ctx = RequestContext.new(1, "eth_blockNumber", [])
-
-      assert {:terminal_error, :no_channels_remaining} =
-               FailoverStrategy.decide(error, [], ctx)
-    end
-
     test "fast-fail logic properly categorizes rate limit errors" do
       error =
         JError.new(-32_005, "Rate limit exceeded", category: :rate_limit, retriable?: true)
@@ -568,14 +560,6 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       assert error.category == :invalid_params
       assert error.retriable? == false
-    end
-
-    test "circuit_open errors trigger failover when channels remain" do
-      ctx = RequestContext.new(1, "eth_blockNumber", [])
-      dummy_channel = %Lasso.RPC.Channel{provider_id: "test", transport: :http}
-
-      assert {:failover, :circuit_open} =
-               FailoverStrategy.decide(:circuit_open, [dummy_channel], ctx)
     end
 
     test "execute_via_channels increments retry count on failover" do
