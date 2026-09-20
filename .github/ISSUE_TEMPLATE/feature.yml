@@ -1,0 +1,39 @@
+name: Feature proposal
+description: Propose a change to the self-hosted RPC Core.
+title: "Proposal: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the RPC workload or operator problem and its current impact.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the external contract and how an operator would use it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Validation and operational impact
+      description: Note compatibility, rollout, observability, performance, and failure-mode considerations.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I checked that this behavior is not already documented or requested.
+          required: true
+        - label: This proposal concerns the open source Core rather than a hosted-only workflow.
+          required: true

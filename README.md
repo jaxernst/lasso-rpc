@@ -3,6 +3,8 @@
 ### Resilient Ethereum RPC over HTTP and WebSocket
 
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](docs/API_REFERENCE.md)
+[![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
+[![Release evidence](https://img.shields.io/badge/release-evidence-22C55E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/download/v0.4.4/container-verification.md)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
@@ -16,9 +18,10 @@ providers by pointing your client at Lasso's URL.
 Run it on your own infrastructure with YAML configuration. The included public
 providers let you try it without API keys.
 
-[Quick Start](#quick-start) · [Configuration](#configuration) ·
+[Quick Start](#quick-start) · [Migration guide](docs/MIGRATION.md) ·
+[Configuration](#configuration) ·
 [Endpoints](#endpoints) · [Troubleshooting](#troubleshooting) ·
-[Run from source](#run-from-source) · [Documentation](#documentation)
+[Run from source](#run-from-source) · [Documentation](#documentation) · [Support](SUPPORT.md)
 
 ## Features
 
@@ -215,6 +218,8 @@ requires named Erlang nodes, a shared cookie, DNS discovery, and private connect
 ## Documentation
 
 - [Configuration](docs/CONFIGURATION.md) — YAML, provider credentials, capabilities, and strategies
+- [Migration guide](docs/MIGRATION.md) — move from direct providers or another
+  RPC gateway with a measured canary and rollback
 - [API reference](docs/API_REFERENCE.md) — routes, metadata, subscriptions, and errors
 - [Deployment](docs/DEPLOYMENT.md) — containers, persistence, upgrades, and clustering
 - [Observability](docs/OBSERVABILITY.md) — logs and metrics
@@ -231,7 +236,10 @@ Cloud account, billing, and management workflows are separate from this self-hos
 
 See [Contributing](CONTRIBUTING.md) for development setup and checks. Report bugs
 through [GitHub issues](https://github.com/jaxernst/lasso-rpc/issues); discuss major
-changes there before opening a pull request.
+changes there before opening a pull request. Project ownership and review
+responsibilities are listed in [Maintainers](MAINTAINERS.md).
+
+For deployment questions and diagnostic details to include, see [Support](SUPPORT.md).
 
 ## Security
 
