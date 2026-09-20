@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-20
+
+### Fixed
+
+- Give distinct physical provider instances a first pass within each availability tier for load-balanced replay-safe unary fallback, before alternate HTTP/WebSocket routes consume the attempt budget. Alternate transports remain available, and lazy and eager selection follow the same tier ordering.
+
+### Documentation
+
+- Clarify the existing latency-weighted fallback: recent latency measurements receive weighted ordering before shuffled unmeasured routes when no candidate qualifies.
+
+### Compatibility
+
+- No configuration or journal migration is required. The three-dispatch replay-safe budget, original request deadline, candidate admission limits, and existing dispatch rules for transactions, stateful methods, and unknown methods are unchanged.
+- Health tiers and explicit recovered-head preference retain precedence. Healthy-sibling deferral is bounded by the cursor's remaining candidate limit; other routing strategies retain their existing behavior.
+- Trying another provider first can delay a working alternate transport. A hash selector can still leave more distinct providers eligible than the dispatch budget covers. Historical state availability remains provider-dependent; this release does not certify archive workload coverage or provider capacity.
+
 ## [0.4.3] - 2026-09-20
 
 ### Fixed
@@ -268,7 +284,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.0...v0.4.1

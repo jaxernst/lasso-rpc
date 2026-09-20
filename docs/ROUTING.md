@@ -80,7 +80,7 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
 - Applies reliability as a qualification boundary, not a weight multiplier
 - Uses no latency floor, weight floor, or implicit exploration share
-- Falls back to a uniform random permutation when no candidate qualifies
+- When no candidate qualifies, emits an availability degradation and orders routes with recent latency measurements before shuffled unmeasured routes; a wholly unmeasured pool is shuffled uniformly.
 
 **Configuration**:
 - `LW_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
