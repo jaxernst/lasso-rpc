@@ -791,10 +791,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             state.failover_context.event_buffer
             |> Enum.reverse()
             |> Enum.sort_by(fn log ->
-              {decode_hex(Map.get(log, "blockNumber", "0x0")),
+              {if(Map.get(log, "removed", false) == true, do: 0, else: 1),
+               decode_hex(Map.get(log, "blockNumber", "0x0")),
                decode_hex(Map.get(log, "transactionIndex", "0x0")),
-               decode_hex(Map.get(log, "logIndex", "0x0")),
-               Map.get(log, "removed", false) == true}
+               decode_hex(Map.get(log, "logIndex", "0x0"))}
             end)
         end
 
