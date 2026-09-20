@@ -166,7 +166,9 @@ With load-balanced, Lasso shuffles providers then reorders by tier:
 
 **Result**: Provider A receives ~100% of traffic as long as it succeeds. This is correct behavior—Lasso routes to the healthiest provider while maintaining fallbacks.
 
-To achieve truly even distribution, ensure all providers are in Tier 1 (closed circuit + not rate-limited).
+To allow statistical distribution, keep multiple providers in Tier 1 (closed
+circuit + not rate-limited). Load-balanced routing does not guarantee exact
+shares or account for provider capacity.
 
 ## Strategy-Health Interaction
 
@@ -174,7 +176,7 @@ All strategies are subject to health tiering. The strategy determines the order 
 
 | Strategy | Within-Tier Behavior | Cross-Tier Impact |
 |----------|---------------------|-------------------|
-| Load Balanced | Random shuffle | No preference, but healthy tiers dominate |
+| Load Balanced | Randomized; replay-safe fallback gives distinct physical instances a bounded first pass | Health tiers and recovered-head preference dominate |
 | Fastest | Latency-ordered | Fastest provider may not receive traffic if unhealthy |
 | Latency Weighted | Weighted random | Weights apply only within each tier |
 | Priority | Priority-ordered | Priority applies only within each tier |
