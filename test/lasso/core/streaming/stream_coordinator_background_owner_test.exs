@@ -297,9 +297,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
 
     assert await_state(pid, &(&1.failover_status == :active)).primary_provider_id == "ws-new"
 
-    assert_receive {:subscription_event, %{"params" => %{"result" => ^removed}}}
-    assert_receive {:subscription_event, %{"params" => %{"result" => ^canonical_100}}}
-    assert_receive {:subscription_event, %{"params" => %{"result" => ^log_101}}}
+    delivered =
+      for _ <- 1..3 do
+        assert_receive {:subscription_event, %{"params" => %{"result" => payload}}}
+        payload
+      end
+
+    assert delivered == [removed, canonical_100, log_101]
     refute_receive {:subscription_event, _duplicate}, 50
   end
 

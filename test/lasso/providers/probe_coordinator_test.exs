@@ -112,6 +112,33 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
   end
 
+  defmodule ChainIdEndpoint do
+    import Plug.Conn
+    def init(opts), do: opts
+
+    def call(conn, opts) do
+      conn
+      |> put_resp_content_type("application/json")
+      |> send_resp(
+        200,
+        Jason.encode!(%{"jsonrpc" => "2.0", "id" => 1, "result" => opts[:result]})
+      )
+    end
+  end
+
+  describe "chain identity probes" do
+    for result <- [nil, 97, false, %{}, [], "62", "0x", "0x+62", "0x062", "0xgg", "0x61"] do
+      @probe_result result
+      test "rejects #{inspect(result)} without restoring HTTP or changing WS eligibility" do
+        assert_probe_identity(@probe_result, :degraded)
+      end
+    end
+
+    test "accepts the configured chain and preserves independent circuit admission" do
+      assert_probe_identity("0x62", :healthy)
+    end
+  end
+
   describe "run_probe_request/1" do
     test "converts Finch pool exits into probe errors" do
       reason = {:shutdown, :idle_timeout}
@@ -391,6 +418,86 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
           :ok
       end
     end
+  end
+
+  defp assert_probe_identity(result, expected_status) do
+    alias Lasso.Core.Support.CircuitBreaker.{Snapshot, Storage}
+    alias Lasso.Providers.CandidateListing
+
+    ref = {:chain_id_probe, make_ref()}
+    {:ok, _} = Plug.Cowboy.http(ChainIdEndpoint, [result: result], ref: ref, port: 0)
+    port = :ranch.get_port(ref)
+
+    ConfigStore.unregister_chain_runtime(@profile, @chain)
+
+    register_chain(@profile, @chain, [
+      %{
+        id: "identity",
+        name: "Identity",
+        url: "http://127.0.0.1:#{port}",
+        ws_url: "ws://127.0.0.1:#{port}",
+        priority: 1
+      }
+    ])
+
+    Catalog.build_from_config()
+    [instance_id] = Catalog.list_instances_for_chain(@chain)
+
+    for {transport, state} <- [http: :open, ws: :closed] do
+      Snapshot.put(%Snapshot{
+        breaker_id: {instance_id, transport},
+        state: state,
+        generation: 1,
+        epoch: 1,
+        owner_pid: self(),
+        ready?: true,
+        control_health: :healthy,
+        half_open_capacity: 1,
+        half_open_inflight: 0,
+        recovery_deadline_us: System.monotonic_time(:microsecond) + 60_000_000
+      })
+    end
+
+    :ets.insert(@instance_table, {{:ws_status, instance_id}, %{status: :connected}})
+
+    on_exit(fn ->
+      Plug.Cowboy.shutdown(ref)
+
+      for transport <- [:http, :ws],
+          do: :ets.delete(Storage.snapshot_table(), {instance_id, transport})
+
+      :ets.delete(@instance_table, {:health_probe, instance_id})
+      :ets.delete(@instance_table, {:ws_status, instance_id})
+    end)
+
+    {:ok, pid} = start_coordinator(@chain)
+    send(pid, :tick)
+
+    assert_wait_until(fn ->
+      case :ets.lookup(@instance_table, {:health_probe, instance_id}) do
+        [{_, health}] -> health.http_status == expected_status
+        [] -> false
+      end
+    end)
+
+    [{_, health}] = :ets.lookup(@instance_table, {:health_probe, instance_id})
+
+    if expected_status == :healthy do
+      assert health.consecutive_failures == 0
+      assert health.last_error == nil
+    else
+      assert health.consecutive_failures >= 1
+      assert {:json_rpc_error, _} = health.last_error
+
+      assert_wait_until(fn ->
+        :sys.get_state(pid).instances[instance_id].consecutive_failures > 0
+      end)
+    end
+
+    assert CandidateListing.list_candidates(@profile, @chain, %{protocol: :http}) == []
+
+    assert [%{id: "identity"}] =
+             CandidateListing.list_candidates(@profile, @chain, %{protocol: :ws})
   end
 
   # Helpers

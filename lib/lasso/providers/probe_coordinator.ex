@@ -428,16 +428,19 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   defp classify_response_body(_, _chain_id), do: {:error, "empty response body"}
 
-  defp validate_chain_id_response(hex, expected_chain_id)
-       when is_binary(hex) and is_integer(expected_chain_id) do
-    case Integer.parse(String.trim_leading(hex, "0x"), 16) do
-      {actual, ""} when actual == expected_chain_id -> :ok
-      {actual, ""} -> {:error, "wrong chain_id: got #{actual}, expected #{expected_chain_id}"}
-      _ -> {:error, "invalid chain_id response: #{hex}"}
+  defp validate_chain_id_response("0x" <> digits, expected_chain_id)
+       when is_integer(expected_chain_id) do
+    if Regex.match?(~r/\A(?:0|[1-9a-fA-F][0-9a-fA-F]*)\z/, digits) do
+      case String.to_integer(digits, 16) do
+        ^expected_chain_id -> :ok
+        actual -> {:error, "wrong chain_id: got #{actual}, expected #{expected_chain_id}"}
+      end
+    else
+      {:error, "invalid chain_id response"}
     end
   end
 
-  defp validate_chain_id_response(_, _), do: :ok
+  defp validate_chain_id_response(_, _), do: {:error, "invalid chain_id response"}
 
   defp rate_limit_in_body?(body) when is_binary(body) do
     lower = String.downcase(body)
