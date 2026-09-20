@@ -193,7 +193,7 @@ Strategies control how providers are selected for each request. Set via URL path
 |----------|----------|-------------|
 | **Priority** | `/rpc/:chain` with application default set to `:priority` | Select by `priority` field (lowest first) |
 | **Fastest** | `/rpc/fastest/:chain` | Lowest recent mean latency among reliability-qualified upstreams |
-| **Load Balanced** | `/rpc/load-balanced/:chain` | Distribute requests across healthy providers with health-aware tiering |
+| **Load Balanced** | `/rpc/load-balanced/:chain` | Randomized order with a bounded distinct-instance first pass for replay-safe fallback |
 | **Latency Weighted** | `/rpc/latency-weighted/:chain` | Weighted permutation using relative successful-attempt latency |
 
 ### When to Use Each Strategy
@@ -202,7 +202,11 @@ Strategies control how providers are selected for each request. Set via URL path
 
 **Fastest** — Optimal latency among upstreams with qualified recent evidence. It never ranks from lifetime averages. If none qualifies, all live candidates remain available and the engine emits an explicit degradation.
 
-**Load Balanced** — Even distribution with health-aware tiering. Spreads load across all healthy providers, deprioritizing those with tripped circuit breakers or rate limits. Good for throughput maximization and avoiding rate limits.
+**Load Balanced** — Randomized ordering with health-aware tiering. For replay-safe
+fallback, distinct physical instances receive a bounded first pass before sibling
+transports within a tier. It does not guarantee exact shares, capacity-aware
+balancing, or independent operators. See [Routing](ROUTING.md#load-balanced-default)
+for the dispatch-budget and recovered-head-preference boundaries.
 
 **Latency Weighted** — Weighted random ordering of qualified upstreams using scale-free latency ratios. Reliability qualification, capacity policy, and exploration remain separate concerns.
 
