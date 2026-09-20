@@ -26,7 +26,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.{CandidateListing, Catalog}
+  alias Lasso.Providers.{CandidateListing, Catalog, ChainIdentity}
 
   alias Lasso.RPC.{
     AttemptIdentity,
@@ -539,14 +539,38 @@ defmodule Lasso.RPC.RequestPipeline do
 
     case CircuitBreaker.admit(breaker_id, ctx.execution_envelope.deadline_us) do
       {:ok, receipt} ->
-        reserve_admitted_channel(
-          channel,
-          instance_id,
-          rest_channels,
-          ctx,
-          receipt,
-          caller_guard
-        )
+        case ChainIdentity.check(
+               instance_id,
+               channel.transport,
+               channel.route_generation
+             ) do
+          :ok ->
+            reserve_admitted_channel(
+              channel,
+              instance_id,
+              rest_channels,
+              ctx,
+              receipt,
+              caller_guard
+            )
+
+          {:error, :chain_identity_rejected} ->
+            abandon_unclaimed(receipt)
+
+            Logger.warning("HTTP provider chain identity rejected, skipping",
+              instance_id: instance_id,
+              request_id: ctx.request_id
+            )
+
+            ctx = RequestContext.increment_retries(ctx)
+
+            attempt_channels(
+              rest_channels,
+              %{ctx | terminal_reason: :admission_unavailable},
+              [],
+              caller_guard
+            )
+        end
 
       {:error, reason} ->
         handle_breaker_rejection(channel, rest_channels, ctx, reason, caller_guard)

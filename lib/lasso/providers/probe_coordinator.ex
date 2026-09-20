@@ -29,7 +29,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   alias Lasso.Config.{ConfigStore, MonitoringDefaults}
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Providers.{Catalog, RestartCounter}
+  alias Lasso.Providers.{Catalog, ChainIdentity, RestartCounter}
 
   @tick_interval_ms 200
   @default_timeout_ms 5_000
@@ -309,16 +309,19 @@ defmodule Lasso.Providers.ProbeCoordinator do
   defp probe_instance(state, instance_id, inst, now) do
     chain_id = state.chain_id
     coordinator = self()
+    snapshot = Catalog.snapshot()
 
-    case Catalog.get_instance(instance_id) do
+    case snapshot && Catalog.get_instance(snapshot, instance_id) do
       {:ok, %{mock?: true}} ->
         state
 
       {:ok, %{url: url} = instance} when is_binary(url) ->
         headers = Map.get(instance, :headers, [{"content-type", "application/json"}])
 
+        observation = ChainIdentity.capture(instance_id, snapshot)
+
         Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-          {^instance_id, result} = do_http_probe(instance_id, url, chain_id, headers)
+          {^instance_id, result} = do_http_probe(instance_id, url, chain_id, headers, observation)
           send(coordinator, {:probe_result, instance_id, result})
         end)
 
@@ -342,7 +345,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
     %{state | instances: Map.put(state.instances, instance_id, updated_inst)}
   end
 
-  defp do_http_probe(instance_id, url, chain_id, headers) do
+  defp do_http_probe(instance_id, url, chain_id, headers, observation) do
     body =
       Jason.encode!(%{"jsonrpc" => "2.0", "method" => "eth_chainId", "params" => [], "id" => 1})
 
@@ -354,6 +357,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
         case classify_response_body(resp_body, chain_id) do
           :ok ->
+            ChainIdentity.record(observation, :verified)
             write_probe_success(instance_id)
             CircuitBreaker.signal_recovery_cast({instance_id, :http})
             {instance_id, :success}
@@ -361,6 +365,11 @@ defmodule Lasso.Providers.ProbeCoordinator do
           {:rate_limited, reason} ->
             write_probe_rate_limit(instance_id)
             {instance_id, {:rate_limited, reason}}
+
+          {:identity_error, reason} ->
+            ChainIdentity.record(observation, :rejected)
+            write_probe_failure(instance_id, {:json_rpc_error, reason})
+            {instance_id, {:failure, {:json_rpc_error, reason}}}
 
           {:error, reason} ->
             write_probe_failure(instance_id, {:json_rpc_error, reason})
@@ -416,17 +425,20 @@ defmodule Lasso.Providers.ProbeCoordinator do
         {:error, msg}
 
       {:ok, %{"result" => hex_chain_id}} ->
-        validate_chain_id_response(hex_chain_id, chain_id)
+        case validate_chain_id_response(hex_chain_id, chain_id) do
+          :ok -> :ok
+          {:error, reason} -> {:identity_error, reason}
+        end
 
       {:ok, _} ->
-        {:error, "unexpected JSON-RPC response shape"}
+        {:identity_error, "unexpected JSON-RPC response shape"}
 
       {:error, _} ->
-        {:error, "invalid JSON response"}
+        {:identity_error, "invalid JSON response"}
     end
   end
 
-  defp classify_response_body(_, _chain_id), do: {:error, "empty response body"}
+  defp classify_response_body(_, _chain_id), do: {:identity_error, "empty response body"}
 
   defp validate_chain_id_response("0x" <> digits, expected_chain_id)
        when is_integer(expected_chain_id) do
