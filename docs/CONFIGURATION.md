@@ -83,6 +83,22 @@ chains:
 | `head_policy` | string | No | `off` (default), `local` (one running instance), or `global` ([durable fleet setup](BLOCK_CONTINUITY_OPERATIONS.md)). Covers block choice, not automatic pinning of state reads. |
 | `block_time_ms` | integer | No | Average block time in milliseconds. Used for optimistic lag calculation |
 
+### HTTP chain identity
+
+The configured `chain_id` is the expected identity of every provider on that
+chain. Background HTTP `eth_chainId` probes reject mismatched or malformed
+results. Once observed, that rejection blocks HTTP dispatch even while the
+provider's circuit is closed; requests can fail over to another eligible route.
+A later matching probe clears the identity rejection without resetting circuit
+state. Transport errors, rate limits, and JSON-RPC errors cannot clear it.
+
+Identity observations are local to the physical endpoint (chain, URLs, and
+authentication). Rejection survives unrelated configuration changes; stale probe
+completions cannot clear it. A changed or newly configured endpoint has no identity
+verdict and keeps normal admission behavior until observed. This is protection
+against observed misconfiguration, not mandatory verification before first use.
+HTTP observations do not establish the identity of a separate WebSocket URL.
+
 ### Monitoring
 
 Controls probe frequency and the dashboard lag status threshold. Shared upstreams use the shortest configured probe interval across profiles; HTTP polling slows while WebSocket block updates are active.

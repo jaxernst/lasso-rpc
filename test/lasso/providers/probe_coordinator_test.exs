@@ -468,6 +468,7 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
 
       :ets.delete(@instance_table, {:health_probe, instance_id})
       :ets.delete(@instance_table, {:ws_status, instance_id})
+      :ets.delete(@instance_table, {:chain_identity, instance_id, :http})
     end)
 
     {:ok, pid} = start_coordinator(@chain)
@@ -493,6 +494,15 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
         :sys.get_state(pid).instances[instance_id].consecutive_failures > 0
       end)
     end
+
+    identity =
+      Lasso.Providers.ChainIdentity.check(instance_id, :http)
+
+    assert identity ==
+             if(expected_status == :healthy, do: :ok, else: {:error, :chain_identity_rejected})
+
+    assert Lasso.Providers.ChainIdentity.check(instance_id, :ws) ==
+             :ok
 
     assert CandidateListing.list_candidates(@profile, @chain, %{protocol: :http}) == []
 

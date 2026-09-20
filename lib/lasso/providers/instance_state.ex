@@ -389,6 +389,7 @@ defmodule Lasso.Providers.InstanceState do
   def clear(instance_id) when is_binary(instance_id) do
     keys = [
       {:health_probe, instance_id},
+      {:chain_identity, instance_id, :http},
       {:health_block_sync, instance_id},
       {:health_routing, instance_id},
       {:circuit, instance_id, :http},
