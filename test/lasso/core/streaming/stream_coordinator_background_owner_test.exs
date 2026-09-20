@@ -357,6 +357,57 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     refute_receive {:subscription_event, _}, 50
   end
 
+  test "a buffered orphan addition is undone before replacement logs" do
+    chain_id = System.unique_integer([:positive])
+    profile = "profile-#{chain_id}"
+    key = {:logs, %{}}
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "client-order", self(), key)
+
+    {:ok, pid} =
+      StreamCoordinator.start_link({profile, chain_id, key, primary_provider_id: "old"})
+
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    orphan_100 = log_event(100, "old-100")
+    removal_100 = log_event(100, "old-100", true)
+    removal_101 = log_event(101, "old-101", true)
+    replacement_100 = log_event(100, "new-100")
+    replacement_101 = log_event(101, "new-101")
+    owner_pid = self()
+    owner_id = make_ref()
+    owner_ref = Process.monitor(self())
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | failover_status: :backfilling,
+          failover_context: %{
+            old_provider_id: "old",
+            new_provider_id: "new",
+            backfill_owner_id: owner_id,
+            backfill_owner_pid: owner_pid,
+            backfill_owner_ref: owner_ref,
+            backfill_task_ref: owner_ref,
+            started_at: System.monotonic_time(:millisecond),
+            attempt_count: 1,
+            event_buffer: [replacement_101, removal_100, replacement_100, removal_101, orphan_100]
+          }
+      }
+    end)
+
+    send(pid, {:backfill_result, owner_id, owner_pid, :ok})
+
+    delivered =
+      for _ <- 1..5 do
+        assert_receive {:subscription_event, %{"params" => %{"result" => payload}}}
+        payload
+      end
+
+    assert delivered == [orphan_100, removal_100, removal_101, replacement_100, replacement_101]
+    refute_receive {:subscription_event, _}, 50
+  end
+
   test "a gap beyond the replay window terminates downstream subscriptions" do
     chain_id = System.unique_integer([:positive])
     profile = "profile-#{chain_id}"

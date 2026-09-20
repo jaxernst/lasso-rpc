@@ -209,6 +209,13 @@ uses a shared subscription pool that selects eligible providers by priority,
 independently of the URL strategy. An explicit provider URL constrains the
 subscription to that provider and cannot fail over to another provider.
 
+During log recovery, buffered events preserve each log identity's addition/removal
+order through its last removal before final additions from replacement blocks are
+delivered. Core deduplicates positive and removed events separately by block hash
+and log index. Repeated removal and re-addition of the same identity within the
+dedupe window is not fully modeled; this ordering rule is not a claim of complete
+recovery for every repeated reorg sequence.
+
 ## Provider Override
 
 Bypass strategy selection entirely by routing directly to a specific provider:

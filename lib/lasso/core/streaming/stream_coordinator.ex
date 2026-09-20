@@ -790,12 +790,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           {:logs, _filter} ->
             state.failover_context.event_buffer
             |> Enum.reverse()
-            |> Enum.sort_by(fn log ->
-              {if(Map.get(log, "removed", false) == true, do: 0, else: 1),
-               decode_hex(Map.get(log, "blockNumber", "0x0")),
-               decode_hex(Map.get(log, "transactionIndex", "0x0")),
-               decode_hex(Map.get(log, "logIndex", "0x0"))}
-            end)
+            |> order_recovery_logs()
         end
 
       Enum.reduce(ordered_buffer, state, fn payload, acc ->
@@ -825,6 +820,38 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       state
     end
   end
+
+  defp order_recovery_logs(events) do
+    {rollbacks, additions} =
+      events
+      |> Enum.group_by(&log_identity/1)
+      |> Enum.map(fn {_identity, lifecycle} ->
+        {trailing_additions, rollback} =
+          lifecycle
+          |> Enum.reverse()
+          |> Enum.split_while(&(Map.get(&1, "removed", false) != true))
+
+        {Enum.reverse(rollback), Enum.reverse(trailing_additions)}
+      end)
+      |> Enum.unzip()
+
+    rollback_events =
+      rollbacks
+      |> Enum.reject(&(&1 == []))
+      |> Enum.sort_by(&log_order_key(hd(&1)))
+      |> List.flatten()
+
+    final_additions = additions |> List.flatten() |> Enum.sort_by(&log_order_key/1)
+    rollback_events ++ final_additions
+  end
+
+  defp log_order_key(log) do
+    {decode_hex(Map.get(log, "blockNumber", "0x0")),
+     decode_hex(Map.get(log, "transactionIndex", "0x0")),
+     decode_hex(Map.get(log, "logIndex", "0x0")), log_identity(log)}
+  end
+
+  defp log_identity(log), do: {Map.get(log, "blockHash"), Map.get(log, "logIndex")}
 
   defp handle_resubscribe_failure(state, reason) do
     Logger.error("Resubscription failed: #{inspect(reason)}",
