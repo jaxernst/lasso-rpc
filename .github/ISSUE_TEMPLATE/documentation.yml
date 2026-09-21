@@ -1,0 +1,33 @@
+name: Documentation problem
+description: Report missing, incorrect, or unclear Core documentation.
+title: "Docs: "
+labels: [documentation]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Page or section
+      description: Link to the page or name the file and heading.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear or incorrect?
+    validations:
+      required: true
+  - type: textarea
+    id: improvement
+    attributes:
+      label: Suggested improvement
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - Blocks installation or operation
+        - Could cause incorrect configuration
+        - Causes confusion
+        - Minor correction
+    validations:
+      required: true

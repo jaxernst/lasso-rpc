@@ -1,0 +1,64 @@
+name: Bug report
+description: Report reproducible incorrect behavior in the self-hosted RPC Core.
+title: "Bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Search existing issues first. Do not include credentials, private URLs,
+        client tokens, or unredacted customer requests.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Release tag, container digest, or exact Git commit.
+      placeholder: v0.4.4
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation
+      options:
+        - Release container / Compose
+        - Container built from source
+        - Elixir release
+        - mix phx.server
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed behavior
+      description: Include the route, chain, method, transport, safe-to-share error, and timestamp with time zone.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Provide commands or steps and a redacted minimal profile. Say whether one upstream works directly.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and diagnostics
+      description: OS, architecture, Elixir/OTP when relevant, logs, and any recent configuration change.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private URLs, tokens, cookies, and customer data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

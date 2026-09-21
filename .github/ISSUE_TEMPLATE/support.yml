@@ -1,0 +1,46 @@
+name: Deployment or configuration help
+description: Ask for help operating or configuring the self-hosted RPC Core.
+title: "Support: "
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Support is best effort. Read SUPPORT.md and redact all credentials,
+        private URLs, tokens, cookies, and customer data.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.4.4
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+      description: Include the relevant documentation, commands, and a redacted minimal profile.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened?
+      description: Include safe-to-share output, route, chain, method, transport, and timestamp where relevant.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This concerns the self-hosted RPC Core rather than a Lasso Cloud account or billing issue.
+          required: true
+        - label: I removed credentials, private URLs, tokens, cookies, and customer data.
+          required: true
