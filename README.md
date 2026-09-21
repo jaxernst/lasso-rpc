@@ -4,7 +4,7 @@
 
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](docs/API_REFERENCE.md)
 [![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
-[![Release evidence](https://img.shields.io/badge/release-evidence-22C55E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/download/v0.4.4/container-verification.md)
+[![Release evidence](https://img.shields.io/badge/release-evidence-22C55E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/latest/download/container-verification.md)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](https://www.apache.org/licenses/LICENSE-2.0)
