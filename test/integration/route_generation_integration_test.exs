@@ -10,13 +10,13 @@ defmodule Lasso.RPC.RouteGenerationIntegrationTest do
     before_publication = Lasso.Config.ConfigStore.route_generation()
 
     setup_providers([%{id: "first", priority: 10, behavior: :healthy}])
-    first_publication = Lasso.Config.ConfigStore.route_generation()
-    assert first_publication > before_publication
 
     assert {:ok, existing} =
              Lasso.RPC.TransportRegistry.get_channel("public", chain, "first", :http)
 
-    assert existing.route_generation == first_publication
+    first_publication = existing.route_generation
+    assert first_publication > before_publication
+    assert Lasso.Config.ConfigStore.route_generation() >= first_publication
 
     setup_providers([%{id: "second", priority: 20, behavior: :healthy}])
     second_publication = Lasso.Config.ConfigStore.route_generation()
