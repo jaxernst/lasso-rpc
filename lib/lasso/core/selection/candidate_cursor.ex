@@ -166,7 +166,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
     filters =
       SelectionFilters.new(
-        protocol: nil,
+        protocol: transport,
         exclude: Keyword.get(opts, :exclude, []),
         include_half_open: Keyword.get(opts, :include_half_open, true),
         max_lag_blocks: plan.max_lag_blocks,
@@ -193,6 +193,38 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       candidate_labels: [],
       diversity_seen: diversity_seen(strategy, method, opts)
     }
+  end
+
+  @doc "Explains static exclusions from the captured selection plan without probing providers."
+  @spec exhaustion_reason(t()) :: atom()
+  def exhaustion_reason(%__MODULE__{} = cursor) do
+    providers =
+      Enum.reject(cursor.plan.providers, &(&1.id in cursor.filters.exclude))
+
+    transport_providers =
+      Enum.filter(providers, fn provider ->
+        Enum.any?(provider.transports, &(&1 in transports_to_check(cursor.filters.protocol)))
+      end)
+
+    cond do
+      not current?(cursor) ->
+        :routing_configuration_changed
+
+      cursor.plan.providers == [] ->
+        :no_providers_configured
+
+      providers == [] ->
+        :providers_excluded
+
+      transport_providers == [] ->
+        :transport_unavailable
+
+      cursor.filters.requires_archival and Enum.all?(transport_providers, &(not &1.archival)) ->
+        :archive_required
+
+      true ->
+        :no_eligible_providers
+    end
   end
 
   @spec next(t()) :: {:ok, Channel.t(), t()} | :done | :stale

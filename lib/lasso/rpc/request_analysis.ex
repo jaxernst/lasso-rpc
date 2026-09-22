@@ -22,7 +22,9 @@ defmodule Lasso.RPC.RequestAnalysis do
 
   ## Options
 
-    * `:consensus_height` - Current blockchain height for age calculation
+    * `:consensus_height` - Fresh reference height for age calculation. Unknown age
+      does not establish an archival requirement; eligible providers may be tried
+      within the request's normal execution budget.
     * `:archival_threshold` - Blocks older than this require archival (default: #{ChainConfig.Selection.default_archival_threshold()})
 
   ## Examples
@@ -92,8 +94,7 @@ defmodule Lasso.RPC.RequestAnalysis do
       {block_num, ""} ->
         case Keyword.get(opts, :consensus_height) do
           nil ->
-            # Conservative: assume archival when consensus height is unknown
-            true
+            false
 
           consensus_height ->
             default_threshold = ChainConfig.Selection.default_archival_threshold()

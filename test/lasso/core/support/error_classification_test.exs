@@ -4,6 +4,18 @@ defmodule Lasso.RPC.ErrorClassificationTest do
   alias Lasso.Core.Support.ErrorClassification
   alias Lasso.Core.Support.ErrorClassifier
 
+  test "argument-validation evidence outranks incidental provider phrases" do
+    for message <- [
+          "invalid argument 0: invalid API key field; please retry with a valid value",
+          "cannot unmarshal string 'rate limit exceeded' into Go value of type hexutil.Uint64",
+          "invalid address: please retry with a 20-byte hex address"
+        ],
+        code <- [-32_000, -32_602, -32_603] do
+      assert %{category: :invalid_params, retriable?: false, breaker_penalty?: false} =
+               ErrorClassifier.classify(code, message)
+    end
+  end
+
   test "quota exhaustion requires exhaustion evidence, not a mention of quota or billing" do
     for message <- [
           "quota service unavailable",

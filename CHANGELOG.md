@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Upgrade Phoenix to 1.8.14, Cowboy to 2.19.0, Cowlib to 2.20.0, and Ranch to 2.3.0. Cowlib 2.20.0 resolves `CVE-2026-43971`; the two remaining acknowledged Cowlib advisories affect encoder paths Lasso does not call.
 
+### Fixed
+
+- Correct Public Arbitrum archive routing: dRPC and PublicNode remain available for recent traffic but no longer claim historical-state support, while qualified keyless Tenderly and Nodies routes provide archival state reads.
+- Keep pinned numeric reads eligible when no fresh head is available to establish their age. Once age is known, requests beyond the configured threshold still require an archival provider.
+- Return structured, non-retriable admission errors when a request requires archival support or a transport that no configured provider supplies, without recording an upstream attempt. Explicit invalid-argument evidence also takes precedence over incidental provider, authentication, throttling, or retry wording in the request error.
+
 ### Documentation and project operations
 
 - Correct the load-balanced routing summaries to describe bounded distinct-provider fallback for replay-safe reads, while keeping health tiers, recovered-head preference, dispatch limits, and provider capacity constraints explicit.
@@ -20,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Compatibility
 
-- No configuration or journal migration is required. Request routing, retry budgets, method safety, and the v0.4.4 runtime contracts are unchanged.
+- No configuration or journal migration is required. Retry budgets and method-safety dispatch limits are unchanged.
+- Unknown block age no longer establishes an archival requirement by itself. Requests can reach eligible providers within the normal execution budget; provider responses still drive ordinary failover. Known-old requests retain archival admission.
+- The bundled Public Arbitrum provider set changes. Operators with local profile overrides retain their configured routes and should review archival declarations against historical state reads, not header availability alone.
 - Lasso OSS continues to require authentication and inbound rate limiting at the operator's ingress boundary.
 
 ## [0.4.4] - 2026-09-20

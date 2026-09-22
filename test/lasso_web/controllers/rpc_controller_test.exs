@@ -180,7 +180,9 @@ defmodule LassoWeb.RPCControllerWireContractTest do
 
       assert Map.keys(body) |> Enum.sort() == ["error", "id", "jsonrpc"]
       assert Map.keys(body["error"]) |> Enum.sort() == ["code", "data", "message"]
-      assert Map.keys(body["error"]["data"]) == ["retry_after_ms"]
+
+      assert Map.keys(body["error"]["data"]) |> Enum.sort() ==
+               ["reason", "retry_after_ms", "upstream_attempts"]
 
       assert %{
                "jsonrpc" => "2.0",
@@ -188,7 +190,11 @@ defmodule LassoWeb.RPCControllerWireContractTest do
                "error" => %{
                  "code" => -32_000,
                  "message" => message,
-                 "data" => %{"retry_after_ms" => retry_after_ms}
+                 "data" => %{
+                   "reason" => "no_eligible_providers",
+                   "retry_after_ms" => retry_after_ms,
+                   "upstream_attempts" => 0
+                 }
                }
              } = body
 

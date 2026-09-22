@@ -608,6 +608,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
       contains_any?(message_lower, @execution_revert_patterns) ->
         :execution_revert
 
+      # Explicit argument validation outranks provider phrases embedded in an
+      # invalid value or accompanying guidance.
+      contains_any?(message_lower, @invalid_params_patterns) ->
+        :invalid_params
+
       # Provider capacity signals
       contains_any?(message_lower, @rate_limit_patterns) ->
         :rate_limit
@@ -623,10 +628,6 @@ defmodule Lasso.Core.Support.ErrorClassification do
       # Patterns like "please retry" indicate the provider wants a retry
       contains_any?(message_lower, @transient_error_patterns) ->
         :server_error
-
-      # Parameter validation errors — request-caused, not provider health issues.
-      contains_any?(message_lower, @invalid_params_patterns) ->
-        :invalid_params
 
       # Block-not-available errors (check before capability violations to avoid
       # "not available"/"not found" patterns in @capability_violation_patterns swallowing these)
