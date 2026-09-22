@@ -304,38 +304,38 @@ chains:
         priority: 2
         url: "https://arbitrum.drpc.org"
         ws_url: "wss://arbitrum.drpc.org"
-        archival: true
+        # Serves headers at full depth but refuses historical state (HTTP 400 code 27).
+        archival: false
         subscribe_new_heads: false
         capabilities:
           limits:
             max_block_range: 10000
 
-      - id: "arbitrum_lava"
-        name: "Lava Arbitrum"
+      - id: "arbitrum_tenderly"
+        name: "Tenderly Arbitrum"
         priority: 3
-        url: "https://arb1.lava.build"
+        url: "https://arbitrum.gateway.tenderly.co"
         archival: true
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
+        subscribe_new_heads: false
 
       - id: "arbitrum_publicnode"
         name: "PublicNode Arbitrum"
         priority: 4
         url: "https://arbitrum-one-rpc.publicnode.com"
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
-        archival: true
+        # Serves headers at full depth but refuses historical state (HTTP 403).
+        archival: false
         subscribe_new_heads: true
         capabilities:
           unsupported_categories: [debug, trace, txpool, filters]
           unsupported_methods: ["eth_protocolVersion"]
 
-      - id: "arbitrum_pocket"
-        name: "Pocket Network Arbitrum"
-        priority: 6
-        url: "https://arb-one.api.pocket.network"
+      - id: "arbitrum_nodies"
+        name: "Nodies Arbitrum"
+        priority: 5
+        url: "https://arb-pokt.nodies.app"
         archival: true
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
+        subscribe_new_heads: false
 
   # ──────────────────────────────────────────────────────────────────────────
   # ETHEREUM SEPOLIA (Testnet)
