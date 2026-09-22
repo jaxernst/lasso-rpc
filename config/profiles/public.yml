@@ -311,16 +311,23 @@ chains:
           limits:
             max_block_range: 10000
 
-      - id: "arbitrum_tenderly"
-        name: "Tenderly Arbitrum"
+      - id: "arbitrum_thirdweb"
+        name: "thirdweb Arbitrum"
         priority: 3
-        url: "https://arbitrum.gateway.tenderly.co"
+        url: "https://arbitrum.rpc.thirdweb.com"
+        archival: true
+        subscribe_new_heads: false
+
+      - id: "arbitrum_blast"
+        name: "Blast Arbitrum"
+        priority: 4
+        url: "https://arbitrum-one.public.blastapi.io"
         archival: true
         subscribe_new_heads: false
 
       - id: "arbitrum_publicnode"
         name: "PublicNode Arbitrum"
-        priority: 4
+        priority: 5
         url: "https://arbitrum-one-rpc.publicnode.com"
         ws_url: "wss://arbitrum-one-rpc.publicnode.com"
         # Serves headers at full depth but refuses historical state (HTTP 403).
@@ -330,11 +337,18 @@ chains:
           unsupported_categories: [debug, trace, txpool, filters]
           unsupported_methods: ["eth_protocolVersion"]
 
+      - id: "arbitrum_tenderly"
+        name: "Tenderly Arbitrum"
+        priority: 6
+        url: "https://arbitrum.gateway.tenderly.co"
+        archival: false
+        subscribe_new_heads: false
+
       - id: "arbitrum_nodies"
         name: "Nodies Arbitrum"
-        priority: 5
+        priority: 7
         url: "https://arb-pokt.nodies.app"
-        archival: true
+        archival: false
         subscribe_new_heads: false
 
   # ──────────────────────────────────────────────────────────────────────────

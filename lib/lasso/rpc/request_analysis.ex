@@ -23,8 +23,9 @@ defmodule Lasso.RPC.RequestAnalysis do
   ## Options
 
     * `:consensus_height` - Fresh reference height for age calculation. Unknown age
-      does not establish an archival requirement; eligible providers may be tried
-      within the request's normal execution budget.
+      does not establish an archival requirement for numeric selectors. EIP-1898
+      state selectors by hash require an archival provider because their age cannot
+      be established before dispatch.
     * `:archival_threshold` - Blocks older than this require archival (default: #{ChainConfig.Selection.default_archival_threshold()})
 
   ## Examples
@@ -80,7 +81,7 @@ defmodule Lasso.RPC.RequestAnalysis do
   defp archival_block?(%{"blockNumber" => block_number}, opts),
     do: archival_block?(block_number, opts)
 
-  defp archival_block?(%{"blockHash" => block_hash}, _opts) when is_binary(block_hash), do: false
+  defp archival_block?(%{"blockHash" => block_hash}, _opts) when is_binary(block_hash), do: true
 
   defp archival_block?("0x" <> hex, _opts) when byte_size(hex) == 64 do
     case Integer.parse(hex, 16) do

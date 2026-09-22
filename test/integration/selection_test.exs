@@ -514,6 +514,45 @@ defmodule Lasso.RPC.SelectionTest do
       assert "provider_1" in provider_ids
       assert "provider_2" in provider_ids
     end
+
+    test "routes EIP-234 log hashes without requiring state archival support", %{chain: chain} do
+      profile = "public"
+      block_hash = "0x" <> String.duplicate("ab", 32)
+
+      setup_providers([
+        %{id: "non_archival", priority: 10, behavior: :healthy, profile: profile, archival: false}
+      ])
+
+      channels =
+        Selection.select_channels(profile, chain, "eth_getLogs",
+          params: [%{"blockHash" => block_hash}]
+        )
+
+      assert Enum.map(channels, & &1.provider_id) == ["non_archival"]
+    end
+
+    test "requires archival capability for EIP-1898 state selectors by hash", %{chain: chain} do
+      profile = "public"
+      block_hash = "0x" <> String.duplicate("ab", 32)
+
+      setup_providers([
+        %{
+          id: "non_archival",
+          priority: 10,
+          behavior: :healthy,
+          profile: profile,
+          archival: false
+        },
+        %{id: "archival", priority: 20, behavior: :healthy, profile: profile, archival: true}
+      ])
+
+      channels =
+        Selection.select_channels(profile, chain, "eth_getBalance",
+          params: ["0xabc", %{"blockHash" => block_hash}]
+        )
+
+      assert Enum.map(channels, & &1.provider_id) == ["archival"]
+    end
   end
 
   describe "lazy execution candidates" do

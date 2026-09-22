@@ -101,7 +101,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     assert recovered.execution_envelope.dispatch_count <= 3
   end
 
-  test "hash selectors leave five distinct providers eligible and can starve archive even over HTTP only" do
+  test "hash state selectors preserve archive diversity within the HTTP dispatch budget" do
     {chain, snapshot, plan} =
       fixture([
         {"recent-a", false, [:http]},
@@ -116,20 +116,22 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
       %{"blockHash" => "0x" <> String.duplicate("1", 64), "requireCanonical" => true}
     ]
 
-    refute RequestAnalysis.analyze("eth_getBalance", params, consensus_height: 100_000_000).requires_archival
+    assert RequestAnalysis.analyze("eth_getBalance", params, consensus_height: 100_000_000).requires_archival
 
-    {seed, _order} =
+    {seed, order} =
       find_order(snapshot, plan, params, :http, fn order ->
-        length(order) == 5 and Enum.all?(Enum.take(order, 3), fn {id, _} -> id != "capable" end)
+        length(order) == 3 and List.last(order) == {"capable", :http}
       end)
 
     :rand.seed(:exsss, {seed, seed + 1, seed + 2})
-    assert {:error, _, ctx} = execute(chain, params, :http)
-    assert ctx.terminal_reason == :dispatch_budget_exhausted
+    assert {:ok, _, ctx} = execute(chain, params, :http)
+    assert ctx.executed_channel.provider_id == "capable"
     assert ctx.execution_envelope.dispatch_count == 3
     assert ctx.execution_envelope.dispatch_limit == 3
     assert ctx.execution_envelope.deadline_us - ctx.execution_envelope.started_at_us == 2_000_000
-    refute_receive {:dispatched, "capable", _}, 10
+    assert dispatched(3) == order
+    refute_receive {:dispatched, "recent-a", _}, 10
+    refute_receive {:dispatched, "recent-b", _}, 10
 
     assert {:ok, _, recovered} = execute(chain, params, :http, "capable")
     assert recovered.execution_envelope.dispatch_count == 1
