@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-21
+
+### Security
+
+- Upgrade Phoenix to 1.8.14, Cowboy to 2.19.0, Cowlib to 2.20.0, and Ranch to 2.3.0. Cowlib 2.20.0 resolves `CVE-2026-43971`; the two remaining acknowledged Cowlib advisories affect encoder paths Lasso does not call.
+
+### Documentation and project operations
+
+- Correct the load-balanced routing summaries to describe bounded distinct-provider fallback for replay-safe reads, while keeping health tiers, recovered-head preference, dispatch limits, and provider capacity constraints explicit.
+- Add a provider-neutral migration and canary guide, support and maintainer policies, ownership rules, and structured issue and pull request templates.
+
+### Compatibility
+
+- No configuration or journal migration is required. Request routing, retry budgets, method safety, and the v0.4.4 runtime contracts are unchanged.
+- Lasso OSS continues to require authentication and inbound rate limiting at the operator's ingress boundary.
+
 ## [0.4.4] - 2026-09-20
 
 ### Fixed
@@ -284,7 +300,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.4...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.5...HEAD
+[0.4.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.1...v0.4.2
