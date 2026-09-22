@@ -154,7 +154,7 @@ defmodule Lasso.RPC.RequestAnalysisTest do
       refute result.requires_archival
     end
 
-    test "recognizes both EIP-1898 block selector variants" do
+    test "requires archival support for EIP-1898 hash selectors with unknown age" do
       by_number =
         RequestAnalysis.analyze("eth_call", [
           %{},
@@ -168,7 +168,7 @@ defmodule Lasso.RPC.RequestAnalysisTest do
         ])
 
       refute by_number.requires_archival
-      refute by_hash.requires_archival
+      assert by_hash.requires_archival
     end
   end
 
