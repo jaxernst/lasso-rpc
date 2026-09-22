@@ -70,14 +70,14 @@ defmodule Lasso.RPC.RequestAnalysisTest do
       refute result.requires_archival
     end
 
-    test "returns requires_archival: true for low hex block without consensus height (conservative)" do
+    test "unknown age does not establish an archival requirement for a low numeric selector" do
       result = RequestAnalysis.analyze("eth_getLogs", [%{"fromBlock" => "0x64"}])
-      assert result.requires_archival
+      refute result.requires_archival
     end
 
-    test "returns requires_archival: true for high hex block without consensus height (conservative)" do
+    test "unknown age does not establish an archival requirement for a high numeric selector" do
       result = RequestAnalysis.analyze("eth_getLogs", [%{"fromBlock" => "0xF4240"}])
-      assert result.requires_archival
+      refute result.requires_archival
     end
 
     test "returns requires_archival: true if either fromBlock or toBlock is archival" do
@@ -167,7 +167,7 @@ defmodule Lasso.RPC.RequestAnalysisTest do
           %{"blockHash" => "0xabc", "requireCanonical" => true}
         ])
 
-      assert by_number.requires_archival
+      refute by_number.requires_archival
       refute by_hash.requires_archival
     end
   end

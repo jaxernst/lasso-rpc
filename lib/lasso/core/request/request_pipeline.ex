@@ -273,7 +273,7 @@ defmodule Lasso.RPC.RequestPipeline do
       :ok ->
         case selected do
           nil ->
-            handle_no_channels(ctx)
+            handle_no_channels(ctx, selection_exhaustion_reason(candidates))
 
           %Channel{} = channel ->
             ctx = RequestContext.mark_upstream_start(ctx)
@@ -1065,25 +1065,57 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
-  @spec handle_no_channels(RequestContext.t()) :: result()
-  defp handle_no_channels(ctx) do
+  defp selection_exhaustion_reason(%CandidateCursor{} = cursor),
+    do: CandidateCursor.exhaustion_reason(cursor)
+
+  defp selection_exhaustion_reason(_candidates), do: :no_eligible_providers
+
+  @spec handle_no_channels(RequestContext.t(), atom()) :: result()
+  defp handle_no_channels(ctx, reason) do
     profile = if ctx.opts, do: ctx.opts.profile, else: ProfileValidator.default_profile()
 
     retry_after_ms =
-      calculate_min_recovery_time(profile, ctx.chain_id, ctx.opts && ctx.opts.transport)
+      if reason == :no_eligible_providers,
+        do: calculate_min_recovery_time(profile, ctx.chain_id, ctx.opts && ctx.opts.transport)
 
     {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain_id)
+
+    message =
+      case reason do
+        :archive_required ->
+          "No eligible upstream for #{ctx.method}: the requested block requires archival support, but no remaining provider on the requested transport declares it."
+
+        :transport_unavailable ->
+          "No eligible upstream for #{ctx.method}: no remaining provider supports the requested transport."
+
+        _ ->
+          message
+      end
+
+    data =
+      Map.merge(data, %{
+        reason: reason,
+        upstream_attempts: ctx.execution_envelope.dispatch_count
+      })
 
     jerr =
       JError.new(-32_000, message,
         category: :provider_error,
-        retriable?: true,
+        retriable?:
+          reason not in [
+            :archive_required,
+            :transport_unavailable,
+            :no_providers_configured,
+            :providers_excluded
+          ],
+        breaker_penalty?: false,
         data: data
       )
 
     Logger.warning("No channels available",
       chain_id: ctx.chain_id,
       method: ctx.method,
+      reason: reason,
       retry_after_ms: retry_after_ms
     )
 
