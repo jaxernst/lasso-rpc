@@ -1,6 +1,6 @@
 <img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
 
-### Resilient Ethereum RPC over HTTP and WebSocket
+### One fast, resilient, observable endpoint for EVM RPC.
 
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](docs/API_REFERENCE.md)
 [![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
@@ -11,12 +11,17 @@
 [![Version](https://img.shields.io/badge/version-0.4.5-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases)
 [![Elixir](https://img.shields.io/badge/built%20with-Elixir%2FOTP-19202E?style=flat-square&labelColor=19202E&logo=elixir&logoColor=white)](https://elixir-lang.org)
 
-Lasso is a multi-chain Ethereum JSON-RPC proxy with health checks, retries,
-failover, and a live dashboard. Route requests across your own nodes and RPC
-providers by pointing your client at Lasso's URL.
+Lasso turns your nodes and RPC providers into one intelligent EVM JSON-RPC
+endpoint. It routes requests using provider health, declared capabilities, and
+latency measured by method and transport. When an upstream falters, eligible
+reads get bounded failover; `newHeads` and `logs` streams share subscriptions
+and can fill bounded gaps after failover. Your app keeps its existing JSON-RPC
+client.
 
-Run it on your own infrastructure with YAML configuration. The included public
-providers let you try it without API keys.
+Watch routing decisions, provider health, and latency in a live dashboard.
+Start with a pinned Docker Compose release and the bundled public pool, which
+needs no provider API keys. Add your own upstreams with YAML profiles when
+you're ready.
 
 [Quick Start](#quick-start) · [Migration guide](docs/MIGRATION.md) ·
 [Configuration](#configuration) ·
@@ -25,13 +30,20 @@ providers let you try it without API keys.
 
 ## Features
 
-- **Routing control:** `fastest`, `load-balanced`, `latency-weighted`, and direct provider routes.
-- **Method-aware measurements:** latency tracked per provider, RPC method, and transport.
-- **Provider resilience:** circuit breakers, retries, and failover based on health and declared capabilities.
-- **WebSocket subscriptions:** multiplexed `newHeads` and `logs`, with bounded recovery and HTTP gap-filling.
-- **YAML profiles:** separate chain, provider, and routing configurations; identical upstreams can share runtime state.
-- **Live dashboard:** provider topology, health, latency, routing activity, and an HTTP/WebSocket request tester.
-- **Optional clustering:** aggregate observability across nodes while each node routes independently.
+- **Route on the right signal:** choose `fastest`, `load-balanced`, or
+  `latency-weighted` in the URL. Lasso filters by capability and health and
+  tracks latency per provider, method, and transport.
+- **Keep traffic moving:** circuit breakers and bounded retries protect
+  eligible reads when an upstream degrades. Direct provider routes let you
+  inspect one backend.
+- **Recover live streams:** matching `newHeads` and `logs` subscriptions share
+  upstream connections, with bounded HTTP gap-filling when an upstream fails.
+- **See where traffic goes:** the dashboard shows topology, health, latency,
+  and routing activity. Opt-in response metadata shows the selected provider,
+  strategy, and upstream timing.
+- **Run pools your way:** YAML profiles configure chains and providers. Each
+  node makes local routing decisions; optional clustering brings regional
+  measurements into one dashboard.
 
 ## Quick Start
 
@@ -50,14 +62,8 @@ curl --fail http://localhost:4000/api/health
 Open **<http://localhost:4000/dashboard>**. The prebuilt image supports Linux AMD64
 and ARM64 and requires no source checkout or application build tools.
 
-Compose binds localhost and keeps profiles and history in a named volume.
-Preserve `.env` across restarts. `docker compose down` stops Lasso and retains its
-data; adding `--volumes` deletes it. See [Deployment](docs/DEPLOYMENT.md#docker)
-for image verification, custom providers, upgrades, and rollback.
-
-Lasso has no built-in client authentication or incoming RPC quotas. Protect
-externally accessible RPC, metrics, and dashboard endpoints with your network or
-reverse proxy. The dashboard tester sends real upstream requests.
+The health check confirms Lasso is running. Send the first RPC request below to
+see it route through a provider.
 
 ## Try It
 
@@ -75,8 +81,19 @@ A successful response contains a hexadecimal block number; the value changes:
 {"jsonrpc":"2.0","id":1,"result":"0x18ba3fb"}
 ```
 
-The health endpoint checks the application. This RPC request also exercises an
-upstream provider. Public providers have their own availability and rate limits.
+Choose `fastest` in the URL and see where Lasso sent the request:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  'http://localhost:4000/rpc/fastest/ethereum?include_meta=body' \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+The opt-in `lasso_meta` field includes the selected provider, strategy, and
+upstream latency. Omit `include_meta` to keep the ordinary JSON-RPC response.
+See the [API reference](docs/API_REFERENCE.md#observability-metadata) for header
+metadata and error responses.
 
 For WebSocket subscriptions, use the dashboard tester or run
 [`wscat`](https://github.com/websockets/wscat) with Node.js and npm:
@@ -94,11 +111,18 @@ At its `>` prompt, send:
 Expect a subscription ID followed by `eth_subscription` notifications as blocks
 arrive. Press Ctrl+C to disconnect.
 
-To inspect routing decisions, add `?include_meta=headers` to an HTTP request URL
-and `-i` to curl. See the [API reference](docs/API_REFERENCE.md#observability-metadata)
-for metadata fields and error responses.
+![Lasso RPC dashboard showing chain topology, provider health, routing activity, and the request tester](docs/images/dashboard.png)
 
-![Lasso RPC v0.3.4 dashboard showing chain topology, provider health, routing activity, and the request tester](docs/images/dashboard-v0.3.4.png)
+## Deployment notes
+
+Compose binds localhost and keeps profiles and history in a named volume.
+Preserve `.env` across restarts. `docker compose down` stops Lasso and retains its
+data; adding `--volumes` deletes it. See [Deployment](docs/DEPLOYMENT.md#docker)
+for image verification, custom providers, upgrades, and rollback.
+
+Lasso has no built-in client authentication or incoming RPC quotas. Protect
+externally accessible RPC, metrics, and dashboard endpoints with your network or
+reverse proxy. The dashboard tester sends real upstream requests.
 
 ## Configuration
 
