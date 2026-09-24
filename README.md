@@ -22,8 +22,6 @@ Self-hosted, Apache-2.0, and built on Elixir/OTP. The bundled public pool covers
 Ethereum, Base, and Arbitrum (mainnet and Sepolia) with no API keys, so you can
 try it in one command. Add any EVM chain and your own providers in YAML.
 
-![Lasso dashboard showing chain topology, provider health, live routing activity, and the request tester](docs/images/dashboard.png)
-
 [Quick Start](#quick-start) · [Use it from your app](#use-it-from-your-app) ·
 [Configuration](#configuration) · [Endpoints](#endpoints) ·
 [How it works](#how-it-works) · [Migration guide](docs/MIGRATION.md) ·
@@ -72,6 +70,8 @@ Each keeps its own picture of provider health, changing providers means a
 redeploy, and nothing records which upstream answered. Lasso moves that into one
 endpoint: shared measurements, one place to change providers, and a record of
 every routing decision.
+
+![Lasso dashboard showing chain topology, provider health, live routing activity, and the request tester](docs/images/dashboard.png)
 
 ## Quick Start
 
