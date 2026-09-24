@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.5] - 2026-09-21
+## [0.4.5] - 2026-09-23
 
 ### Security
 
@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Correct Public Arbitrum archive routing: dRPC and PublicNode remain available for recent traffic but no longer claim historical-state support, while qualified keyless Tenderly and Nodies routes provide archival state reads.
+- Correct Public Arbitrum archive routing: thirdweb and Blast now serve historical state reads. dRPC, PublicNode, Tenderly, and Nodies remain available for recent traffic but no longer claim historical-state support.
 - Keep pinned numeric reads eligible when no fresh head is available to establish their age. Once age is known, requests beyond the configured threshold still require an archival provider.
 - Return structured, non-retriable admission errors when a request requires archival support or a transport that no configured provider supplies, without recording an upstream attempt. Explicit invalid-argument evidence also takes precedence over incidental provider, authentication, throttling, or retry wording in the request error.
 
@@ -27,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 
 - No configuration or journal migration is required. Retry budgets and method-safety dispatch limits are unchanged.
-- Unknown block age no longer establishes an archival requirement by itself. Requests can reach eligible providers within the normal execution budget; provider responses still drive ordinary failover. Known-old requests retain archival admission.
+- Unknown block age no longer establishes an archival requirement for numeric selectors. Requests can reach eligible providers within the normal execution budget; provider responses still drive ordinary failover. Known-old requests retain archival admission.
+- EIP-1898 state reads selected by block hash now require an archival provider, because their age cannot be established before dispatch. A chain with no archival provider rejects them at admission.
 - The bundled Public Arbitrum provider set changes. Operators with local profile overrides retain their configured routes and should review archival declarations against historical state reads, not header availability alone.
 - Lasso OSS continues to require authentication and inbound rate limiting at the operator's ingress boundary.
 
