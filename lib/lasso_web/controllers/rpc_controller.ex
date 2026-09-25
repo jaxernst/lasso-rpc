@@ -31,6 +31,7 @@ defmodule LassoWeb.RPCController do
   alias Lasso.Config.MethodPolicy
   alias Lasso.Config.ProfileValidator
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.JSONRPC.RequestValidator
   alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
   alias Lasso.RPC.RequestPipeline
   alias Lasso.RPC.Response
@@ -174,7 +175,7 @@ defmodule LassoWeb.RPCController do
           json(conn, error_response)
         end
 
-      {:error, error} ->
+      {:invalid, error, response_id} ->
         # Inject observability metadata even for errors (no context available)
         conn = maybe_inject_observability_metadata(conn, nil)
 
@@ -185,7 +186,7 @@ defmodule LassoWeb.RPCController do
             conn,
             error
             |> JError.from()
-            |> JError.to_response(Map.get(params, "id"))
+            |> JError.to_response(response_id)
           )
         end
     end
@@ -228,8 +229,7 @@ defmodule LassoWeb.RPCController do
   end
 
   defp notification_request?(request) when is_map(request) do
-    not Map.has_key?(request, "id") and is_binary(request["method"]) and
-      request["jsonrpc"] in [nil, @jsonrpc_version]
+    RequestValidator.notification?(request)
   end
 
   defp notification_request?(_request), do: false
@@ -322,8 +322,13 @@ defmodule LassoWeb.RPCController do
 
         prepare_valid_batch_item(item, normalized, chain, conn, started_at_us)
 
-      {:error, error} ->
-        item = %{index: index, request_id: request_id(request), respond?: true}
+      {:invalid, error, response_id} ->
+        item = %{
+          index: index,
+          request_id: response_id,
+          respond?: not notification_request?(request)
+        }
+
         {:immediate, item, {:error, error}}
     end
   end
@@ -491,26 +496,7 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp request_id(request) when is_map(request), do: Map.get(request, "id")
-  defp request_id(_request), do: nil
-
-  defp validate_json_rpc_request(%{"method" => method} = request) when is_binary(method) do
-    if Map.has_key?(request, "jsonrpc") and request["jsonrpc"] != @jsonrpc_version do
-      {:error, JError.new(-32_600, "Invalid Request: jsonrpc must be \"2.0\"")}
-    else
-      normalized =
-        Map.update(request, "params", [], fn
-          nil -> []
-          list when is_list(list) -> list
-          map when is_map(map) -> [map]
-          other -> [other]
-        end)
-
-      {:ok, normalized}
-    end
-  end
-
-  defp validate_json_rpc_request(_), do: {:error, JError.new(-32_600, "Invalid Request")}
+  defp validate_json_rpc_request(request), do: RequestValidator.validate(request)
 
   defp process_json_rpc_request(
          %{"method" => "eth_chainId", "params" => []} = request,

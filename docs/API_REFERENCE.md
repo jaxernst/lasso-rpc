@@ -224,6 +224,20 @@ The server sends two frames:
 
 ## Batch Requests
 
+HTTP and WebSocket requests require `"jsonrpc":"2.0"` and a string `method`.
+The optional `id` is a string, number, or `null`; omitting it creates a
+notification, which has no response. `params` may be an array or object and
+defaults to an empty array when absent. Scalar and explicit `null` parameters
+return `-32602`, while an invalid envelope or ID returns `-32600`. Valid
+notifications remain silent even when their method parameters are invalid.
+
+Core validates EIP-1898 block selectors on applicable methods: a selector
+cannot include both `blockNumber` and `blockHash`. For `eth_getLogs`, `blockHash`
+cannot be combined with `fromBlock` or `toBlock`. These errors are local
+`-32602` responses, before upstream dispatch. WebSocket `eth_subscribe` accepts
+`["newHeads"]`, `["logs"]`, or `["logs", filter_object]`;
+`eth_unsubscribe` accepts one string subscription ID.
+
 HTTP endpoints support JSON-RPC batch requests (arrays). Maximum 50 requests per batch (configurable).
 
 ```bash

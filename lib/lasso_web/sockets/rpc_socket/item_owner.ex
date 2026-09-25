@@ -4,6 +4,7 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Streaming.SubscriptionRouter
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.JSONRPC.SubscriptionParams
   alias Lasso.RPC.{RequestContext, RequestOptions, RequestPipeline}
 
   defmodule Work do
@@ -71,7 +72,7 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
 
   defp execute(%Work{method: "eth_subscribe"} = work, scope, socket_pid, context, _opts) do
     with_subscription_scope(scope, context, fn guard ->
-      with {:ok, key} <- subscription_key(work.params),
+      with {:ok, key} <- SubscriptionParams.subscribe_key(work.params),
            request_id <-
              SubscriptionRouter.subscribe_request(work.profile, work.chain_id, key,
                provider_id: work.provider_id,
@@ -101,7 +102,8 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
          socket_pid,
          context,
          _opts
-       ) do
+       )
+       when is_binary(subscription_id) do
     with_subscription_scope(scope, context, fn guard ->
       request_id =
         SubscriptionRouter.unsubscribe_checked_request(
@@ -126,12 +128,13 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
   end
 
   defp execute(
-         %Work{method: "eth_unsubscribe", params: [_subscription_id]},
+         %Work{method: "eth_unsubscribe", params: [subscription_id]},
          scope,
          _socket_pid,
          context,
          _opts
-       ) do
+       )
+       when is_binary(subscription_id) do
     with_subscription_scope(scope, context, fn _guard ->
       {:ok, {:subscription_missing, false}, RequestContext.record_success(context, false)}
     end)
@@ -153,14 +156,6 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
       work.params,
       opts
     )
-  end
-
-  defp subscription_key(["newHeads" | _rest]), do: {:ok, {:newHeads}}
-  defp subscription_key(["logs"]), do: {:ok, {:logs, %{}}}
-  defp subscription_key(["logs", filter | _rest]) when is_map(filter), do: {:ok, {:logs, filter}}
-
-  defp subscription_key(_params) do
-    {:error, JError.new(-32_602, "Invalid subscription parameters", category: :invalid_params)}
   end
 
   defp subscription_error(message, reason) do

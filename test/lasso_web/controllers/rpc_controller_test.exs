@@ -53,6 +53,79 @@ defmodule LassoWeb.RPCControllerWireContractTest do
   end
 
   describe "JSON-RPC wire contract" do
+    test "malformed envelopes and conflicting block selectors fail before upstream dispatch", %{
+      chain: chain
+    } do
+      setup_providers([%{id: "validation-upstream", behavior: :healthy, profile: "public"}])
+
+      cases = [
+        {%{"id" => 1, "method" => "eth_blockNumber", "params" => []}, -32_600, 1},
+        {%{"jsonrpc" => "2.0", "id" => true, "method" => "eth_blockNumber"}, -32_600, nil},
+        {%{"jsonrpc" => "2.0", "id" => 2, "method" => "eth_blockNumber", "params" => 1}, -32_602,
+         2},
+        {%{
+           "jsonrpc" => "2.0",
+           "id" => 3,
+           "method" => "eth_getBalance",
+           "params" => [
+             "0x0000000000000000000000000000000000000000",
+             %{"blockNumber" => "0x1", "blockHash" => "0x" <> String.duplicate("0", 64)}
+           ]
+         }, -32_602, 3}
+      ]
+
+      for {request, code, id} <- cases do
+        conn = post_json("/rpc/#{chain}", request)
+        assert conn.status == 200
+        assert %{"id" => ^id, "error" => %{"code" => ^code}} = json_response(conn, 200)
+      end
+    end
+
+    test "invalid notification parameters produce no response in a batch", %{chain: chain} do
+      setup_providers([%{id: "validation-upstream", behavior: :healthy, profile: "public"}])
+
+      conn =
+        post_json("/rpc/#{chain}", [
+          %{"jsonrpc" => "2.0", "method" => "eth_getLogs", "params" => [%{"blockHash" => "bad"}]},
+          %{"jsonrpc" => "2.0", "id" => 4, "method" => "eth_chainId", "params" => []}
+        ])
+
+      assert conn.status == 200
+      assert [%{"id" => 4, "result" => result}] = json_response(conn, 200)
+      assert is_binary(result)
+    end
+
+    test "object parameters reach the upstream unchanged", %{chain: chain} do
+      caller = self()
+
+      setup_providers([
+        %{
+          id: "object-params",
+          profile: "public",
+          behavior:
+            {:conditional,
+             fn method, params, _state ->
+               send(caller, {:upstream_request, method, params})
+               {:ok, "0x2a"}
+             end}
+        }
+      ])
+
+      params = %{"address" => "0x0000000000000000000000000000000000000000"}
+
+      conn =
+        post_json("/rpc/#{chain}", %{
+          "jsonrpc" => "2.0",
+          "id" => 7,
+          "method" => "eth_getBalance",
+          "params" => params
+        })
+
+      assert conn.status == 200
+      assert %{"id" => 7, "result" => "0x2a"} = json_response(conn, 200)
+      assert_receive {:upstream_request, "eth_getBalance", ^params}
+    end
+
     test "empty batch returns Invalid Request", %{chain: chain} do
       setup_providers([%{id: "batch-local", behavior: :healthy, profile: "public"}])
       conn = post_json("/rpc/#{chain}", [])
