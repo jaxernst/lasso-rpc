@@ -319,6 +319,25 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     refute_receive {:send_notification, _json}
   end
 
+  test "malformed socket requests return correlated errors without reserving bytes" do
+    before = ByteBudget.stats()
+    state = socket_state()
+
+    cases = [
+      {%{"id" => 5, "method" => "eth_blockNumber", "params" => []}, -32_600, 5},
+      {%{"jsonrpc" => "2.0", "id" => false, "method" => "eth_blockNumber"}, -32_600, nil},
+      {%{"jsonrpc" => "2.0", "id" => 6, "method" => "eth_subscribe", "params" => 7}, -32_602, 6}
+    ]
+
+    for {request, code, id} <- cases do
+      assert {:reply, :ok, {:text, json}, ^state} = handle_request(state, request)
+      assert %{"id" => ^id, "error" => %{"code" => ^code}} = Jason.decode!(json)
+    end
+
+    refute_receive {:item_owner_started, _item_ref, _owner, _work}
+    assert ByteBudget.stats().reservations == before.reservations
+  end
+
   test "an explicit null ID remains distinct from a notification" do
     state = socket_state()
     assert {:ok, state} = forward(state, nil)

@@ -22,6 +22,7 @@ defmodule LassoWeb.RPCSocket do
   alias Lasso.Config.{ConfigStore, ProfileValidator}
   alias Lasso.Core.Request.ByteBudget
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.JSONRPC.RequestValidator
   alias Lasso.RPC.{Observability, RequestContext, Response}
   alias LassoWeb.RPC.Helpers
   alias LassoWeb.RPCSocket.ItemOwner
@@ -342,14 +343,21 @@ defmodule LassoWeb.RPCSocket do
 
   defp handle_budgeted_text(text, state, started_at_us, reservation) do
     case Jason.decode(text) do
-      {:ok, %{"jsonrpc" => "2.0"} = request} ->
-        handle_json_rpc(request, state, started_at_us, reservation)
+      {:ok, decoded} ->
+        case RequestValidator.validate(decoded) do
+          {:ok, request} ->
+            handle_json_rpc(request, state, started_at_us, reservation)
 
-      {:ok, invalid} ->
-        ByteBudget.release(reservation)
-        error = JError.new(-32_600, "Invalid Request: missing jsonrpc field")
-        response = JError.to_response(error, request_id(invalid))
-        {:reply, :ok, {:text, Jason.encode!(response)}, state}
+          {:invalid, error, response_id} ->
+            ByteBudget.release(reservation)
+
+            if RequestValidator.notification?(decoded) do
+              {:ok, state}
+            else
+              response = JError.to_response(error, response_id)
+              {:reply, :ok, {:text, Jason.encode!(response)}, state}
+            end
+        end
 
       {:error, _reason} ->
         ByteBudget.release(reservation)
