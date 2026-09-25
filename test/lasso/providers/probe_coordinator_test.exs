@@ -506,8 +506,14 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
 
     assert CandidateListing.list_candidates(@profile, @chain, %{protocol: :http}) == []
 
-    assert [%{id: "identity"}] =
-             CandidateListing.list_candidates(@profile, @chain, %{protocol: :ws})
+    # CandidateListing fails closed while a catalog publication is in flight.
+    # Wait for a stable snapshot before asserting the transport-specific result.
+    assert_wait_until(fn ->
+      match?(
+        [%{id: "identity"}],
+        CandidateListing.list_candidates(@profile, @chain, %{protocol: :ws})
+      )
+    end)
   end
 
   # Helpers
