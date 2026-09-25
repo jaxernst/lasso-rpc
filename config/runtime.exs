@@ -102,6 +102,16 @@ config :lasso, :http_pool,
   size: positive_integer_env.("LASSO_HTTP_POOL_SIZE", 256),
   count: positive_integer_env.("LASSO_HTTP_POOL_COUNT", 1)
 
+config :lasso,
+  upstream_admission_shards: positive_integer_env.("LASSO_UPSTREAM_ADMISSION_SHARDS", 32),
+  upstream_inflight_node_limit: positive_integer_env.("LASSO_UPSTREAM_INFLIGHT_NODE_LIMIT", 512),
+  upstream_inflight_origin_limit:
+    positive_integer_env.("LASSO_UPSTREAM_INFLIGHT_ORIGIN_LIMIT", 192),
+  upstream_inflight_response_byte_limit:
+    positive_integer_env.("LASSO_UPSTREAM_INFLIGHT_RESPONSE_BYTE_LIMIT", 128 * 1_024 * 1_024),
+  upstream_response_byte_limit:
+    positive_integer_env.("LASSO_UPSTREAM_RESPONSE_BYTE_LIMIT", 16 * 1_024 * 1_024)
+
 if value = System.get_env("LW_BETA") do
   case Float.parse(value) do
     {beta, ""} when beta > 0 -> config :lasso, :lw_beta, beta

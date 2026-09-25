@@ -30,14 +30,17 @@ defmodule Lasso.RPC.Response.Success do
   """
 
   @enforce_keys [:id, :jsonrpc, :raw_bytes]
-  defstruct [:id, :jsonrpc, :raw_bytes]
+  defstruct [:id, :jsonrpc, :raw_bytes, :capacity_lease]
+
+  alias Lasso.Core.Transport.UpstreamAdmission
 
   @type id :: integer() | String.t() | nil
 
   @type t :: %__MODULE__{
           id: id(),
           jsonrpc: String.t(),
-          raw_bytes: binary()
+          raw_bytes: binary(),
+          capacity_lease: UpstreamAdmission.Lease.t() | nil
         }
 
   @doc """
@@ -85,6 +88,13 @@ defmodule Lasso.RPC.Response.Success do
   """
   @spec response_size(t()) :: non_neg_integer()
   def response_size(%__MODULE__{raw_bytes: raw_bytes}), do: byte_size(raw_bytes)
+
+  @spec release_capacity(t(), atom()) :: :ok
+  def release_capacity(%__MODULE__{capacity_lease: %UpstreamAdmission.Lease{} = lease}, reason)
+      when is_atom(reason),
+      do: UpstreamAdmission.release(lease, reason)
+
+  def release_capacity(%__MODULE__{}, _reason), do: :ok
 end
 
 defmodule Lasso.RPC.Response.Error do

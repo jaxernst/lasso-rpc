@@ -332,6 +332,13 @@ Set in `config/runtime.exs` or via environment variables. Application configurat
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | Use a larger short-lived heap while validating completed HTTP upstream responses; useful for CPU-bound, high-concurrency deployments | `false` |
 | `LASSO_HTTP_POOL_SIZE` | Maximum HTTP/1 connections per upstream host and pool | `256` |
 | `LASSO_HTTP_POOL_COUNT` | Independent Finch pools per upstream host | `1` |
+| `LASSO_UPSTREAM_ADMISSION_SHARDS` | Shards for the upstream admission ledger | `32` |
+| `LASSO_UPSTREAM_INFLIGHT_NODE_LIMIT` | Maximum concurrent upstream HTTP requests on this node | `512` |
+| `LASSO_UPSTREAM_INFLIGHT_ORIGIN_LIMIT` | Maximum concurrent requests to one physical upstream origin | `192` |
+| `LASSO_UPSTREAM_INFLIGHT_RESPONSE_BYTE_LIMIT` | Aggregate retained upstream HTTP response budget, in bytes | `134217728` (128 MiB) |
+| `LASSO_UPSTREAM_RESPONSE_BYTE_LIMIT` | Maximum upstream HTTP response size, in bytes | `16777216` (16 MiB) |
+
+Upstream HTTP responses are streamed under these limits. The byte budget charges twice the received body size to cover a conservative in-memory copy during validation and delivery. An oversized or compressed response is rejected locally; it does not penalize upstream reliability. The origin limit must be divisible by the shard count, no greater than the node limit or Finch pool capacity. The aggregate byte budget must cover twice the maximum response size. Invalid combinations fail application startup.
 
 ### Circuit Breaker Defaults
 

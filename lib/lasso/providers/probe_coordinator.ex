@@ -30,6 +30,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   alias Lasso.Config.{ConfigStore, MonitoringDefaults}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Providers.{Catalog, ChainIdentity, RestartCounter}
+  alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
 
   @tick_interval_ms 200
   @default_timeout_ms 5_000
@@ -351,9 +352,17 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
     request = Finch.build(:post, url, headers, body)
 
-    case run_probe_request(fn ->
-           Finch.request(request, Lasso.Finch, receive_timeout: @default_timeout_ms)
-         end) do
+    run_probe_request(fn ->
+      BoundedHTTP.bounded_request(
+        request,
+        [receive_timeout: @default_timeout_ms, upstream_instance_id: instance_id],
+        &handle_http_probe_response(&1, instance_id, chain_id, observation)
+      )
+    end)
+  end
+
+  defp handle_http_probe_response(response, instance_id, chain_id, observation) do
+    case response do
       {:ok, %{status: status, body: resp_body}} when status in 200..299 ->
         case classify_response_body(resp_body, chain_id) do
           :ok ->

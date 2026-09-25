@@ -8,6 +8,7 @@ defmodule Lasso.Config.ConfigValidator do
 
   require Logger
   alias Lasso.Config.ChainConfig
+  alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
 
   @http_timeout 5000
 
@@ -273,7 +274,7 @@ defmodule Lasso.Config.ConfigValidator do
 
     request = Finch.build(:post, url, headers, body)
 
-    case Finch.request(request, Lasso.Finch, receive_timeout: @http_timeout) do
+    BoundedHTTP.bounded_request(request, [receive_timeout: @http_timeout], fn
       {:ok, %Finch.Response{status: 200}} ->
         {:ok, :connected}
 
@@ -285,7 +286,7 @@ defmodule Lasso.Config.ConfigValidator do
 
       {:error, reason} ->
         {:error, reason}
-    end
+    end)
   rescue
     error -> {:error, {:request_exception, error}}
   end

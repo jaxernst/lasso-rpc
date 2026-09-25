@@ -151,6 +151,7 @@ defmodule LassoWeb.RPCController do
       if Map.has_key?(request, "id") do
         send_single_success(conn, request, result, ctx)
       else
+        release_response_capacity(result, :notification)
         send_resp(conn, 204, "")
       end
     else
@@ -192,7 +193,7 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp send_single_success(conn, _request, %Response.Success{raw_bytes: bytes}, ctx) do
+  defp send_single_success(conn, _request, %Response.Success{raw_bytes: bytes} = response, ctx) do
     case conn.assigns[:include_meta] do
       :body ->
         case Jason.decode(bytes) do
@@ -210,6 +211,8 @@ defmodule LassoWeb.RPCController do
         |> put_resp_content_type("application/json")
         |> send_resp(200, bytes)
     end
+  after
+    release_response_capacity(response, :sent)
   end
 
   defp send_single_success(conn, request, result, ctx) do
@@ -280,7 +283,8 @@ defmodule LassoWeb.RPCController do
     contexts = completed |> Enum.map(& &1.context) |> Enum.reject(&is_nil/1)
 
     conn = maybe_inject_observability_metadata(conn, List.first(contexts))
-    responses = Enum.filter(completed, & &1.respond?)
+    {responses, discarded} = Enum.split_with(completed, & &1.respond?)
+    Enum.each(discarded, &release_response_capacity(&1.response, :notification))
 
     if responses == [] do
       send_resp(conn, 204, "")
@@ -479,22 +483,31 @@ defmodule LassoWeb.RPCController do
     items = Enum.map(responses, & &1.response)
     request_ids = Enum.map(responses, & &1.request_id)
 
-    if Enum.all?(items, &(match?(%Response.Success{}, &1) or match?(%Response.Error{}, &1))) do
-      case Response.Batch.build(items, request_ids) do
-        {:ok, batch} ->
-          {:ok, bytes} = Response.Batch.to_bytes(batch)
+    try do
+      if Enum.all?(items, &(match?(%Response.Success{}, &1) or match?(%Response.Error{}, &1))) do
+        case Response.Batch.build(items, request_ids) do
+          {:ok, batch} ->
+            {:ok, bytes} = Response.Batch.to_bytes(batch)
 
-          conn
-          |> put_resp_content_type("application/json")
-          |> send_resp(200, bytes)
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(200, bytes)
 
-        {:error, _reason} ->
-          json(conn, Enum.zip_with(items, request_ids, &response_to_map/2))
+          {:error, _reason} ->
+            json(conn, Enum.zip_with(items, request_ids, &response_to_map/2))
+        end
+      else
+        json(conn, Enum.zip_with(items, request_ids, &response_to_map/2))
       end
-    else
-      json(conn, Enum.zip_with(items, request_ids, &response_to_map/2))
+    after
+      Enum.each(items, &release_response_capacity(&1, :batch_sent))
     end
   end
+
+  defp release_response_capacity(%Response.Success{} = response, reason),
+    do: Response.Success.release_capacity(response, reason)
+
+  defp release_response_capacity(_response, _reason), do: :ok
 
   defp validate_json_rpc_request(request), do: RequestValidator.validate(request)
 

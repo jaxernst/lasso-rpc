@@ -541,7 +541,12 @@ defmodule Lasso.RPC.TransportRegistry do
 
         with {:ok, instance_id} <- physical_instance_id(state, provider_config, opts),
              {:ok, raw_channel} <-
-               open_transport(transport, transport_module, provider_config, channel_opts) do
+               open_transport(
+                 transport,
+                 transport_module,
+                 provider_config,
+                 Keyword.put(channel_opts, :instance_id, instance_id)
+               ) do
           channel =
             Channel.new(
               state.profile,
