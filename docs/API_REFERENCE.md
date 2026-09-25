@@ -320,6 +320,8 @@ The `websocket_url` mirrors the HTTP request path — for example, a request to
 | `-32602` | Invalid params (unsupported chain, missing chain_id) |
 | `-32603` | Internal error |
 | `-32000` | Server error (for example, upstream rate limiting or exhausted routing) |
+| `-32005` | Upstream response exceeded the local size or framing safety envelope; the rejected response does not count as an upstream reliability failure |
+| `-32008` | Local transport capacity unavailable before dispatch; eligible routes may be retried |
 
 ### Upstream rate limits
 

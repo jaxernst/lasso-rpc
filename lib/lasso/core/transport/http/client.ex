@@ -29,12 +29,14 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
 
   # Raw bytes response
   @type raw_response :: {:raw, binary()}
+  @type retained_raw_response ::
+          {:raw, binary(), Lasso.Core.Transport.UpstreamAdmission.Lease.t()}
 
   @callback request(provider_config, method, params, opts) ::
-              {:ok, raw_response()} | {:error, error_reason}
+              {:ok, raw_response() | retained_raw_response()} | {:error, error_reason}
 
   @callback request_prepared(provider_config, prepared_request, opts) ::
-              {:ok, raw_response()} | {:error, error_reason}
+              {:ok, raw_response() | retained_raw_response()} | {:error, error_reason}
 
   @callback deferred_dispatch?() :: boolean()
 
@@ -59,14 +61,14 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
 
   # Facade to configured adapter
   @spec request(provider_config, method, params, opts) ::
-          {:ok, raw_response()} | {:error, error_reason}
+          {:ok, raw_response() | retained_raw_response()} | {:error, error_reason}
   def request(provider_config, method, params, opts \\ []) do
     adapter().request(provider_config, method, params, opts)
   end
 
   @doc false
   @spec request_prepared(provider_config, prepared_request, opts) ::
-          {:ok, raw_response()} | {:error, error_reason}
+          {:ok, raw_response() | retained_raw_response()} | {:error, error_reason}
   def request_prepared(provider_config, %Lasso.RPC.PreparedRequest{} = prepared, opts \\ []) do
     adapter = adapter()
 
@@ -102,6 +104,16 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
         case Jason.decode(bytes) do
           {:ok, json} -> {:ok, json}
           {:error, reason} -> {:error, {:response_decode_error, inspect(reason)}}
+        end
+
+      {:ok, {:raw, bytes, lease}} ->
+        try do
+          case Jason.decode(bytes) do
+            {:ok, json} -> {:ok, json}
+            {:error, reason} -> {:error, {:response_decode_error, inspect(reason)}}
+          end
+        after
+          Lasso.Core.Transport.UpstreamAdmission.release(lease, :decoded)
         end
 
       {:error, reason} ->

@@ -2,8 +2,8 @@ defmodule Lasso.Core.Request.RequestOwner do
   @moduledoc false
 
   alias Lasso.Core.Request.ExecutionScope
-  alias Lasso.Core.Transport.AttemptProtocol
-  alias Lasso.RPC.{AttemptIdentity, ExecutionProjector, ExecutionReducer}
+  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission}
+  alias Lasso.RPC.{AttemptIdentity, ExecutionProjector, ExecutionReducer, Response}
 
   defmodule AttemptCompletion do
     @moduledoc false
@@ -147,6 +147,7 @@ defmodule Lasso.Core.Request.RequestOwner do
   defp handle_completion(state, %AttemptCompletion{completed_at_us: completed_at_us} = completion) do
     case completion.terminal_candidate do
       {:ok, %{event_us: event_us} = terminal} when event_us >= state.reducer.deadline_us ->
+        release_completion(completion, :deadline)
         close_deadline(state, terminal)
 
       _candidate ->
@@ -156,9 +157,11 @@ defmodule Lasso.Core.Request.RequestOwner do
               safely_commit_terminal(state, completion.result, completed_at_us, terminal)
 
             {:error, reason} ->
+              release_completion(completion, :invalid_completion)
               protocol_failure(state, reason, completed_at_us)
           end
         else
+          release_completion(completion, :deadline)
           close_deadline(state)
         end
     end
@@ -194,7 +197,9 @@ defmodule Lasso.Core.Request.RequestOwner do
   defp safely_commit_terminal(state, result, completed_at_us, terminal) do
     commit_terminal(state, result, completed_at_us, terminal)
   rescue
-    ArgumentError -> protocol_failure(state, :invalid_terminal, completed_at_us)
+    ArgumentError ->
+      release_result(result, :invalid_terminal)
+      protocol_failure(state, :invalid_terminal, completed_at_us)
   end
 
   defp protocol_failure(state, reason, event_us) do
@@ -316,7 +321,8 @@ defmodule Lasso.Core.Request.RequestOwner do
       {:request_owner_drain, attempt_ref, ^marker} when attempt_ref == state.attempt_ref ->
         state
 
-      {^task_ref, _reply} ->
+      {^task_ref, reply} ->
+        release_completion(reply, :discarded_completion)
         drain_committed_until_marker(state, marker)
 
       {:EXIT, ^task_pid, _reason} ->
@@ -451,8 +457,15 @@ defmodule Lasso.Core.Request.RequestOwner do
     cancel_cutoff(state)
     cleanup_task(state.task)
     drain_retired_attempt(state)
+    handoff_result(state)
     build_outcome(state)
   end
+
+  defp handoff_result(%{caller_pid: caller_pid, result: result}) when is_pid(caller_pid) do
+    transfer_result(result, caller_pid)
+  end
+
+  defp handoff_result(_state), do: :ok
 
   defp build_outcome(%{
          fact: fact,
@@ -558,7 +571,8 @@ defmodule Lasso.Core.Request.RequestOwner do
     task_pid = state.task.pid
 
     receive do
-      {^task_ref, _reply} ->
+      {^task_ref, reply} ->
+        release_completion(reply, :retired_attempt)
         drain_retired_attempt(state)
 
       {:DOWN, ^task_ref, :process, ^task_pid, _reason} ->
@@ -594,6 +608,29 @@ defmodule Lasso.Core.Request.RequestOwner do
 
   defp invoke_test_before_restore(nil), do: :ok
   defp invoke_test_before_restore(hook) when is_function(hook, 0), do: hook.()
+
+  defp release_completion(%AttemptCompletion{result: result}, reason),
+    do: release_result(result, reason)
+
+  defp release_completion(_other, _reason), do: :ok
+
+  defp release_result(result, reason) do
+    case capacity_lease(result) do
+      %UpstreamAdmission.Lease{} = lease -> UpstreamAdmission.release(lease, reason)
+      nil -> :ok
+    end
+  end
+
+  defp transfer_result(result, owner) do
+    case capacity_lease(result) do
+      %UpstreamAdmission.Lease{} = lease -> UpstreamAdmission.transfer(lease, owner)
+      nil -> :ok
+    end
+  end
+
+  defp capacity_lease({:ok, %Response.Success{capacity_lease: lease}}), do: lease
+  defp capacity_lease({:ok, %Response.Success{capacity_lease: lease}, _elapsed}), do: lease
+  defp capacity_lease(_result), do: nil
 
   defp now_us, do: System.monotonic_time(:microsecond)
 end

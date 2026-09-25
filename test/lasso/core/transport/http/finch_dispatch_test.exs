@@ -3,6 +3,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
   alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Core.Transport.AttemptProtocol
+  alias Lasso.Core.Transport.UpstreamAdmission
   alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: FinchClient
   alias Lasso.RPC.Transports.HTTP
@@ -17,10 +18,10 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
     :ok
   end
 
-  test "adapter source uses only the public Finch request seam" do
+  test "adapter source uses only the public Finch streaming seam" do
     source = File.read!("lib/lasso/core/transport/http/adapters/finch.ex")
 
-    assert source =~ "Finch.request(request, finch_name"
+    assert source =~ "Finch.stream_while(request, finch_name"
     refute source =~ "Finch.HTTP1"
     refute source =~ "Finch.Pool.Manager"
     refute source =~ "NimblePool"
@@ -322,7 +323,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
     server_monitor = Process.monitor(server)
 
-    assert {:ok, {:raw, ^response_body}} =
+    assert {:ok, {:raw, ^response_body, lease}} =
              FinchClient.request(
                %{url: "http://127.0.0.1:#{port}"},
                "eth_blockNumber",
@@ -332,6 +333,8 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
                finch_name: @finch_name,
                attempt_dispatch: context
              )
+
+    assert :ok = UpstreamAdmission.release(lease, :test_consumed)
 
     assert %{
              certainty: :dispatched,

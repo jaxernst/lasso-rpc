@@ -167,4 +167,7 @@ defmodule Lasso.RPC.ExecutionProjector do
         :reliability_failure,
         :provider_application_failure
       )
+
+  defp application_error_projection(:local_safety, _safety),
+    do: projection(false, :return_response, :none, :neutral, :local_safety_rejection)
 end

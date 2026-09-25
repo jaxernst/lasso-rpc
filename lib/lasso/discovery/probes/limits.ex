@@ -11,6 +11,7 @@ defmodule Lasso.Discovery.Probes.Limits do
   """
 
   alias Lasso.Discovery.{ErrorClassifier, TestParams}
+  alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
 
   @chain_archive_blocks %{
     "ethereum" => 100,
@@ -294,7 +295,7 @@ defmodule Lasso.Discovery.Probes.Limits do
         body
       )
 
-    case Finch.request(request, Lasso.Finch, receive_timeout: timeout) do
+    BoundedHTTP.bounded_request(request, [receive_timeout: timeout], fn
       {:ok, %{status: 200, body: response_body}} ->
         case Jason.decode(response_body) do
           {:ok, responses} when is_list(responses) ->
@@ -315,7 +316,7 @@ defmodule Lasso.Discovery.Probes.Limits do
 
       {:error, reason} ->
         {:error, reason}
-    end
+    end)
   end
 
   # Block parameter support test
@@ -508,7 +509,7 @@ defmodule Lasso.Discovery.Probes.Limits do
         body
       )
 
-    case Finch.request(request, Lasso.Finch, receive_timeout: timeout) do
+    BoundedHTTP.bounded_request(request, [receive_timeout: timeout], fn
       {:ok, %{status: 200, body: response_body}} ->
         Jason.decode(response_body)
 
@@ -523,7 +524,7 @@ defmodule Lasso.Discovery.Probes.Limits do
 
       {:error, reason} ->
         {:error, reason}
-    end
+    end)
   rescue
     e -> {:error, e}
   end

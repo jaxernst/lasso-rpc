@@ -10,7 +10,7 @@ defmodule Lasso.RPC.Transports.HTTP do
   @behaviour Lasso.RPC.Transport
 
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
-  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamResponse}
+  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.PreparedRequest
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
@@ -28,6 +28,7 @@ defmodule Lasso.RPC.Transports.HTTP do
     provider_id = Keyword.get(opts, :provider_id, Map.get(provider_config, :id, "unknown"))
     profile = Keyword.get(opts, :profile, Map.get(provider_config, :profile))
     chain_id = Keyword.get(opts, :chain_id, Map.get(provider_config, :chain_id))
+    instance_id = Keyword.get(opts, :instance_id)
 
     case get_http_url(provider_config) do
       nil ->
@@ -41,6 +42,7 @@ defmodule Lasso.RPC.Transports.HTTP do
         channel = %{
           url: url,
           provider_id: provider_id,
+          instance_id: instance_id,
           profile: profile,
           chain_id: chain_id,
           provider_capabilities: Map.get(provider_config, :capabilities),
@@ -111,26 +113,32 @@ defmodule Lasso.RPC.Transports.HTTP do
              request_id: upstream_id,
              timeout: timeout,
              deadline_us: deadline_us,
+             upstream_instance_id: Map.get(channel, :instance_id),
              attempt_dispatch: dispatch_context
            ) do
         {:ok, {:raw, raw_bytes}} ->
-          received_at_us = System.monotonic_time(:microsecond)
-          tune_response_heap()
-          validation = UpstreamResponse.validate_unary(raw_bytes, upstream_id, client_id)
-          validated_at_us = System.monotonic_time(:microsecond)
+          validate_received_response(
+            raw_bytes,
+            nil,
+            channel,
+            upstream_id,
+            client_id,
+            dispatch_context,
+            deadline_us,
+            io_start_us
+          )
 
-          settle_raw_response(%{
-            validation: validation,
-            raw_bytes: raw_bytes,
-            provider_id: provider_id,
-            profile: Map.get(channel, :profile),
-            chain_id: Map.get(channel, :chain_id),
-            provider_capabilities: Map.get(channel, :provider_capabilities),
-            dispatch_context: dispatch_context,
-            deadline_us: deadline_us,
-            io_duration_us: max(received_at_us - io_start_us, 0),
-            validated_at_us: validated_at_us
-          })
+        {:ok, {:raw, raw_bytes, lease}} ->
+          validate_received_response(
+            raw_bytes,
+            lease,
+            channel,
+            upstream_id,
+            client_id,
+            dispatch_context,
+            deadline_us,
+            io_start_us
+          )
 
         {:error, reason} ->
           {:error,
@@ -155,6 +163,36 @@ defmodule Lasso.RPC.Transports.HTTP do
       {:error, reason} ->
         {:error, reason, io_ms}
     end
+  end
+
+  defp validate_received_response(
+         raw_bytes,
+         lease,
+         channel,
+         upstream_id,
+         client_id,
+         dispatch_context,
+         deadline_us,
+         io_start_us
+       ) do
+    received_at_us = System.monotonic_time(:microsecond)
+    tune_response_heap()
+    validation = UpstreamResponse.validate_unary(raw_bytes, upstream_id, client_id)
+    validated_at_us = System.monotonic_time(:microsecond)
+
+    settle_raw_response(%{
+      validation: validation,
+      raw_bytes: raw_bytes,
+      response_lease: lease,
+      provider_id: channel.provider_id,
+      profile: Map.get(channel, :profile),
+      chain_id: Map.get(channel, :chain_id),
+      provider_capabilities: Map.get(channel, :provider_capabilities),
+      dispatch_context: dispatch_context,
+      deadline_us: deadline_us,
+      io_duration_us: max(received_at_us - io_start_us, 0),
+      validated_at_us: validated_at_us
+    })
   end
 
   @impl true
@@ -213,6 +251,8 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   defp settle_raw_response(%{validated_at_us: validated_at_us, deadline_us: deadline_us} = input)
        when validated_at_us >= deadline_us do
+    release_response_lease(input, :deadline)
+
     AttemptProtocol.terminal_at(
       input.dispatch_context,
       :transport_failure,
@@ -229,17 +269,44 @@ defmodule Lasso.RPC.Transports.HTTP do
   end
 
   defp settle_raw_response(%{validation: {:ok, response}} = input) do
-    AttemptProtocol.terminal_at(
-      input.dispatch_context,
-      :response,
-      %{response_kind: :success, io_duration_us: input.io_duration_us},
-      input.validated_at_us
-    )
+    case retain_response_lease(response, input) do
+      {:ok, response} ->
+        AttemptProtocol.terminal_at(
+          input.dispatch_context,
+          :response,
+          %{response_kind: :success, io_duration_us: input.io_duration_us},
+          input.validated_at_us
+        )
 
-    {:ok, response}
+        {:ok, response}
+
+      {:error, reason} ->
+        release_response_lease(input, :handoff_failed)
+
+        AttemptProtocol.terminal_at(
+          input.dispatch_context,
+          :response,
+          %{
+            response_kind: :error,
+            error_code: -32_005,
+            error_category: :local_capacity_rejection,
+            io_duration_us: input.io_duration_us
+          },
+          input.validated_at_us
+        )
+
+        {:error,
+         ErrorNormalizer.normalize({:response_limit, reason},
+           provider_id: input.provider_id,
+           context: :transport,
+           transport: :http
+         )}
+    end
   end
 
   defp settle_raw_response(%{validation: {:error, %JError{} = jerr}} = input) do
+    release_response_lease(input, :jsonrpc_error)
+
     %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
       ErrorClassifier.classify(jerr.code, jerr.message,
         data: jerr.data,
@@ -274,6 +341,8 @@ defmodule Lasso.RPC.Transports.HTTP do
   end
 
   defp settle_raw_response(%{validation: {:invalid, parse_reason}} = input) do
+    release_response_lease(input, :invalid_response)
+
     AttemptProtocol.terminal_at(
       input.dispatch_context,
       :invalid_response,
@@ -292,4 +361,24 @@ defmodule Lasso.RPC.Transports.HTTP do
        breaker_penalty?: true
      )}
   end
+
+  defp retain_response_lease(response, %{response_lease: nil}), do: {:ok, response}
+
+  defp retain_response_lease(response, %{response_lease: lease, dispatch_context: context}) do
+    owner =
+      case context do
+        %AttemptProtocol.Context{owner: owner} -> owner
+        _untracked -> self()
+      end
+
+    case UpstreamAdmission.transfer(lease, owner) do
+      :ok -> {:ok, %{response | capacity_lease: lease}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp release_response_lease(%{response_lease: nil}, _reason), do: :ok
+
+  defp release_response_lease(%{response_lease: lease}, reason),
+    do: UpstreamAdmission.release(lease, reason)
 end

@@ -139,6 +139,22 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  def normalize({:response_limit, reason}, opts) do
+    provider_id = Keyword.get(opts, :provider_id)
+    context = Keyword.get(opts, :context, :transport)
+    transport = Keyword.get(opts, :transport)
+
+    JError.new(-32_005, "Upstream response exceeded the local safety envelope",
+      data: %{reason: reason},
+      provider_id: provider_id,
+      source: context,
+      transport: transport,
+      category: :local_capacity_rejection,
+      retriable?: false,
+      breaker_penalty?: false
+    )
+  end
+
   def normalize({:encode_error, reason}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
     context = Keyword.get(opts, :context, :transport)

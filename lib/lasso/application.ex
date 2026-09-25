@@ -71,6 +71,9 @@ defmodule Lasso.Application do
         # Fixed, sharded admission ledger for aggregate in-flight request bytes.
         Lasso.Core.Request.ByteBudget,
 
+        # Bound concurrent upstream work and retained HTTP response bytes.
+        Lasso.Core.Transport.UpstreamAdmission,
+
         # Cluster topology - single source of truth for cluster membership
         Lasso.Cluster.Topology,
 
