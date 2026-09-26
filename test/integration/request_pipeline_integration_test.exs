@@ -22,6 +22,33 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   alias LassoWeb.Dashboard.EventStream
 
   describe "oversized eth_getLogs contract" do
+    test "preserves argument validation even when a quoted value mentions a range limit", %{
+      chain: chain
+    } do
+      message =
+        "cannot unmarshal string 'range too large' into Go value of type hexutil.Uint64"
+
+      setup_providers([
+        %{
+          id: "invalid_filter",
+          priority: 10,
+          profile: "public",
+          behavior: {:error, JError.new(-32_602, message, category: :invalid_params)}
+        }
+      ])
+
+      assert {:error, error, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_getLogs",
+                 [%{"fromBlock" => "range too large"}],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert error.category == :invalid_params
+      assert error.message == message
+    end
+
     test "returns one actionable error without retrying another provider", %{chain: chain} do
       setup_providers([
         %{

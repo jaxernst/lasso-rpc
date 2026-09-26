@@ -25,6 +25,18 @@ defmodule Lasso.Core.Support.LogRangeLimit do
     "too many results",
     "too many logs"
   ]
+  @argument_validation_patterns [
+    "invalid argument",
+    "cannot unmarshal",
+    "unable to decode",
+    "invalid hex",
+    "odd length hex",
+    "hex string without 0x prefix",
+    "invalid address",
+    "wrong number of arguments",
+    "missing value for required argument",
+    "abi: cannot marshal"
+  ]
 
   @spec translate(String.t(), term(), keyword()) :: {:ok, JError.t()} | :not_range_limit
   def translate(method, reason, opts \\ [])
@@ -61,7 +73,9 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   defp provider_range_limit?(%JError{category: category, message: message})
        when category in @provider_categories and is_binary(message) do
     bounded_message = message |> String.slice(0, 4_096) |> String.downcase()
-    Enum.any?(@patterns, &String.contains?(bounded_message, &1))
+
+    not Enum.any?(@argument_validation_patterns, &String.contains?(bounded_message, &1)) and
+      Enum.any?(@patterns, &String.contains?(bounded_message, &1))
   end
 
   defp provider_range_limit?(_error), do: false
