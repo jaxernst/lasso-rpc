@@ -90,7 +90,8 @@ smoke_proxy() {
     curl --noproxy '*' --insecure --fail --silent --show-error \
       "${resolve_args[@]}" --user "$basic_user:$basic_password" \
       "$address$LASSO_PROXY_READY_PATH" --output "$scratch/ready-response"
-    grep -q '"status":"ready"' "$scratch/ready-response" || {
+    python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["status"] == "ready"' \
+      "$scratch/ready-response" || {
       cat "$scratch/ready-response" >&2
       return 1
     }
@@ -119,7 +120,8 @@ smoke_proxy() {
       --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"],"id":42}' \
       --output "$scratch/upstream-rpc-response" \
       "$address$LASSO_PROXY_RPC_PATH"
-    grep -q '"result":"0x0"' "$scratch/upstream-rpc-response" || {
+    python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["result"] == "0x0"' \
+      "$scratch/upstream-rpc-response" || {
       cat "$scratch/upstream-rpc-response" >&2
       return 1
     }
