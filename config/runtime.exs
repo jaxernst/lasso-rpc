@@ -1,5 +1,32 @@
 import Config
 
+if level = System.get_env("LOG_LEVEL") do
+  case String.downcase(level) do
+    value when value in ["debug", "info", "warning", "error"] ->
+      parsed_level = String.to_existing_atom(value)
+      config :logger, level: parsed_level
+      config :logger, :console, level: parsed_level
+
+    _ ->
+      raise "LOG_LEVEL must be debug, info, warning, or error"
+  end
+end
+
+case System.get_env("LOG_FORMAT") do
+  nil ->
+    :ok
+
+  "text" ->
+    :ok
+
+  "json" ->
+    config :logger, utc_log: true
+    config :logger, :console, format: {Lasso.Logger.JSONFormatter, :format}, metadata: :all
+
+  _ ->
+    raise "LOG_FORMAT must be text or json"
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration
