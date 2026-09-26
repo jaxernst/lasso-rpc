@@ -25,6 +25,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Request.{ExecutionScope, RequestOwner}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
+  alias Lasso.Core.Support.CredentialHealth
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{CandidateListing, Catalog, ChainIdentity}
 
@@ -814,6 +815,9 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp commit_attempt_context(ctx, channel, instance_id, outcome) do
+    if match?(%AttemptTerminal.Response{kind: :success}, outcome.fact),
+      do: CredentialHealth.observe_success(instance_id)
+
     certainty = strongest_certainty(ctx.request_dispatch_certainty, fact_certainty(outcome.fact))
 
     envelope =
@@ -985,10 +989,36 @@ defmodule Lasso.RPC.RequestPipeline do
     if authoritative_not_dispatched?(fact) do
       ctx
     else
+      maybe_observe_credential_failure(ctx, channel, reason)
+
       ctx
       |> RequestContext.add_upstream_latency(fact_latency_ms(fact))
       |> RequestContext.record_channel_attempt(channel, reason)
     end
+  end
+
+  defp maybe_observe_credential_failure(ctx, channel, %JError{
+         category: category,
+         http_status: status
+       })
+       when category == :auth_error or status == 401 do
+    observe_credential_rejection(ctx, channel)
+  end
+
+  defp maybe_observe_credential_failure(ctx, channel, {kind, %{status: 401}})
+       when kind in [:client_error, :server_error] do
+    observe_credential_rejection(ctx, channel)
+  end
+
+  defp maybe_observe_credential_failure(_ctx, _channel, _reason), do: :ok
+
+  defp observe_credential_rejection(ctx, channel) do
+    CredentialHealth.observe_failure(%{
+      error_category: :auth_error,
+      upstream_instance_id: channel.instance_id,
+      provider_id: channel.provider_id,
+      chain_id: ctx.chain_id
+    })
   end
 
   defp fact_latency_ms(%AttemptTerminal.Response{io_duration_us: us}), do: us / 1_000
