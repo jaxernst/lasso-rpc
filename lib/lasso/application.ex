@@ -83,6 +83,9 @@ defmodule Lasso.Application do
         # Error classification sample store (attaches to telemetry)
         Lasso.Core.Support.ErrorClassificationStore,
 
+        # Sustained upstream credential failures from terminal attempts.
+        Lasso.Core.Support.CredentialHealth,
+
         # Dispatch truth is boot-critical for tracked HTTP attempts.
         Lasso.Core.Transport.HTTP.DispatchTracker,
 

@@ -90,6 +90,22 @@ circuit transitions. Standard Logger configuration controls output level and
 format. The proxy does not emit a JSON `rpc.request.completed` log for every
 request, and there is no request-log sampling configuration.
 
+## Upstream credential health
+
+Three dispatched authentication failures from the same configured upstream
+within two minutes activate a credential alert, even when client requests
+succeed after failover. `Lasso.Diagnostics.credential_health()` returns active
+provider and profile identifiers, affected chain count, and first-seen Unix
+milliseconds. A successful upstream attempt resolves that instance's alert.
+Connected nodes share active state for operator views; a disconnected node's
+last report expires after three minutes.
+
+Transitions emit `[:lasso, :provider, :credential_health]` telemetry and an
+operational log. This signal uses built-in or confirmed error categories and
+does not change routing based on an unconfirmed interpretation. Investigate and
+replace a deactivated upstream key in the deployment's configuration; no
+credential value is retained in the alert.
+
 ## Block freshness
 
 Provider synchronization derives from timestamped block observations in ETS.

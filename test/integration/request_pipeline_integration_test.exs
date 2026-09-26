@@ -5,6 +5,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag timeout: 10_000
 
   alias Lasso.Events.RoutingDecision
+  alias Lasso.Core.Support.{CredentialHealth, ErrorClassifier}
   alias Lasso.Providers.Catalog
 
   alias Lasso.RPC.{
@@ -19,6 +20,96 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
   alias LassoWeb.Dashboard.EventStream
+
+  test "repeated upstream authentication failures remain visible after successful failover", %{
+    chain: chain
+  } do
+    assert ErrorClassifier.classify(9, "Your key is deactivated").category == :auth_error
+
+    setup_providers([
+      %{
+        id: "credential_deactivated",
+        priority: 10,
+        profile: "public",
+        behavior:
+          {:error,
+           Lasso.JSONRPC.Error.new(9, "Your key is deactivated",
+             category: :auth_error,
+             retriable?: true
+           )}
+      },
+      %{id: "healthy_fallback", priority: 20, profile: "public", behavior: :healthy}
+    ])
+
+    for _ <- 1..3 do
+      assert {:ok, _result, ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert ctx.retries == 1
+    end
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(CredentialHealth.active("public"), fn alert ->
+        alert.provider_id == "credential_deactivated" and alert.chain_count == 1 and
+          alert.first_seen_ms <= alert.last_seen_ms
+      end)
+    end)
+
+    assert Enum.any?(
+             Lasso.Diagnostics.credential_health(),
+             &(&1.provider_id == "credential_deactivated")
+           )
+
+    remote_instance = "remote-#{chain}"
+
+    remote_entry = %{
+      instance_id: remote_instance,
+      provider_id: "credential_deactivated",
+      chain_id: chain + 1,
+      profiles: ["public"],
+      first_seen_ms: System.system_time(:millisecond),
+      last_seen_ms: System.system_time(:millisecond),
+      active?: true
+    }
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "lasso:provider:credential_health",
+      {:credential_health, :remote_test_node, :active, remote_entry}
+    )
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(
+        CredentialHealth.active("public"),
+        &(&1.provider_id == "credential_deactivated" and &1.chain_count == 2)
+      )
+    end)
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "lasso:provider:credential_health",
+      {:credential_health, :remote_test_node, :resolved, remote_entry}
+    )
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(
+        CredentialHealth.active("public"),
+        &(&1.provider_id == "credential_deactivated" and &1.chain_count == 1)
+      )
+    end)
+
+    instance_id = Catalog.lookup_instance_id("public", chain, "credential_deactivated")
+    CredentialHealth.observe_success(instance_id)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.all?(CredentialHealth.active("public"), &(&1.provider_id != "credential_deactivated"))
+    end)
+  end
 
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do

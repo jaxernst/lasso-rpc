@@ -149,6 +149,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "authentication",
     "authenticate",
     "api key",
+    "key is deactivated",
     "forbidden",
     "access denied",
     "permission denied"
