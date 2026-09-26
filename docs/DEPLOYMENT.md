@@ -232,11 +232,25 @@ Set the variable in your environment or secrets manager:
 export ALCHEMY_API_KEY="your-key-here"
 ```
 
-### Health Check
+### Liveness and routing readiness
 
-Lasso exposes `GET /api/health` for liveness/readiness probes. Configure your orchestrator or load balancer to poll this endpoint.
+`GET /api/health` confirms that the application is running and reports cluster
+topology. It is a liveness check, not a routing readiness check.
 
-The health endpoint confirms that the application is running and reports cluster topology. It does not make live upstream RPC requests, so pair it with your normal provider and routing monitoring.
+`GET /api/ready` checks every configured chain in the default `public` profile.
+It returns HTTP 200 only when each chain has an eligible, non-rate-limited HTTP
+upstream and a fresh head observation from that eligible set. Otherwise it
+returns HTTP 503 with a per-chain reason. Set `profile` and `chain` to scope a
+load-balancer probe to the route your application uses:
+
+```bash
+curl --fail-with-body 'http://localhost:4000/api/ready?profile=my-app&chain=ethereum'
+```
+
+Readiness uses recent local routing state and makes no upstream request of its
+own. It can remain unavailable during startup until head monitoring observes a
+block. Protect both endpoints at the deployment boundary, and keep a separate
+upstream-backed application probe for the exact method and workload you serve.
 
 ### HTTPS
 
