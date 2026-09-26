@@ -86,9 +86,15 @@ additional failure, exhaustion, slow-request, and state-transition events.
 ## Operational logs
 
 Production enables `Lasso.TelemetryLogger` for slow requests, failover, and
-circuit transitions. Standard Logger configuration controls output level and
-format. The proxy does not emit a JSON `rpc.request.completed` log for every
-request, and there is no request-log sampling configuration.
+circuit transitions. Set `LOG_LEVEL=debug|info|warning|error` to control the
+container/release console level (`info` by default). Set `LOG_FORMAT=json` for
+one JSON object per line; text remains the default. JSON entries include UTC
+time, severity, message, and an allowlist of route/request identifiers such as
+`request_id`, `chain_id`, and `provider_id`. The formatter masks embedded
+upstream URL paths and queries and common labeled credential assignments; do
+not put secrets in arbitrary freeform log messages or provider identifiers.
+The proxy does not emit a JSON `rpc.request.completed` log for every request,
+and there is no request-log sampling configuration.
 
 ## Block freshness
 
