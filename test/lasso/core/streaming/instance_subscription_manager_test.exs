@@ -32,10 +32,19 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
         priority: 1
       })
 
-    Process.sleep(200)
-
     instance_id =
       Lasso.Providers.Catalog.lookup_instance_id(@default_profile, test_chain, test_provider)
+
+    Lasso.Test.Eventually.assert_eventually(
+      fn ->
+        match?(
+          %{connection_state: %{status: :connected}},
+          InstanceSubscriptionManager.get_status(instance_id)
+        )
+      end,
+      timeout: 1_000,
+      interval: 10
+    )
 
     on_exit(fn ->
       MockWSProvider.stop_mock(test_chain, test_provider)
@@ -56,7 +65,17 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
       {:ws_connected, instance_id, connection_id}
     )
 
-    Process.sleep(20)
+    Lasso.Test.Eventually.assert_eventually(
+      fn ->
+        match?(
+          %{connection_state: %{connection_id: ^connection_id}},
+          InstanceSubscriptionManager.get_status(instance_id)
+        )
+      end,
+      timeout: 1_000,
+      interval: 10
+    )
+
     connection_id
   end
 
