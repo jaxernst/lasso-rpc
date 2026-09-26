@@ -65,6 +65,28 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
              &(&1.provider_id == "credential_deactivated")
            )
 
+    first_seen_ms =
+      CredentialHealth.active("public")
+      |> Enum.find(&(&1.provider_id == "credential_deactivated"))
+      |> Map.fetch!(:first_seen_ms)
+
+    instance_id = Catalog.lookup_instance_id("public", chain, "credential_deactivated")
+    Process.sleep(5)
+
+    CredentialHealth.observe_failure(%{
+      error_category: :auth_error,
+      upstream_instance_id: instance_id,
+      provider_id: "credential_deactivated",
+      chain_id: chain
+    })
+
+    :sys.get_state(CredentialHealth)
+
+    assert Enum.any?(
+             CredentialHealth.active("public"),
+             &(&1.provider_id == "credential_deactivated" and &1.first_seen_ms == first_seen_ms)
+           )
+
     remote_instance = "remote-#{chain}"
 
     remote_entry = %{
@@ -103,7 +125,6 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       )
     end)
 
-    instance_id = Catalog.lookup_instance_id("public", chain, "credential_deactivated")
     CredentialHealth.observe_success(instance_id)
 
     Lasso.Test.Eventually.assert_eventually(fn ->
@@ -135,7 +156,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     stats = Lasso.Diagnostics.credential_health_stats()
     assert stats.pending_failures <= 1_024
     assert stats.dropped_failures > 0
-    assert CredentialHealth.active("public") == []
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
 
     :ok = :sys.resume(observer)
 
@@ -145,6 +166,29 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
     :sys.get_state(observer)
     refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
+
+    expired_ms = System.system_time(:millisecond) - 11_000
+    :ets.insert(:lasso_credential_health_reservations, {0, instance_id, 1, expired_ms})
+    send(observer, :maintenance)
+    :sys.get_state(observer)
+    assert Lasso.Diagnostics.credential_health_stats().pending_failures == 0
+
+    Enum.each(1..3, fn _ -> CredentialHealth.observe_failure(failure) end)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
+    end)
+
+    :ets.insert(
+      :lasso_credential_health_pending_successes,
+      {instance_id, System.unique_integer([:monotonic, :positive])}
+    )
+
+    send(observer, :maintenance)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.all?(CredentialHealth.active("public"), &(&1.provider_id != "queued_credential"))
+    end)
   end
 
   describe "circuit breaker coordination" do

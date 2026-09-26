@@ -49,6 +49,8 @@ defmodule Lasso.CredentialHealthHTTPIntegrationTest do
     on_exit(fn ->
       Application.put_env(:lasso, :http_client, prior_http_client)
       Providers.remove_provider(chain_id, provider_id)
+      send(CredentialHealth, :heartbeat)
+      :sys.get_state(CredentialHealth)
       Lasso.ProfileChainSupervisor.stop_profile_chain("public", chain_id)
       ConfigStore.unregister_chain_runtime("public", chain_id)
       Plug.Cowboy.shutdown(ref)

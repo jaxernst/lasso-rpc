@@ -20,11 +20,15 @@ defmodule Lasso.Core.Support.CredentialHealth do
   @markers :lasso_credential_health_markers
   @active :lasso_credential_health_active
   @queue :lasso_credential_health_queue
+  @reservations :lasso_credential_health_reservations
   @successes :lasso_credential_health_pending_successes
   @window_ms 120_000
   @heartbeat_ms 60_000
+  @maintenance_ms 5_000
+  @reservation_ttl_ms 10_000
   @remote_stale_ms 180_000
   @max_pending_failures 1_024
+  @reservation_probes 32
   @max_local_instances 2_048
   @max_markers 3_072
   @max_remote_instances 4_096
@@ -71,8 +75,10 @@ defmodule Lasso.Core.Support.CredentialHealth do
   @doc "Queue occupancy and dropped authentication observations, available even if the observer stalls."
   @spec stats() :: %{pending_failures: non_neg_integer(), dropped_failures: non_neg_integer()}
   def stats do
+    pending = :ets.info(@reservations, :size)
+
     %{
-      pending_failures: :ets.lookup_element(@queue, :pending, 2),
+      pending_failures: if(is_integer(pending), do: pending, else: 0),
       dropped_failures: :ets.lookup_element(@queue, :dropped, 2)
     }
   rescue
@@ -104,16 +110,19 @@ defmodule Lasso.Core.Support.CredentialHealth do
       when is_binary(instance_id) and is_binary(provider_id) and is_integer(chain_id) do
     profiles = monitored_profiles(instance_id)
 
-    if profiles != [] and reserve_failure() do
-      if admit_marker(instance_id) do
-        GenServer.cast(
-          __MODULE__,
-          {:auth_error, instance_id, provider_id, chain_id, profiles,
-           System.system_time(:millisecond), System.unique_integer([:monotonic, :positive])}
-        )
-      else
-        release_failure()
-        record_drop()
+    occurred_ms = System.system_time(:millisecond)
+    seq = System.unique_integer([:monotonic, :positive])
+
+    if profiles != [] and admit_marker(instance_id) do
+      case reserve_failure(instance_id, seq, occurred_ms) do
+        {:ok, slot} ->
+          GenServer.cast(
+            __MODULE__,
+            {:auth_error, instance_id, provider_id, chain_id, profiles, occurred_ms, seq, slot}
+          )
+
+        :full ->
+          record_drop()
       end
     end
 
@@ -136,41 +145,54 @@ defmodule Lasso.Core.Support.CredentialHealth do
 
     :ets.new(@active, [:named_table, :set, :public, read_concurrency: true])
     :ets.new(@queue, [:named_table, :set, :public, write_concurrency: true])
-    :ets.insert(@queue, [{:pending, 0}, {:dropped, 0}])
+    :ets.insert(@queue, {:dropped, 0})
+    :ets.new(@reservations, [:named_table, :set, :public, write_concurrency: true])
     :ets.new(@successes, [:named_table, :set, :public, write_concurrency: true])
     :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, @topic)
     Process.send_after(self(), :heartbeat, @heartbeat_ms)
+    Process.send_after(self(), :maintenance, @maintenance_ms)
     {:ok, %{instances: %{}, remote: %{}, recoveries: %{}, reported_drops: 0}}
   end
 
   @impl true
-  def handle_cast({:auth_error, id, provider_id, chain_id, profiles, occurred_ms, seq}, state) do
-    release_failure()
-    :ets.update_counter(@markers, id, {2, -1}, {id, 0})
-    recovered_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
-    previous = Map.get(state.instances, id)
+  def handle_cast(
+        {:auth_error, id, provider_id, chain_id, profiles, occurred_ms, seq, slot},
+        state
+      ) do
+    if consume_failure(slot, id, seq, occurred_ms) do
+      recovered_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
 
-    cond do
-      seq <= recovered_seq or System.system_time(:millisecond) - occurred_ms > @window_ms ->
-        prune_marker(id, previous)
-        {:noreply, state}
+      state =
+        if pending_for_id?(id),
+          do: state,
+          else: %{state | recoveries: Map.delete(state.recoveries, id)}
 
-      is_nil(previous) and map_size(state.instances) >= @max_local_instances ->
-        prune_marker(id, nil)
-        {:noreply, state}
+      previous = Map.get(state.instances, id)
 
-      true ->
-        entry = record_failure(previous, id, provider_id, chain_id, profiles, occurred_ms, seq)
-        state = put_in(state.instances[id], entry)
+      cond do
+        seq <= recovered_seq or System.system_time(:millisecond) - occurred_ms > @window_ms ->
+          prune_marker(id, previous, seq)
+          {:noreply, state}
 
-        if entry.active? do
-          :ets.insert(@active, {{:local, id}, entry})
-        end
+        is_nil(previous) and map_size(state.instances) >= @max_local_instances ->
+          prune_marker(id, nil, seq)
+          {:noreply, state}
 
-        if entry.active? and not (previous != nil and previous.active?),
-          do: emit_transition(:active, entry, state)
+        true ->
+          entry = record_failure(previous, id, provider_id, chain_id, profiles, occurred_ms, seq)
+          state = put_in(state.instances[id], entry)
 
-        {:noreply, state}
+          if entry.active? do
+            :ets.insert(@active, {{:local, id}, entry})
+          end
+
+          if entry.active? and not (previous != nil and previous.active?),
+            do: emit_transition(:active, entry, state)
+
+          {:noreply, state}
+      end
+    else
+      {:noreply, state}
     end
   end
 
@@ -206,6 +228,45 @@ defmodule Lasso.Core.Support.CredentialHealth do
   end
 
   def handle_info({:credential_health, _origin, _status, _entry}, state), do: {:noreply, state}
+
+  def handle_info(:maintenance, state) do
+    now_ms = System.system_time(:millisecond)
+
+    expired =
+      @reservations
+      |> :ets.tab2list()
+      |> Enum.count(fn {slot, id, seq, occurred_ms} ->
+        now_ms - occurred_ms > @reservation_ttl_ms and
+          consume_failure(slot, id, seq, occurred_ms)
+      end)
+
+    if expired > 0, do: :ets.update_counter(@queue, :dropped, {2, expired})
+
+    state =
+      @successes
+      |> :ets.tab2list()
+      |> Enum.reduce(state, fn {id, _seq}, acc ->
+        case :ets.take(@successes, id) do
+          [{^id, seq}] -> resolve_success(acc, id, seq)
+          [] -> acc
+        end
+      end)
+
+    state = %{
+      state
+      | recoveries: Map.reject(state.recoveries, fn {id, _value} -> not pending_for_id?(id) end)
+    }
+
+    Enum.each(:ets.tab2list(@markers), fn {id, marked_ms, marker_seq} ->
+      if not Map.has_key?(state.instances, id) and
+           now_ms - marked_ms > @reservation_ttl_ms and not pending_for_id?(id) do
+        :ets.select_delete(@markers, [{{id, marked_ms, marker_seq}, [], [true]}])
+      end
+    end)
+
+    Process.send_after(self(), :maintenance, @maintenance_ms)
+    {:noreply, state}
+  end
 
   def handle_info(:heartbeat, state) do
     now_ms = System.system_time(:millisecond)
@@ -284,18 +345,16 @@ defmodule Lasso.Core.Support.CredentialHealth do
       if entry, do: Map.put(state.instances, id, entry), else: Map.delete(state.instances, id)
 
     recoveries =
-      case :ets.lookup(@markers, id) do
-        [{^id, pending}] when pending > 0 ->
-          previous_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
+      if pending_for_id?(id) do
+        previous_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
 
-          Map.put(
-            state.recoveries,
-            id,
-            {max(seq, previous_seq), System.system_time(:millisecond)}
-          )
-
-        _ ->
-          Map.delete(state.recoveries, id)
+        Map.put(
+          state.recoveries,
+          id,
+          {max(seq, previous_seq), System.system_time(:millisecond)}
+        )
+      else
+        Map.delete(state.recoveries, id)
       end
 
     state = %{state | instances: instances, recoveries: recoveries}
@@ -304,7 +363,7 @@ defmodule Lasso.Core.Support.CredentialHealth do
       :ets.insert(@active, {{:local, id}, entry})
     else
       :ets.delete(@active, {:local, id})
-      prune_marker(id, entry)
+      prune_marker(id, entry, seq)
     end
 
     if previous && previous.active? && not (entry != nil and entry.active?),
@@ -333,7 +392,10 @@ defmodule Lasso.Core.Support.CredentialHealth do
       |> Enum.take(-@threshold)
 
     entry = build_entry(previous, failures)
-    if previous.active?, do: %{entry | active?: true}, else: entry
+
+    if previous.active?,
+      do: %{entry | active?: true, first_seen_ms: previous.first_seen_ms},
+      else: entry
   end
 
   defp build_entry(base, failures) do
@@ -354,32 +416,51 @@ defmodule Lasso.Core.Support.CredentialHealth do
     |> Enum.filter(fn profile -> configured == :all or profile in configured end)
   end
 
-  defp reserve_failure do
-    pending = :ets.update_counter(@queue, :pending, {2, 1})
+  defp reserve_failure(id, seq, occurred_ms) do
+    start_slot = rem(seq, @max_pending_failures)
 
-    if pending <= @max_pending_failures do
-      true
-    else
-      release_failure()
-      record_drop()
-      false
-    end
+    Enum.reduce_while(0..(@reservation_probes - 1), :full, fn offset, _acc ->
+      slot = rem(start_slot + offset, @max_pending_failures)
+
+      if :ets.insert_new(@reservations, {slot, id, seq, occurred_ms}),
+        do: {:halt, {:ok, slot}},
+        else: {:cont, :full}
+    end)
   end
 
-  defp release_failure, do: :ets.update_counter(@queue, :pending, {2, -1})
+  defp consume_failure(slot, id, seq, occurred_ms) do
+    :ets.select_delete(@reservations, [{{slot, id, seq, occurred_ms}, [], [true]}]) == 1
+  end
+
+  defp pending_for_id?(id), do: :ets.match_object(@reservations, {:_, id, :_, :_}) != []
+
   defp record_drop, do: :ets.update_counter(@queue, :dropped, {2, 1})
 
   defp admit_marker(id) do
     if :ets.member(@markers, id) or :ets.info(@markers, :size) < @max_markers do
-      :ets.update_counter(@markers, id, {2, 1}, {id, 0})
+      :ets.insert(
+        @markers,
+        {id, System.system_time(:millisecond), System.unique_integer([:monotonic, :positive])}
+      )
+
       true
     else
       false
     end
   end
 
-  defp prune_marker(id, entry) do
-    if is_nil(entry), do: :ets.select_delete(@markers, [{{id, 0}, [], [true]}])
+  defp prune_marker(id, entry, through_seq \\ :infinity) do
+    if is_nil(entry) and not pending_for_id?(id) do
+      case :ets.lookup(@markers, id) do
+        [{^id, marked_ms, marker_seq}]
+        when through_seq == :infinity or marker_seq <= through_seq ->
+          :ets.select_delete(@markers, [{{id, marked_ms, marker_seq}, [], [true]}])
+
+        _ ->
+          :ok
+      end
+    end
+
     :ok
   end
 
