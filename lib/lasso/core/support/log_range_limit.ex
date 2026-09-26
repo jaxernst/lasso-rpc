@@ -17,6 +17,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
     "block range too large",
     "block range exceeded",
     "range too large",
+    "range is too large",
     "ranges over",
     "query returned more than",
     "result set too large",

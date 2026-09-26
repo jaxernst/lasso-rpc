@@ -30,7 +30,9 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           profile: "public",
           behavior:
             {:error,
-             JError.new(-32_000, "ranges over 10000 blocks are not supported on free plan")}
+             JError.new(-32_603, "eth_getLogs range is too large, max is 1k blocks",
+               category: :capability_violation
+             )}
         },
         %{id: "fallback", priority: 20, profile: "public", behavior: :healthy}
       ])
