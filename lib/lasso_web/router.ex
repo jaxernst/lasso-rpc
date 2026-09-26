@@ -35,6 +35,7 @@ defmodule LassoWeb.Router do
 
     # Health and status endpoints
     get("/health", HealthController, :health)
+    get("/ready", ReadyController, :ready)
     get("/metrics/:chain", MetricsController, :metrics)
 
     # Chain endpoints

@@ -340,7 +340,19 @@ dashboard tester maximum; `burst_limit` is metadata, not ingress enforcement.
 GET /api/health
 ```
 
-Returns system health status.
+Returns process liveness and cluster topology; it does not check upstream routing.
+
+### Routing readiness
+
+```
+GET /api/ready?profile=public&chain=ethereum
+```
+
+Returns HTTP 200 when the selected chain has an eligible HTTP upstream and a
+fresh head observation from that candidate set; otherwise it returns HTTP 503
+with a reason. Omit `chain` to check all configured chains in the selected
+profile. Omit `profile` to use `public`. The check reads local state without
+issuing a new upstream request.
 
 ### Chain Status
 
