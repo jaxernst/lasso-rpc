@@ -130,21 +130,29 @@ docker compose up -d --force-recreate --wait
 
 In v0.3.5, new profiles can reuse connected WebSocket upstreams after reload.
 If you remain on v0.3.4, recreate the container after adding profiles to avoid
-unavailable subscriptions. For new profiles and YAML-only edits in v0.3.5, reload
-the running node:
+unavailable subscriptions. On Core v0.5 and later, validate new profiles and
+YAML edits before reloading the running node:
 
 ```bash
-docker compose exec -T lasso /app/bin/lasso rpc 'IO.inspect(Lasso.Config.ConfigStore.reload())'
+docker compose exec -T lasso /app/bin/lasso check-config
+docker compose exec -T lasso /app/bin/lasso reload
 ```
 
-A successful reload prints `:ok`. A rejected reload reports its error and keeps
-the active configuration. Fix the file before restarting: a cold start cannot
+The commands exit nonzero on invalid files or a rejected reload. `check-config`
+does not change the active configuration or write profile files. A rejected
+reload reports its error and keeps the active configuration. Fix the file before
+restarting: a cold start cannot
 recover the prior in-memory configuration. Invalid files are logged during startup
 retries and prevent the service becoming ready. Use `docker compose logs lasso`
 to see the specific rejected field. A read-only mount supports loading
 and reloading; application-side configuration saves need a writable mount.
 `LASSO_PROFILES_DIR` overrides profile seeding and selection.
 `LASSO_SNAPSHOTS_DIR` independently overrides the history directory at runtime.
+On v0.4.x, reload with the earlier command:
+
+```bash
+docker compose exec -T lasso /app/bin/lasso rpc 'IO.inspect(Lasso.Config.ConfigStore.reload())'
+```
 
 #### Upgrade and rollback
 

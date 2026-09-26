@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+bin_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
+
+case "${1:-}" in
+  check-config)
+    shift
+    if [ "$#" -ne 0 ]; then
+      echo "Usage: lasso check-config" >&2
+      exit 2
+    fi
+    exec "$bin_dir/lasso-runtime" eval 'Lasso.Operator.Commands.check_config!()'
+    ;;
+  reload)
+    shift
+    if [ "$#" -ne 0 ]; then
+      echo "Usage: lasso reload" >&2
+      exit 2
+    fi
+    exec "$bin_dir/lasso-runtime" rpc 'Lasso.Operator.Commands.reload!()'
+    ;;
+  *)
+    exec "$bin_dir/lasso-runtime" "$@"
+    ;;
+esac

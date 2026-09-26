@@ -1332,7 +1332,9 @@ defmodule Lasso.Config.ConfigStore do
     {profile_ids, new_state}
   end
 
-  defp validate_profile_specs(profile_specs) when is_list(profile_specs) do
+  @doc "Validate loaded profile specs before an operator applies them to the active store."
+  @spec validate_profile_specs([map()]) :: :ok | {:error, term()}
+  def validate_profile_specs(profile_specs) when is_list(profile_specs) do
     with :ok <- validate_unique_profile_ids(profile_specs) do
       Enum.reduce_while(profile_specs, :ok, fn spec, :ok ->
         case validate_profile_spec(spec) do
@@ -1343,7 +1345,7 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
-  defp validate_profile_specs(_), do: {:error, :invalid_profile_specs}
+  def validate_profile_specs(_), do: {:error, :invalid_profile_specs}
 
   defp validate_unique_profile_ids(profile_specs) do
     ids = Enum.map(profile_specs, &Map.get(&1, :profile_id))

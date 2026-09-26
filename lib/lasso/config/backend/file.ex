@@ -85,6 +85,18 @@ defmodule Lasso.Config.Backend.File do
     end
   end
 
+  @doc "Validate existing profile files without creating directories or migrating legacy files."
+  @spec validate_all(String.t()) :: {:ok, [map()]} | {:error, term()}
+  def validate_all(profiles_dir) when is_binary(profiles_dir) do
+    if File.dir?(profiles_dir) do
+      profiles_dir
+      |> list_profile_files()
+      |> load_all_profiles_from_files()
+    else
+      {:error, {:profiles_dir_missing, profiles_dir}}
+    end
+  end
+
   @impl true
   def load(%{profiles_dir: profiles_dir}, slug) when is_binary(slug) do
     path = Path.join(profiles_dir, "#{slug}.yml")

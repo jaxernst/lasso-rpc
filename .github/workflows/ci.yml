@@ -241,12 +241,35 @@ jobs:
 
           trap 'docker logs lasso-rpc-ci || true; docker rm --force lasso-rpc-ci >/dev/null 2>&1 || true' EXIT
 
+          ready=false
           for _ in $(seq 1 60); do
             if curl --fail --silent --show-error http://127.0.0.1:4000/api/health; then
-              exit 0
+              ready=true
+              break
             fi
             sleep 1
           done
 
-          echo "Container did not become healthy within 60 seconds" >&2
-          exit 1
+          if [ "$ready" != true ]; then
+            echo "Container did not become healthy within 60 seconds" >&2
+            exit 1
+          fi
+
+          docker exec lasso-rpc-ci /app/bin/lasso check-config
+          docker exec lasso-rpc-ci /app/bin/lasso reload
+          before="$(docker exec lasso-rpc-ci /app/bin/lasso rpc 'IO.puts(Lasso.Config.ConfigStore.route_generation())')"
+          docker exec lasso-rpc-ci sh -c 'printf "\nunsupported_field: true\n" >> /data/config/profiles/public.yml'
+
+          if docker exec lasso-rpc-ci /app/bin/lasso check-config; then
+            echo "Invalid profile passed check-config" >&2
+            exit 1
+          fi
+
+          if docker exec lasso-rpc-ci /app/bin/lasso reload; then
+            echo "Invalid profile reloaded" >&2
+            exit 1
+          fi
+
+          after="$(docker exec lasso-rpc-ci /app/bin/lasso rpc 'IO.puts(Lasso.Config.ConfigStore.route_generation())')"
+          test "$before" = "$after"
+          curl --fail --silent --show-error http://127.0.0.1:4000/api/health

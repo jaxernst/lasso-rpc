@@ -299,13 +299,20 @@ config/profiles/
 
 The dashboard lists configured profiles and links to this guide. To add a profile, create its YAML file in the profiles directory on each node and reload Lasso. For containers, follow the [deployment instructions](DEPLOYMENT.md#custom-profiles-and-credentials). v0.3.5 supports new profiles reusing connected WebSocket upstreams after reload. On v0.3.4, restart after adding a profile to avoid unavailable subscriptions.
 
-For new profiles and YAML edits, reload the running release:
+For Core v0.5 and later, validate edited files before applying them to the
+running release:
 
 ```bash
-_build/prod/rel/lasso/bin/lasso rpc 'Lasso.Config.ConfigStore.reload()'
+_build/prod/rel/lasso/bin/lasso check-config
+_build/prod/rel/lasso/bin/lasso reload
 ```
 
-Confirm the reload returns `:ok`, then refresh the dashboard. Each node reads its own files; distribute the same configuration to every node.
+`check-config` reads the existing file profiles without changing disk or the
+active routes. Both commands exit nonzero on invalid configuration. A rejected
+reload keeps the active configuration, but a later cold start cannot recover it
+from invalid files. On v0.4.x, use `bin/lasso rpc 'IO.inspect(Lasso.Config.ConfigStore.reload())'`
+for reload. After a successful reload, refresh the dashboard. Each node reads
+its own files; distribute the same configuration to every node.
 
 Access via URL: `/rpc/profile/:slug/:chain`
 

@@ -29,9 +29,19 @@ defmodule Lasso.MixProject do
     [
       lasso: [
         include_executables_for: [:unix],
-        applications: [runtime_tools: :permanent]
+        applications: [runtime_tools: :permanent],
+        steps: [:assemble, &install_operator_commands/1]
       ]
     ]
+  end
+
+  defp install_operator_commands(release) do
+    generated = Path.join([release.path, "bin", "lasso"])
+    runtime = Path.join([release.path, "bin", "lasso-runtime"])
+    File.rename!(generated, runtime)
+    File.cp!(Path.expand("rel/operator-lasso", __DIR__), generated)
+    File.chmod!(generated, 0o755)
+    release
   end
 
   defp aliases do

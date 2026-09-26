@@ -3,6 +3,7 @@ defmodule Lasso.Config.FileSchemaTest do
 
   alias Lasso.Config.Backend.File, as: FileBackend
   alias Lasso.Config.ConfigStore
+  alias Lasso.Operator.Commands
 
   setup do
     root = Path.join(System.tmp_dir!(), "lasso-schema-#{System.unique_integer([:positive])}")
@@ -145,6 +146,44 @@ defmodule Lasso.Config.FileSchemaTest do
 
     assert {:error, :public_profile_missing} = ConfigStore.reload()
     assert ConfigStore.route_generation() == generation
+    assert {:ok, _} = ConfigStore.get_profile("public")
+  end
+
+  test "operator check and reload reject bad files without changing the active profile", ctx do
+    write_profile(ctx, body())
+    assert {:ok, 1} = Commands.check_config(ctx.root)
+
+    original_state = :sys.get_state(ConfigStore)
+    original_backend = Application.get_env(:lasso, :backend_config)
+    generation = ConfigStore.route_generation()
+    profile = ConfigStore.get_profile("public")
+
+    on_exit(fn ->
+      :sys.replace_state(ConfigStore, fn _ -> original_state end)
+
+      if is_nil(original_backend),
+        do: Application.delete_env(:lasso, :backend_config),
+        else: Application.put_env(:lasso, :backend_config, original_backend)
+    end)
+
+    Application.put_env(:lasso, :backend_config,
+      backend: FileBackend,
+      config: [profiles_dir: ctx.root]
+    )
+
+    :sys.replace_state(ConfigStore, fn state ->
+      %{state | backend_module: FileBackend, backend_state: ctx.backend}
+    end)
+
+    write_profile(ctx, body() <> "unsupported: true\n")
+    assert {:error, _} = Commands.check_config()
+    assert {:error, _} = Commands.reload()
+    assert ConfigStore.route_generation() == generation
+    assert ConfigStore.get_profile("public") == profile
+
+    write_profile(ctx, body())
+    assert {:ok, 1} = Commands.check_config()
+    assert :ok = Commands.reload()
     assert {:ok, _} = ConfigStore.get_profile("public")
   end
 end
