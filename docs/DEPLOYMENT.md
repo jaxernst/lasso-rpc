@@ -356,6 +356,8 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 - [ ] Profile YAML validated (startup crashes on unresolved `${ENV_VAR}`)
 - [ ] Client request limits enforced at the reverse proxy; profile rate settings only configure the dashboard tester
 - [ ] TLS terminated at reverse proxy / load balancer
-- [ ] Structured JSON log drain configured
+- [ ] Console log drain configured. Set `LOG_FORMAT=json` for single-line JSON
+      with request IDs and safe route metadata; `LOG_LEVEL` accepts `debug`,
+      `info`, `warning`, or `error`. The default remains human-readable text.
 - [ ] RPC and dashboard protected by reverse-proxy authentication or a private network boundary (Lasso OSS has no built-in client authentication)
 - [ ] If clustering: named nodes, shared cookie, DNS discovery, and private distribution connectivity configured; peers visible in `Node.list()`

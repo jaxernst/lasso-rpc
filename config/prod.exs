@@ -20,10 +20,7 @@ config :logger, :console,
 
 # Additional logger configuration for production
 config :logger,
-  level: :info,
-  compile_time_purge_matching: [
-    [level_lower_than: :info]
-  ]
+  level: :info
 
 # Enable detailed Phoenix logging (same as dev)
 config :phoenix, :logger, true
