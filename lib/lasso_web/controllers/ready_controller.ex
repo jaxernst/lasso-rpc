@@ -9,7 +9,7 @@ defmodule LassoWeb.ReadyController do
   use LassoWeb, :controller
 
   alias Lasso.Config.{ConfigStore, ProfileValidator}
-  alias Lasso.Providers.CandidateListing
+  alias Lasso.Providers.{CandidateListing, InstanceState}
   alias Lasso.RPC.{ChainState, SelectionFilters}
 
   @spec ready(Plug.Conn.t(), map()) :: Plug.Conn.t()
@@ -58,7 +58,7 @@ defmodule LassoWeb.ReadyController do
         chain_id,
         SelectionFilters.new(protocol: :http, exclude_rate_limited: true)
       )
-      |> Enum.filter(&(&1.availability in [:up, :limited]))
+      |> Enum.filter(&eligible_http_candidate?/1)
 
     reason =
       cond do
@@ -82,5 +82,13 @@ defmodule LassoWeb.ReadyController do
       status: if(is_nil(reason), do: "ready", else: "not_ready"),
       reason: reason
     }
+  end
+
+  defp eligible_http_candidate?(candidate) do
+    http_status = InstanceState.read_health(candidate.instance_id).http_status
+
+    candidate.availability in [:up, :limited] and
+      candidate.transport_availability.http in [:up, :limited] and
+      InstanceState.status_to_availability(http_status) in [:up, :limited]
   end
 end

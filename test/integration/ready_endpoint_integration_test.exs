@@ -47,6 +47,14 @@ defmodule LassoWeb.ReadyEndpointIntegrationTest do
 
     assert %{"status" => "ready", "checks" => [%{"chain_id" => ^chain, "reason" => nil}]} =
              build_conn() |> get(path) |> json_response(200)
+
+    :ets.insert(:lasso_instance_state, {
+      {:health_block_sync, instance_id},
+      %{http_status: :unhealthy, last_health_check: System.system_time(:millisecond)}
+    })
+
+    assert %{"status" => "not_ready", "checks" => [%{"reason" => "no_eligible_upstream"}]} =
+             build_conn() |> get(path) |> json_response(503)
   end
 
   test "unknown chain is not ready", %{chain: chain} do
