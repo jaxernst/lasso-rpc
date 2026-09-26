@@ -224,6 +224,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Build image from clean context
         run: docker build --pull --no-cache --tag lasso-rpc:ci .
 
@@ -275,3 +279,20 @@ jobs:
           after="$(docker exec lasso-rpc-ci /app/bin/lasso rpc 'IO.puts(Lasso.Config.ConfigStore.route_generation())')"
           test "$before" = "$after"
           curl --fail --silent --show-error http://127.0.0.1:4000/api/health
+
+      - name: Exercise the candidate distribution with a controlled upstream
+        run: |
+          version="$(awk -F '"' '/^[[:space:]]*version:/ {print $2; exit}' mix.exs)"
+          test -n "$version"
+          python3 scripts/distribution/verify.py \
+            --candidate --image lasso-rpc:ci --version "$version" \
+            --revision "$GITHUB_SHA" \
+            --report "$RUNNER_TEMP/verification-candidate.json"
+
+      - name: Preserve candidate distribution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-distribution-evidence
+          path: ${{ runner.temp }}/verification-candidate.json*
+          if-no-files-found: warn

@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--report", required=True)
+    parser.add_argument("--candidate", action="store_true",
+                        help="Exercise a locally built CI image before it has release identity labels")
     parser.add_argument("--compose", default=str(Path(__file__).resolve().parents[2] / "deployment/compose.release.yml"))
     parser.add_argument("--previous-image", help="Immutable previous release image for a policy-off upgrade check")
     parser.add_argument("--previous-version", help="Expected health version of the previous release")
@@ -44,7 +46,8 @@ def main():
     checks = []
     started = time.time()
     cid = None
-    report = {"image": args.image, "version": args.version, "revision": args.revision, "checks": checks}
+    report = {"image": args.image, "version": args.version, "revision": args.revision,
+              "candidate": args.candidate, "checks": checks}
     with tempfile.TemporaryDirectory(prefix="lasso-distribution-") as directory:
         root = Path(directory)
         shutil.copyfile(args.compose, root / "compose.yml")
@@ -180,10 +183,12 @@ chains:
             assert info["HostConfig"]["CapDrop"] == ["ALL"]
             assert "no-new-privileges:true" in info["HostConfig"]["SecurityOpt"]
             labels = info["Config"].get("Labels", {})
-            assert labels["org.opencontainers.image.revision"] == args.revision
-            assert labels["org.opencontainers.image.version"] == "v" + args.version
+            if not args.candidate:
+                assert labels["org.opencontainers.image.revision"] == args.revision
+                assert labels["org.opencontainers.image.version"] == "v" + args.version
             report["architecture"] = json.loads(run(["docker", "image", "inspect", info["Image"]]))[0]["Architecture"]
-            record("Version/revision identity, nonroot user, read-only root, restricted capabilities")
+            identity_check = "Candidate image" if args.candidate else "Version/revision identity"
+            record(identity_check + ", nonroot user, read-only root, restricted capabilities")
             status, body = request("/api/chains")
             assert status == 200 and len(json.loads(body)["chains"]) >= 1
             assert request("/dashboard")[0] == 200
@@ -242,6 +247,14 @@ ws.onerror = () => { console.error('WebSocket error'); process.exit(1); };
 '''
             run(["node", "-e", ws, f"ws://127.0.0.1:{port}/ws/rpc/profile/custom/provider/second/ethereum"], timeout=25)
             record("WebSocket RPC, subscription acknowledgment, newHeads delivery, and unsubscribe")
+            repository = Path(__file__).resolve().parents[2]
+            proxy_env = dict(env, LASSO_UPSTREAM_PORT=str(port),
+                             LASSO_PROXY_READY_PATH="/api/ready?profile=custom&chain=ethereum",
+                             LASSO_PROXY_RPC_PATH="/rpc/profile/custom/ethereum",
+                             LASSO_PROXY_WS_PATH="/ws/rpc/profile/custom/provider/second/ethereum")
+            run(["bash", str(repository / "deployment/proxy/smoke.sh")],
+                cwd=repository, env=proxy_env, timeout=120)
+            record("Authenticated Caddy and nginx pass controlled upstream HTTP RPC and WebSocket upgrades")
             write_profile("shared", profile("shared"))
             assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
             for slug in ["shared", "public", "custom"]:
