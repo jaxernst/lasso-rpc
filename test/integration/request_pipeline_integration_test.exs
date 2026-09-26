@@ -5,6 +5,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag timeout: 10_000
 
   alias Lasso.Events.RoutingDecision
+  alias Lasso.Core.Support.{CredentialHealth, ErrorClassifier}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
 
@@ -106,6 +107,290 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       assert ctx.retries == 1
       assert length(ctx.attempted_channels) == 2
     end
+  end
+
+  test "repeated upstream authentication failures remain visible after successful failover", %{
+    chain: chain
+  } do
+    assert ErrorClassifier.classify(9, "Your key is deactivated").category == :auth_error
+
+    setup_providers([
+      %{
+        id: "credential_deactivated",
+        priority: 10,
+        profile: "public",
+        behavior:
+          {:error,
+           Lasso.JSONRPC.Error.new(9, "Your key is deactivated",
+             category: :auth_error,
+             retriable?: true
+           )}
+      },
+      %{id: "healthy_fallback", priority: 20, profile: "public", behavior: :healthy}
+    ])
+
+    for _ <- 1..3 do
+      assert {:ok, _result, ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert ctx.retries == 1
+    end
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(CredentialHealth.active("public"), fn alert ->
+        alert.provider_id == "credential_deactivated" and alert.chain_count == 1 and
+          alert.first_seen_ms <= alert.last_seen_ms
+      end)
+    end)
+
+    assert Enum.any?(
+             Lasso.Diagnostics.credential_health(),
+             &(&1.provider_id == "credential_deactivated")
+           )
+
+    first_seen_ms =
+      CredentialHealth.active("public")
+      |> Enum.find(&(&1.provider_id == "credential_deactivated"))
+      |> Map.fetch!(:first_seen_ms)
+
+    instance_id = Catalog.lookup_instance_id("public", chain, "credential_deactivated")
+    Process.sleep(5)
+
+    CredentialHealth.observe_failure(%{
+      error_category: :auth_error,
+      upstream_instance_id: instance_id,
+      provider_id: "credential_deactivated",
+      chain_id: chain
+    })
+
+    :sys.get_state(CredentialHealth)
+
+    assert Enum.any?(
+             CredentialHealth.active("public"),
+             &(&1.provider_id == "credential_deactivated" and &1.first_seen_ms == first_seen_ms)
+           )
+
+    remote_instance = "remote-#{chain}"
+
+    remote_entry = %{
+      instance_id: remote_instance,
+      provider_id: "credential_deactivated",
+      chain_id: chain + 1,
+      profiles: ["public"],
+      first_seen_ms: System.system_time(:millisecond),
+      last_seen_ms: System.system_time(:millisecond),
+      active?: true
+    }
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "lasso:provider:credential_health",
+      {:credential_health, :remote_test_node, :active, remote_entry}
+    )
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(
+        CredentialHealth.active("public"),
+        &(&1.provider_id == "credential_deactivated" and &1.chain_count == 2)
+      )
+    end)
+
+    Phoenix.PubSub.broadcast(
+      Lasso.PubSub,
+      "lasso:provider:credential_health",
+      {:credential_health, :remote_test_node, :resolved, remote_entry}
+    )
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(
+        CredentialHealth.active("public"),
+        &(&1.provider_id == "credential_deactivated" and &1.chain_count == 1)
+      )
+    end)
+
+    CredentialHealth.observe_success(instance_id)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.all?(CredentialHealth.active("public"), &(&1.provider_id != "credential_deactivated"))
+    end)
+  end
+
+  test "queued success supersedes earlier failures and the observer bounds pending work", %{
+    chain: chain
+  } do
+    setup_providers([%{id: "queued_credential", profile: "public", behavior: :healthy}])
+    instance_id = Catalog.lookup_instance_id("public", chain, "queued_credential")
+    observer = Process.whereis(CredentialHealth)
+    :ok = :sys.suspend(observer)
+    on_exit(fn -> if Process.alive?(observer), do: :sys.resume(observer) end)
+
+    failure = %{
+      error_category: :auth_error,
+      upstream_instance_id: instance_id,
+      provider_id: "queued_credential",
+      chain_id: chain
+    }
+
+    Enum.each(1..3, fn _ -> CredentialHealth.observe_failure(failure) end)
+    Enum.each(1..1_500, fn _ -> CredentialHealth.observe_failure(failure) end)
+    CredentialHealth.observe_success(instance_id)
+    CredentialHealth.observe_success(instance_id)
+
+    stats = Lasso.Diagnostics.credential_health_stats()
+    assert stats.pending_failures <= 1_024
+    assert stats.dropped_failures > 0
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
+
+    :ok = :sys.resume(observer)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Lasso.Diagnostics.credential_health_stats().pending_failures == 0
+    end)
+
+    :sys.get_state(observer)
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
+
+    expired_ms = System.system_time(:millisecond) - 11_000
+    :ets.insert(:lasso_credential_health_reservations, {0, instance_id, 1, expired_ms})
+    send(observer, :maintenance)
+    :sys.get_state(observer)
+    assert Lasso.Diagnostics.credential_health_stats().pending_failures == 0
+
+    Enum.each(1..3, fn _ -> CredentialHealth.observe_failure(failure) end)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
+    end)
+
+    :ets.insert(
+      :lasso_credential_health_pending_successes,
+      {instance_id, System.unique_integer([:monotonic, :positive])}
+    )
+
+    send(observer, :maintenance)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.all?(CredentialHealth.active("public"), &(&1.provider_id != "queued_credential"))
+    end)
+  end
+
+  test "recovery still supersedes failures paused before reservation", %{chain: chain} do
+    setup_providers([%{id: "paused_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "paused_credential")
+    sequences = for _ <- 1..3, do: System.unique_integer([:monotonic, :positive])
+    now_ms = System.system_time(:millisecond)
+    :ets.insert(:lasso_credential_health_markers, {id, now_ms, hd(sequences)})
+
+    CredentialHealth.observe_success(id)
+    :sys.get_state(CredentialHealth)
+
+    for {seq, slot} <- Enum.with_index(sequences) do
+      :ets.insert(:lasso_credential_health_reservations, {slot, id, seq, now_ms})
+
+      GenServer.cast(
+        CredentialHealth,
+        {:auth_error, id, "paused_credential", chain, ["public"], now_ms, seq, slot}
+      )
+
+      send(CredentialHealth, :maintenance)
+      :sys.get_state(CredentialHealth)
+    end
+
+    state = :sys.get_state(CredentialHealth)
+    refute Map.has_key?(state.instances, id)
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "paused_credential"))
+  end
+
+  test "an older delayed success preserves an active incident start", %{chain: chain} do
+    setup_providers([%{id: "delayed_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "delayed_credential")
+    older_success_seq = System.unique_integer([:monotonic, :positive])
+
+    for _ <- 1..4 do
+      CredentialHealth.observe_failure(%{
+        error_category: :auth_error,
+        upstream_instance_id: id,
+        provider_id: "delayed_credential",
+        chain_id: chain
+      })
+
+      Process.sleep(2)
+    end
+
+    :sys.get_state(CredentialHealth)
+
+    first_seen_ms =
+      CredentialHealth.active("public")
+      |> Enum.find(&(&1.provider_id == "delayed_credential"))
+      |> Map.fetch!(:first_seen_ms)
+
+    :ets.insert(:lasso_credential_health_pending_successes, {id, older_success_seq})
+    GenServer.cast(CredentialHealth, {:success, id})
+    :sys.get_state(CredentialHealth)
+
+    assert Enum.any?(
+             CredentialHealth.active("public"),
+             &(&1.provider_id == "delayed_credential" and &1.first_seen_ms == first_seen_ms)
+           )
+  end
+
+  test "equal-time failures retain the newest sequence after delayed recovery", %{chain: chain} do
+    setup_providers([%{id: "tied_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "tied_credential")
+    sequences = for _ <- 1..7, do: System.unique_integer([:monotonic, :positive])
+    success_seq = Enum.at(sequences, 3)
+    failure_sequences = Enum.take(sequences, 3) ++ Enum.drop(sequences, 4)
+    occurred_ms = System.system_time(:millisecond)
+    :ets.insert(:lasso_credential_health_markers, {id, occurred_ms, hd(sequences)})
+
+    for {seq, slot} <- Enum.with_index(failure_sequences) do
+      :ets.insert(:lasso_credential_health_reservations, {slot, id, seq, occurred_ms})
+
+      GenServer.cast(
+        CredentialHealth,
+        {:auth_error, id, "tied_credential", chain, ["public"], occurred_ms, seq, slot}
+      )
+    end
+
+    :sys.get_state(CredentialHealth)
+    :ets.insert(:lasso_credential_health_pending_successes, {id, success_seq})
+    GenServer.cast(CredentialHealth, {:success, id})
+    :sys.get_state(CredentialHealth)
+
+    assert Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "tied_credential"))
+  end
+
+  test "active credential incidents follow current profile membership", %{chain: chain} do
+    setup_providers([%{id: "moving_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "moving_credential")
+
+    failure = %{
+      error_category: :auth_error,
+      upstream_instance_id: id,
+      provider_id: "moving_credential",
+      chain_id: chain
+    }
+
+    Enum.each(1..3, fn _ -> CredentialHealth.observe_failure(failure) end)
+    :sys.get_state(CredentialHealth)
+    assert Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "moving_credential"))
+
+    catalog = Catalog.table()
+    :ets.insert(catalog, {{:instance_refs, id}, ["premium"]})
+    CredentialHealth.observe_failure(failure)
+    :sys.get_state(CredentialHealth)
+    assert Enum.any?(CredentialHealth.active("premium"), &(&1.provider_id == "moving_credential"))
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "moving_credential"))
+
+    :ets.insert(catalog, {{:instance_refs, id}, []})
+    send(CredentialHealth, :heartbeat)
+    :sys.get_state(CredentialHealth)
+    refute Enum.any?(CredentialHealth.active(), &(&1.provider_id == "moving_credential"))
   end
 
   describe "circuit breaker coordination" do
