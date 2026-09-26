@@ -30,6 +30,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     ClientSubscriptionRegistry,
     InstanceSubscriptionManager,
     InstanceSubscriptionRegistry,
+    ReplayWindow,
     StreamCoordinator,
     StreamSupervisor
   }
@@ -105,10 +106,23 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_connection(profile, chain_id))
     Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_sub_manager_restarted(chain_id))
 
-    dedupe_cfg =
+    {dedupe_cfg, max_backfill_blocks, backfill_timeout} =
       case ConfigStore.get_chain(profile, chain_id) do
-        {:ok, cfg} -> Map.get(cfg, :dedupe, %{})
-        _ -> %{}
+        {:ok, cfg} ->
+          failover = get_in(cfg, [Access.key(:websocket), Access.key(:failover)]) || %{}
+          timeout = Map.get(failover, :backfill_timeout_ms, 30_000)
+
+          effective_blocks =
+            ReplayWindow.effective_blocks(
+              Map.get(failover, :max_backfill_blocks),
+              Map.get(cfg, :block_time_ms),
+              timeout
+            )
+
+          {Map.get(cfg, :dedupe, %{}), effective_blocks, timeout}
+
+        _ ->
+          {%{}, 32, 30_000}
       end
 
     state = %{
@@ -118,8 +132,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
       coordinator_monitors: %{},
       dedupe_max_items: Map.get(dedupe_cfg, :max_items, 256),
       dedupe_max_age_ms: Map.get(dedupe_cfg, :max_age_ms, 30_000),
-      max_backfill_blocks: 32,
-      backfill_timeout: 30_000
+      max_backfill_blocks: max_backfill_blocks,
+      backfill_timeout: backfill_timeout
     }
 
     {:ok, state}

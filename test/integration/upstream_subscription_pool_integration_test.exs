@@ -3,17 +3,35 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
 
   alias Lasso.Core.Streaming.ClientSubscriptionRegistry
   alias Lasso.Core.Streaming.SubscriptionRouter
+  alias Lasso.Core.Streaming.StreamCoordinator
   alias Lasso.Core.Streaming.UpstreamSubscriptionPool
+  alias Lasso.Testing.ChainHelper
   alias Lasso.Testing.MockWSProvider
   alias LassoWeb.RPCSocket.ItemOwner
 
   @default_profile "public"
 
-  setup do
+  setup context do
     suffix = System.unique_integer([:positive])
     test_chain = suffix
     test_provider = "mock_ws_provider_#{suffix}"
     test_profile = @default_profile
+
+    if replay_config = Map.get(context, :replay_config) do
+      chain_config =
+        test_chain
+        |> ChainHelper.default_chain_config()
+        |> Map.put(:block_time_ms, replay_config.block_time_ms)
+        |> Map.put(:websocket, %{
+          failover: %{
+            max_backfill_blocks: replay_config.max_backfill_blocks,
+            backfill_timeout_ms: replay_config.backfill_timeout_ms
+          }
+        })
+
+      :ok =
+        Lasso.Config.ConfigStore.register_chain_runtime(test_profile, test_chain, chain_config)
+    end
 
     {:ok, ^test_provider} =
       MockWSProvider.start_mock(test_chain, %{
@@ -32,6 +50,38 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
     end)
 
     {:ok, chain: test_chain, provider: test_provider, profile: test_profile}
+  end
+
+  describe "configured failover replay window" do
+    @tag replay_config: %{
+           block_time_ms: 250,
+           max_backfill_blocks: 40,
+           backfill_timeout_ms: 30_000
+         }
+    test "expands a fast chain's window through the active coordinator", %{
+      chain: chain,
+      profile: profile
+    } do
+      state = get_pool_state(chain)
+
+      assert state.max_backfill_blocks == 120
+      assert state.backfill_timeout == 30_000
+
+      {:ok, _subscription_id} =
+        UpstreamSubscriptionPool.subscribe_client(profile, chain, self(), {:newHeads})
+
+      coordinator = StreamCoordinator.via(profile, chain, {:newHeads})
+      assert :sys.get_state(coordinator).max_backfill_blocks == 120
+    end
+
+    @tag replay_config: %{
+           block_time_ms: 250,
+           max_backfill_blocks: 200,
+           backfill_timeout_ms: 30_000
+         }
+    test "preserves an explicit larger operator allowance", %{chain: chain} do
+      assert get_pool_state(chain).max_backfill_blocks == 200
+    end
   end
 
   describe "basic subscription lifecycle" do

@@ -125,10 +125,10 @@ Controls upstream WebSocket subscription behavior.
 |-------|------|---------|-------------|
 | `subscribe_new_heads` | boolean | true | Enable `newHeads` block tracking and eligibility for client `newHeads` subscriptions |
 | `new_heads_timeout_ms` | integer | 42000 | Timeout before marking subscription stale (~3x block time) |
-| `failover.max_backfill_blocks` | integer | 100 | Max blocks to fetch via HTTP during subscription failover |
+| `failover.max_backfill_blocks` | integer | 100 | Minimum block allowance during subscription failover; fast chains may expand to cover the recovery horizon |
 | `failover.backfill_timeout_ms` | integer | 30000 | Timeout for backfill HTTP requests |
 
-Failover limits are captured from the active profile at the beginning of each recovery, including after YAML reload. An in-progress recovery keeps its captured limits. The backfill timeout is also bounded by the overall 30-second recovery deadline. Gaps beyond `max_backfill_blocks` terminate continuity rather than silently skipping missing blocks.
+Failover limits are captured from the active profile at the beginning of each recovery, including after YAML reload. An in-progress recovery keeps its captured limits. The effective block allowance is the greater of `max_backfill_blocks` and the blocks expected during one backfill-timeout horizon, with time-derived expansion capped at 2048 blocks. The backfill timeout is also bounded by the overall 30-second recovery deadline. Gaps beyond the effective allowance terminate continuity rather than silently skipping missing blocks.
 
 ### UI Topology
 

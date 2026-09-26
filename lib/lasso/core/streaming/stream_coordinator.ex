@@ -20,6 +20,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   alias Lasso.Core.Streaming.{
     ClientSubscriptionRegistry,
+    ReplayWindow,
     StreamState
   }
 
@@ -424,9 +425,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp profile_failover_options(profile, chain_id, opts) do
     case ConfigStore.get_chain(profile, chain_id) do
-      {:ok, %{websocket: %{failover: config}}} ->
+      {:ok, %{websocket: %{failover: config}} = chain} ->
         opts
-        |> Keyword.put(:max_backfill_blocks, config.max_backfill_blocks)
+        |> Keyword.put(
+          :max_backfill_blocks,
+          ReplayWindow.effective_blocks(
+            config.max_backfill_blocks,
+            chain.block_time_ms,
+            config.backfill_timeout_ms
+          )
+        )
         |> Keyword.put(:backfill_timeout, config.backfill_timeout_ms)
 
       _ ->
