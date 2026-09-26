@@ -287,7 +287,7 @@ defmodule Lasso.Core.Support.CredentialHealth do
 
     Enum.each(removed, fn entry ->
       :ets.delete(@active, {:local, entry.instance_id})
-      prune_marker(entry.instance_id, nil)
+      prune_marker(entry.instance_id)
       if entry.active?, do: broadcast(:resolved, entry)
     end)
 
@@ -437,11 +437,10 @@ defmodule Lasso.Core.Support.CredentialHealth do
     end
   end
 
-  defp prune_marker(id, entry, through_seq \\ :infinity) do
-    if is_nil(entry) and not pending_for_id?(id) do
+  defp prune_marker(id) do
+    if not pending_for_id?(id) do
       case :ets.lookup(@markers, id) do
-        [{^id, marked_ms, marker_seq}]
-        when through_seq == :infinity or marker_seq <= through_seq ->
+        [{^id, marked_ms, marker_seq}] ->
           :ets.select_delete(@markers, [{{id, marked_ms, marker_seq}, [], [true]}])
 
         _ ->
