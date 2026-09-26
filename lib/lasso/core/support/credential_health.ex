@@ -405,7 +405,11 @@ defmodule Lasso.Core.Support.CredentialHealth do
       %{
         entry
         | active?: true,
-          active_first_seq: previous.active_first_seq,
+          active_first_seq:
+            if(entry.active?,
+              do: max(previous.active_first_seq, entry.active_first_seq),
+              else: previous.active_first_seq
+            ),
           first_seen_ms: previous.first_seen_ms
       }
     else
