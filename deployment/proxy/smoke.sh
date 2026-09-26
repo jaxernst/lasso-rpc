@@ -86,10 +86,14 @@ smoke_proxy() {
     "$address/metrics" --output "$scratch/metrics-response"
   grep -q '^# HELP ' "$scratch/metrics-response"
   if [ -n "${LASSO_PROXY_READY_PATH:-}" ]; then
+    echo "Checking readiness through $address" >&2
     curl --noproxy '*' --insecure --fail --silent --show-error \
       "${resolve_args[@]}" --user "$basic_user:$basic_password" \
       "$address$LASSO_PROXY_READY_PATH" --output "$scratch/ready-response"
-    grep -q '"status":"ready"' "$scratch/ready-response"
+    grep -q '"status":"ready"' "$scratch/ready-response" || {
+      cat "$scratch/ready-response" >&2
+      return 1
+    }
   fi
   curl --noproxy '*' --insecure --fail --silent --show-error \
     "${resolve_args[@]}" --user "$basic_user:$basic_password" \
@@ -108,13 +112,17 @@ smoke_proxy() {
   esac
 
   if [ -n "${LASSO_PROXY_RPC_PATH:-}" ]; then
+    echo "Checking controlled RPC through $address" >&2
     curl --noproxy '*' --insecure --fail --silent --show-error \
       "${resolve_args[@]}" --user "$basic_user:$basic_password" \
       --header 'Content-Type: application/json' \
       --data '{"jsonrpc":"2.0","method":"eth_getBalance","params":["0x0000000000000000000000000000000000000001","latest"],"id":42}' \
       --output "$scratch/upstream-rpc-response" \
       "$address$LASSO_PROXY_RPC_PATH"
-    grep -q '"result":"0x0"' "$scratch/upstream-rpc-response"
+    grep -q '"result":"0x0"' "$scratch/upstream-rpc-response" || {
+      cat "$scratch/upstream-rpc-response" >&2
+      return 1
+    }
   fi
 
   curl --noproxy '*' --insecure --http1.1 --silent --show-error \
@@ -124,7 +132,10 @@ smoke_proxy() {
     --header 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
     --dump-header "$headers" --output /dev/null --max-time 2 \
     "$address${LASSO_PROXY_WS_PATH:-/ws/rpc/ethereum}" || true
-  grep -Eq '^HTTP/1\.[01] 101 ' "$headers"
+  grep -Eq '^HTTP/1\.[01] 101 ' "$headers" || {
+    cat "$headers" >&2
+    return 1
+  }
 }
 
 smoke_proxy https://localhost:4080

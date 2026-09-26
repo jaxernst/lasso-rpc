@@ -221,6 +221,14 @@ chains:
             assert "# TYPE lasso_circuit_state gauge" in metrics
             assert "# TYPE lasso_provider_head_lag_blocks gauge" in metrics
             record("Fresh head and eligible controlled upstream become ready; Prometheus scrape names match the dashboard")
+            repository = Path(__file__).resolve().parents[2]
+            proxy_env = dict(env, LASSO_UPSTREAM_PORT=str(port),
+                             LASSO_PROXY_READY_PATH="/api/ready?profile=custom&chain=ethereum",
+                             LASSO_PROXY_RPC_PATH="/rpc/profile/custom/ethereum",
+                             LASSO_PROXY_WS_PATH="/ws/rpc/profile/custom/provider/second/ethereum")
+            run(["bash", str(repository / "deployment/proxy/smoke.sh")],
+                cwd=repository, env=proxy_env, timeout=120)
+            record("Authenticated Caddy and nginx pass controlled upstream HTTP RPC and WebSocket upgrades")
             before = upstream.calls["/second"]
             upstream.fail_first = True
             for _ in range(4):
@@ -247,14 +255,6 @@ ws.onerror = () => { console.error('WebSocket error'); process.exit(1); };
 '''
             run(["node", "-e", ws, f"ws://127.0.0.1:{port}/ws/rpc/profile/custom/provider/second/ethereum"], timeout=25)
             record("WebSocket RPC, subscription acknowledgment, newHeads delivery, and unsubscribe")
-            repository = Path(__file__).resolve().parents[2]
-            proxy_env = dict(env, LASSO_UPSTREAM_PORT=str(port),
-                             LASSO_PROXY_READY_PATH="/api/ready?profile=custom&chain=ethereum",
-                             LASSO_PROXY_RPC_PATH="/rpc/profile/custom/ethereum",
-                             LASSO_PROXY_WS_PATH="/ws/rpc/profile/custom/provider/second/ethereum")
-            run(["bash", str(repository / "deployment/proxy/smoke.sh")],
-                cwd=repository, env=proxy_env, timeout=120)
-            record("Authenticated Caddy and nginx pass controlled upstream HTTP RPC and WebSocket upgrades")
             write_profile("shared", profile("shared"))
             assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
             for slug in ["shared", "public", "custom"]:
