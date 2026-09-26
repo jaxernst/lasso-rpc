@@ -97,6 +97,14 @@ def main():
         def rpc(expression):
             return execute("/app/bin/lasso", "rpc", expression)
 
+        def operator_command(*parts):
+            return execute("/app/bin/lasso", *parts)
+
+        def rejected_operator_command(*parts):
+            result = subprocess.run(["docker", "exec", cid, "/app/bin/lasso", *parts],
+                                    text=True, capture_output=True)
+            assert result.returncode != 0, f"Accepted invalid {' '.join(parts)}"
+
         def write_profile(slug, content):
             run(["docker", "exec", "-i", cid, "sh", "-c", 'cat > "$1"', "sh", f"/data/config/profiles/{slug}.yml"], input=content)
 
@@ -191,6 +199,23 @@ chains:
                 assert status == 200 and json.loads(body).get("result") == "0x0", (path, status, body)
             assert upstream.authenticated > 0
             record("Custom YAML activation, namespaced routing, provider override, credential substitution")
+            assert operator_command("check-config")
+            operator_command("reload")
+            record("Supported check-config and reload commands accept valid file profiles")
+            head_request = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 35}
+            assert json.loads(request("/rpc/profile/custom/ethereum", head_request)[1])["result"] == "0x1000"
+            for _ in range(75):
+                status, body = request("/api/ready?profile=custom&chain=ethereum")
+                if status == 200 and json.loads(body).get("status") == "ready":
+                    break
+                time.sleep(1)
+            else:
+                raise AssertionError(f"Controlled upstream never became ready: {status} {body}")
+            status, metrics = request("/metrics")
+            assert status == 200 and "# TYPE lasso_rpc_requests_total counter" in metrics
+            assert "# TYPE lasso_circuit_state gauge" in metrics
+            assert "# TYPE lasso_provider_head_lag_blocks gauge" in metrics
+            record("Fresh head and eligible controlled upstream become ready; Prometheus scrape names match the dashboard")
             before = upstream.calls["/second"]
             upstream.fail_first = True
             for _ in range(4):
@@ -228,12 +253,15 @@ ws.onerror = () => { console.error('WebSocket error'); process.exit(1); };
                 assert status == expected and "error" in json.loads(body)
             record("Invalid profile/provider client errors")
             write_profile("custom", profile("custom") + "\nunsupported_setting: true\n")
-            answer = rpc('before = Lasso.Config.ConfigStore.route_generation(); result = Lasso.Config.ConfigStore.reload(); unless match?({:error, _}, result) and before == Lasso.Config.ConfigStore.route_generation(), do: raise("Invalid reload changed active config"); IO.puts("retained")')
-            assert answer == "retained"
+            before_generation = rpc("IO.puts(Lasso.Config.ConfigStore.route_generation())")
+            rejected_operator_command("check-config")
+            rejected_operator_command("reload")
+            assert rpc("IO.puts(Lasso.Config.ConfigStore.route_generation())") == before_generation
             assert json.loads(request("/rpc/profile/custom/ethereum", payload)[1])["result"] == "0x0"
             write_profile("custom", profile("custom"))
-            assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
-            record("Invalid reload preserves active generation and working RPC")
+            operator_command("check-config")
+            operator_command("reload")
+            record("Invalid command validation and reload preserve active generation and working RPC")
             assert rpc('Lasso.Benchmarking.Persistence.save_snapshot("custom", "ethereum", %{release_probe: true}); entries = Lasso.Benchmarking.Persistence.load_snapshots("custom", "ethereum", 1); unless Enum.any?(entries, &(&1["data"]["release_probe"] == true)), do: raise("Snapshot missing"); IO.puts("saved")') == "saved"
             previous = cid
             dc("up", "--detach", "--no-build", "--force-recreate", "--wait", "--wait-timeout", "90")
@@ -370,6 +398,10 @@ ws.onerror = () => { console.error('Pinned WebSocket error'); process.exit(1); }
             surfaces = request("/dashboard/custom")[1] + logs.stdout + logs.stderr
             assert all(value not in surfaces for value in [credential, secret, cookie])
             record("Generated credentials absent from inspected dashboard HTML and runtime logs")
+            report["observed_container_usage"] = {
+                "scope": "One native container after controlled release checks; not a sizing guarantee",
+                "docker_stats": json.loads(run(["docker", "stats", "--no-stream", "--format", "{{json .}}", cid]))}
+            record("Observed container CPU and memory after controlled native acceptance")
             report["result"] = "pass"
         except Exception as error:
             message = str(error) or traceback.format_exc()
