@@ -162,20 +162,13 @@ defmodule Lasso.Core.Support.CredentialHealth do
     if consume_failure(slot, id, seq, occurred_ms) do
       recovered_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
 
-      state =
-        if pending_for_id?(id),
-          do: state,
-          else: %{state | recoveries: Map.delete(state.recoveries, id)}
-
       previous = Map.get(state.instances, id)
 
       cond do
         seq <= recovered_seq or System.system_time(:millisecond) - occurred_ms > @window_ms ->
-          prune_marker(id, previous, seq)
           {:noreply, state}
 
         is_nil(previous) and map_size(state.instances) >= @max_local_instances ->
-          prune_marker(id, nil, seq)
           {:noreply, state}
 
         true ->
@@ -252,17 +245,20 @@ defmodule Lasso.Core.Support.CredentialHealth do
         end
       end)
 
-    state = %{
-      state
-      | recoveries: Map.reject(state.recoveries, fn {id, _value} -> not pending_for_id?(id) end)
-    }
-
     Enum.each(:ets.tab2list(@markers), fn {id, marked_ms, marker_seq} ->
       if not Map.has_key?(state.instances, id) and
            now_ms - marked_ms > @reservation_ttl_ms and not pending_for_id?(id) do
         :ets.select_delete(@markers, [{{id, marked_ms, marker_seq}, [], [true]}])
       end
     end)
+
+    state = %{
+      state
+      | recoveries:
+          Map.reject(state.recoveries, fn {id, _value} ->
+            not :ets.member(@markers, id) and not pending_for_id?(id)
+          end)
+    }
 
     Process.send_after(self(), :maintenance, @maintenance_ms)
     {:noreply, state}
@@ -338,24 +334,17 @@ defmodule Lasso.Core.Support.CredentialHealth do
     entry =
       cond do
         retained == [] -> nil
+        previous && retained == previous.failures -> previous
         previous -> build_entry(previous, retained)
       end
 
     instances =
       if entry, do: Map.put(state.instances, id, entry), else: Map.delete(state.instances, id)
 
-    recoveries =
-      if pending_for_id?(id) do
-        previous_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
+    previous_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
 
-        Map.put(
-          state.recoveries,
-          id,
-          {max(seq, previous_seq), System.system_time(:millisecond)}
-        )
-      else
-        Map.delete(state.recoveries, id)
-      end
+    recoveries =
+      Map.put(state.recoveries, id, {max(seq, previous_seq), System.system_time(:millisecond)})
 
     state = %{state | instances: instances, recoveries: recoveries}
 
@@ -363,7 +352,6 @@ defmodule Lasso.Core.Support.CredentialHealth do
       :ets.insert(@active, {{:local, id}, entry})
     else
       :ets.delete(@active, {:local, id})
-      prune_marker(id, entry, seq)
     end
 
     if previous && previous.active? && not (entry != nil and entry.active?),

@@ -191,6 +191,66 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end)
   end
 
+  test "recovery still supersedes failures paused before reservation", %{chain: chain} do
+    setup_providers([%{id: "paused_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "paused_credential")
+    sequences = for _ <- 1..3, do: System.unique_integer([:monotonic, :positive])
+    now_ms = System.system_time(:millisecond)
+    :ets.insert(:lasso_credential_health_markers, {id, now_ms, hd(sequences)})
+
+    CredentialHealth.observe_success(id)
+    :sys.get_state(CredentialHealth)
+
+    for {seq, slot} <- Enum.with_index(sequences) do
+      :ets.insert(:lasso_credential_health_reservations, {slot, id, seq, now_ms})
+
+      GenServer.cast(
+        CredentialHealth,
+        {:auth_error, id, "paused_credential", chain, ["public"], now_ms, seq, slot}
+      )
+
+      send(CredentialHealth, :maintenance)
+      :sys.get_state(CredentialHealth)
+    end
+
+    state = :sys.get_state(CredentialHealth)
+    refute Map.has_key?(state.instances, id)
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "paused_credential"))
+  end
+
+  test "an older delayed success preserves an active incident start", %{chain: chain} do
+    setup_providers([%{id: "delayed_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "delayed_credential")
+    older_success_seq = System.unique_integer([:monotonic, :positive])
+
+    for _ <- 1..4 do
+      CredentialHealth.observe_failure(%{
+        error_category: :auth_error,
+        upstream_instance_id: id,
+        provider_id: "delayed_credential",
+        chain_id: chain
+      })
+
+      Process.sleep(2)
+    end
+
+    :sys.get_state(CredentialHealth)
+
+    first_seen_ms =
+      CredentialHealth.active("public")
+      |> Enum.find(&(&1.provider_id == "delayed_credential"))
+      |> Map.fetch!(:first_seen_ms)
+
+    :ets.insert(:lasso_credential_health_pending_successes, {id, older_success_seq})
+    GenServer.cast(CredentialHealth, {:success, id})
+    :sys.get_state(CredentialHealth)
+
+    assert Enum.any?(
+             CredentialHealth.active("public"),
+             &(&1.provider_id == "delayed_credential" and &1.first_seen_ms == first_seen_ms)
+           )
+  end
+
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do
       profile = "public"
