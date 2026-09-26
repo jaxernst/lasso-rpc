@@ -339,6 +339,41 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
            )
   end
 
+  test "delayed recovery closes an aged incident despite a newer failure", %{chain: chain} do
+    setup_providers([%{id: "aged_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "aged_credential")
+
+    failure = %{
+      error_category: :auth_error,
+      upstream_instance_id: id,
+      provider_id: "aged_credential",
+      chain_id: chain
+    }
+
+    Enum.each(1..3, fn _ -> CredentialHealth.observe_failure(failure) end)
+    :sys.get_state(CredentialHealth)
+    assert Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "aged_credential"))
+
+    success_seq = System.unique_integer([:monotonic, :positive])
+    old_ms = System.system_time(:millisecond) - 121_000
+
+    :sys.replace_state(CredentialHealth, fn state ->
+      entry = Map.fetch!(state.instances, id)
+      aged = %{entry | failures: Enum.map(entry.failures, fn {_ms, seq} -> {old_ms, seq} end)}
+      put_in(state.instances[id], aged)
+    end)
+
+    CredentialHealth.observe_failure(failure)
+    :sys.get_state(CredentialHealth)
+
+    :ets.insert(:lasso_credential_health_pending_successes, {id, success_seq})
+    GenServer.cast(CredentialHealth, {:success, id})
+    :sys.get_state(CredentialHealth)
+
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "aged_credential"))
+    assert length(:sys.get_state(CredentialHealth).instances[id].failures) == 1
+  end
+
   test "equal-time failures retain the newest sequence after delayed recovery", %{chain: chain} do
     setup_providers([%{id: "tied_credential", profile: "public", behavior: :healthy}])
     id = Catalog.lookup_instance_id("public", chain, "tied_credential")
