@@ -272,6 +272,59 @@ for series limits, units, and the versioned Grafana dashboard.
 
 Lasso serves HTTP. Terminate TLS at your reverse proxy or load balancer. Set `PHX_HOST` to your public hostname. Production URL generation defaults to HTTPS; set `PHX_SCHEME=http` when serving locally without a TLS proxy.
 
+### Reverse proxy examples
+
+The [Caddy](../deployment/proxy/Caddyfile) and
+[nginx](../deployment/proxy/nginx.conf) examples keep the release on
+`127.0.0.1:4000` and expose one authenticated HTTPS origin. They forward the
+original paths for HTTP JSON-RPC (`/rpc/*`), WebSocket JSON-RPC (`/ws/rpc/*`),
+the dashboard and its `/live/websocket` connection, `/api/ready`, and
+`/metrics`. The proxy protects every path with HTTP Basic authentication;
+configure your Prometheus collector to send the same credentials or put its
+scrape traffic on a separate private listener. Lasso Core does not authenticate
+clients itself.
+
+For the downloadable Compose release, leave its loopback-only port binding in
+place and set the public URL in `compose.override.yml`:
+
+```yaml
+services:
+  lasso:
+    environment:
+      PHX_HOST: rpc.example.com
+      PHX_SCHEME: https
+```
+
+Replace the hostname and ensure its DNS points at the proxy. For Caddy,
+generate a password hash with `caddy hash-password`, set
+`LASSO_BASIC_AUTH_HASH` in Caddy's service environment, and install the
+example as its Caddyfile. Caddy obtains and renews the site's certificate when
+the hostname is reachable. For nginx, install the example in `conf.d`, provide
+the certificate and key at its indicated paths, and create
+`/etc/nginx/lasso.htpasswd` with `htpasswd -cB`. Keep these secrets readable
+only by the proxy. The nginx upgrade headers and two-hour-plus read timeout
+support long-lived WebSocket sessions; Caddy handles upgrades automatically.
+Proxy reloads can disconnect existing WebSocket sessions, so verify client
+reconnection during maintenance.
+
+Check both the auth boundary and each route after installation:
+
+```bash
+curl -i https://rpc.example.com/api/health                 # 401 without credentials
+curl -u operator https://rpc.example.com/api/ready?chain=ethereum
+curl -u operator https://rpc.example.com/metrics
+curl -u operator -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+  https://rpc.example.com/rpc/ethereum
+```
+
+Also load `/dashboard` in a browser and test a WebSocket client against
+`wss://rpc.example.com/ws/rpc/ethereum` with credentials in its upgrade
+request. A 200 health response is not upstream readiness; use `/api/ready` and
+the RPC call above to check the route you serve. The examples cover a single
+node. For multiple nodes, terminate TLS and authentication at the shared proxy
+and route each WebSocket connection to one backend for its lifetime.
+
 ---
 
 ## Multi-Node Clustering

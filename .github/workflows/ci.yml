@@ -255,6 +255,8 @@ jobs:
             exit 1
           fi
 
+          bash deployment/proxy/smoke.sh
+
           docker exec lasso-rpc-ci /app/bin/lasso check-config
           docker exec lasso-rpc-ci /app/bin/lasso reload
           before="$(docker exec lasso-rpc-ci /app/bin/lasso rpc 'IO.puts(Lasso.Config.ConfigStore.route_generation())')"

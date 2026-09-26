@@ -1,0 +1,11 @@
+# Point this hostname at the proxy and keep Lasso bound to 127.0.0.1:4000.
+# Set LASSO_BASIC_AUTH_HASH to a Caddy password hash before starting Caddy.
+rpc.example.com {
+  basic_auth {
+    operator {$LASSO_BASIC_AUTH_HASH}
+  }
+
+  # All paths retain their original URI: /rpc, /ws/rpc, /dashboard,
+  # /live/websocket, /api/ready, and /metrics. Caddy handles WebSocket upgrades.
+  reverse_proxy 127.0.0.1:4000
+}
