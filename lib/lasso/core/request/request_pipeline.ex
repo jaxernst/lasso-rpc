@@ -997,7 +997,22 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp maybe_observe_credential_failure(ctx, channel, %JError{category: :auth_error}) do
+  defp maybe_observe_credential_failure(ctx, channel, %JError{
+         category: category,
+         http_status: status
+       })
+       when category == :auth_error or status == 401 do
+    observe_credential_rejection(ctx, channel)
+  end
+
+  defp maybe_observe_credential_failure(ctx, channel, {kind, %{status: 401}})
+       when kind in [:client_error, :server_error] do
+    observe_credential_rejection(ctx, channel)
+  end
+
+  defp maybe_observe_credential_failure(_ctx, _channel, _reason), do: :ok
+
+  defp observe_credential_rejection(ctx, channel) do
     CredentialHealth.observe_failure(%{
       error_category: :auth_error,
       upstream_instance_id: channel.instance_id,
@@ -1005,8 +1020,6 @@ defmodule Lasso.RPC.RequestPipeline do
       chain_id: ctx.chain_id
     })
   end
-
-  defp maybe_observe_credential_failure(_ctx, _channel, _reason), do: :ok
 
   defp fact_latency_ms(%AttemptTerminal.Response{io_duration_us: us}), do: us / 1_000
   defp fact_latency_ms(%AttemptTerminal.InvalidResponse{io_duration_us: us}), do: us / 1_000

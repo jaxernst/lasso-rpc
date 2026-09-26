@@ -101,8 +101,12 @@ Connected nodes share active state for operator views; a disconnected node's
 last report expires after three minutes.
 
 Transitions emit `[:lasso, :provider, :credential_health]` telemetry and an
-operational log. This signal uses built-in or confirmed error categories and
-does not change routing based on an unconfirmed interpretation. Investigate and
+operational log. Dispatched HTTP 401 responses also count when their body does
+not contain JSON-RPC error data; arbitrary error text does not. The observation
+queue is bounded. `Lasso.Diagnostics.credential_health_stats()` reports local
+pending and dropped failures, and drops emit
+`[:lasso, :provider, :credential_health, :dropped]` telemetry and a log.
+This signal does not change routing. Investigate and
 replace a deactivated upstream key in the deployment's configuration; no
 credential value is retained in the alert.
 

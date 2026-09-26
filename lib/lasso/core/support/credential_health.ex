@@ -1,12 +1,11 @@
 defmodule Lasso.Core.Support.CredentialHealth do
   @moduledoc """
-  Bounded health evidence for operator-managed upstream credentials.
+  Bounded evidence for operator-managed upstream credential failures.
 
-  Three authentication failures from one dispatched instance within two minutes
-  activate a credential alert. A successful attempt from that same instance
-  resolves it. The tracker reads terminal attempts, so a request that succeeds
-  after failover still records the failed upstream. Active states are shared
-  across connected nodes for operator views. It never changes routing.
+  Three dispatched authentication failures for one instance in a rolling
+  two-minute window activate an alert. A later success from that instance
+  resolves it, even when failures are still queued. Connected nodes share
+  active states. This observer never changes routing.
   """
 
   use GenServer
@@ -16,27 +15,75 @@ defmodule Lasso.Core.Support.CredentialHealth do
   alias Lasso.Providers.Catalog
 
   @health_event [:lasso, :provider, :credential_health]
+  @drop_event [:lasso, :provider, :credential_health, :dropped]
   @topic "lasso:provider:credential_health"
   @markers :lasso_credential_health_markers
+  @active :lasso_credential_health_active
+  @queue :lasso_credential_health_queue
+  @successes :lasso_credential_health_pending_successes
   @window_ms 120_000
   @heartbeat_ms 60_000
   @remote_stale_ms 180_000
+  @max_pending_failures 1_024
   @max_local_instances 2_048
+  @max_markers 3_072
   @max_remote_instances 4_096
   @threshold 3
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-  @doc "Active credential failures, grouped by profile and provider across connected nodes."
+  @doc "Active credential failures grouped by profile and provider across connected nodes."
   @spec active(String.t() | nil) :: [map()]
-  def active(profile \\ nil), do: GenServer.call(__MODULE__, {:active, profile})
+  def active(profile \\ nil) do
+    @active
+    |> :ets.tab2list()
+    |> Enum.map(fn {_key, entry} -> entry end)
+    |> Enum.flat_map(fn entry ->
+      for ref <- entry.profiles, is_nil(profile) or ref == profile do
+        %{
+          profile: ref,
+          provider_id: entry.provider_id,
+          chain_id: entry.chain_id,
+          first_seen_ms: entry.first_seen_ms,
+          last_seen_ms: entry.last_seen_ms,
+          instance_id: entry.instance_id
+        }
+      end
+    end)
+    |> Enum.group_by(&{&1.profile, &1.provider_id})
+    |> Enum.map(fn {{ref, provider_id}, entries} ->
+      %{
+        profile: ref,
+        provider_id: provider_id,
+        chain_count: entries |> Enum.map(& &1.chain_id) |> Enum.uniq() |> length(),
+        first_seen_ms: entries |> Enum.map(& &1.first_seen_ms) |> Enum.min(),
+        last_seen_ms: entries |> Enum.map(& &1.last_seen_ms) |> Enum.max(),
+        instance_count: entries |> Enum.map(& &1.instance_id) |> Enum.uniq() |> length(),
+        instance_ids: entries |> Enum.map(& &1.instance_id) |> Enum.uniq()
+      }
+    end)
+    |> Enum.sort_by(&{&1.profile, &1.provider_id})
+  rescue
+    ArgumentError -> []
+  end
 
-  @doc "Clears a failed instance after an observed successful upstream attempt."
+  @doc "Queue occupancy and dropped authentication observations, available even if the observer stalls."
+  @spec stats() :: %{pending_failures: non_neg_integer(), dropped_failures: non_neg_integer()}
+  def stats do
+    %{
+      pending_failures: :ets.lookup_element(@queue, :pending, 2),
+      dropped_failures: :ets.lookup_element(@queue, :dropped, 2)
+    }
+  rescue
+    ArgumentError -> %{pending_failures: 0, dropped_failures: 0}
+  end
+
+  @doc "Clears failures after a successful attempt from the same upstream instance."
   @spec observe_success(term()) :: :ok
   def observe_success(instance_id) when is_binary(instance_id) do
     if :ets.member(@markers, instance_id) do
-      GenServer.cast(__MODULE__, {:success, instance_id})
+      enqueue_success(instance_id, System.unique_integer([:monotonic, :positive]))
     end
 
     :ok
@@ -46,83 +93,92 @@ defmodule Lasso.Core.Support.CredentialHealth do
 
   def observe_success(_instance_id), do: :ok
 
-  @doc "Records a dispatched upstream authentication failure without changing routing."
+  @doc "Records a dispatched upstream authentication rejection without changing routing."
   @spec observe_failure(term()) :: :ok
-  def observe_failure(%{error_category: :auth_error} = attempt) do
-    GenServer.cast(
-      __MODULE__,
-      {:auth_error, Map.take(attempt, [:upstream_instance_id, :provider_id, :chain_id])}
-    )
+  def observe_failure(%{
+        error_category: :auth_error,
+        upstream_instance_id: instance_id,
+        provider_id: provider_id,
+        chain_id: chain_id
+      })
+      when is_binary(instance_id) and is_binary(provider_id) and is_integer(chain_id) do
+    profiles = monitored_profiles(instance_id)
+
+    if profiles != [] and reserve_failure() do
+      if admit_marker(instance_id) do
+        GenServer.cast(
+          __MODULE__,
+          {:auth_error, instance_id, provider_id, chain_id, profiles,
+           System.system_time(:millisecond), System.unique_integer([:monotonic, :positive])}
+        )
+      else
+        release_failure()
+        record_drop()
+      end
+    end
 
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   def observe_failure(_attempt), do: :ok
 
   @impl true
   def init(_opts) do
-    :ets.new(@markers, [:named_table, :set, :public, read_concurrency: true])
+    :ets.new(@markers, [
+      :named_table,
+      :set,
+      :public,
+      read_concurrency: true,
+      write_concurrency: true
+    ])
+
+    :ets.new(@active, [:named_table, :set, :public, read_concurrency: true])
+    :ets.new(@queue, [:named_table, :set, :public, write_concurrency: true])
+    :ets.insert(@queue, [{:pending, 0}, {:dropped, 0}])
+    :ets.new(@successes, [:named_table, :set, :public, write_concurrency: true])
     :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, @topic)
     Process.send_after(self(), :heartbeat, @heartbeat_ms)
-    {:ok, %{instances: %{}, remote: %{}}}
+    {:ok, %{instances: %{}, remote: %{}, recoveries: %{}, reported_drops: 0}}
   end
 
   @impl true
-  def handle_cast(
-        {:auth_error,
-         %{upstream_instance_id: instance_id, provider_id: provider_id, chain_id: chain_id}},
-        state
-      )
-      when is_binary(instance_id) and is_binary(provider_id) and is_integer(chain_id) do
-    profiles = monitored_profiles(instance_id)
+  def handle_cast({:auth_error, id, provider_id, chain_id, profiles, occurred_ms, seq}, state) do
+    release_failure()
+    :ets.update_counter(@markers, id, {2, -1}, {id, 0})
+    recovered_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
+    previous = Map.get(state.instances, id)
 
-    if profiles == [] do
-      {:noreply, state}
-    else
-      now_ms = System.system_time(:millisecond)
-      previous = Map.get(state.instances, instance_id)
-
-      if is_nil(previous) and map_size(state.instances) >= @max_local_instances do
+    cond do
+      seq <= recovered_seq or System.system_time(:millisecond) - occurred_ms > @window_ms ->
+        prune_marker(id, previous)
         {:noreply, state}
-      else
-        entry =
-          cond do
-            is_nil(previous) ->
-              new_entry(instance_id, provider_id, chain_id, profiles, now_ms)
 
-            previous.active? ->
-              %{previous | last_seen_ms: now_ms, count: previous.count + 1}
+      is_nil(previous) and map_size(state.instances) >= @max_local_instances ->
+        prune_marker(id, nil)
+        {:noreply, state}
 
-            now_ms - previous.first_seen_ms > @window_ms ->
-              new_entry(instance_id, provider_id, chain_id, profiles, now_ms)
+      true ->
+        entry = record_failure(previous, id, provider_id, chain_id, profiles, occurred_ms, seq)
+        state = put_in(state.instances[id], entry)
 
-            true ->
-              %{previous | last_seen_ms: now_ms, count: previous.count + 1}
-          end
-
-        entry = %{entry | active?: entry.count >= @threshold}
-        :ets.insert(@markers, {instance_id, true})
-        state = put_in(state.instances[instance_id], entry)
-
-        if entry.active? and not (previous && previous.active?) do
-          emit_transition(:active, entry, state)
+        if entry.active? do
+          :ets.insert(@active, {{:local, id}, entry})
         end
 
+        if entry.active? and not (previous != nil and previous.active?),
+          do: emit_transition(:active, entry, state)
+
         {:noreply, state}
-      end
     end
   end
 
-  def handle_cast({:auth_error, _metadata}, state), do: {:noreply, state}
-
-  def handle_cast({:success, instance_id}, state) do
-    {entry, instances} = Map.pop(state.instances, instance_id)
-    :ets.delete(@markers, instance_id)
-    state = %{state | instances: instances}
-
-    if entry && entry.active?, do: emit_transition(:resolved, entry, state)
-
-    {:noreply, state}
+  def handle_cast({:success, id}, state) do
+    case :ets.take(@successes, id) do
+      [{^id, seq}] -> {:noreply, resolve_success(state, id, seq)}
+      [] -> {:noreply, state}
+    end
   end
 
   @impl true
@@ -133,15 +189,14 @@ defmodule Lasso.Core.Support.CredentialHealth do
     remote =
       case status do
         :resolved ->
+          :ets.delete(@active, key)
           Map.delete(state.remote, key)
 
         :active
         when map_size(state.remote) < @max_remote_instances or is_map_key(state.remote, key) ->
-          Map.put(
-            state.remote,
-            key,
-            Map.put(entry, :reported_at_ms, System.system_time(:millisecond))
-          )
+          updated = Map.put(entry, :reported_at_ms, System.system_time(:millisecond))
+          :ets.insert(@active, {key, updated})
+          Map.put(state.remote, key, updated)
 
         :active ->
           state.remote
@@ -174,64 +229,121 @@ defmodule Lasso.Core.Support.CredentialHealth do
       end)
 
     Enum.each(removed, fn entry ->
-      :ets.delete(@markers, entry.instance_id)
+      :ets.delete(@active, {:local, entry.instance_id})
+      prune_marker(entry.instance_id, nil)
       if entry.active?, do: broadcast(:resolved, entry)
     end)
 
     remote =
-      Map.reject(state.remote, fn {_key, entry} ->
-        now_ms - entry.reported_at_ms > @remote_stale_ms
+      Map.reject(state.remote, fn {key, entry} ->
+        stale? = now_ms - entry.reported_at_ms > @remote_stale_ms
+        if stale?, do: :ets.delete(@active, key)
+        stale?
       end)
+
+    recoveries =
+      Map.reject(state.recoveries, fn {_id, {_seq, at_ms}} ->
+        now_ms - at_ms > @remote_stale_ms
+      end)
+
+    dropped = :ets.lookup_element(@queue, :dropped, 2)
+
+    if dropped > state.reported_drops do
+      count = dropped - state.reported_drops
+      Logger.warning("Credential health observations dropped", dropped: count)
+      :telemetry.execute(@drop_event, %{count: count}, %{})
+    end
 
     Process.send_after(self(), :heartbeat, @heartbeat_ms)
-    {:noreply, %{state | instances: instances, remote: remote}}
+
+    {:noreply,
+     %{
+       state
+       | instances: instances,
+         remote: remote,
+         recoveries: recoveries,
+         reported_drops: dropped
+     }}
   end
 
-  @impl true
-  def handle_call({:active, profile}, _from, state) do
-    active =
-      (Map.values(state.instances) ++ Map.values(state.remote))
-      |> Enum.filter(& &1.active?)
-      |> Enum.flat_map(fn entry ->
-        for ref <- entry.profiles, is_nil(profile) or ref == profile do
-          %{
-            profile: ref,
-            provider_id: entry.provider_id,
-            chain_id: entry.chain_id,
-            first_seen_ms: entry.first_seen_ms,
-            last_seen_ms: entry.last_seen_ms,
-            instance_id: entry.instance_id
-          }
-        end
-      end)
-      |> Enum.group_by(&{&1.profile, &1.provider_id})
-      |> Enum.map(fn {{ref, provider_id}, entries} ->
-        %{
-          profile: ref,
-          provider_id: provider_id,
-          chain_count: entries |> Enum.map(& &1.chain_id) |> Enum.uniq() |> length(),
-          first_seen_ms: entries |> Enum.map(& &1.first_seen_ms) |> Enum.min(),
-          last_seen_ms: entries |> Enum.map(& &1.last_seen_ms) |> Enum.max(),
-          instance_count: entries |> Enum.map(& &1.instance_id) |> Enum.uniq() |> length(),
-          instance_ids: entries |> Enum.map(& &1.instance_id) |> Enum.uniq()
-        }
-      end)
-      |> Enum.sort_by(&{&1.profile, &1.provider_id})
+  defp resolve_success(state, id, seq) do
+    previous = Map.get(state.instances, id)
 
-    {:reply, active, state}
+    retained =
+      if previous,
+        do: Enum.filter(previous.failures, fn {_at_ms, failure_seq} -> failure_seq > seq end),
+        else: []
+
+    entry =
+      cond do
+        retained == [] -> nil
+        previous -> build_entry(previous, retained)
+      end
+
+    instances =
+      if entry, do: Map.put(state.instances, id, entry), else: Map.delete(state.instances, id)
+
+    recoveries =
+      case :ets.lookup(@markers, id) do
+        [{^id, pending}] when pending > 0 ->
+          previous_seq = state.recoveries |> Map.get(id, {0, 0}) |> elem(0)
+
+          Map.put(
+            state.recoveries,
+            id,
+            {max(seq, previous_seq), System.system_time(:millisecond)}
+          )
+
+        _ ->
+          Map.delete(state.recoveries, id)
+      end
+
+    state = %{state | instances: instances, recoveries: recoveries}
+
+    if entry && entry.active? do
+      :ets.insert(@active, {{:local, id}, entry})
+    else
+      :ets.delete(@active, {:local, id})
+      prune_marker(id, entry)
+    end
+
+    if previous && previous.active? && not (entry != nil and entry.active?),
+      do: emit_transition(:resolved, previous, state)
+
+    state
   end
 
-  defp new_entry(instance_id, provider_id, chain_id, profiles, now_ms) do
-    %{
-      instance_id: instance_id,
-      provider_id: provider_id,
-      chain_id: chain_id,
-      profiles: profiles,
-      first_seen_ms: now_ms,
-      last_seen_ms: now_ms,
-      count: 1,
-      active?: false
-    }
+  defp record_failure(nil, id, provider_id, chain_id, profiles, occurred_ms, seq) do
+    build_entry(
+      %{
+        instance_id: id,
+        provider_id: provider_id,
+        chain_id: chain_id,
+        profiles: profiles
+      },
+      [{occurred_ms, seq}]
+    )
+  end
+
+  defp record_failure(previous, _id, _provider_id, _chain_id, _profiles, occurred_ms, seq) do
+    failures =
+      [{occurred_ms, seq} | previous.failures]
+      |> Enum.filter(fn {at_ms, _} -> occurred_ms - at_ms <= @window_ms end)
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.take(-@threshold)
+
+    entry = build_entry(previous, failures)
+    if previous.active?, do: %{entry | active?: true}, else: entry
+  end
+
+  defp build_entry(base, failures) do
+    times = Enum.map(failures, &elem(&1, 0))
+
+    base
+    |> Map.put(:failures, failures)
+    |> Map.put(:first_seen_ms, Enum.min(times))
+    |> Map.put(:last_seen_ms, Enum.max(times))
+    |> Map.put(:active?, length(failures) >= @threshold)
   end
 
   defp monitored_profiles(instance_id) do
@@ -242,6 +354,55 @@ defmodule Lasso.Core.Support.CredentialHealth do
     |> Enum.filter(fn profile -> configured == :all or profile in configured end)
   end
 
+  defp reserve_failure do
+    pending = :ets.update_counter(@queue, :pending, {2, 1})
+
+    if pending <= @max_pending_failures do
+      true
+    else
+      release_failure()
+      record_drop()
+      false
+    end
+  end
+
+  defp release_failure, do: :ets.update_counter(@queue, :pending, {2, -1})
+  defp record_drop, do: :ets.update_counter(@queue, :dropped, {2, 1})
+
+  defp admit_marker(id) do
+    if :ets.member(@markers, id) or :ets.info(@markers, :size) < @max_markers do
+      :ets.update_counter(@markers, id, {2, 1}, {id, 0})
+      true
+    else
+      false
+    end
+  end
+
+  defp prune_marker(id, entry) do
+    if is_nil(entry), do: :ets.select_delete(@markers, [{{id, 0}, [], [true]}])
+    :ok
+  end
+
+  defp enqueue_success(id, seq) do
+    if :ets.insert_new(@successes, {id, seq}) do
+      GenServer.cast(__MODULE__, {:success, id})
+    else
+      case :ets.lookup(@successes, id) do
+        [{^id, old}] when old < seq ->
+          case :ets.select_replace(@successes, [{{id, old}, [], [{{id, seq}}]}]) do
+            1 -> :ok
+            0 -> enqueue_success(id, seq)
+          end
+
+        [{^id, _newer}] ->
+          :ok
+
+        [] ->
+          enqueue_success(id, seq)
+      end
+    end
+  end
+
   defp emit_transition(status, entry, state) do
     affected =
       (Map.values(state.instances) ++ Map.values(state.remote))
@@ -250,19 +411,12 @@ defmodule Lasso.Core.Support.CredentialHealth do
           Enum.any?(candidate.profiles, &(&1 in entry.profiles))
       end)
 
-    first_seen_ms =
-      [entry | affected]
-      |> Enum.map(& &1.first_seen_ms)
-      |> Enum.min()
-
-    chain_count = affected |> Enum.map(& &1.chain_id) |> Enum.uniq() |> length()
-
     metadata = %{
       status: status,
       provider_id: entry.provider_id,
       profiles: entry.profiles,
-      chain_count: chain_count,
-      first_seen_ms: first_seen_ms
+      chain_count: affected |> Enum.map(& &1.chain_id) |> Enum.uniq() |> length(),
+      first_seen_ms: entry.first_seen_ms
     }
 
     if status == :active do

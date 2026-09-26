@@ -111,6 +111,42 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     end)
   end
 
+  test "queued success supersedes earlier failures and the observer bounds pending work", %{
+    chain: chain
+  } do
+    setup_providers([%{id: "queued_credential", profile: "public", behavior: :healthy}])
+    instance_id = Catalog.lookup_instance_id("public", chain, "queued_credential")
+    observer = Process.whereis(CredentialHealth)
+    :ok = :sys.suspend(observer)
+    on_exit(fn -> if Process.alive?(observer), do: :sys.resume(observer) end)
+
+    failure = %{
+      error_category: :auth_error,
+      upstream_instance_id: instance_id,
+      provider_id: "queued_credential",
+      chain_id: chain
+    }
+
+    Enum.each(1..3, fn _ -> CredentialHealth.observe_failure(failure) end)
+    Enum.each(1..1_500, fn _ -> CredentialHealth.observe_failure(failure) end)
+    CredentialHealth.observe_success(instance_id)
+    CredentialHealth.observe_success(instance_id)
+
+    stats = Lasso.Diagnostics.credential_health_stats()
+    assert stats.pending_failures <= 1_024
+    assert stats.dropped_failures > 0
+    assert CredentialHealth.active("public") == []
+
+    :ok = :sys.resume(observer)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Lasso.Diagnostics.credential_health_stats().pending_failures == 0
+    end)
+
+    :sys.get_state(observer)
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "queued_credential"))
+  end
+
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do
       profile = "public"
