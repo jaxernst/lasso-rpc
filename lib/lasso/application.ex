@@ -79,6 +79,7 @@ defmodule Lasso.Application do
 
         # Start Telemetry supervisor for metrics and monitoring
         Lasso.Telemetry,
+        Lasso.Observability.Prometheus,
 
         # Error classification sample store (attaches to telemetry)
         Lasso.Core.Support.ErrorClassificationStore,

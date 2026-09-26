@@ -1,0 +1,48 @@
+{
+  "uid": "lasso-core-v1",
+  "title": "Lasso Core v1",
+  "description": "Node-local routing and upstream evidence from the bounded /metrics endpoint.",
+  "tags": ["lasso", "core"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "title": "RPC request rate by outcome",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum by (outcome) (rate(lasso_rpc_requests_total[5m]))", "legendFormat": "{{outcome}}"}]
+    },
+    {
+      "id": 2,
+      "title": "Provider error rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "sum by (chain, provider) (rate(lasso_rpc_requests_total{outcome=\"error\"}[5m]))", "legendFormat": "{{chain}} / {{provider}}"}]
+    },
+    {
+      "id": 3,
+      "title": "Open circuits",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+      "targets": [{"expr": "sum(lasso_circuit_state{state=\"open\"})", "legendFormat": "open"}]
+    },
+    {
+      "id": 4,
+      "title": "Provider head lag (blocks)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+      "targets": [{"expr": "lasso_provider_head_lag_blocks", "legendFormat": "{{profile}} / {{chain}} / {{provider}}"}]
+    },
+    {
+      "id": 5,
+      "title": "Dropped metric observations",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "targets": [{"expr": "increase(lasso_rpc_request_observations_dropped_total[1h])", "legendFormat": "dropped"}]
+    }
+  ]
+}

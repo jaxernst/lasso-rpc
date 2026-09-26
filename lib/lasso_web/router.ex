@@ -30,6 +30,10 @@ defmodule LassoWeb.Router do
     live("/dashboard/:profile", Dashboard, :show)
   end
 
+  scope "/", LassoWeb do
+    get("/metrics", PrometheusController, :index)
+  end
+
   scope "/api", LassoWeb do
     pipe_through(:api)
 

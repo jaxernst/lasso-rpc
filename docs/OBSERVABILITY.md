@@ -13,7 +13,21 @@ observations display as unavailable rather than a measured zero.
 
 `GET /api/metrics/:chain` reports node-local upstream attempt metrics for the
 `public` profile. It is a JSON endpoint. See [API Reference](API_REFERENCE.md#non-rpc-api-endpoints)
-for its fields and units. Lasso does not expose a Prometheus scrape endpoint.
+for its fields and units.
+
+`GET /metrics` exposes Prometheus text for node-local routed request counts by
+chain, provider, method, and outcome; current local circuit state; and fresh
+provider head lag. The request series table is capped at 4,096 slots. Unknown
+methods share an `other` label, and observations that cannot fit increment
+`lasso_rpc_request_observations_dropped_total`. Circuit and lag samples scan at
+most 2,048 configured provider routes per scrape. A missing lag sample means
+the local registry has no fresh lag observation; it does not mean zero lag.
+
+Import [the versioned Grafana dashboard](grafana/lasso-core-v1.json) into a
+Prometheus-backed Grafana instance. Scrape each Core node separately and retain
+an instance label in Prometheus when aggregating nodes. Restrict `/metrics` at
+the reverse proxy or private network boundary; the endpoint itself has no
+application authentication and includes configured provider identifiers.
 
 The browser request tester generates real upstream traffic. Its HTTP success,
 error, and latency counters describe that browser's run. WebSocket connection

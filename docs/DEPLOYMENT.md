@@ -252,6 +252,14 @@ own. It can remain unavailable during startup until head monitoring observes a
 block. Protect both endpoints at the deployment boundary, and keep a separate
 upstream-backed application probe for the exact method and workload you serve.
 
+### Prometheus scrape
+
+Scrape `GET /metrics` on each node to monitor routed request outcomes, local
+circuit states, and provider head lag. Keep this path on a private network or
+allow only your collector through the reverse proxy. It has no application
+authentication and reports provider identifiers. See [Observability](OBSERVABILITY.md)
+for series limits, units, and the versioned Grafana dashboard.
+
 ### HTTPS
 
 Lasso serves HTTP. Terminate TLS at your reverse proxy or load balancer. Set `PHX_HOST` to your public hostname. Production URL generation defaults to HTTPS; set `PHX_SCHEME=http` when serving locally without a TLS proxy.
