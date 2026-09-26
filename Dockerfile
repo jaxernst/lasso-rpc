@@ -33,6 +33,7 @@ RUN mix deps.get --only prod
 COPY lib/ ./lib/
 COPY assets/ ./assets/
 COPY priv/ ./priv/
+COPY rel/operator-lasso ./rel/operator-lasso
 
 # Compile application
 RUN mix compile

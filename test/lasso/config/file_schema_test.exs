@@ -183,7 +183,7 @@ defmodule Lasso.Config.FileSchemaTest do
 
     write_profile(ctx, body())
     assert {:ok, 1} = Commands.check_config()
-    assert :ok = Commands.reload()
-    assert {:ok, _} = ConfigStore.get_profile("public")
+    assert ConfigStore.route_generation() == generation
+    assert ConfigStore.get_profile("public") == profile
   end
 end
