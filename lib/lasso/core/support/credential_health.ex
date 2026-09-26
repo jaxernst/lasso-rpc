@@ -345,7 +345,7 @@ defmodule Lasso.Core.Support.CredentialHealth do
     entry =
       cond do
         retained == [] -> nil
-        previous && previous.active? && seq < previous.active_since_seq -> previous
+        previous && previous.active? && seq < previous.active_first_seq -> previous
         previous -> build_entry(previous, retained)
       end
 
@@ -405,7 +405,7 @@ defmodule Lasso.Core.Support.CredentialHealth do
       %{
         entry
         | active?: true,
-          active_since_seq: previous.active_since_seq,
+          active_first_seq: previous.active_first_seq,
           first_seen_ms: previous.first_seen_ms
       }
     else
@@ -422,12 +422,12 @@ defmodule Lasso.Core.Support.CredentialHealth do
     |> Map.put(:last_seen_ms, Enum.max(times))
     |> Map.put(:active?, length(failures) >= @threshold)
     |> Map.put(
-      :active_since_seq,
-      if(length(failures) >= @threshold, do: max_failure_seq(failures))
+      :active_first_seq,
+      if(length(failures) >= @threshold, do: min_failure_seq(failures))
     )
   end
 
-  defp max_failure_seq(failures), do: failures |> Enum.map(&elem(&1, 1)) |> Enum.max()
+  defp min_failure_seq(failures), do: failures |> Enum.map(&elem(&1, 1)) |> Enum.min()
 
   defp monitored_profiles(instance_id) do
     configured = Application.get_env(:lasso, :credential_health_profiles, :all)

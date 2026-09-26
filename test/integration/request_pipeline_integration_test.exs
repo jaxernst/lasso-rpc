@@ -374,6 +374,32 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
     assert length(:sys.get_state(CredentialHealth).instances[id].failures) == 1
   end
 
+  test "delayed recovery splits the failures that established an incident", %{chain: chain} do
+    setup_providers([%{id: "split_credential", profile: "public", behavior: :healthy}])
+    id = Catalog.lookup_instance_id("public", chain, "split_credential")
+
+    failure = %{
+      error_category: :auth_error,
+      upstream_instance_id: id,
+      provider_id: "split_credential",
+      chain_id: chain
+    }
+
+    Enum.each(1..2, fn _ -> CredentialHealth.observe_failure(failure) end)
+    :sys.get_state(CredentialHealth)
+    success_seq = System.unique_integer([:monotonic, :positive])
+    CredentialHealth.observe_failure(failure)
+    :sys.get_state(CredentialHealth)
+    assert Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "split_credential"))
+
+    :ets.insert(:lasso_credential_health_pending_successes, {id, success_seq})
+    GenServer.cast(CredentialHealth, {:success, id})
+    :sys.get_state(CredentialHealth)
+
+    refute Enum.any?(CredentialHealth.active("public"), &(&1.provider_id == "split_credential"))
+    assert length(:sys.get_state(CredentialHealth).instances[id].failures) == 1
+  end
+
   test "equal-time failures retain the newest sequence after delayed recovery", %{chain: chain} do
     setup_providers([%{id: "tied_credential", profile: "public", behavior: :healthy}])
     id = Catalog.lookup_instance_id("public", chain, "tied_credential")
