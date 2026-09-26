@@ -3,6 +3,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
 
   alias Lasso.Core.Request.RequestOwner
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission}
+  alias Lasso.Core.Support.LogRangeLimit
   alias Lasso.RPC.{AttemptIdentity, AttemptTerminal}
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: FinchClient
@@ -35,6 +36,12 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
       serve_once("HTTP/1.1 200 OK\r\ncontent-length: 65\r\nconnection: keep-alive\r\n\r\n")
 
     assert {:error, {:response_limit, :response_too_large}} = rpc(url)
+
+    assert {:ok, range_error} =
+             LogRangeLimit.translate("eth_getLogs", {:response_limit, :response_too_large})
+
+    assert range_error.code == -32_005
+    assert range_error.data.action == :reduce_block_range
     assert request.() =~ "accept-encoding: identity"
     assert_empty()
     assert UpstreamAdmission.stats(@admission).response_rejected == 1

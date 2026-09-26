@@ -320,7 +320,7 @@ The `websocket_url` mirrors the HTTP request path — for example, a request to
 | `-32602` | Invalid params (unsupported chain, missing chain_id) |
 | `-32603` | Internal error |
 | `-32000` | Server error (for example, upstream rate limiting or exhausted routing) |
-| `-32005` | Upstream response exceeded the local size or framing safety envelope; the rejected response does not count as an upstream reliability failure |
+| `-32005` | A local response-size/framing limit, or a known `eth_getLogs` range/result limit. The latter returns `data.reason: "log_range_too_large"` and `data.action: "reduce_block_range"`; retry with a narrower range. These limits do not penalize upstream reliability. |
 | `-32008` | Local transport capacity unavailable before dispatch; eligible routes may be retried |
 
 ### Upstream rate limits

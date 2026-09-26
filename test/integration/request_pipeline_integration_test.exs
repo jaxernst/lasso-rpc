@@ -5,6 +5,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   @moduletag timeout: 10_000
 
   alias Lasso.Events.RoutingDecision
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.Catalog
 
   alias Lasso.RPC.{
@@ -19,6 +20,93 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   alias Lasso.Test.CircuitBreakerHelper
   alias Lasso.Testing.MockProviderBehavior
   alias LassoWeb.Dashboard.EventStream
+
+  describe "oversized eth_getLogs contract" do
+    test "preserves argument validation even when a quoted value mentions a range limit", %{
+      chain: chain
+    } do
+      message =
+        "cannot unmarshal string 'range too large' into Go value of type hexutil.Uint64"
+
+      setup_providers([
+        %{
+          id: "invalid_filter",
+          priority: 10,
+          profile: "public",
+          behavior: {:error, JError.new(-32_602, message, category: :invalid_params)}
+        }
+      ])
+
+      assert {:error, error, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_getLogs",
+                 [%{"fromBlock" => "range too large"}],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert error.category == :invalid_params
+      assert error.message == message
+    end
+
+    test "returns one actionable error without retrying another provider", %{chain: chain} do
+      setup_providers([
+        %{
+          id: "range_limited",
+          priority: 10,
+          profile: "public",
+          behavior:
+            {:error,
+             JError.new(-32_603, "eth_getLogs range is too large, max is 1k blocks",
+               category: :capability_violation
+             )}
+        },
+        %{id: "fallback", priority: 20, profile: "public", behavior: :healthy}
+      ])
+
+      filter = %{"fromBlock" => "0x1000000", "toBlock" => "0x10007d0"}
+
+      assert {:error, error, ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_getLogs",
+                 [filter],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert error.code == -32_005
+      assert error.category == :log_range_limit
+      assert error.data == %{reason: :log_range_too_large, action: :reduce_block_range}
+      assert ctx.retries == 0
+      assert length(ctx.attempted_channels) == 1
+      assert ctx.error.category == :log_range_limit
+    end
+
+    test "still falls back for a provider-specific archival limit", %{chain: chain} do
+      setup_providers([
+        %{
+          id: "non_archival",
+          priority: 10,
+          profile: "public",
+          behavior: {:error, JError.new(-32_000, "archive node required")}
+        },
+        %{id: "archival", priority: 20, profile: "public", behavior: :healthy}
+      ])
+
+      filter = %{"fromBlock" => "0x1000000", "toBlock" => "0x10007d0"}
+
+      assert {:ok, _result, ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_getLogs",
+                 [filter],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert ctx.retries == 1
+      assert length(ctx.attempted_channels) == 2
+    end
+  end
 
   describe "circuit breaker coordination" do
     test "fails over when circuit breaker is open", %{chain: chain} do

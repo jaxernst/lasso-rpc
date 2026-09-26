@@ -25,6 +25,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Request.{ExecutionScope, RequestOwner}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
+  alias Lasso.Core.Support.LogRangeLimit
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{CandidateListing, Catalog, ChainIdentity}
 
@@ -886,10 +887,21 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, {:continue, nil}) do
-    if outcome.projection.fallback_eligible do
-      handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
-    else
-      handle_owner_terminal(outcome, channel, ctx)
+    {reason, _latency_ms} = owner_error(outcome)
+
+    case LogRangeLimit.translate(ctx.method, reason,
+           provider_id: channel.provider_id,
+           transport: channel.transport
+         ) do
+      {:ok, range_error} ->
+        handle_owner_terminal(outcome, channel, ctx, range_error)
+
+      :not_range_limit ->
+        if outcome.projection.fallback_eligible do
+          handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
+        else
+          handle_owner_terminal(outcome, channel, ctx)
+        end
     end
   end
 
@@ -916,12 +928,12 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp handle_owner_terminal(outcome, channel, ctx) do
+  defp handle_owner_terminal(outcome, channel, ctx, terminal_error \\ nil) do
     {reason, _latency_ms} = owner_error(outcome)
     ctx = record_owner_failure(ctx, channel, outcome.fact, reason)
     ctx = record_public_response_attempt(ctx, outcome.fact)
     ctx = RequestContext.set_executed_channel(ctx, channel)
-    finalize_error(owner_terminal_error(outcome, channel), ctx)
+    finalize_error(terminal_error || owner_terminal_error(outcome, channel), ctx)
   end
 
   defp record_public_response_attempt(ctx, %AttemptTerminal.Response{} = fact),
