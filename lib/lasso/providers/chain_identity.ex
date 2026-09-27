@@ -22,6 +22,21 @@ defmodule Lasso.Providers.ChainIdentity do
           sequence: pos_integer()
         }
 
+  @spec validate(term(), pos_integer()) :: :ok | {:error, String.t()}
+  def validate("0x" <> digits, expected_chain_id)
+      when is_integer(expected_chain_id) do
+    if Regex.match?(~r/\A(?:0|[1-9a-fA-F][0-9a-fA-F]*)\z/, digits) do
+      case String.to_integer(digits, 16) do
+        ^expected_chain_id -> :ok
+        actual -> {:error, "wrong chain_id: got #{actual}, expected #{expected_chain_id}"}
+      end
+    else
+      {:error, "invalid chain_id response"}
+    end
+  end
+
+  def validate(_, _), do: {:error, "invalid chain_id response"}
+
   @spec capture(String.t(), Catalog.snapshot()) :: observation()
   def capture(instance_id, %{generation: generation}) do
     %{
