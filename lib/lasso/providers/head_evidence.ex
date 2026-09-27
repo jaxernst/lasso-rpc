@@ -23,7 +23,8 @@ defmodule Lasso.Providers.HeadEvidence do
       when is_binary(profile_id) and profile_id != "" and is_integer(chain_id) and
              chain_id > 0 and is_integer(now_ms) do
     with {:ok, chain} <- ConfigStore.get_chain(profile_id, chain_id),
-         %{generation: generation} = catalog <- Catalog.snapshot() do
+         %{generation: generation} = catalog <- Catalog.snapshot(),
+         true <- generation == ConfigStore.route_generation() do
       instance_ids =
         catalog
         |> Catalog.get_profile_providers(profile_id, chain_id)
@@ -36,7 +37,11 @@ defmodule Lasso.Providers.HeadEvidence do
           Registry.get_observations(chain_id, instance_id)
         end)
 
-      {:ok, HeadComparison.derive(scope, observations, now_ms, generation)}
+      result = HeadComparison.derive(scope, observations, now_ms, generation)
+
+      if Catalog.snapshot() == catalog and generation == ConfigStore.route_generation(),
+        do: {:ok, result},
+        else: {:error, :not_found}
     else
       _missing -> {:error, :not_found}
     end

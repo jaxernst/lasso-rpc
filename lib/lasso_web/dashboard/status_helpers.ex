@@ -4,9 +4,9 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   Enhanced with comprehensive status classification logic including block sync validation.
   """
 
-  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.BlockSync.{Observation, Registry}
   alias Lasso.Config.ConfigStore
-  alias Lasso.Providers.LagCalculation
+  alias Lasso.Providers.{Catalog, HeadEvidence, LagCalculation}
 
   # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
   # Read from application config at runtime
@@ -186,11 +186,10 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   end
 
   @doc """
-  Check if a provider is lagging behind the best known block height.
+  Check whether all assessable transports lag a qualified profile reference.
 
-  Uses optimistic lag calculation to fairly evaluate HTTP providers on fast chains.
-  Optimistic lag credits providers for blocks that likely arrived since the last poll,
-  preventing unfair "lagging" status on chains like Arbitrum (0.25s blocks).
+  HTTP uses its poll-start reference, and WebSocket uses the fresh observed head.
+  Missing, stale, or ambiguous evidence never establishes a lagging verdict.
 
   Returns:
   - :synced - Within acceptable lag threshold
@@ -204,26 +203,69 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
       when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
     threshold = lag_threshold_blocks(profile_id, chain_id)
 
-    if threshold == 0 do
-      :synced
-    else
-      case calculate_optimistic_lag(chain_id, provider_id) do
-        {:ok, optimistic_lag} when optimistic_lag >= -threshold ->
-          :synced
+    cond do
+      not profile_instance?(profile_id, chain_id, provider_id) ->
+        :unavailable
 
-        {:ok, _optimistic_lag} ->
-          :lagging
+      threshold == 0 ->
+        :synced
 
-        {:error, _reason} ->
-          case check_block_height_source_status(chain_id, provider_id) do
-            :polling_failing -> :degraded_no_data
-            _ -> :unavailable
-          end
-      end
+      true ->
+        classify_head_lag(chain_id, provider_id, profile_id, threshold)
     end
   end
 
   def check_block_lag(_chain, _provider_id, _profile_id), do: :unavailable
+
+  defp profile_instance?(profile_id, chain_id, instance_id) when is_binary(profile_id) do
+    profile_id
+    |> Catalog.get_profile_providers(chain_id)
+    |> Enum.any?(&(&1.instance_id == instance_id))
+  end
+
+  defp profile_instance?(_profile_id, _chain_id, _instance_id), do: false
+
+  defp classify_head_lag(chain_id, instance_id, profile_id, threshold) do
+    assessments = transport_assessments(chain_id, instance_id, profile_id, threshold)
+    assessed = Enum.reject(assessments, &(&1.status == :unknown))
+
+    cond do
+      Enum.any?(assessed, &(&1.status == :eligible)) ->
+        :synced
+
+      assessed != [] and Enum.all?(assessed, &(&1.status == :lagging)) ->
+        :lagging
+
+      check_block_height_source_status(chain_id, instance_id) == :polling_failing ->
+        :degraded_no_data
+
+      true ->
+        :unavailable
+    end
+  end
+
+  defp transport_assessments(chain_id, instance_id, profile_id, threshold)
+       when is_binary(profile_id) do
+    case HeadEvidence.snapshot(profile_id, chain_id) do
+      {:ok, snapshot} ->
+        chain_id
+        |> Registry.get_observations(instance_id)
+        |> Enum.map(fn observation ->
+          LagCalculation.assess_transport(
+            chain_id,
+            instance_id,
+            observation.transport,
+            snapshot,
+            threshold
+          )
+        end)
+
+      _unavailable ->
+        []
+    end
+  end
+
+  defp transport_assessments(_chain_id, _instance_id, _profile_id, _threshold), do: []
 
   @doc """
   Calculate optimistic lag that accounts for observation delay.
@@ -259,20 +301,21 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   """
   def check_block_height_source_status(chain_id, provider_id)
       when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
-    case BlockSyncRegistry.get_height(chain_id, provider_id) do
-      {:ok, {_height, timestamp, _source, _meta}} ->
-        # Check if data is recent (within 60 seconds)
-        age = System.system_time(:millisecond) - timestamp
+    now_ms = System.system_time(:millisecond)
+    observations = Registry.get_observations(chain_id, provider_id)
 
-        if age < 60_000 do
-          :ok
-        else
-          :polling_failing
-        end
-
-      {:error, :not_found} ->
-        # No height data yet - provider may still be initializing
+    cond do
+      observations == [] ->
         :ok
+
+      Enum.any?(observations, fn observation ->
+        now_ms - observation.observed_at_ms <=
+            Observation.effective_stale_after_ms(observation, nil)
+      end) ->
+        :ok
+
+      true ->
+        :polling_failing
     end
   catch
     :exit, _ -> :ok

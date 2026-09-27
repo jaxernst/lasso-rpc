@@ -4,6 +4,7 @@ defmodule Lasso.BlockSync.Observation do
   """
 
   alias Lasso.BlockSync.{Registry, Worker}
+  alias Lasso.Observations.HeadObservation
 
   @default_stale_after_ms 60_000
 
@@ -111,6 +112,21 @@ defmodule Lasso.BlockSync.Observation do
     _error -> @default_stale_after_ms
   catch
     :exit, _reason -> @default_stale_after_ms
+  end
+
+  @doc "Returns the freshness window for a retained transport fact."
+  @spec effective_stale_after_ms(HeadObservation.t(), pos_integer() | nil) :: pos_integer()
+  def effective_stale_after_ms(%HeadObservation{} = observation, compiled_freshness_ms) do
+    base =
+      if is_integer(compiled_freshness_ms) and compiled_freshness_ms > 0,
+        do: compiled_freshness_ms,
+        else: stale_after_ms(observation.instance_id, observation.chain_id, observation.transport)
+
+    Enum.max([
+      base,
+      positive(Map.get(observation.attributes, :stale_after_ms), 0),
+      3 * positive(observation.sample_interval_ms, 0)
+    ])
   end
 
   defp positive(value, _fallback) when is_integer(value) and value > 0, do: value

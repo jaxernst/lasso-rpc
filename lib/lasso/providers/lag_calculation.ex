@@ -10,7 +10,52 @@ defmodule Lasso.Providers.LagCalculation do
 
   alias Lasso.BlockSync.{Observation, ObservationProjection, Registry}
   alias Lasso.Config.ConfigStore
+  alias Lasso.Observations.{HeadComparison, HeadObservation, HeadSnapshot}
+  alias Lasso.Observations.HeadComparison.{Assessment, AssessmentPolicy}
   alias Lasso.RPC.ChainState
+
+  @doc "Assess one retained transport fact against a profile-scoped head snapshot."
+  @spec assess_transport(
+          pos_integer(),
+          String.t(),
+          :http | :ws,
+          HeadSnapshot.t(),
+          non_neg_integer(),
+          integer(),
+          pos_integer() | nil
+        ) :: Assessment.t()
+  def assess_transport(
+        chain_id,
+        instance_id,
+        transport,
+        %HeadSnapshot{} = snapshot,
+        max_lag_blocks,
+        now_ms \\ System.system_time(:millisecond),
+        compiled_freshness_ms \\ nil
+      )
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) and
+             transport in [:http, :ws] and is_integer(max_lag_blocks) and max_lag_blocks >= 0 and
+             is_integer(now_ms) do
+    case Registry.get_observation(chain_id, instance_id, transport) do
+      {:ok, %HeadObservation{} = observation} ->
+        policy = %AssessmentPolicy{
+          freshness_ms: Observation.effective_stale_after_ms(observation, compiled_freshness_ms),
+          max_lag_blocks: max_lag_blocks
+        }
+
+        HeadComparison.assess(snapshot, observation, policy, now_ms)
+
+      {:error, :not_found} ->
+        %Assessment{
+          status: :unknown,
+          reason: :observation_missing,
+          lag: nil,
+          raw_lag: nil,
+          compared_height: nil,
+          age_ms: 0
+        }
+    end
+  end
 
   @spec calculate_optimistic_lag(pos_integer(), String.t(), non_neg_integer()) ::
           {:ok, integer(), integer()} | {:error, term()}

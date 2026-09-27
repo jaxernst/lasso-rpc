@@ -6,6 +6,7 @@ defmodule Lasso.Providers.HeadEvidenceTest do
   alias Lasso.Config.ConfigStore
   alias Lasso.Observations.HeadComparison
   alias Lasso.Providers.{Catalog, HeadEvidence}
+  alias LassoWeb.Dashboard.StatusHelpers
 
   test "current probe facts compare only the requesting profile's active upstreams" do
     chain_id = System.unique_integer([:positive])
@@ -67,6 +68,8 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert public.reference_height == 100
     assert public.voter_count == 2
     assert public.supporting_instances == Enum.sort(Map.values(ids_a))
+    assert StatusHelpers.check_block_lag(chain_id, ids_a["a"], profile_a) == :synced
+    assert StatusHelpers.check_block_lag(chain_id, ids_a["a"], profile_b) == :unavailable
 
     assert {:ok, stale} =
              HeadEvidence.snapshot(profile_a, chain_id, System.system_time(:millisecond) + 61_000)
@@ -78,6 +81,7 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert private.qualification == :uncorroborated
     assert private.reference_height == 200
     assert private.voter_count == 1
+    assert StatusHelpers.check_block_lag(chain_id, other.instance_id, profile_b) == :unavailable
     refute public.scope_id == private.scope_id
 
     assert :ok = ConfigStore.unregister_provider_runtime(profile_a, chain_id, "b")
@@ -89,6 +93,63 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert after_removal.qualification == :uncorroborated
     assert after_removal.voter_count == 1
     assert after_removal.reference_height == 100
+  end
+
+  test "operator lag status needs a qualified reference and an assessable transport" do
+    chain_id = System.unique_integer([:positive])
+    profile = "lag-status-#{chain_id}"
+
+    on_exit(fn ->
+      Registry.clear_chain(chain_id)
+      ConfigStore.unregister_chain_runtime(profile, chain_id)
+      Catalog.build_from_config()
+    end)
+
+    assert :ok =
+             ConfigStore.register_chain_runtime(profile, chain_id, %{
+               block_time_ms: 1_000,
+               providers: [provider("ahead-a"), provider("ahead-b"), provider("behind")]
+             })
+
+    Catalog.build_from_config()
+
+    ids =
+      Map.new(Catalog.get_profile_providers(profile, chain_id), &{&1.provider_id, &1.instance_id})
+
+    assert :ok = Registry.put_height(chain_id, ids["ahead-a"], 100, :ws)
+    assert :ok = Registry.put_height(chain_id, ids["ahead-b"], 100, :ws)
+    assert :ok = Registry.put_height(chain_id, ids["behind"], 90, :ws)
+    assert :ok = Registry.put_height(chain_id, ids["behind"], 90, :http)
+
+    assert {:ok, snapshot} = HeadEvidence.snapshot(profile, chain_id)
+    assert snapshot.qualification == :qualified
+    assert snapshot.reference_height == 100
+    assert StatusHelpers.check_block_lag(chain_id, ids["behind"], profile) == :lagging
+
+    assert :ok = Registry.put_height(chain_id, ids["behind"], 100, :ws)
+    assert StatusHelpers.check_block_lag(chain_id, ids["behind"], profile) == :synced
+
+    assert :ok = ConfigStore.unregister_provider_runtime(profile, chain_id, "ahead-a")
+
+    assert :ok =
+             Lasso.RPC.ChainSupervisor.remove_provider(
+               profile,
+               chain_id,
+               "ahead-a",
+               ids["ahead-a"]
+             )
+
+    assert :ok = ConfigStore.unregister_provider_runtime(profile, chain_id, "ahead-b")
+
+    assert :ok =
+             Lasso.RPC.ChainSupervisor.remove_provider(
+               profile,
+               chain_id,
+               "ahead-b",
+               ids["ahead-b"]
+             )
+
+    assert StatusHelpers.check_block_lag(chain_id, ids["behind"], profile) == :unavailable
   end
 
   test "an HTTP poll retains both profile references captured before peer heads change" do
