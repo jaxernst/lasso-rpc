@@ -22,6 +22,11 @@ defmodule Lasso.Config.FileSchema do
     "probe_interval_ms" => :positive,
     "lag_alert_threshold_blocks" => :nonnegative,
     "lag_threshold_blocks" => :nonnegative,
+    "background_observations" => :boolean,
+    "http_heads_interval_ms" => :observation_interval,
+    "http_backup_interval_ms" => :observation_interval,
+    "chain_identity_interval_ms" => :observation_interval,
+    "evidence_freshness_ms" => :observation_positive,
     "subscribe_new_heads" => :boolean,
     "new_heads_staleness_threshold_ms" => :positive
   }
@@ -48,6 +53,16 @@ defmodule Lasso.Config.FileSchema do
     "url" => :http_url,
     "ws_url" => :ws_url,
     "subscribe_new_heads" => :boolean,
+    "background_observations" => :boolean,
+    "block_poll_interval_ms" => :observation_positive,
+    "chain_identity_interval_ms" => :observation_positive,
+    "observation_overrides" => %{
+      "background_observations" => :boolean,
+      "subscribe_new_heads" => :boolean,
+      "http_heads_interval_ms" => :observation_interval,
+      "http_backup_interval_ms" => :observation_interval,
+      "chain_identity_interval_ms" => :observation_interval
+    },
     "archival" => :boolean,
     "sharing_mode" => {:enum, ["auto", "isolated"]},
     "api_key" => :secret,
@@ -155,6 +170,20 @@ defmodule Lasso.Config.FileSchema do
 
   defp validate!(value, :positive, _) when is_integer(value) and value > 0, do: :ok
   defp validate!(value, :nonnegative, _) when is_integer(value) and value >= 0, do: :ok
+
+  defp validate!(value, :observation_positive, path) do
+    if is_integer(value) and value >= 1_000 and
+         value <= Lasso.Config.ObservationConfig.max_interval_ms(),
+       do: :ok,
+       else: invalid!(path, "expected 1000ms through 31536000000ms")
+  end
+
+  defp validate!(value, :observation_interval, path) do
+    if value == 0,
+      do: :ok,
+      else: validate!(value, :observation_positive, path)
+  end
+
   defp validate!(value, :integer, _) when is_integer(value), do: :ok
   defp validate!(value, :boolean, _) when is_boolean(value), do: :ok
   defp validate!(value, :string, _) when is_binary(value) and byte_size(value) > 0, do: :ok

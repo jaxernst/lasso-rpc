@@ -7,7 +7,7 @@ defmodule Lasso.Config.ConfigValidator do
   """
 
   require Logger
-  alias Lasso.Config.ChainConfig
+  alias Lasso.Config.{ChainConfig, ObservationConfig}
   alias Lasso.Providers.ProviderHeaders
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
 
@@ -22,6 +22,7 @@ defmodule Lasso.Config.ConfigValidator do
 
     with :ok <- validate_basic_structure(chain_config),
          :ok <- validate_chain_id(chain_config.chain_id),
+         :ok <- ObservationConfig.validate_monitoring(chain_config.monitoring),
          :ok <- validate_providers(chain_config.providers, skip_connectivity),
          :ok <- validate_provider_priorities(chain_config.providers) do
       validate_websocket_settings(chain_config.websocket)
@@ -36,7 +37,8 @@ defmodule Lasso.Config.ConfigValidator do
     with :ok <- validate_providers_not_empty(providers),
          :ok <- validate_provider_ids_unique(providers),
          :ok <- validate_provider_urls_unique(providers),
-         :ok <- validate_provider_structures(providers) do
+         :ok <- validate_provider_structures(providers),
+         :ok <- validate_provider_observation_settings(providers) do
       if skip_connectivity do
         :ok
       else
@@ -246,6 +248,31 @@ defmodule Lasso.Config.ConfigValidator do
       _invalid_provider -> {:error, :invalid_provider_headers}
     end
   end
+
+  defp validate_provider_observation_settings(providers) do
+    Enum.reduce_while(providers, :ok, fn provider, :ok ->
+      with :ok <- ObservationConfig.validate_overrides(provider.observation_overrides),
+           true <- is_boolean(provider.background_observations),
+           :ok <- validate_optional_observation_interval(provider.block_poll_interval_ms),
+           :ok <- validate_optional_observation_interval(provider.chain_identity_interval_ms) do
+        {:cont, :ok}
+      else
+        {:error, reason} -> {:halt, {:error, {reason, provider.id}}}
+        false -> {:halt, {:error, {:invalid_background_observations, provider.id}}}
+      end
+    end)
+  end
+
+  defp validate_optional_observation_interval(nil), do: :ok
+
+  defp validate_optional_observation_interval(value)
+       when is_integer(value) and value >= 1_000 do
+    if value <= ObservationConfig.max_interval_ms(),
+      do: :ok,
+      else: {:error, :invalid_observation_interval}
+  end
+
+  defp validate_optional_observation_interval(_), do: {:error, :invalid_observation_interval}
 
   defp validate_provider_connectivity(providers) do
     # Test connectivity to each provider

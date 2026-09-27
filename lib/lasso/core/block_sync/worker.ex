@@ -3,22 +3,22 @@ defmodule Lasso.BlockSync.Worker do
   Per-instance GenServer that orchestrates block sync strategies.
 
   Each unique provider instance gets one Worker that:
-  1. Always runs HTTP polling for reliable block height tracking
+  1. Runs HTTP polling when a profile requests periodic head observations
   2. Optionally runs WS subscription for real-time updates
   3. Reports heights to BlockSync.Registry
   4. Fan-out broadcasts to all profiles referencing this instance
 
   ## State Machine
 
-  The Worker operates in one of two modes:
+  The Worker operates in one of three modes:
+  - `:standby` - no background head-observation demand
   - `:http_only` - HTTP polling only (WS unavailable or disabled)
-  - `:http_with_ws` - HTTP polling + WS subscription (real-time layer)
+  - `:http_with_ws` - WS subscription, with optional HTTP backup polling
 
   ## WS-Aware Polling
 
-  When WS subscription is active, HTTP polling interval is reduced (3x normal)
-  to conserve RPC usage while maintaining connection warmth and WS liveness
-  detection. Normal interval is restored when WS degrades or disconnects.
+  When WS head evidence is fresh, HTTP polling uses each reference's backup
+  interval. Normal polling resumes when evidence expires or WS degrades.
   """
 
   use GenServer
@@ -26,19 +26,19 @@ defmodule Lasso.BlockSync.Worker do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
-  alias Lasso.Config.{ChainConfig, ConfigStore, MonitoringDefaults}
+  alias Lasso.Config.{ConfigStore, MonitoringDefaults, ObservationConfig}
   alias Lasso.Observations.HeadObservation
-  alias Lasso.Providers.{Catalog, RestartCounter}
+  alias Lasso.Providers.{Catalog, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.WebSocket.Connection
 
   @reconnect_delay_ms 5_000
   @ws_active_poll_multiplier 3
 
-  @type mode :: :http_only | :http_with_ws
+  @type mode :: :standby | :http_only | :http_with_ws
   @type config :: %{
           subscribe_new_heads: boolean(),
-          poll_interval_ms: pos_integer(),
-          ws_active_poll_interval_ms: pos_integer(),
+          poll_interval_ms: non_neg_integer(),
+          ws_active_poll_interval_ms: non_neg_integer(),
           staleness_threshold_ms: pos_integer()
         }
 
@@ -56,6 +56,7 @@ defmodule Lasso.BlockSync.Worker do
           auth_scope: auth_scope() | nil,
           last_emitted_coalesced: tuple() | nil,
           start_timer_ref: reference() | nil,
+          policy_timer_ref: reference() | nil,
           restart_count_cleared: boolean()
         }
 
@@ -69,6 +70,7 @@ defmodule Lasso.BlockSync.Worker do
     :auth_scope,
     :last_emitted_coalesced,
     :start_timer_ref,
+    :policy_timer_ref,
     ws_retry_count: 0,
     http_reduced: false,
     restart_count_cleared: false
@@ -109,6 +111,7 @@ defmodule Lasso.BlockSync.Worker do
       auth_scope: nil,
       last_emitted_coalesced: nil,
       start_timer_ref: nil,
+      policy_timer_ref: nil,
       ws_retry_count: 0,
       http_reduced: false,
       restart_count_cleared: false
@@ -172,6 +175,7 @@ defmodule Lasso.BlockSync.Worker do
   @impl true
   def terminate(_reason, state) do
     if state.start_timer_ref, do: Process.cancel_timer(state.start_timer_ref)
+    if state.policy_timer_ref, do: Process.cancel_timer(state.policy_timer_ref)
 
     # Release strategy resources on supervised shutdown (auth rotation,
     # provider removal, profile suspension). Without this, WS subscriptions
@@ -199,14 +203,19 @@ defmodule Lasso.BlockSync.Worker do
       |> Map.put(:last_emitted_coalesced, last_emitted_coalesced)
       |> apply_config_reload(new_config)
 
-    {:noreply, state}
+    {:noreply, schedule_policy_refresh(state)}
   end
 
   @impl true
   def handle_info(:start_strategies, state) do
     state = %{state | start_timer_ref: nil}
     state = start_strategies(state)
-    {:noreply, state}
+    {:noreply, schedule_policy_refresh(state)}
+  end
+
+  def handle_info(:refresh_observation_policy, state) do
+    state = %{state | policy_timer_ref: nil}
+    {:noreply, state |> refresh_http_policy() |> schedule_policy_refresh()}
   end
 
   # Block height reports from strategies
@@ -323,7 +332,7 @@ defmodule Lasso.BlockSync.Worker do
       )
       when instance_id == state.instance_id and state.ws_strategy != nil and is_map(payload) do
     new_ws_state = WsStrategy.handle_new_head(state.ws_strategy, payload, received_at)
-    {:noreply, %{state | ws_strategy: new_ws_state}}
+    {:noreply, refresh_http_policy(%{state | ws_strategy: new_ws_state})}
   end
 
   def handle_info(
@@ -505,6 +514,8 @@ defmodule Lasso.BlockSync.Worker do
       subscribe_new_heads: has_ws,
       poll_interval_ms: poll_interval_ms,
       ws_active_poll_interval_ms: poll_interval_ms * @ws_active_poll_multiplier,
+      evidence_freshness_ms: ObservationConfig.default_freshness(block_time_ms),
+      reference_policies: nil,
       staleness_threshold_ms: 35_000,
       max_backfill_blocks: nil,
       backfill_timeout_ms: nil
@@ -514,20 +525,21 @@ defmodule Lasso.BlockSync.Worker do
   @doc "Coalesces block-sync configuration across profile references."
   @spec coalesce_config([{term(), term()}], String.t(), pos_integer(), boolean()) :: map()
   def coalesce_config(ref_configs, instance_id, chain_id, has_ws) do
-    poll_interval_ms =
-      ref_configs
-      |> Enum.map(fn {_, cc} -> cc.monitoring.probe_interval_ms end)
-      |> Enum.min()
+    policies =
+      Enum.map(ref_configs, fn {ref, chain} ->
+        provider_id = Catalog.reverse_lookup_provider_id(ref, chain_id, instance_id)
+        provider = Enum.find(chain.providers, &(&1.id == provider_id))
+        ObservationConfig.resolve(chain, provider)
+      end)
+
+    effective = ObservationPolicy.coalesce(policies, has_ws)
 
     staleness_threshold_ms =
       ref_configs
       |> Enum.map(fn {_, cc} -> cc.websocket.new_heads_timeout_ms end)
       |> Enum.max()
 
-    subscribe_new_heads =
-      Enum.any?(ref_configs, fn {ref, cc} ->
-        resolve_subscribe_new_heads(cc, ref, chain_id, instance_id)
-      end)
+    subscribe_new_heads = effective.subscribe_new_heads
 
     max_backfill_blocks =
       ref_configs
@@ -561,8 +573,10 @@ defmodule Lasso.BlockSync.Worker do
 
     %{
       subscribe_new_heads: subscribe_new_heads and has_ws,
-      poll_interval_ms: poll_interval_ms,
-      ws_active_poll_interval_ms: poll_interval_ms * @ws_active_poll_multiplier,
+      poll_interval_ms: effective.poll_interval_ms,
+      ws_active_poll_interval_ms: effective.ws_active_poll_interval_ms,
+      evidence_freshness_ms: effective.evidence_freshness_ms,
+      reference_policies: policies,
       staleness_threshold_ms: staleness_threshold_ms,
       max_backfill_blocks: max_backfill_blocks,
       backfill_timeout_ms: backfill_timeout_ms
@@ -600,19 +614,6 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
-  defp resolve_subscribe_new_heads(chain_config, profile, chain_id, instance_id) do
-    provider_id = Catalog.reverse_lookup_provider_id(profile, chain_id, instance_id)
-
-    if provider_id do
-      case ChainConfig.get_provider_by_id(chain_config, provider_id) do
-        {:ok, provider} -> ChainConfig.should_subscribe_new_heads?(chain_config, provider)
-        {:error, _} -> chain_config.websocket.subscribe_new_heads
-      end
-    else
-      chain_config.websocket.subscribe_new_heads
-    end
-  end
-
   defp apply_config_reload(state, new_config) do
     old_config = state.config
     old_subscribe = old_config.subscribe_new_heads
@@ -620,6 +621,14 @@ defmodule Lasso.BlockSync.Worker do
 
     state = %{state | config: new_config}
 
+    if state.mode == nil do
+      state
+    else
+      apply_started_config_reload(state, old_subscribe, new_subscribe)
+    end
+  end
+
+  defp apply_started_config_reload(state, old_subscribe, new_subscribe) do
     state =
       cond do
         old_subscribe and not new_subscribe ->
@@ -643,16 +652,7 @@ defmodule Lasso.BlockSync.Worker do
           state
       end
 
-    if state.http_strategy && old_config.poll_interval_ms != new_config.poll_interval_ms do
-      new_interval =
-        if state.http_reduced,
-          do: new_config.ws_active_poll_interval_ms,
-          else: new_config.poll_interval_ms
-
-      %{state | http_strategy: HttpStrategy.set_poll_interval(state.http_strategy, new_interval)}
-    else
-      state
-    end
+    refresh_http_policy(state)
   end
 
   defp teardown_ws_subscription(%{ws_strategy: nil} = state), do: state
@@ -673,10 +673,30 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   defp start_http_polling(state) do
+    set_http_interval(state, state.config.poll_interval_ms)
+  end
+
+  defp set_http_interval(%{http_strategy: nil} = state, 0),
+    do: %{state | mode: if(state.ws_strategy, do: :http_with_ws, else: :standby)}
+
+  defp set_http_interval(state, 0) do
+    HttpStrategy.stop(state.http_strategy)
+    %{state | http_strategy: nil, mode: if(state.ws_strategy, do: :http_with_ws, else: :standby)}
+  end
+
+  defp set_http_interval(%{http_strategy: %{poll_interval_ms: interval}} = state, interval),
+    do: state
+
+  defp set_http_interval(%{http_strategy: http} = state, interval)
+       when not is_nil(http) and is_integer(interval) and interval > 0 do
+    %{state | http_strategy: HttpStrategy.set_poll_interval(http, interval)}
+  end
+
+  defp set_http_interval(state, interval) when is_integer(interval) and interval > 0 do
     http_opts = [
       instance_id: state.instance_id,
       parent: self(),
-      poll_interval_ms: state.config.poll_interval_ms
+      poll_interval_ms: interval
     ]
 
     {:ok, http_state} = HttpStrategy.start(state.chain_id, state.instance_id, http_opts)
@@ -684,10 +704,14 @@ defmodule Lasso.BlockSync.Worker do
     Logger.debug("HTTP polling started",
       chain_id: state.chain_id,
       instance_id: state.instance_id,
-      poll_interval_ms: state.config.poll_interval_ms
+      poll_interval_ms: interval
     )
 
-    %{state | mode: :http_only, http_strategy: http_state}
+    %{
+      state
+      | mode: if(state.ws_strategy, do: :http_with_ws, else: :http_only),
+        http_strategy: http_state
+    }
   end
 
   defp add_ws_subscription(state) do
@@ -780,12 +804,11 @@ defmodule Lasso.BlockSync.Worker do
     state
   end
 
-  defp reduce_http_polling(%{http_strategy: nil} = state), do: state
   defp reduce_http_polling(%{http_reduced: true} = state), do: state
 
   defp reduce_http_polling(state) do
     reduced_interval = state.config.ws_active_poll_interval_ms
-    new_http = HttpStrategy.set_poll_interval(state.http_strategy, reduced_interval)
+    state = refresh_http_policy(%{state | http_reduced: true})
 
     Logger.debug("HTTP polling reduced (WS active)",
       chain_id: state.chain_id,
@@ -793,15 +816,14 @@ defmodule Lasso.BlockSync.Worker do
       poll_interval_ms: reduced_interval
     )
 
-    %{state | http_strategy: new_http, http_reduced: true}
+    state
   end
 
-  defp restore_http_polling(%{http_strategy: nil} = state), do: state
   defp restore_http_polling(%{http_reduced: false} = state), do: state
 
   defp restore_http_polling(state) do
     normal_interval = state.config.poll_interval_ms
-    new_http = HttpStrategy.set_poll_interval(state.http_strategy, normal_interval)
+    state = refresh_http_policy(%{state | http_reduced: false})
 
     Logger.debug("HTTP polling restored to normal",
       chain_id: state.chain_id,
@@ -809,11 +831,65 @@ defmodule Lasso.BlockSync.Worker do
       poll_interval_ms: normal_interval
     )
 
-    %{state | http_strategy: new_http, http_reduced: false}
+    state
   end
 
-  defp observation_stale_after_ms(state, :http), do: state.config.poll_interval_ms * 3
-  defp observation_stale_after_ms(state, :ws), do: state.config.staleness_threshold_ms
+  defp refresh_http_policy(%{mode: nil} = state), do: state
+
+  defp refresh_http_policy(state) do
+    interval =
+      case state.config.reference_policies do
+        policies when is_list(policies) ->
+          ws = state.ws_strategy
+
+          age =
+            if ws && ws.last_block_time,
+              do: max(0, System.system_time(:millisecond) - ws.last_block_time)
+
+          ObservationPolicy.current_interval(
+            policies,
+            state.config.subscribe_new_heads,
+            ws_healthy?: state.http_reduced and ws != nil and ws.status == :active,
+            ws_age_ms: age
+          )
+
+        nil ->
+          if state.http_reduced,
+            do: state.config.ws_active_poll_interval_ms,
+            else: state.config.poll_interval_ms
+      end
+
+    previous_interval = state.http_strategy && state.http_strategy.poll_interval_ms
+    state = set_http_interval(state, interval)
+
+    if state.http_strategy &&
+         ((is_integer(previous_interval) and interval < previous_interval) or
+            (is_nil(previous_interval) and state.http_reduced)) do
+      %{state | http_strategy: HttpStrategy.poll_now(state.http_strategy)}
+    else
+      state
+    end
+  end
+
+  defp schedule_policy_refresh(%{policy_timer_ref: ref} = state) when not is_nil(ref) do
+    if state.config.subscribe_new_heads and is_list(state.config.reference_policies) do
+      state
+    else
+      Process.cancel_timer(ref)
+      %{state | policy_timer_ref: nil}
+    end
+  end
+
+  defp schedule_policy_refresh(state) do
+    if state.mode != nil and state.config.subscribe_new_heads and
+         is_list(state.config.reference_policies) do
+      %{state | policy_timer_ref: Process.send_after(self(), :refresh_observation_policy, 1_000)}
+    else
+      state
+    end
+  end
+
+  defp observation_stale_after_ms(state, _source), do: state.config.evidence_freshness_ms
 
   defp maybe_put_optimistic_credit(metadata, state, :http) do
     Map.put(metadata, :optimistic_credit_ms, state.config.poll_interval_ms)

@@ -8,7 +8,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
   ## Probe Cycle
 
   With a 200ms tick interval and N unique instances for a chain:
-  - Each instance is probed at most every 10s (minimum probe interval floor)
+  - Each instance follows the shortest enabled chain-identity interval across references
+  - An interval of zero skips periodic chain-identity probes
   - Exponential backoff per-instance on failure (2s base, 30s max, ±20% jitter)
   - Rate-limited providers back off to 30s
   - Auth-failed providers (401/402) back off to 120s
@@ -27,9 +28,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
   use GenServer
   require Logger
 
-  alias Lasso.Config.{ConfigStore, MonitoringDefaults}
+  alias Lasso.Config.MonitoringDefaults
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Providers.{Catalog, ChainIdentity, RestartCounter}
+  alias Lasso.Providers.{Catalog, ChainIdentity, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
 
   @tick_interval_ms 200
@@ -46,7 +47,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
           consecutive_failures: non_neg_integer(),
           last_probe_monotonic: integer() | nil,
           current_backoff_ms: non_neg_integer(),
-          cached_interval_ms: pos_integer() | nil,
+          cached_interval_ms: non_neg_integer() | nil,
           cached_at: integer() | nil
         }
 
@@ -259,9 +260,10 @@ defmodule Lasso.Providers.ProbeCoordinator do
   defp should_probe?(inst, now, state) do
     effective_ms = effective_probe_interval_ms(state, inst.instance_id)
 
-    case inst.last_probe_monotonic do
-      nil -> {true, effective_ms}
-      last -> {now - last >= max(inst.current_backoff_ms, effective_ms), effective_ms}
+    case {effective_ms, inst.last_probe_monotonic} do
+      {0, _last} -> {false, 0}
+      {_, nil} -> {true, effective_ms}
+      {interval, last} -> {now - last >= max(inst.current_backoff_ms, interval), interval}
     end
   end
 
@@ -282,21 +284,15 @@ defmodule Lasso.Providers.ProbeCoordinator do
   end
 
   defp compute_interval(state, instance_id) do
-    refs = Catalog.get_instance_refs(instance_id)
+    policies = ObservationPolicy.references(instance_id, state.chain_id) |> Enum.map(&elem(&1, 2))
 
-    intervals =
-      refs
-      |> Enum.map(&ConfigStore.get_chain(&1, state.chain_id))
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, cc} -> cc.monitoring.probe_interval_ms end)
-
-    case intervals do
+    case policies do
       [] ->
         block_time_ms = instance_block_time_ms(instance_id)
         MonitoringDefaults.default_probe_interval_ms(block_time_ms)
 
       _ ->
-        Enum.min(intervals)
+        ObservationPolicy.coalesce(policies, false).chain_identity_interval_ms
     end
   end
 

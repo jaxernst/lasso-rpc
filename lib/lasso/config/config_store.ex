@@ -2080,14 +2080,14 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   defp normalize_monitoring_config(attrs) when is_map(attrs) do
-    %ChainConfig.Monitoring{
+    Lasso.Config.ObservationConfig.monitoring(attrs, %ChainConfig.Monitoring{
       probe_interval_ms:
         Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 15_000,
       lag_alert_threshold_blocks:
         Map.get(attrs, :lag_alert_threshold_blocks) ||
           Map.get(attrs, "lag_alert_threshold_blocks") ||
           Map.get(attrs, :lag_threshold_blocks) || Map.get(attrs, "lag_threshold_blocks") || 3
-    }
+    })
   end
 
   defp normalize_provider_config(attrs) when is_map(attrs) do
@@ -2114,6 +2114,14 @@ defmodule Lasso.Config.ConfigStore do
       archival: archival,
       subscribe_new_heads:
         Map.get(attrs, :subscribe_new_heads, Map.get(attrs, "subscribe_new_heads")),
+      background_observations:
+        Map.get(attrs, :background_observations, Map.get(attrs, "background_observations", true)),
+      observation_overrides:
+        Map.get(attrs, :observation_overrides, Map.get(attrs, "observation_overrides")),
+      chain_identity_interval_ms:
+        Map.get(attrs, :chain_identity_interval_ms, Map.get(attrs, "chain_identity_interval_ms")),
+      block_poll_interval_ms:
+        Map.get(attrs, :block_poll_interval_ms, Map.get(attrs, "block_poll_interval_ms")),
       sharing_mode: sharing_mode,
       api_key: Map.get(attrs, :api_key) || Map.get(attrs, "api_key"),
       credentials: Map.get(attrs, :credentials) || Map.get(attrs, "credentials"),

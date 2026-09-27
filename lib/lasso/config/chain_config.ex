@@ -54,6 +54,10 @@ defmodule Lasso.Config.ChainConfig do
                :capabilities,
                :subscribe_new_heads,
                :archival,
+               :background_observations,
+               :observation_overrides,
+               :chain_identity_interval_ms,
+               :block_poll_interval_ms,
                :sharing_mode
              ]}
     @derive {Inspect, except: [:url, :ws_url, :api_key, :credentials, :headers, :auth_headers]}
@@ -66,6 +70,10 @@ defmodule Lasso.Config.ChainConfig do
             capabilities: map() | nil,
             subscribe_new_heads: boolean() | nil,
             archival: boolean(),
+            background_observations: boolean(),
+            observation_overrides: map() | nil,
+            chain_identity_interval_ms: pos_integer() | nil,
+            block_poll_interval_ms: pos_integer() | nil,
             sharing_mode: :auto | :isolated,
             api_key: String.t() | nil,
             credentials: term(),
@@ -86,7 +94,11 @@ defmodule Lasso.Config.ChainConfig do
       :headers,
       :auth_headers,
       :__mock__,
+      :observation_overrides,
+      :chain_identity_interval_ms,
+      :block_poll_interval_ms,
       archival: true,
+      background_observations: true,
       sharing_mode: :auto
     ]
   end
@@ -181,11 +193,23 @@ defmodule Lasso.Config.ChainConfig do
     """
 
     @type t :: %__MODULE__{
+            background_observations: boolean(),
+            http_heads_interval_ms: non_neg_integer() | nil,
+            http_backup_interval_ms: non_neg_integer() | nil,
+            chain_identity_interval_ms: non_neg_integer() | nil,
+            evidence_freshness_ms: pos_integer() | nil,
+            subscribe_new_heads: boolean() | nil,
             probe_interval_ms: non_neg_integer(),
             lag_alert_threshold_blocks: non_neg_integer()
           }
 
-    defstruct probe_interval_ms: 12_000,
+    defstruct background_observations: true,
+              http_heads_interval_ms: nil,
+              http_backup_interval_ms: nil,
+              chain_identity_interval_ms: nil,
+              evidence_freshness_ms: nil,
+              subscribe_new_heads: nil,
+              probe_interval_ms: 12_000,
               lag_alert_threshold_blocks: 3
   end
 
@@ -226,10 +250,8 @@ defmodule Lasso.Config.ChainConfig do
   """
   @spec should_subscribe_new_heads?(t(), Provider.t()) :: boolean()
   def should_subscribe_new_heads?(chain_config, provider) do
-    case provider.subscribe_new_heads do
-      nil -> chain_config.websocket.subscribe_new_heads
-      value when is_boolean(value) -> value
-    end
+    policy = Lasso.Config.ObservationConfig.resolve(chain_config, provider)
+    policy.background_observations and policy.subscribe_new_heads
   end
 
   @doc "Substitutes ${VAR_NAME} patterns with environment variable values."

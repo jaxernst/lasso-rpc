@@ -105,8 +105,16 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `probe_interval_ms` | integer | 12000 | Health check polling interval. Set to ~1x block time for L1, ~2.5x for L2 |
+| `probe_interval_ms` | integer | 12000 | Legacy fallback for HTTP head and chain-identity intervals. Set to ~1x block time for L1, ~2.5x for L2. |
 | `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold for qualified profile-scoped transport evidence; this setting does not emit lag warning logs. |
+| `background_observations` | boolean | true | Enable periodic head polling, chain-identity probes, and configured `newHeads` observation. Client requests remain separate. |
+| `http_heads_interval_ms` | integer | `probe_interval_ms` | Normal HTTP head-poll interval; `0` disables periodic head polling. |
+| `http_backup_interval_ms` | integer | 3 × normal interval | HTTP head-poll interval while WebSocket head evidence is fresh; `0` disables backup polling. |
+| `chain_identity_interval_ms` | integer | `probe_interval_ms` | Interval for `eth_chainId` probes; `0` disables periodic identity probes. |
+| `evidence_freshness_ms` | integer | 30000–60000 from block time | Freshness window for retained head evidence. |
+| `subscribe_new_heads` | boolean | WebSocket setting | Override automatic `newHeads` observation for the chain. |
+
+The new intervals accept `0` to disable that activity, or at least 1000 ms. When profiles share a physical upstream, Core uses the shortest positive interval requested by an enabled reference. A disabled reference does not turn off another profile's observations. After a YAML reload, the worker applies the new demand without restarting client requests.
 
 ### Selection
 
@@ -194,6 +202,8 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
+| `background_observations` | boolean | No | Disable this provider's periodic observation demand without disabling client routing |
+| `observation_overrides` | map | No | Sparse per-provider overrides for `background_observations`, `subscribe_new_heads`, and the HTTP head, backup, and chain-identity intervals |
 | `capabilities` | map | No | Provider capabilities (see Capabilities below) |
 | `sharing_mode` | string | No | `auto` shares identical upstream runtime; `isolated` separates it by profile |
 | `api_key` | string | No | Sends `Authorization: Bearer <value>` |
@@ -201,6 +211,8 @@ providers:
 | `auth_headers` | map | No | Headers with precedence over `headers` and `api_key` |
 
 *At least one of `url` or `ws_url` is required.
+
+`observation_overrides` is sparse: an omitted field keeps the provider's legacy preference, then the chain setting. An explicit override wins. The chain-wide `background_observations: false` switch still disables periodic work for that chain reference.
 
 ## Environment Variable Substitution
 

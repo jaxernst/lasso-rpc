@@ -298,6 +298,11 @@ defmodule Lasso.Config.Backend.File do
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
         capabilities: parse_capabilities(provider_data["capabilities"]),
         subscribe_new_heads: parse_subscribe_new_heads(provider_data["subscribe_new_heads"]),
+        background_observations:
+          parse_background_observations(provider_data["background_observations"]),
+        observation_overrides: provider_data["observation_overrides"],
+        chain_identity_interval_ms: provider_data["chain_identity_interval_ms"],
+        block_poll_interval_ms: provider_data["block_poll_interval_ms"],
         archival: parse_archival(provider_data["archival"]),
         sharing_mode: parse_sharing_mode(provider_data["sharing_mode"]),
         api_key: ChainConfig.substitute_env_vars(provider_data["api_key"]),
@@ -327,6 +332,9 @@ defmodule Lasso.Config.Backend.File do
   defp parse_subscribe_new_heads("true"), do: true
   defp parse_subscribe_new_heads("false"), do: false
   defp parse_subscribe_new_heads(_), do: nil
+
+  defp parse_background_observations(nil), do: true
+  defp parse_background_observations(value) when is_boolean(value), do: value
 
   defp parse_archival(nil), do: true
   defp parse_archival(value) when is_boolean(value), do: value
@@ -451,13 +459,13 @@ defmodule Lasso.Config.Backend.File do
   defp parse_monitoring(nil), do: %ChainConfig.Monitoring{}
 
   defp parse_monitoring(monitoring_data) when is_map(monitoring_data) do
-    %ChainConfig.Monitoring{
+    Lasso.Config.ObservationConfig.monitoring(monitoring_data, %ChainConfig.Monitoring{
       probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
       # Support both new and legacy field names
       lag_alert_threshold_blocks:
         Map.get(monitoring_data, "lag_alert_threshold_blocks") ||
           Map.get(monitoring_data, "lag_threshold_blocks", 3)
-    }
+    })
   end
 
   defp parse_topology(nil), do: %ChainConfig.Topology{}
