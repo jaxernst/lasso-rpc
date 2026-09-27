@@ -176,6 +176,18 @@ defmodule Lasso.RPC.MethodRegistry do
   @spec method_category(String.t()) :: atom()
   def method_category(method), do: Map.get(@method_categories, method, :unknown)
 
+  # An invalid transaction payload cannot establish whether a real transaction
+  # would be accepted. Discovery must never send a valid one as a test.
+  @unverifiable_methods ~w(eth_sendRawTransaction eth_sendTransaction)
+
+  @doc "Whether provider support can be established through a side-effect-free probe."
+  @spec unverifiable?(String.t()) :: boolean()
+  def unverifiable?(method) when is_binary(method), do: method in @unverifiable_methods
+
+  @doc "Transaction methods whose support discovery cannot safely verify."
+  @spec unverifiable_methods() :: [String.t()]
+  def unverifiable_methods, do: @unverifiable_methods
+
   @doc """
   Returns default support assumption for unknown methods.
 

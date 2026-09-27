@@ -29,7 +29,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     ]
   }
 
-  @type method_status :: :supported | :unsupported | :unknown | :timeout
+  @type method_status :: :supported | :unsupported | :unknown | :timeout | :unverifiable
   @type method_result :: %{
           method: String.t(),
           status: method_status(),
@@ -94,7 +94,13 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
 
   Returns a map with :status, :duration_ms, and error details if any.
   """
+  @unverifiable_methods MethodRegistry.unverifiable_methods()
+
   @spec probe_http_method(String.t(), String.t(), non_neg_integer()) :: map()
+  def probe_http_method(_url, method, _timeout) when method in @unverifiable_methods do
+    %{status: :unverifiable, duration_ms: 0, error: nil, error_code: nil}
+  end
+
   def probe_http_method(url, method, timeout) do
     params = TestParams.minimal_params_for(method)
     provider_config = %{url: url}
@@ -124,7 +130,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
           supported: [method_result()],
           unsupported: [method_result()],
           unknown: [method_result()],
-          timeout: [method_result()]
+          timeout: [method_result()],
+          unverifiable: [method_result()]
         }
   def group_by_status(results) do
     Enum.group_by(results, & &1.status)
@@ -132,6 +139,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     |> Map.put_new(:unsupported, [])
     |> Map.put_new(:unknown, [])
     |> Map.put_new(:timeout, [])
+    |> Map.put_new(:unverifiable, [])
   end
 
   @doc """
@@ -141,7 +149,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
           supported: integer(),
           unsupported: integer(),
           unknown: integer(),
-          timeout: integer()
+          timeout: integer(),
+          unverifiable: integer()
         }
   def count_by_status(results) do
     grouped = group_by_status(results)
@@ -150,7 +159,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
       supported: length(grouped.supported),
       unsupported: length(grouped.unsupported),
       unknown: length(grouped.unknown),
-      timeout: length(grouped.timeout)
+      timeout: length(grouped.timeout),
+      unverifiable: length(grouped.unverifiable)
     }
   end
 
