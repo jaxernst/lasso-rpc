@@ -37,7 +37,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
 
   @terminal_kinds [:predispatch_failure, :response, :invalid_response, :transport_failure]
 
-  @doc false
+  @doc "Creates the process-local dispatch gate for one attempt and strict cutoff."
   @spec new_context(pid(), reference(), integer()) :: Context.t()
   def new_context(owner, attempt_ref, deadline_us)
       when is_pid(owner) and is_reference(attempt_ref) and is_integer(deadline_us) do
@@ -46,10 +46,15 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     :atomics.put(gate, 2, @timestamp_unset)
     :atomics.put(gate, 3, @timestamp_unset)
 
-    %Context{owner: owner, attempt_ref: attempt_ref, deadline_us: deadline_us, gate: gate}
+    %Context{
+      owner: owner,
+      attempt_ref: attempt_ref,
+      deadline_us: deadline_us,
+      gate: gate
+    }
   end
 
-  @doc false
+  @doc "Installs an attempt context in the current transport task."
   @spec install_context(context()) :: :ok
   def install_context(context) do
     Process.put(@dispatch_context_key, context)
@@ -58,7 +63,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     :ok
   end
 
-  @doc false
+  @doc "Clears the current transport task's attempt context."
   @spec clear_context() :: :ok
   def clear_context do
     Process.delete(@dispatch_context_key)
@@ -67,7 +72,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     :ok
   end
 
-  @doc false
+  @doc "Takes the paired terminal candidate produced by the current transport task."
   @spec take_terminal_candidate(Context.t()) :: terminal_candidate()
   def take_terminal_candidate(%Context{}) do
     case Process.delete(@terminal_candidate_key) do
@@ -77,14 +82,14 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     end
   end
 
-  @doc false
+  @doc "Atomically closes dispatch authorization and returns its immutable proof snapshot."
   @spec close(Context.t()) :: map()
   def close(%Context{gate: gate}) do
     state = close_gate(gate)
     gate_snapshot(gate, state)
   end
 
-  @doc false
+  @doc "Projects the gate snapshot into canonical dispatch observations."
   @spec gate_observations([map()], map()) :: [map()]
   def gate_observations(observations, snapshot) do
     observations =
@@ -121,7 +126,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     send_started_at(context, System.monotonic_time(:microsecond))
   end
 
-  @doc false
+  @doc "Records send authorization at an explicit source timestamp under the strict cutoff."
   @spec send_started_at(context() | nil, integer()) :: :ok | {:error, send_start_error()}
   def send_started_at(context, event_us) when is_integer(event_us) do
     with :ok <- validate_send_start(context, event_us),
