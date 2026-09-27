@@ -11,6 +11,68 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
   @moduletag :integration
 
   describe "WebSocket subscription zero-gap guarantee" do
+    test "degraded exhaustion closes clients and a new subscription starts fresh", %{
+      chain: chain
+    } do
+      profile = "public"
+      key = {:newHeads}
+      head = start_supervised!({Agent, fn -> 200 end})
+
+      {:ok, [p1_id, p2_id]} =
+        IntegrationHelper.setup_test_chain_with_providers(
+          chain,
+          [
+            %{id: "provider_1", priority: 10, behavior: :healthy, profile: profile},
+            %{id: "provider_2", priority: 20, behavior: :healthy, profile: profile}
+          ],
+          provider_type: :ws
+        )
+
+      start_backfill_provider(chain, head, profile)
+      {:ok, old_sub_id} = IntegrationHelper.subscribe_client(chain, self(), key, profile)
+      wait_for_subscription_active(profile, chain, key)
+      assert wait_for_any_upstream_subscription_established(profile, chain, key) == p1_id
+
+      MockWSProvider.send_block(chain, p1_id, block(200))
+      assert Enum.map(collect_blocks(1, timeout: 2_000), &extract_block_number/1) == [200]
+
+      coordinator = Lasso.Core.Streaming.StreamCoordinator.via(profile, chain, key)
+      original_pid = GenServer.whereis(coordinator)
+      now = System.monotonic_time(:millisecond)
+
+      :sys.replace_state(coordinator, fn state ->
+        %{
+          state
+          | max_failover_attempts: 2,
+            failover_history: [
+              %{provider_id: p1_id, failed_at: now, reason: :test},
+              %{provider_id: p2_id, failed_at: now, reason: :test}
+            ]
+        }
+      end)
+
+      Lasso.Core.Streaming.StreamCoordinator.provider_unhealthy(
+        profile,
+        chain,
+        key,
+        p1_id,
+        p2_id
+      )
+
+      Lasso.Test.Eventually.assert_eventually(fn -> GenServer.whereis(coordinator) == nil end)
+      assert_receive {:subscription_terminated, ^old_sub_id, :continuity_exhausted}, 1_000
+
+      Agent.update(head, fn _ -> 201 end)
+      {:ok, _new_sub_id} = IntegrationHelper.subscribe_client(chain, self(), key, profile)
+      wait_for_subscription_active(profile, chain, key)
+      selected = wait_for_any_upstream_subscription_established(profile, chain, key)
+      refute GenServer.whereis(coordinator) == original_pid
+      assert :sys.get_state(coordinator).state.markers.last_block_num == nil
+      MockWSProvider.send_block(chain, selected, block(201))
+
+      assert Enum.map(collect_blocks(1, timeout: 3_000), &extract_block_number/1) == [201]
+    end
+
     test "disconnect replaces the upstream and replays missed heads without overlap", %{
       chain: chain
     } do
