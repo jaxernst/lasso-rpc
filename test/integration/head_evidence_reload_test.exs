@@ -8,6 +8,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
   alias Lasso.Observations.HeadSnapshot
   alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.{RequestOptions, RequestPipeline}
+  alias Lasso.RPC.Providers.AdapterHelpers
   alias LassoWeb.Dashboard.StatusHelpers
 
   @moduletag :integration
@@ -161,6 +162,21 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert {:ok, %{qualification: :qualified, reference_height: 100}} =
              HeadEvidence.snapshot(slug, chain_id)
 
+    assert AdapterHelpers.estimate_current_block(%{profile: slug, chain_id: chain_id}) == 100
+
+    assert AdapterHelpers.estimate_current_block(%{profile: other_slug, chain_id: chain_id}) ==
+             200
+
+    assert :ok =
+             AdapterHelpers.validate_block_age(["0x64"], %{profile: slug, chain_id: chain_id}, 5)
+
+    assert {:error, {:requires_archival, _}} =
+             AdapterHelpers.validate_block_age(
+               ["0x64"],
+               %{profile: other_slug, chain_id: chain_id},
+               5
+             )
+
     # The other profile is at 200. Its head must not make block 100 archival
     # for this profile, whose own qualified reference is 100.
     assert_routed_to_at(slug, chain_id, "peer-a", "0x64")
@@ -191,6 +207,11 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert alone.qualification != :qualified
     assert alone.revision > snapshot.revision
     assert_cached(alone)
+    assert AdapterHelpers.estimate_current_block(%{profile: slug, chain_id: chain_id}) == 0
+
+    assert AdapterHelpers.estimate_current_block(%{profile: other_slug, chain_id: chain_id}) ==
+             200
+
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :unavailable
     assert_routed_to(slug, chain_id, "behind")
 

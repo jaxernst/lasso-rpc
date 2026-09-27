@@ -7,6 +7,8 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
   """
 
   alias Lasso.JSONRPC.BlockSelector
+  alias Lasso.Observations.HeadSnapshot
+  alias Lasso.Providers.HeadEvidence
   alias Lasso.RPC.ChainState
 
   @spec get_adapter_config(map(), atom(), any()) :: any()
@@ -64,13 +66,29 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
   def estimate_current_block(ctx) do
     case Map.get(ctx, :chain_id) do
       chain_id when is_integer(chain_id) and chain_id > 0 ->
-        case ChainState.consensus_height(chain_id) do
-          {:ok, height} -> height
-          {:error, _} -> 0
-        end
+        estimate_current_block_for_profile(ctx, chain_id)
 
       _ ->
         0
+    end
+  end
+
+  defp estimate_current_block_for_profile(%{profile: profile}, chain_id)
+       when is_binary(profile) do
+    case HeadEvidence.snapshot(profile, chain_id) do
+      {:ok, %HeadSnapshot{qualification: :qualified, reference_height: height}}
+      when is_integer(height) ->
+        height
+
+      _unavailable ->
+        0
+    end
+  end
+
+  defp estimate_current_block_for_profile(_ctx, chain_id) do
+    case ChainState.consensus_height(chain_id) do
+      {:ok, height} -> height
+      {:error, _} -> 0
     end
   end
 
