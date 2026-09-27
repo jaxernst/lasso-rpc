@@ -2,6 +2,12 @@
 
 Provider selection in Lasso operates as a 4-stage pipeline that transforms a pool of candidate providers into an ordered execution plan. Strategy ranking consumes published recent routing evidence, while live admission remains authoritative.
 
+Numeric historical-request age is measured against a fresh concrete head from
+the requested file profile, not another profile's upstreams. A qualified or
+single-upstream uncorroborated snapshot can provide that height; ambiguous or
+missing evidence cannot establish age. Block-hash selectors still require a
+declared archival provider because their age is unknown before dispatch.
+
 ## Pipeline Overview
 
 ```

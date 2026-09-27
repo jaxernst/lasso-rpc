@@ -18,11 +18,11 @@ defmodule Lasso.RPC.Selection do
   require Logger
 
   alias Lasso.Config.ConfigStore
+  alias Lasso.Observations.HeadSnapshot
   alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence}
 
   alias Lasso.RPC.{
     AttemptProjection,
-    ChainState,
     Channel,
     RequestAnalysis,
     RoutingEvidence,
@@ -320,7 +320,8 @@ defmodule Lasso.RPC.Selection do
         _ -> nil
       end
 
-    consensus_height = get_consensus_height(plan.chain_id)
+    head_snapshot = HeadEvidence.snapshot_for_plan(plan)
+    consensus_height = HeadSnapshot.archive_reference_height(head_snapshot)
 
     requirements =
       Lasso.RPC.RequestAnalysis.analyze(
@@ -337,7 +338,7 @@ defmodule Lasso.RPC.Selection do
         exclude: Keyword.get(opts, :exclude, []),
         include_half_open: Keyword.get(opts, :include_half_open, true),
         max_lag_blocks: plan.max_lag_blocks,
-        head_snapshot: HeadEvidence.snapshot_for_plan(plan),
+        head_snapshot: if(is_nil(plan.max_lag_blocks), do: :unavailable, else: head_snapshot),
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
@@ -1094,15 +1095,9 @@ defmodule Lasso.RPC.Selection do
       selection_snapshot_current?(snapshot)
   end
 
-  defp get_consensus_height(chain_id) do
-    case ChainState.consensus_height(chain_id) do
-      {:ok, height} -> height
-      {:error, _} -> nil
-    end
-  end
-
   defp build_selection_filters(plan, method, params, exclude, protocol, opts) do
-    consensus_height = get_consensus_height(plan.chain_id)
+    head_snapshot = HeadEvidence.snapshot_for_plan(plan)
+    consensus_height = HeadSnapshot.archive_reference_height(head_snapshot)
     include_half_open = Keyword.get(opts, :include_half_open, false)
     requires_subscribe_new_heads = Keyword.get(opts, :requires_subscribe_new_heads, false)
     workload_key = Keyword.get(opts, :workload_key, :client)
@@ -1122,7 +1117,7 @@ defmodule Lasso.RPC.Selection do
         method: method,
         include_half_open: include_half_open,
         max_lag_blocks: plan.max_lag_blocks,
-        head_snapshot: HeadEvidence.snapshot_for_plan(plan),
+        head_snapshot: if(is_nil(plan.max_lag_blocks), do: :unavailable, else: head_snapshot),
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: requires_subscribe_new_heads,

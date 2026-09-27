@@ -4,6 +4,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
   alias Lasso.BlockSync.Registry
   alias Lasso.Config.Backend.File, as: FileBackend
   alias Lasso.Config.ConfigStore
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Observations.HeadSnapshot
   alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.{RequestOptions, RequestPipeline}
@@ -160,6 +161,13 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert {:ok, %{qualification: :qualified, reference_height: 100}} =
              HeadEvidence.snapshot(slug, chain_id)
 
+    # The other profile is at 200. Its head must not make block 100 archival
+    # for this profile, whose own qualified reference is 100.
+    assert_routed_to_at(slug, chain_id, "peer-a", "0x64")
+
+    assert {:error, %JError{data: %{reason: :archive_required, upstream_attempts: 0}}, _ctx} =
+             request(other_slug, chain_id, "0x64")
+
     Lasso.Test.Eventually.assert_eventually(fn ->
       StatusHelpers.check_block_lag(chain_id, other_ids["other-a"], other_slug) == :synced
     end)
@@ -236,11 +244,17 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert Jason.decode!(response.raw_bytes)["result"] == provider
   end
 
-  defp request(profile, chain_id) do
+  defp assert_routed_to_at(profile, chain_id, provider, block) do
+    assert {:ok, response, context} = request(profile, chain_id, block)
+    assert context.executed_channel.provider_id == provider
+    assert Jason.decode!(response.raw_bytes)["result"] == provider
+  end
+
+  defp request(profile, chain_id, block \\ "latest") do
     RequestPipeline.execute_via_channels(
       chain_id,
       "eth_getBalance",
-      ["0x0000000000000000000000000000000000000000", "latest"],
+      ["0x0000000000000000000000000000000000000000", block],
       %RequestOptions{
         profile: profile,
         strategy: :priority,
@@ -257,7 +271,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
       |> Enum.map_join("\n", fn {provider, priority} ->
         {_ref, port} = endpoints[provider]
 
-        "      - id: #{provider}\n        priority: #{priority}\n        url: http://127.0.0.1:#{port}"
+        "      - id: #{provider}\n        priority: #{priority}\n        archival: false\n        url: http://127.0.0.1:#{port}"
       end)
 
     File.write!(Path.join(root, "#{slug}.yml"), """
@@ -273,6 +287,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
           probe_interval_ms: 200
         selection:
           max_lag_blocks: 2
+          archival_threshold: 20
         providers:
     #{providers}
     """)

@@ -20,8 +20,6 @@ defmodule Lasso.Providers.HeadEvidence do
 
   @doc "Captures head evidence for the exact routing-plan generation."
   @spec snapshot_for_plan(RoutingPlan.t()) :: HeadSnapshot.t() | :unavailable
-  def snapshot_for_plan(%RoutingPlan{max_lag_blocks: nil}), do: :unavailable
-
   def snapshot_for_plan(%RoutingPlan{} = plan) do
     generation = plan.generation
 

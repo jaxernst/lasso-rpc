@@ -19,19 +19,16 @@ or Anvil. Tests start a local Phoenix listener on port 4002; do not run two
 suites concurrently on that port. Dashboard JavaScript contract tests run through
 ExUnit, so Node.js must be on `PATH`.
 
-## Mock-provider integration suite
+## Focused mock-provider integration tests
 
 ```bash
-mix test --include integration
+mix test test/integration/archive_provider_diversity_test.exs --include integration
 ```
 
-This includes the default tests and integration tests backed by local mock
-providers. It still excludes publication-database and Anvil tests. To run only
-the integration-tagged tests:
-
-```bash
-mix test --only integration
-```
+Run the relevant files explicitly when PostgreSQL and Anvil are unavailable.
+`--include integration` across the whole tree also selects tests carrying both
+`:integration` and `:publication_db` or `:anvil`; the global exclusions do not
+remove those tests. Use the full CI setup below for a whole-tree integration run.
 
 ## Full CI integration suite
 

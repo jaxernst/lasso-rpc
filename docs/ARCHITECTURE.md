@@ -503,12 +503,17 @@ transport means synced; all assessable transports must lag before it reports
 lagging. Circuit, rate-limit, and connection states still affect overall
 provider status.
 
+Historical request age uses a fresh, concrete reference from the requested
+profile's head snapshot. A qualified or single-upstream uncorroborated reference
+can classify a numeric selector; ambiguous or unavailable evidence cannot.
+Another profile's higher head never makes this profile's request archival.
+
 The older chain-wide `ChainState.consensus_height/1` remains available for
-historical request analysis and compatibility callers. It derives a P75
-height from fresh observations (maximum with fewer than four providers),
-with bounded time alignment for HTTP samples. `BlockTimeMeasurement` tracks
-a dynamic interval for that older optimistic calculation. This chain-wide
-height does not qualify a profile-scoped routing or dashboard lag verdict.
+compatibility callers. It derives a P75 height from fresh observations
+(maximum with fewer than four providers), with bounded time alignment for HTTP
+samples. `BlockTimeMeasurement` tracks a dynamic interval for that older
+optimistic calculation. This chain-wide height does not qualify a
+profile-scoped routing or dashboard verdict.
 
 ### Health Probing
 

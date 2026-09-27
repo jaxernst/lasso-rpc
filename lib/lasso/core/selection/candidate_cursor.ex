@@ -21,6 +21,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   alias Lasso.BlockSync.Observation
   alias Lasso.Config.{ConfigStore, MethodConstraints}
+  alias Lasso.Observations.HeadSnapshot
   alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence, InstanceState}
 
   alias Lasso.RPC.{
@@ -160,7 +161,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
        ) do
     transport = Keyword.get(opts, :transport, :both)
     strategy = Keyword.get(opts, :strategy, :load_balanced)
-    consensus_height = consensus_height(plan.chain_id)
+    head_snapshot = HeadEvidence.snapshot_for_plan(plan)
+    consensus_height = HeadSnapshot.archive_reference_height(head_snapshot) || :unavailable
 
     requirements =
       RequestAnalysis.analyze(
@@ -177,7 +179,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         exclude: Keyword.get(opts, :exclude, []),
         include_half_open: Keyword.get(opts, :include_half_open, true),
         max_lag_blocks: plan.max_lag_blocks,
-        head_snapshot: HeadEvidence.snapshot_for_plan(plan),
+        head_snapshot: if(is_nil(plan.max_lag_blocks), do: :unavailable, else: head_snapshot),
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
@@ -584,13 +586,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defp current?(cursor) do
     Catalog.snapshot() == cursor.snapshot and
       ConfigStore.route_generation() == cursor.snapshot.generation
-  end
-
-  defp consensus_height(chain_id) do
-    case Lasso.RPC.ChainState.consensus_height(chain_id) do
-      {:ok, height} -> height
-      {:error, _reason} -> :unavailable
-    end
   end
 
   defp unavailable_to_nil(:unavailable), do: nil
