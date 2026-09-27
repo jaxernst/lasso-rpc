@@ -314,7 +314,11 @@ defmodule Lasso.Boot.InfrastructureStarter do
 
   defp format_provider_issues(providers) do
     Enum.map_join(providers, "\n", fn {provider_id, issues} ->
-      issue_list = Enum.map_join(issues, "\n", fn {type, url} -> "    - #{type}: #{url}" end)
+      issue_list =
+        Enum.map_join(issues, "\n", fn {type, variables} ->
+          "    - #{type}: " <> Enum.map_join(variables, ", ", &"${#{&1}}")
+        end)
+
       "  Provider '#{provider_id}':\n#{issue_list}"
     end)
   end

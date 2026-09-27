@@ -252,12 +252,40 @@ defmodule Lasso.Config.ChainConfig do
     string =~ ~r/\$\{[^}]+\}/
   end
 
-  @spec has_unresolved_placeholders?(any()) :: false
-  def has_unresolved_placeholders?(_), do: false
+  @spec has_unresolved_placeholders?(any()) :: boolean()
+  def has_unresolved_placeholders?(value), do: unresolved_env_vars(value) != []
 
-  @doc "Validates that all provider URLs have resolved environment variables."
+  @doc "Returns unresolved environment variable names without exposing configured values."
+  @spec unresolved_env_vars(term()) :: [String.t()]
+  def unresolved_env_vars(value) when is_binary(value) do
+    ~r/\$\{([^}]+)\}/
+    |> Regex.scan(value, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def unresolved_env_vars(value) when is_map(value) do
+    value
+    |> Map.values()
+    |> Enum.flat_map(&unresolved_env_vars/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def unresolved_env_vars(value) when is_list(value) do
+    value
+    |> Enum.flat_map(&unresolved_env_vars/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  def unresolved_env_vars({_key, value}), do: unresolved_env_vars(value)
+  def unresolved_env_vars(_value), do: []
+
+  @doc "Validates that provider endpoints and credential fields have no unresolved variables."
   @spec validate_no_unresolved_placeholders(t()) ::
-          :ok | {:error, {:unresolved_env_vars, [{String.t(), [{atom(), String.t()}]}]}}
+          :ok | {:error, {:unresolved_env_vars, [{String.t(), [{atom(), [String.t()]}]}]}}
   def validate_no_unresolved_placeholders(%__MODULE__{} = chain_config) do
     chain_config.providers
     |> Enum.flat_map(&collect_provider_issues/1)
@@ -270,10 +298,19 @@ defmodule Lasso.Config.ChainConfig do
   defp collect_provider_issues(provider) do
     issues =
       [
-        if(has_unresolved_placeholders?(provider.url), do: {:url, provider.url}),
-        if(has_unresolved_placeholders?(provider.ws_url), do: {:ws_url, provider.ws_url})
+        {:url, provider.url},
+        {:ws_url, provider.ws_url},
+        {:api_key, provider.api_key},
+        {:headers, provider.headers},
+        {:auth_headers, provider.auth_headers},
+        {:credentials, provider.credentials}
       ]
-      |> Enum.reject(&is_nil/1)
+      |> Enum.flat_map(fn {field, value} ->
+        case unresolved_env_vars(value) do
+          [] -> []
+          names -> [{field, names}]
+        end
+      end)
 
     case issues do
       [] -> []

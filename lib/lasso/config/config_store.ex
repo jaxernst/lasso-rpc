@@ -732,11 +732,18 @@ defmodule Lasso.Config.ConfigStore do
         {:reply, {:error, :already_exists}, state}
 
       {:error, :not_found} ->
-        ensure_profile_in_list(profile_id)
         chain_config = normalize_chain_config(chain_id, chain_attrs)
-        add_chain_to_profile(profile_id, chain_id, chain_config)
-        Logger.debug("Registered chain #{chain_id} in profile #{profile_id} (runtime)")
-        {:reply, :ok, mark_runtime_dirty(state, profile_id, :ok)}
+
+        case ChainConfig.validate_no_unresolved_placeholders(chain_config) do
+          :ok ->
+            ensure_profile_in_list(profile_id)
+            add_chain_to_profile(profile_id, chain_id, chain_config)
+            Logger.debug("Registered chain #{chain_id} in profile #{profile_id} (runtime)")
+            {:reply, :ok, mark_runtime_dirty(state, profile_id, :ok)}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -762,8 +769,9 @@ defmodule Lasso.Config.ConfigStore do
       ) do
     with {:ok, chain_config} <- get_chain(profile_id, chain_id),
          provider_config <- normalize_provider_config(provider_attrs),
-         :ok <- validate_provider_not_exists(chain_config, provider_config.id) do
-      updated_chain = add_provider_to_chain(chain_config, provider_config)
+         :ok <- validate_provider_not_exists(chain_config, provider_config.id),
+         updated_chain <- add_provider_to_chain(chain_config, provider_config),
+         :ok <- ChainConfig.validate_no_unresolved_placeholders(updated_chain) do
       update_chain_in_profile(profile_id, chain_id, updated_chain)
 
       Logger.debug(
@@ -774,6 +782,7 @@ defmodule Lasso.Config.ConfigStore do
     else
       {:error, :not_found} -> {:reply, {:error, :chain_not_found}, state}
       {:error, :already_exists} -> {:reply, {:error, :already_exists}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -1383,11 +1392,25 @@ defmodule Lasso.Config.ConfigStore do
         {:error, :global_publication_unconfigured}
 
       true ->
-        validate_chain_aliases(chains, MapSet.new(ids))
+        with :ok <- validate_chain_aliases(chains, MapSet.new(ids)) do
+          validate_profile_provider_placeholders(chains)
+        end
     end
   end
 
   defp validate_profile_spec(_), do: {:error, :invalid_profile_spec}
+
+  defp validate_profile_provider_placeholders(chains) do
+    Enum.reduce_while(chains, :ok, fn {chain_name, chain}, :ok ->
+      case ChainConfig.validate_no_unresolved_placeholders(chain) do
+        :ok ->
+          {:cont, :ok}
+
+        {:error, {:unresolved_env_vars, providers}} ->
+          {:halt, {:error, {:unresolved_env_vars, [{chain_name, providers}]}}}
+      end
+    end)
+  end
 
   defp validate_chain_aliases(chains, chain_ids) do
     aliases =
