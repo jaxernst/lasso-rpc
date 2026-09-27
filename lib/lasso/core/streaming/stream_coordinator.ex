@@ -113,6 +113,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   @impl true
   def init({profile, chain_id, key, opts}) do
     opts = profile_failover_options(profile, chain_id, opts)
+    max_backfill_blocks = Keyword.get(opts, :max_backfill_blocks, 32)
 
     state = %{
       profile: profile,
@@ -122,10 +123,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       state:
         StreamState.new(
           dedupe_max_items: Keyword.get(opts, :dedupe_max_items, 256),
-          dedupe_max_age_ms: Keyword.get(opts, :dedupe_max_age_ms, 30_000)
+          dedupe_max_age_ms: Keyword.get(opts, :dedupe_max_age_ms, 30_000),
+          history_blocks: max_backfill_blocks,
+          history_max_items: Keyword.get(opts, :history_max_items, 4_096)
         ),
       # Backfill config
-      max_backfill_blocks: Keyword.get(opts, :max_backfill_blocks, 32),
+      max_backfill_blocks: max_backfill_blocks,
       backfill_timeout: Keyword.get(opts, :backfill_timeout, 30_000),
       continuity_policy: Keyword.get(opts, :continuity_policy, :strict_abort),
       backfill_requester:
@@ -376,14 +379,20 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp process_event_normal(state, payload) do
     case ingest_event(state.state, state.key, payload) do
       {stream_state, :emit} ->
-        case ClientSubscriptionRegistry.dispatch(
-               state.profile,
-               state.chain_id,
-               state.key,
-               payload
-             ) do
-          :ok -> {:noreply, %{state | state: stream_state}}
-          {:error, reason} -> fail_client_ingress(state, reason)
+        case reserve_retained_bytes(state, stream_state, 0) do
+          :ok ->
+            case ClientSubscriptionRegistry.dispatch(
+                   state.profile,
+                   state.chain_id,
+                   state.key,
+                   payload
+                 ) do
+              :ok -> {:noreply, %{state | state: stream_state}}
+              {:error, reason} -> fail_client_ingress(state, reason)
+            end
+
+          {:error, reason} ->
+            fail_client_ingress(state, reason)
         end
 
       {stream_state, :skip} ->
@@ -408,13 +417,21 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     enter_degraded_mode(state, failover_budget(state))
   end
 
+  defp reserve_retained_bytes(state, stream_state, buffered_bytes) do
+    ContinuityBudget.set_stream_bytes(
+      state.continuity_budget,
+      self(),
+      StreamState.retained_bytes(stream_state) + buffered_bytes
+    )
+  end
+
   defp buffer_event(state, payload) do
     if state.failover_context do
       context = state.failover_context
       buffer = context.event_buffer
       count = Map.get_lazy(context, :event_buffer_count, fn -> length(buffer) end)
       bytes = Map.get_lazy(context, :event_buffer_bytes, fn -> event_buffer_bytes(buffer) end)
-      payload_bytes = :erlang.external_size(payload)
+      payload_bytes = StreamState.event_bytes(payload)
 
       cond do
         payload_bytes > state.max_event_bytes ->
@@ -424,11 +441,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           fail_recovery_buffer(state, :event_buffer_overflow, count)
 
         true ->
-          case ContinuityBudget.set_stream_bytes(
-                 state.continuity_budget,
-                 self(),
-                 bytes + payload_bytes
-               ) do
+          case reserve_retained_bytes(state, state.state, bytes + payload_bytes) do
             :ok ->
               updated_context =
                 context
@@ -533,7 +546,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     %{
       state
       | max_backfill_blocks: opts[:max_backfill_blocks],
-        backfill_timeout: opts[:backfill_timeout]
+        backfill_timeout: opts[:backfill_timeout],
+        state: %{state.state | history_blocks: opts[:max_backfill_blocks]}
     }
   end
 
@@ -857,8 +871,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
     case drain_event_buffer(state) do
       {:ok, new_state} ->
-        ContinuityBudget.release_owner(state.continuity_budget)
-
         final_state = %{
           new_state
           | primary_provider_id: provider_id,
@@ -901,22 +913,41 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             |> order_recovery_logs()
         end
 
-      Enum.reduce_while(ordered_buffer, {:ok, state}, fn payload, {:ok, acc} ->
-        case ingest_event(acc.state, acc.key, payload) do
-          {stream_state, :emit} ->
-            case ClientSubscriptionRegistry.dispatch(acc.profile, acc.chain_id, acc.key, payload) do
-              :ok -> {:cont, {:ok, %{acc | state: stream_state}}}
-              {:error, reason} -> {:halt, {:error, reason}}
-            end
+      initial_bytes =
+        Map.get_lazy(state.failover_context, :event_buffer_bytes, fn ->
+          event_buffer_bytes(state.failover_context.event_buffer)
+        end)
 
-          {stream_state, :skip} ->
-            {:cont, {:ok, %{acc | state: stream_state}}}
-        end
+      Enum.reduce_while(ordered_buffer, {:ok, state, initial_bytes}, fn
+        payload, {:ok, acc, buffered_bytes} ->
+          drain_buffered_event(acc, payload, buffered_bytes)
       end)
+      |> case do
+        {:ok, drained_state, _remaining_bytes} -> {:ok, drained_state}
+        {:error, reason} -> {:error, reason}
+      end
     else
       {:ok, state}
     end
   end
+
+  defp drain_buffered_event(state, payload, buffered_bytes) do
+    remaining_bytes = max(buffered_bytes - StreamState.event_bytes(payload), 0)
+    {stream_state, decision} = ingest_event(state.state, state.key, payload)
+
+    with :ok <- reserve_retained_bytes(state, stream_state, remaining_bytes),
+         :ok <- dispatch_drained_event(state, payload, decision) do
+      {:cont, {:ok, %{state | state: stream_state}, remaining_bytes}}
+    else
+      {:error, reason} -> {:halt, {:error, reason}}
+    end
+  end
+
+  defp dispatch_drained_event(state, payload, :emit) do
+    ClientSubscriptionRegistry.dispatch(state.profile, state.chain_id, state.key, payload)
+  end
+
+  defp dispatch_drained_event(_state, _payload, :skip), do: :ok
 
   defp order_recovery_logs(events) do
     {rollbacks, additions} =
@@ -1063,6 +1094,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
      %{
        state
        | failover_status: :degraded,
+         state: StreamState.clear_history(state.state),
          failover_context: nil,
          failover_history: [],
          recovery_deadline_us: nil

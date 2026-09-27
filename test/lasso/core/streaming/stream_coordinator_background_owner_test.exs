@@ -2,7 +2,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Request.ExecutionScope
-  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, ContinuityBudget, StreamCoordinator}
+
+  alias Lasso.Core.Streaming.{
+    ClientSubscriptionRegistry,
+    ContinuityBudget,
+    StreamCoordinator,
+    StreamState
+  }
 
   defp new_head(number) do
     %{"hash" => "0x#{number}", "number" => "0x#{Integer.to_string(number, 16)}"}
@@ -62,6 +68,117 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
       )
 
     {pid, profile, chain_id, key}
+  end
+
+  @tag :integration
+  test "retained heads stay within the replay horizon and release node bytes on owner exit" do
+    budget =
+      start_supervised!(
+        {ContinuityBudget,
+         name: :retained_history_test_budget,
+         node_limit: 2_048,
+         stream_limit: 1_024,
+         client_limit: 1_024}
+      )
+
+    {pid, profile, chain_id, key} =
+      start_coordinator(self(), continuity_budget: budget, max_backfill_blocks: 2)
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "retained-client", self(), key)
+
+    for number <- 10..12 do
+      GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(number), number})
+      assert_receive {:subscription_event, %{"params" => %{"result" => %{"number" => _}}}}
+    end
+
+    state = await_state(pid, &(&1.state.markers.last_block_num == 12))
+    assert Map.keys(state.state.head_history) |> Enum.sort() == [11, 12]
+
+    assert StreamState.retained_bytes(state.state) ==
+             StreamState.event_bytes(new_head(11)) + StreamState.event_bytes(new_head(12))
+
+    assert ContinuityBudget.stats(budget).stream_bytes == StreamState.retained_bytes(state.state)
+
+    GenServer.stop(pid)
+    assert ContinuityBudget.stats(budget).stream_bytes == 0
+  end
+
+  @tag :integration
+  test "retained history exhaustion terminates downstream continuity and frees the reservation" do
+    stream_limit =
+      StreamState.event_bytes(new_head(10)) + StreamState.event_bytes(new_head(11)) - 1
+
+    budget =
+      start_supervised!(
+        {ContinuityBudget,
+         name: :retained_history_exhaustion_test_budget,
+         node_limit: 2_048,
+         stream_limit: stream_limit,
+         client_limit: stream_limit}
+      )
+
+    {pid, profile, chain_id, key} =
+      start_coordinator(self(), continuity_budget: budget, max_backfill_blocks: 2)
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "retained-client", self(), key)
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(10), 10})
+    assert_receive {:subscription_event, _}
+    assert ContinuityBudget.stats(budget).stream_bytes > 0
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(11), 11})
+    assert_receive {:subscription_terminated, "retained-client", :continuity_exhausted}
+    state = await_state(pid, &(&1.failover_status == :degraded))
+    assert state.state.markers.last_block_num == 10
+    assert state.state.head_history == %{}
+    assert ContinuityBudget.stats(budget).stream_bytes == 0
+  end
+
+  @tag :integration
+  test "successful replay keeps retained bytes reserved after draining recovery buffers" do
+    requester = fn _scope, _chain_id, method, params, _opts ->
+      case {method, params} do
+        {"eth_blockNumber", []} -> {:ok, "0xb", %{}}
+        {"eth_getBlockByNumber", ["0xA", false]} -> {:ok, new_head(10), %{}}
+        {"eth_getBlockByNumber", ["0xB", false]} -> {:ok, new_head(11), %{}}
+      end
+    end
+
+    budget =
+      start_supervised!(
+        {ContinuityBudget,
+         name: :retained_replay_test_budget,
+         node_limit: 2_048,
+         stream_limit: 1_024,
+         client_limit: 1_024}
+      )
+
+    {pid, profile, chain_id, key} =
+      start_coordinator(self(),
+        backfill_requester: requester,
+        continuity_budget: budget,
+        max_backfill_blocks: 2
+      )
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "replay-client", self(), key)
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(10), 10})
+    assert_receive {:subscription_event, _}
+    GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
+
+    state =
+      await_state(pid, fn state ->
+        state.failover_status == :active and state.primary_provider_id == "ws-new"
+      end)
+
+    assert state.state.markers.last_block_num == 11
+    assert Map.keys(state.state.head_history) |> Enum.sort() == [10, 11]
+    assert ContinuityBudget.stats(budget).stream_bytes == StreamState.retained_bytes(state.state)
   end
 
   test "one unlinked owner uses one provider and deadline and delivers events before its result" do

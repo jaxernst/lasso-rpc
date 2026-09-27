@@ -135,8 +135,8 @@ delivery bound: 16 MiB and 32 queued notifications per client, within 128 MiB
 across the node. A client that cannot keep up loses its subscription and its
 WebSocket closes with code `1013`; the `[:lasso, :stream, :slow_consumer]`
 telemetry event names the reason. Reservations are reclaimed when a socket
-dies. These are runtime defaults, not profile YAML settings. Remaining ingress
-and replay retention bounds are tracked under [issue #186](https://github.com/jaxernst/lasso-rpc/issues/186).
+dies. These are runtime defaults, not profile YAML settings. Connected-reorg
+repair remains tracked under [issue #186](https://github.com/jaxernst/lasso-rpc/issues/186).
 
 The v0.5 candidate also admits incoming upstream frames and instance fanout
 before they enter recipient mailboxes. The node-local ingress envelope is
@@ -152,9 +152,11 @@ failure or a missed acknowledgement terminates recovery rather than reporting
 success for an undelivered event. Live events buffered during recovery have a
 100-event count limit and also reserve from the 16 MiB per-stream and 128 MiB
 node continuity envelope, with a 4 MiB per-event limit. Exhaustion terminates
-continuity and releases the reservation. Retained replay history and
-connected-reorg repair are still tracked under issue #186, so these defaults do
-not establish full streaming continuity qualification.
+continuity and releases the reservation. Recent heads and logs are retained
+within the effective replay horizon and charged to the same per-stream and node
+continuity envelope. History exhaustion terminates downstream continuity and
+releases its reservation. Connected-reorg repair remains under issue #186, so
+these defaults do not establish full streaming continuity qualification.
 
 ### UI Topology
 
