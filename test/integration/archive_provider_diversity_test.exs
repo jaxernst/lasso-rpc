@@ -426,7 +426,30 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     {chain, snapshot, plan} = fixture([{"bad-a", true, [:http, :ws]}, {"capable", true, [:http]}])
     ahead = Catalog.lookup_instance_id("public", chain, "bad-a")
     capable = Catalog.lookup_instance_id("public", chain, "capable")
-    Lasso.BlockSync.Registry.put_height(chain, ahead, 100_000_000, :http)
+
+    {:ok, {_height, initial_at_ms, _source, _metadata}} =
+      Lasso.BlockSync.Registry.get_height(chain, ahead)
+
+    assert :ok =
+             Lasso.BlockSync.Registry.put_height_at(
+               chain,
+               ahead,
+               100_000_000,
+               initial_at_ms + 1,
+               :http,
+               %{}
+             )
+
+    assert :ok =
+             Lasso.BlockSync.Registry.put_height_at(
+               chain,
+               ahead,
+               99_999_998,
+               initial_at_ms + 2,
+               :ws,
+               %{}
+             )
+
     Lasso.BlockSync.Registry.put_height(chain, capable, 99_999_999, :http)
 
     {seed, _} =
