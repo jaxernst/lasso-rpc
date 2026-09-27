@@ -177,7 +177,7 @@ with dns_query when is_binary(dns_query) <- System.get_env("CLUSTER_DNS_QUERY"),
   config :libcluster,
     topologies: [
       dns: [
-        strategy: Cluster.Strategy.DNSPoll,
+        strategy: Lasso.Cluster.DNSDiscovery,
         config: [
           polling_interval: 5_000,
           query: dns_query,

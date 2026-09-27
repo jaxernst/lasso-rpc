@@ -366,6 +366,10 @@ profile YAML to every node. Reload each node after adding or editing profiles.
 In Compose, put these values in each instance's `.env` and recreate its container
 with `docker compose up -d --force-recreate --wait`. Nodes poll DNS every five
 seconds. The deployment network must allow direct access to the IPs in DNS.
+An empty or partial DNS response does not disconnect peers that are already
+connected. DNS adds connection candidates; distribution connection loss and
+explicit shutdown determine when a peer leaves. If a peer disconnects while
+its address is absent from DNS, it reconnects after DNS advertises it again.
 
 Check the running node's name and peers:
 
