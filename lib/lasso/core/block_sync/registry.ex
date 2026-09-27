@@ -26,7 +26,8 @@ defmodule Lasso.BlockSync.Registry do
 
   alias Lasso.BlockSync.ObservationProjection
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
-  alias Lasso.Observations.HeadObservation
+  alias Lasso.Observations.{HeadComparison, HeadObservation, HeadScope, HeadSnapshot}
+  alias Lasso.Providers.HeadEvidence
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
@@ -73,6 +74,7 @@ defmodule Lasso.BlockSync.Registry do
     value = {height, observed_at_ms, source, metadata}
     stored? = store_newer_height(key, value, @observation_retries)
     store_observation(chain_id, provider_id, height, observed_at_ms, source, metadata)
+    refresh_scope_cache(chain_id, provider_id)
 
     if stored? do
       update_block_time(chain_id, height)
@@ -103,6 +105,8 @@ defmodule Lasso.BlockSync.Registry do
       observation,
       @observation_retries
     )
+
+    refresh_scope_cache(chain_id, observation.instance_id)
 
     if stored? do
       update_block_time(chain_id, observation.height)
@@ -151,6 +155,34 @@ defmodule Lasso.BlockSync.Registry do
         {:error, :not_found} -> []
       end
     end)
+  end
+
+  @doc "Read a current profile-scoped snapshot, deriving only on a cold or expired cache."
+  @spec get_head_snapshot(HeadScope.t(), non_neg_integer(), integer()) ::
+          {:ok, HeadSnapshot.t()} | {:error, :unstable}
+  def get_head_snapshot(%HeadScope{} = scope, generation, now_ms)
+      when is_integer(generation) and generation >= 0 and is_integer(now_ms) do
+    revision = current_head_revision(scope.chain_id)
+
+    case :ets.lookup(@table, scope.cache_key) do
+      [{_key, ^revision, ^generation, %HeadSnapshot{} = snapshot}]
+      when now_ms <= snapshot.valid_through_ms ->
+        if current_head_revision(scope.chain_id) == revision,
+          do: {:ok, snapshot},
+          else: refresh_head_snapshot(scope, generation, now_ms, @cache_retries)
+
+      _missing_or_expired ->
+        refresh_head_snapshot(scope, generation, now_ms, @cache_retries)
+    end
+  end
+
+  @doc "Clear scoped snapshot rows after an atomic catalog generation swap."
+  @spec clear_scoped_head_snapshots() :: :ok
+  def clear_scoped_head_snapshots do
+    :ets.match_delete(@table, {{:head_snapshot_scope, :_, :_, :_, :_, :_, :_}, :_, :_, :_})
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @doc """
@@ -298,6 +330,13 @@ defmodule Lasso.BlockSync.Registry do
     :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
+    :ets.delete(@table, {:head_revision, chain_id})
+
+    :ets.match_delete(
+      @table,
+      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_}, :_, :_, :_}
+    )
+
     :ok
   end
 
@@ -308,6 +347,13 @@ defmodule Lasso.BlockSync.Registry do
     :ets.delete(@table, {:height, chain_id, provider_id})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :http})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :ws})
+    next_head_revision(chain_id)
+
+    :ets.match_delete(
+      @table,
+      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_}, :_, :_, :_}
+    )
+
     revision = next_consensus_revision(chain_id)
     refresh_consensus_cache(chain_id, System.system_time(:millisecond), revision)
     :ok
@@ -440,6 +486,48 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   defp store_newer_observation(_key, _observation, 0), do: :ok
+
+  defp refresh_scope_cache(chain_id, instance_id) do
+    next_head_revision(chain_id)
+    HeadEvidence.refresh_for_instance(chain_id, instance_id)
+  end
+
+  defp refresh_head_snapshot(scope, generation, now_ms, retries) when retries > 0 do
+    revision = current_head_revision(scope.chain_id)
+
+    observations =
+      Enum.flat_map(scope.instance_ids, &get_observations(scope.chain_id, &1))
+
+    snapshot = HeadComparison.derive(scope, observations, now_ms, generation)
+
+    if current_head_revision(scope.chain_id) == revision do
+      :ets.insert(@table, {scope.cache_key, revision, generation, snapshot})
+
+      if current_head_revision(scope.chain_id) == revision,
+        do: {:ok, snapshot},
+        else: refresh_head_snapshot(scope, generation, now_ms, retries - 1)
+    else
+      refresh_head_snapshot(scope, generation, now_ms, retries - 1)
+    end
+  end
+
+  defp refresh_head_snapshot(_scope, _generation, _now_ms, 0), do: {:error, :unstable}
+
+  defp next_head_revision(chain_id) do
+    :ets.update_counter(
+      @table,
+      {:head_revision, chain_id},
+      {2, 1},
+      {{:head_revision, chain_id}, 0}
+    )
+  end
+
+  defp current_head_revision(chain_id) do
+    case :ets.lookup(@table, {:head_revision, chain_id}) do
+      [{{:head_revision, ^chain_id}, revision}] -> revision
+      [] -> 0
+    end
+  end
 
   defp refresh_consensus_cache(chain_id, now_ms, revision) do
     case select_current_samples(chain_id, nil, now_ms) do

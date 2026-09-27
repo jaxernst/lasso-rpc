@@ -117,14 +117,17 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
       )
 
     assert Enum.all?(ids, fn {_provider, id} -> is_binary(id) end)
+    assert {:ok, initial_snapshot} = HeadEvidence.snapshot(slug, chain_id)
 
     for peer <- ["peer-a", "peer-b"] do
       assert :ok = Registry.put_height(chain_id, ids[peer], 100, :ws)
     end
 
     assert :ok = Registry.put_height(chain_id, ids["behind"], 90, :ws)
+    assert cached_snapshot(initial_snapshot).reference_height == 100
     assert {:ok, snapshot} = HeadEvidence.snapshot(slug, chain_id)
     assert snapshot.qualification == :qualified
+    assert_cached(snapshot)
     assert {:ok, reference} = HeadSnapshot.reference(snapshot)
 
     Lasso.Test.Eventually.assert_eventually(fn ->
@@ -152,6 +155,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert other_snapshot.qualification == :qualified
     assert other_snapshot.reference_height == 200
     refute other_snapshot.scope_id == snapshot.scope_id
+    assert_cached(other_snapshot)
 
     assert {:ok, %{qualification: :qualified, reference_height: 100}} =
              HeadEvidence.snapshot(slug, chain_id)
@@ -177,6 +181,8 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
 
     assert {:ok, alone} = HeadEvidence.snapshot(slug, chain_id)
     assert alone.qualification != :qualified
+    assert alone.revision > snapshot.revision
+    assert_cached(alone)
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :unavailable
     assert_routed_to(slug, chain_id, "behind")
 
@@ -197,6 +203,8 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert {:ok, recovered} = HeadEvidence.snapshot(slug, chain_id)
     assert recovered.qualification == :qualified
     assert recovered.reference_height == 100
+    assert recovered.revision > alone.revision
+    assert_cached(recovered)
     Agent.update(heights, &Map.put(&1, "behind", 100))
 
     Lasso.Test.Eventually.assert_eventually(fn ->
@@ -205,6 +213,21 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
 
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :synced
     assert_routed_to(slug, chain_id, "behind")
+  end
+
+  defp assert_cached(%HeadSnapshot{scope_id: scope_id} = snapshot) do
+    cached = cached_snapshot(snapshot)
+    assert cached.scope_id == scope_id
+    assert cached.reference_height == snapshot.reference_height
+  end
+
+  defp cached_snapshot(%HeadSnapshot{scope_id: scope_id, revision: generation}) do
+    cache_key = put_elem(scope_id, 0, :head_snapshot_scope)
+
+    assert [{^cache_key, _source_revision, ^generation, cached}] =
+             :ets.lookup(:block_sync_registry, cache_key)
+
+    cached
   end
 
   defp assert_routed_to(profile, chain_id, provider) do

@@ -172,6 +172,7 @@ defmodule Lasso.Providers.Catalog.Owner do
     }
 
     :persistent_term.put(key, snapshot)
+    Lasso.BlockSync.Registry.clear_scoped_head_snapshots()
 
     if old_table, do: Process.send_after(self(), {:delete_table, old_table}, @grace_period_ms)
     :ok

@@ -164,6 +164,15 @@ defmodule Lasso.Providers.Catalog do
     end
   end
 
+  @doc false
+  @spec get_instance_refs(snapshot(), String.t()) :: [String.t()]
+  def get_instance_refs(%{table: table}, instance_id) do
+    case safe_lookup(table, {:instance_refs, instance_id}) do
+      [{_, refs}] -> refs
+      _ -> []
+    end
+  end
+
   @doc """
   Gets the provider list for a profile+chain with instance_id cross-references.
   """

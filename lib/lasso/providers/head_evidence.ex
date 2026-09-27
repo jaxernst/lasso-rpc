@@ -39,28 +39,52 @@ defmodule Lasso.Providers.HeadEvidence do
   def snapshot(profile_id, chain_id, now_ms \\ System.system_time(:millisecond))
       when is_binary(profile_id) and profile_id != "" and is_integer(chain_id) and
              chain_id > 0 and is_integer(now_ms) do
-    with {:ok, chain} <- ConfigStore.get_chain(profile_id, chain_id),
-         %{generation: generation} = catalog <- Catalog.snapshot(),
-         true <- generation == ConfigStore.route_generation() do
-      instance_ids =
-        catalog
-        |> Catalog.get_profile_providers(profile_id, chain_id)
-        |> Enum.map(& &1.instance_id)
-
-      scope = HeadScope.new(profile_id, chain_id, instance_ids, policy(chain.block_time_ms))
-
-      observations =
-        Enum.flat_map(scope.instance_ids, fn instance_id ->
-          Registry.get_observations(chain_id, instance_id)
-        end)
-
-      result = HeadComparison.derive(scope, observations, now_ms, generation)
-
+    with %{generation: generation} = catalog <- Catalog.snapshot(),
+         true <- generation == ConfigStore.route_generation(),
+         {:ok, scope} <- scope_for(profile_id, chain_id, catalog),
+         {:ok, result} <- Registry.get_head_snapshot(scope, generation, now_ms) do
       if Catalog.snapshot() == catalog and generation == ConfigStore.route_generation(),
         do: {:ok, result},
         else: {:error, :not_found}
     else
       _missing -> {:error, :not_found}
+    end
+  end
+
+  @doc "Refresh active profile scopes after one upstream publishes head evidence."
+  @spec refresh_for_instance(pos_integer(), String.t()) :: :ok
+  def refresh_for_instance(chain_id, instance_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    case Catalog.snapshot() do
+      %{generation: generation} = catalog ->
+        if generation == ConfigStore.route_generation() do
+          now_ms = System.system_time(:millisecond)
+
+          catalog
+          |> Catalog.get_instance_refs(instance_id)
+          |> Enum.uniq()
+          |> Enum.each(fn profile_id ->
+            with {:ok, scope} <- scope_for(profile_id, chain_id, catalog) do
+              Registry.get_head_snapshot(scope, generation, now_ms)
+            end
+          end)
+        end
+
+      _unavailable ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp scope_for(profile_id, chain_id, catalog) do
+    with {:ok, chain} <- ConfigStore.get_chain(profile_id, chain_id) do
+      instance_ids =
+        catalog
+        |> Catalog.get_profile_providers(profile_id, chain_id)
+        |> Enum.map(& &1.instance_id)
+
+      {:ok, HeadScope.new(profile_id, chain_id, instance_ids, policy(chain.block_time_ms))}
     end
   end
 
