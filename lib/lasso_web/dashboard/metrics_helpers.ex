@@ -19,10 +19,6 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   alias LassoWeb.Dashboard.{Constants, Helpers, MetricsStore}
   alias LassoWeb.Dashboard.Metrics.Calculations
 
-  # ETS table name helpers (must match BenchmarkStore)
-  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-  defp score_table_name(profile, chain_name), do: :"provider_scores_#{profile}_#{chain_name}"
-
   # Request-rate measurement windows, narrowest first, with the sample floor a
   # window must clear before it is trusted.
   @rps_windows_ms [5_000, 15_000, 60_000]
@@ -43,7 +39,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   Uses monotonic time for consistency with BenchmarkStore timestamps.
   """
   def get_windowed_percentiles_from_ets(profile, chain_name, window_ms \\ 300_000) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = BenchmarkStore.score_table(profile, chain_name)
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select recent_latencies from all RPC entries updated within the window
@@ -73,7 +69,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
   been updated within the specified window.
   """
   def get_windowed_success_rate_from_ets(profile, chain_name, window_ms \\ 300_000) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = BenchmarkStore.score_table(profile, chain_name)
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select {successes, total} from all RPC entries updated within the window
@@ -109,7 +105,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
         provider_id,
         window_ms \\ 300_000
       ) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = BenchmarkStore.score_table(profile, chain_name)
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select recent_latencies for this specific provider
@@ -137,7 +133,7 @@ defmodule LassoWeb.Dashboard.MetricsHelpers do
         provider_id,
         window_ms \\ 300_000
       ) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = BenchmarkStore.score_table(profile, chain_name)
     cutoff = System.monotonic_time(:millisecond) - window_ms
 
     # Select {successes, total} for this specific provider

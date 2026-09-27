@@ -2,6 +2,8 @@ import Config
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
+config :lasso, :benchmark_store_max_entries_per_chain, 1_000
+
 config :lasso, LassoWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: String.duplicate("a", 64),

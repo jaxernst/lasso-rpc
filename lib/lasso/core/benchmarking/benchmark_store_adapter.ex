@@ -130,10 +130,9 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
 
   @impl true
   def batch_get_transport_performance(profile, chain, requests) do
-    score_table = score_table_name(profile, chain)
+    score_table = BenchmarkStore.score_table(profile, chain)
 
-    # Check if table exists
-    if table_exists?(score_table) do
+    if score_table != :undefined do
       # Batch lookup using :ets.lookup/2 for each request
       Enum.reduce(requests, %{}, fn {provider_id, method, transport}, acc ->
         method_key = "#{method}@#{transport}"
@@ -167,18 +166,6 @@ defmodule Lasso.RPC.Metrics.BenchmarkStore do
       Enum.reduce(requests, %{}, fn key, acc ->
         Map.put(acc, key, nil)
       end)
-    end
-  end
-
-  # Private functions
-
-  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-  defp score_table_name(profile, chain), do: :"provider_scores_#{profile}_#{chain}"
-
-  defp table_exists?(table_name) do
-    case :ets.whereis(table_name) do
-      :undefined -> false
-      _ -> true
     end
   end
 

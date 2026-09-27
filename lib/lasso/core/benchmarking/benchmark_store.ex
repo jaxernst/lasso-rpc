@@ -16,16 +16,25 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   require Logger
 
   @type profile :: String.t()
-  @type chain_name :: pos_integer()
+  @type chain_name :: pos_integer() | String.t()
   @type provider_id :: String.t()
   @type method :: String.t()
   @type result :: :success | :error | :timeout | :network_error | :rate_limit | atom()
 
   # ~1 entry per second for 24 hours
-  @max_entries_per_chain 86_400
+  @max_entries_per_chain Application.compile_env(
+                           :lasso,
+                           :benchmark_store_max_entries_per_chain,
+                           86_400
+                         )
+  @table_registry :lasso_benchmark_table_registry
+  @retention_table :lasso_benchmark_retention
+  @max_score_entries_per_chain 4_096
+  @ingress_limit 8_192
+  @ingress_item_bytes 2_048
   # 1 hour in milliseconds
   @cleanup_interval 3_600_000
-  @table_limits_interval 10_000
+  @retention_report_interval 10_000
 
   @doc """
   Starts the BenchmarkStore GenServer.
@@ -33,6 +42,63 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @doc false
+  @spec score_table(profile(), chain_name()) :: :ets.table() | :undefined
+  def score_table(profile, chain_name) do
+    lookup_table(:score, profile, chain_name)
+  end
+
+  @doc "Returns bounded raw-evidence retention statistics for a profile and chain."
+  @spec get_retention_stats(profile(), chain_name()) :: %{
+          retained: non_neg_integer(),
+          dropped: non_neg_integer(),
+          limit: pos_integer()
+        }
+  def get_retention_stats(profile, chain_name) do
+    retained =
+      case rpc_table(profile, chain_name) do
+        :undefined -> 0
+        table -> :ets.info(table, :size) || 0
+      end
+
+    dropped =
+      case safe_lookup(@retention_table, {profile, chain_name}) do
+        [{{^profile, ^chain_name}, total, _since_report}] -> total
+        [] -> 0
+      end
+
+    %{retained: retained, dropped: dropped, limit: @max_entries_per_chain}
+  end
+
+  @doc "Returns bounded diagnostic queue counters."
+  @spec ingress_stats() :: %{
+          queued: non_neg_integer(),
+          dropped: non_neg_integer(),
+          limit: pos_integer()
+        }
+  def ingress_stats do
+    [{:ingress, queued, dropped}] = :ets.lookup(@retention_table, :ingress)
+    %{queued: queued, dropped: dropped, limit: @ingress_limit}
+  end
+
+  @doc "Returns score cardinality admission statistics; request totals remain independent."
+  @spec get_score_retention_stats(profile(), chain_name()) :: map()
+  def get_score_retention_stats(profile, chain_name) do
+    retained =
+      case score_table(profile, chain_name) do
+        :undefined -> 0
+        table -> :ets.info(table, :size) || 0
+      end
+
+    dropped =
+      case safe_lookup(@retention_table, {:scores, profile, chain_name}) do
+        [{_, total}] -> total
+        [] -> 0
+      end
+
+    %{retained: retained, dropped: dropped, limit: @max_score_entries_per_chain}
   end
 
   @doc """
@@ -277,17 +343,50 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     monotonic_ts = System.monotonic_time(:millisecond)
     system_ts = System.system_time(:millisecond)
 
-    GenServer.cast(
-      __MODULE__,
+    message =
       {:record_rpc_call, profile, chain_name, provider_id, method, duration_ms, result,
        monotonic_ts, system_ts}
-    )
+
+    table = :ets.whereis(@retention_table)
+    owner = :ets.info(table, :owner)
+
+    if :erlang.external_size(message) <= @ingress_item_bytes do
+      queued = :ets.update_counter(table, :ingress, {2, 1})
+
+      if queued <= @ingress_limit do
+        GenServer.cast(owner, message)
+      else
+        :ets.update_counter(table, :ingress, [{2, -1}, {3, 1}])
+      end
+    else
+      :ets.update_counter(table, :ingress, {3, 1})
+    end
+
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   @impl true
   def init(_opts) do
     schedule_cleanup()
-    schedule_table_limits_check()
+    schedule_retention_report()
+
+    :ets.new(@table_registry, [
+      :named_table,
+      :public,
+      :set,
+      read_concurrency: true
+    ])
+
+    :ets.new(@retention_table, [
+      :named_table,
+      :public,
+      :set,
+      write_concurrency: true
+    ])
+
+    :ets.insert(@retention_table, {:ingress, 0, 0})
 
     state = %{
       rpc_tables: %{},
@@ -304,22 +403,48 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
          monotonic_ts, system_ts},
         state
       ) do
+    :ets.update_counter(@retention_table, :ingress, {2, -1})
     new_state = ensure_tables_exist(state, profile, chain_name)
 
-    rpc_table = rpc_table_name(profile, chain_name)
-    score_table = score_table_name(profile, chain_name)
+    key = {profile, chain_name}
+    rpc_table = Map.fetch!(new_state.rpc_tables, key)
+    score_table = Map.fetch!(new_state.score_tables, key)
 
-    :ets.insert(rpc_table, {monotonic_ts, system_ts, provider_id, method, duration_ms, result})
+    entry_key = {monotonic_ts, System.unique_integer([:monotonic, :positive])}
+    dropped = make_room_for_rpc_entry(rpc_table)
 
-    update_rpc_scores(
-      score_table,
-      provider_id,
-      method,
-      duration_ms,
-      result,
-      monotonic_ts,
-      system_ts
-    )
+    :ets.insert(rpc_table, {entry_key, system_ts, provider_id, method, duration_ms, result})
+
+    if dropped > 0 do
+      :ets.update_counter(
+        @retention_table,
+        {profile, chain_name},
+        [{2, dropped}, {3, dropped}],
+        {{profile, chain_name}, 0, 0}
+      )
+    end
+
+    score_key = {provider_id, method, :rpc}
+
+    if :ets.member(score_table, score_key) or
+         :ets.info(score_table, :size) < @max_score_entries_per_chain do
+      update_rpc_scores(
+        score_table,
+        provider_id,
+        method,
+        duration_ms,
+        result,
+        monotonic_ts,
+        system_ts
+      )
+    else
+      :ets.update_counter(
+        @retention_table,
+        {:scores, profile, chain_name},
+        {2, 1},
+        {{:scores, profile, chain_name}, 0}
+      )
+    end
 
     {:noreply, new_state}
   end
@@ -333,12 +458,21 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     cutoff_time = System.monotonic_time(:millisecond) - 24 * 60 * 60 * 1000
 
     if Map.has_key?(state.rpc_tables, key) do
-      rpc_table = rpc_table_name(profile, chain_name)
-      cleanup_rpc_table_by_monotonic_timestamp(rpc_table, cutoff_time)
+      rpc_table = rpc_table(profile, chain_name)
+      cleanup_work = cleanup_rpc_table_by_monotonic_timestamp(rpc_table, cutoff_time)
+
+      if cleanup_work > 0 do
+        :ets.update_counter(
+          @retention_table,
+          key,
+          {3, cleanup_work},
+          {key, 0, 0}
+        )
+      end
     end
 
     if Map.has_key?(state.score_tables, key) do
-      score_table = score_table_name(profile, chain_name)
+      score_table = score_table(profile, chain_name)
       cleanup_score_table_by_monotonic_timestamp(score_table, cutoff_time)
     end
 
@@ -452,14 +586,19 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     key = {profile, chain_name}
 
     if Map.has_key?(state.rpc_tables, key) do
-      rpc_table = rpc_table_name(profile, chain_name)
+      rpc_table = rpc_table(profile, chain_name)
       :ets.delete(rpc_table)
     end
 
     if Map.has_key?(state.score_tables, key) do
-      score_table = score_table_name(profile, chain_name)
+      score_table = score_table(profile, chain_name)
       :ets.delete(score_table)
     end
+
+    :ets.delete(@table_registry, {:rpc, profile, chain_name})
+    :ets.delete(@table_registry, {:score, profile, chain_name})
+    :ets.delete(@retention_table, key)
+    :ets.delete(@retention_table, {:scores, profile, chain_name})
 
     profile_chains_set = Map.get(state.profile_chains, profile, MapSet.new())
     updated_profile_chains_set = MapSet.delete(profile_chains_set, chain_name)
@@ -487,7 +626,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.score_tables, key) do
-        score_table = score_table_name(profile, chain_name)
+        score_table = score_table(profile, chain_name)
         lookup_key = {provider_id, method, :rpc}
 
         case :ets.lookup(score_table, lookup_key) do
@@ -531,7 +670,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.rpc_tables, key) do
-        rpc_table = rpc_table_name(profile, chain_name)
+        rpc_table = rpc_table(profile, chain_name)
 
         rpc_table
         |> :ets.tab2list()
@@ -566,7 +705,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.rpc_tables, key) do
-        rpc_table = rpc_table_name(profile, chain_name)
+        rpc_table = rpc_table(profile, chain_name)
 
         latencies =
           rpc_table
@@ -591,7 +730,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.score_tables, key) do
-        score_table = score_table_name(profile, chain_name)
+        score_table = score_table(profile, chain_name)
 
         rpc_entries =
           score_table
@@ -628,7 +767,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.rpc_tables, key) do
-        rpc_table = rpc_table_name(profile, chain_name)
+        rpc_table = rpc_table(profile, chain_name)
         current_hour = div(System.system_time(:second), 3600) * 3600
         hour_ago = current_hour - 3600
 
@@ -688,7 +827,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.rpc_tables, key) do
-        rpc_table = rpc_table_name(profile, chain_name)
+        rpc_table = rpc_table(profile, chain_name)
         current_time = System.system_time(:millisecond)
         lookback = current_time - 30_000
 
@@ -731,7 +870,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.score_tables, key) do
-        score_table = score_table_name(profile, chain_name)
+        score_table = score_table(profile, chain_name)
 
         rpc_entries =
           score_table
@@ -765,7 +904,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.score_tables, key) do
-        score_table = score_table_name(profile, chain_name)
+        score_table = score_table(profile, chain_name)
 
         rpc_stats =
           score_table
@@ -789,7 +928,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
         calls_last_minute =
           if Map.has_key?(state.rpc_tables, key) do
-            rpc_table = rpc_table_name(profile, chain_name)
+            rpc_table = rpc_table(profile, chain_name)
 
             rpc_table
             |> :ets.tab2list()
@@ -825,7 +964,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.score_tables, key) do
-        score_table = score_table_name(profile, chain_name)
+        score_table = score_table(profile, chain_name)
 
         score_table
         |> :ets.tab2list()
@@ -889,7 +1028,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.score_tables, key) do
-        score_table = score_table_name(profile, chain_name)
+        score_table = score_table(profile, chain_name)
         :ets.tab2list(score_table)
       else
         []
@@ -928,12 +1067,12 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
     result =
       if Map.has_key?(state.rpc_tables, key) do
-        rpc_table = rpc_table_name(profile, chain_name)
+        rpc_table = rpc_table(profile, chain_name)
         cutoff = System.monotonic_time(:millisecond) - window_seconds * 1_000
 
         match_spec = [
           {
-            {:"$1", :_, :"$2", :_, :_, :_},
+            {{:"$1", :_}, :_, :"$2", :_, :_, :_},
             [{:>, :"$1", cutoff}],
             [:"$2"]
           }
@@ -997,17 +1136,43 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   @impl true
-  def handle_info(:enforce_table_limits, state) do
-    Enum.each(state.rpc_tables, fn {_key, rpc_table} ->
-      enforce_table_limits(rpc_table)
+  def handle_info(:report_retention, state) do
+    Enum.each(state.rpc_tables, fn {{profile, chain_name} = key, rpc_table} ->
+      retained = :ets.info(rpc_table, :size) || 0
+
+      {dropped, cleanup_work} =
+        case :ets.lookup(@retention_table, key) do
+          [{^key, total, since_report}] -> {total, since_report}
+          [] -> {0, 0}
+        end
+
+      :ets.update_element(@retention_table, key, {3, 0})
+
+      :telemetry.execute(
+        [:lasso, :benchmark_store, :retention],
+        %{retained: retained, dropped: dropped, cleanup_work: cleanup_work},
+        %{profile: profile, chain: chain_name, limit: @max_entries_per_chain}
+      )
+
+      :telemetry.execute(
+        [:lasso, :benchmark_store, :score_retention],
+        Map.take(get_score_retention_stats(profile, chain_name), [:retained, :dropped]),
+        %{profile: profile, chain: chain_name, limit: @max_score_entries_per_chain}
+      )
     end)
 
-    schedule_table_limits_check()
+    :telemetry.execute(
+      [:lasso, :benchmark_store, :ingress],
+      Map.take(ingress_stats(), [:queued, :dropped]),
+      %{limit: @ingress_limit}
+    )
+
+    schedule_retention_report()
     {:noreply, state}
   end
 
   defp get_rpc_performance_with_percentiles_data(profile, chain_name, provider_id, method) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
     key = {provider_id, method, :rpc}
 
     case :ets.lookup(score_table, key) do
@@ -1028,7 +1193,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp get_all_method_performance_data(profile, chain_name) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
 
     score_table
     |> :ets.tab2list()
@@ -1095,7 +1260,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp create_performance_snapshot_private(profile, chain_name) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
     current_hour = div(System.system_time(:second), 3600) * 3600
 
     all_entries = :ets.tab2list(score_table)
@@ -1143,11 +1308,28 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     else
       Logger.info("Creating benchmark tables for profile: #{profile}, chain: #{chain}")
 
-      rpc_table = rpc_table_name(profile, chain)
-      score_table = score_table_name(profile, chain)
+      rpc_table =
+        :ets.new(:lasso_rpc_metrics, [
+          :public,
+          :ordered_set,
+          :compressed,
+          read_concurrency: true
+        ])
 
-      :ets.new(rpc_table, [:public, :named_table, :bag, :compressed])
-      :ets.new(score_table, [:public, :named_table, :set, :compressed])
+      score_table =
+        :ets.new(:lasso_provider_scores, [
+          :public,
+          :set,
+          :compressed,
+          read_concurrency: true
+        ])
+
+      :ets.insert(@table_registry, [
+        {{:rpc, profile, chain}, rpc_table},
+        {{:score, profile, chain}, score_table}
+      ])
+
+      :ets.insert(@retention_table, {{profile, chain}, 0, 0})
 
       profile_chains_set = Map.get(state.profile_chains, profile, MapSet.new())
 
@@ -1227,13 +1409,16 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
 
   defp cleanup_rpc_table_by_monotonic_timestamp(table_name, cutoff_time) do
     match_spec = [
-      {{:"$1", :_, :_, :_, :_, :_}, [{:<, :"$1", cutoff_time}], [true]}
+      {{{:"$1", :_}, :_, :_, :_, :_, :_}, [{:<, :"$1", cutoff_time}], [true]}
     ]
 
     deleted = :ets.select_delete(table_name, match_spec)
     Logger.debug("Cleaned up #{deleted} old RPC entries from #{table_name}")
+    deleted
   rescue
-    e -> Logger.error("Error during RPC table cleanup: #{inspect(e)}")
+    e ->
+      Logger.error("Error during RPC table cleanup: #{inspect(e)}")
+      0
   end
 
   defp cleanup_score_table_by_monotonic_timestamp(score_table, cutoff_time) do
@@ -1248,7 +1433,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp calculate_leaderboard(profile, chain_name) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
 
     rpc_scores =
       score_table
@@ -1292,7 +1477,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp get_detailed_provider_metrics(profile, chain_name, provider_id) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
 
     rpc_metrics =
       score_table
@@ -1319,7 +1504,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp get_rpc_performance_stats(profile, chain_name, method) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
 
     method_entries =
       score_table
@@ -1349,7 +1534,7 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
   end
 
   defp get_realtime_benchmark_stats(profile, chain_name) do
-    score_table = score_table_name(profile, chain_name)
+    score_table = score_table(profile, chain_name)
     all_entries = :ets.tab2list(score_table)
 
     {providers, rpc_methods} =
@@ -1375,45 +1560,45 @@ defmodule Lasso.Benchmarking.BenchmarkStore do
     success_rate * latency_factor * confidence_factor
   end
 
-  # credo:disable-for-lines:2 Credo.Check.Warning.UnsafeToAtom
-  defp rpc_table_name(profile, chain), do: :"rpc_metrics_#{profile}_#{chain}"
-  defp score_table_name(profile, chain), do: :"provider_scores_#{profile}_#{chain}"
+  defp rpc_table(profile, chain), do: lookup_table(:rpc, profile, chain)
+
+  defp lookup_table(type, profile, chain) do
+    case safe_lookup(@table_registry, {type, profile, chain}) do
+      [{{^type, ^profile, ^chain}, table}] -> table
+      [] -> :undefined
+    end
+  end
+
+  defp safe_lookup(table, key) do
+    :ets.lookup(table, key)
+  rescue
+    ArgumentError -> []
+  end
 
   defp schedule_cleanup do
     Process.send_after(__MODULE__, :cleanup_all_chains, @cleanup_interval)
   end
 
-  defp schedule_table_limits_check do
-    Process.send_after(__MODULE__, :enforce_table_limits, @table_limits_interval)
+  defp schedule_retention_report do
+    Process.send_after(__MODULE__, :report_retention, @retention_report_interval)
   end
 
-  defp enforce_table_limits(table_name) do
-    current_size = :ets.info(table_name, :size)
+  defp make_room_for_rpc_entry(table) do
+    entries_to_drop = max((:ets.info(table, :size) || 0) - @max_entries_per_chain + 1, 0)
+    delete_oldest_entries(table, entries_to_drop)
+    entries_to_drop
+  end
 
-    if current_size >= @max_entries_per_chain do
-      Logger.debug(
-        "Table #{table_name} at limit (#{current_size}/#{@max_entries_per_chain}), removing oldest entries"
-      )
+  defp delete_oldest_entries(_table, 0), do: :ok
 
-      entries_to_remove = div(@max_entries_per_chain, 10)
+  defp delete_oldest_entries(table, remaining) do
+    case :ets.first(table) do
+      :"$end_of_table" ->
+        :ok
 
-      oldest_entries =
-        table_name
-        |> :ets.tab2list()
-        |> Enum.sort_by(fn {monotonic_ts, _, _, _, _, _} -> monotonic_ts end)
-        |> Enum.take(entries_to_remove)
-
-      Enum.each(oldest_entries, fn entry ->
-        :ets.delete_object(table_name, entry)
-      end)
-
-      Logger.debug("Removed #{length(oldest_entries)} oldest entries from #{table_name}")
+      key ->
+        :ets.delete(table, key)
+        delete_oldest_entries(table, remaining - 1)
     end
-  rescue
-    e ->
-      Logger.error("Error enforcing table limits for #{table_name}: #{inspect(e)}")
-  catch
-    :exit, reason ->
-      Logger.error("Table #{table_name} may not exist: #{inspect(reason)}")
   end
 end
