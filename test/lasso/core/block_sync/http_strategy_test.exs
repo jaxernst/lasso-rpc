@@ -74,13 +74,22 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     earliest_observed_at_ms = System.system_time(:millisecond)
     send(owner_pid, :release_poll)
 
-    assert_receive {:http_strategy, :poll_result, ^instance_id, owner_id, ^owner_pid, {:ok, 42}}
+    assert_receive {:http_strategy, :poll_result, ^instance_id, owner_id, ^owner_pid,
+                    %HttpStrategy.PollOutcome{
+                      result: {:ok, 42},
+                      completed_at_us: completed_at_us,
+                      observed_at_ms: owner_observed_at_ms
+                    } = outcome}
 
     assert owner_id == state.poll_owner_id
+    assert completed_at_us >= plan.started_at_us
+    assert owner_observed_at_ms >= earliest_observed_at_ms
+
+    Process.sleep(30)
 
     assert {:ok, state} =
              HttpStrategy.handle_message(
-               {:poll_result, owner_id, owner_pid, {:ok, 42}},
+               {:poll_result, owner_id, owner_pid, outcome},
                state
              )
 
@@ -93,8 +102,9 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
                     }}
 
     assert latency_ms >= 0
-    assert observed_at_ms >= earliest_observed_at_ms
-    assert observed_at_ms <= System.system_time(:millisecond)
+    assert observed_at_ms == owner_observed_at_ms
+    assert latency_ms == max(div(completed_at_us - plan.started_at_us, 1_000), 0)
+    assert state.last_poll_time == owner_observed_at_ms
     assert state.poll_owner_pid == nil
     assert is_reference(state.timer_ref)
     assert is_integer(Process.read_timer(state.timer_ref))
@@ -248,11 +258,11 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     send(first_owner, :release)
 
     assert_receive {:http_strategy, :poll_result, ^instance_id, first_owner_id, ^first_owner,
-                    {:ok, 1}}
+                    %HttpStrategy.PollOutcome{result: {:ok, 1}} = outcome}
 
     assert {:ok, state} =
              HttpStrategy.handle_message(
-               {:poll_result, first_owner_id, first_owner, {:ok, 1}},
+               {:poll_result, first_owner_id, first_owner, outcome},
                state
              )
 

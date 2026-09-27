@@ -63,6 +63,19 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
           }
   end
 
+  defmodule PollOutcome do
+    @moduledoc false
+
+    @enforce_keys [:result, :completed_at_us, :observed_at_ms]
+    defstruct @enforce_keys
+
+    @type t :: %__MODULE__{
+            result: {:ok, non_neg_integer()} | {:error, term()},
+            completed_at_us: integer(),
+            observed_at_ms: integer()
+          }
+  end
+
   defstruct [
     :instance_id,
     :chain_id,
@@ -277,7 +290,14 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         {owner_pid, owner_ref} =
           spawn_monitor(fn ->
             result = safely_run_poll(runner, plan)
-            send(parent, {:http_strategy, :poll_result, instance_id, owner_id, self(), result})
+
+            outcome = %PollOutcome{
+              result: result,
+              completed_at_us: System.monotonic_time(:microsecond),
+              observed_at_ms: System.system_time(:millisecond)
+            }
+
+            send(parent, {:http_strategy, :poll_result, instance_id, owner_id, self(), outcome})
           end)
 
         %{
@@ -368,19 +388,21 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   end
 
   defp apply_poll_result(state, result, plan) do
+    outcome = normalize_poll_outcome(result)
+
     latency_ms =
       if plan,
-        do: max(div(System.monotonic_time(:microsecond) - plan.started_at_us, 1_000), 0),
+        do: max(div(outcome.completed_at_us - plan.started_at_us, 1_000), 0),
         else: 0
 
-    case result do
+    case outcome.result do
       {:ok, height} ->
         {:ok, observation} =
           HeadObservation.http(%{
             chain_id: state.chain_id,
             instance_id: state.instance_id,
             height: height,
-            observed_at_ms: System.system_time(:millisecond),
+            observed_at_ms: outcome.observed_at_ms,
             latency_ms: latency_ms,
             sample_interval_ms: state.poll_interval_ms,
             poll_references: if(plan, do: plan.head_references_at_poll_start, else: [])
@@ -394,7 +416,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
           state
           | consecutive_failures: 0,
             last_height: height,
-            last_poll_time: System.system_time(:millisecond)
+            last_poll_time: outcome.observed_at_ms
         }
 
         if state.consecutive_failures >= @max_consecutive_failures do
@@ -421,9 +443,19 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         %{
           state
           | consecutive_failures: failures,
-            last_poll_time: System.system_time(:millisecond)
+            last_poll_time: outcome.observed_at_ms
         }
     end
+  end
+
+  defp normalize_poll_outcome(%PollOutcome{} = outcome), do: outcome
+
+  defp normalize_poll_outcome(result) do
+    %PollOutcome{
+      result: result,
+      completed_at_us: System.monotonic_time(:microsecond),
+      observed_at_ms: System.system_time(:millisecond)
+    }
   end
 
   defp write_health_success(instance_id) do

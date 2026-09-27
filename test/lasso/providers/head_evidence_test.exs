@@ -342,11 +342,13 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert :ok = Registry.put_height(chain_id, ids_b["peer-b"], 150, :ws)
 
     send(owner, :release)
-    assert_receive {:http_strategy, :poll_result, ^shared, owner_id, ^owner, {:ok, 99}}
+
+    assert_receive {:http_strategy, :poll_result, ^shared, owner_id, ^owner,
+                    %HttpStrategy.PollOutcome{result: {:ok, 99}} = outcome}
 
     assert {:ok, strategy} =
              HttpStrategy.handle_message(
-               {:poll_result, owner_id, owner, {:ok, 99}},
+               {:poll_result, owner_id, owner, outcome},
                strategy
              )
 
