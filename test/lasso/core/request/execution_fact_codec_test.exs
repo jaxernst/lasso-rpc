@@ -41,6 +41,12 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
     ]
   end
 
+  defp local_success_attrs do
+    request_attrs()
+    |> Keyword.put(:candidate_admission_count, 0)
+    |> Keyword.put(:dispatch_count, 0)
+  end
+
   test "round trips every tagged fact variant" do
     id = identity()
     response = AttemptTerminal.Response.new(id, :success, 12)
@@ -70,6 +76,7 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
       AttemptTerminal.Deadline.new(id, :dispatched, 30),
       AttemptTerminal.Cancelled.new(id, :caller_abandoned, :not_dispatched, 0),
       RequestTerminal.UpstreamResponse.new(request_attrs(), response),
+      RequestTerminal.LocalSuccess.new(local_success_attrs(), :published_block),
       RequestTerminal.LocalFailure.new(request_attrs(), :configuration),
       RequestTerminal.Deadline.new(request_attrs(), :indeterminate),
       RequestTerminal.CallerAbandonment.new(
@@ -93,6 +100,19 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
       assert byte_size(json) <= Codec.max_bytes()
       assert {:ok, ^fact} = Codec.decode(json)
     end
+  end
+
+  test "local success writes source and reads the previous Core reason key" do
+    fact = RequestTerminal.LocalSuccess.new(local_success_attrs(), :published_block)
+    wire = fact |> Codec.encode!() |> Jason.decode!()
+
+    assert wire["variant"] == "local_success"
+    assert wire["source"] == "published_block"
+    refute Map.has_key?(wire, "reason")
+    assert {:ok, ^fact} = wire |> Jason.encode!() |> Codec.decode()
+
+    old_wire = wire |> Map.delete("source") |> Map.put("reason", "published_block")
+    assert {:ok, ^fact} = old_wire |> Jason.encode!() |> Codec.decode()
   end
 
   test "version two retains exploration and ambiguity while version one remains ordinary" do
