@@ -20,6 +20,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   alias Lasso.Core.Streaming.{
     ClientSubscriptionRegistry,
+    ContinuityBudget,
     Ingress,
     ReplayWindow,
     StreamState
@@ -55,6 +56,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   @max_dynamic_failover_attempts 11
   @failover_cooldown_ms 5_000
   @max_event_buffer 100
+  @default_max_event_bytes 4 * 1_024 * 1_024
   @degraded_mode_retry_delay_ms 60_000
   @default_recovery_timeout_ms 30_000
 
@@ -139,6 +141,17 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       max_failover_attempts: Keyword.get(opts, :max_failover_attempts),
       failover_cooldown_ms: Keyword.get(opts, :failover_cooldown_ms, @failover_cooldown_ms),
       max_event_buffer: Keyword.get(opts, :max_event_buffer, @max_event_buffer),
+      max_event_bytes:
+        Keyword.get(
+          opts,
+          :max_event_bytes,
+          Application.get_env(
+            :lasso,
+            :websocket_continuity_event_byte_limit,
+            @default_max_event_bytes
+          )
+        ),
+      continuity_budget: Keyword.get(opts, :continuity_budget, ContinuityBudget),
       recovery_timeout_ms: Keyword.get(opts, :recovery_timeout_ms, @default_recovery_timeout_ms),
       recovery_deadline_us: nil
     }
@@ -149,6 +162,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   @impl true
   def terminate(_reason, state) do
     cancel_backfill_owner(state)
+    ContinuityBudget.release_owner(state.continuity_budget)
     :ok
   end
 
@@ -396,33 +410,67 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp buffer_event(state, payload) do
     if state.failover_context do
-      buffer = state.failover_context.event_buffer
-      buffer_count = Map.get(state.failover_context, :event_buffer_count, length(buffer))
+      context = state.failover_context
+      buffer = context.event_buffer
+      count = Map.get(context, :event_buffer_count, length(buffer))
+      bytes = Map.get(context, :event_buffer_bytes, event_buffer_bytes(buffer))
+      payload_bytes = :erlang.external_size(payload)
 
-      if buffer_count < state.max_event_buffer do
-        updated_context =
-          state.failover_context
-          |> Map.put(:event_buffer, [payload | buffer])
-          |> Map.put(:event_buffer_count, buffer_count + 1)
+      cond do
+        payload_bytes > state.max_event_bytes ->
+          fail_recovery_buffer(state, :event_too_large, payload_bytes)
 
-        {:noreply, %{state | failover_context: updated_context}}
-      else
-        Logger.error("Event buffer full (#{state.max_event_buffer}), entering degraded mode",
-          chain_id: state.chain_id,
-          key: inspect(state.key)
-        )
+        count >= state.max_event_buffer ->
+          fail_recovery_buffer(state, :event_buffer_overflow, count)
 
-        :telemetry.execute(
-          [:lasso, :stream, :event_buffer_overflow],
-          %{count: 1},
-          %{chain_id: state.chain_id, profile: state.profile, key: inspect(state.key)}
-        )
+        true ->
+          case ContinuityBudget.set_stream_bytes(
+                 state.continuity_budget,
+                 self(),
+                 bytes + payload_bytes
+               ) do
+            :ok ->
+              updated_context =
+                context
+                |> Map.put(:event_buffer, [payload | buffer])
+                |> Map.put(:event_buffer_count, count + 1)
+                |> Map.put(:event_buffer_bytes, bytes + payload_bytes)
 
-        enter_degraded_mode(state, failover_budget(state))
+              {:noreply, %{state | failover_context: updated_context}}
+
+            {:error, reason} ->
+              fail_recovery_buffer(state, reason, bytes + payload_bytes)
+          end
       end
     else
       {:noreply, state}
     end
+  end
+
+  defp fail_recovery_buffer(state, reason, size) do
+    message =
+      if reason == :event_buffer_overflow,
+        do: "Event buffer full",
+        else: "Recovery buffer exhausted"
+
+    Logger.error("#{message}, entering degraded mode",
+      chain_id: state.chain_id,
+      key: inspect(state.key),
+      reason: reason,
+      size: size
+    )
+
+    :telemetry.execute(
+      [:lasso, :stream, :event_buffer_overflow],
+      %{count: 1},
+      %{chain_id: state.chain_id, profile: state.profile, key: inspect(state.key), reason: reason}
+    )
+
+    enter_degraded_mode(state, failover_budget(state))
+  end
+
+  defp event_buffer_bytes(buffer) do
+    Enum.reduce(buffer, 0, fn payload, bytes -> bytes + :erlang.external_size(payload) end)
   end
 
   defp drop_stale_provider_event(state, provider_id) do
@@ -591,6 +639,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       started_at: div(started_at_us, 1_000),
       event_buffer: initial_buffer,
       event_buffer_count: length(initial_buffer),
+      event_buffer_bytes: event_buffer_bytes(initial_buffer),
       attempt_count: recent_failures + 1
     }
 
@@ -808,6 +857,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
     case drain_event_buffer(state) do
       {:ok, new_state} ->
+        ContinuityBudget.release_owner(state.continuity_budget)
+
         final_state = %{
           new_state
           | primary_provider_id: provider_id,
@@ -972,6 +1023,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp enter_degraded_mode(state, budget) do
     cancel_backfill_owner(state)
+    ContinuityBudget.release_owner(state.continuity_budget)
 
     ClientSubscriptionRegistry.terminate(
       state.profile,

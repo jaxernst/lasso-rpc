@@ -149,9 +149,12 @@ envelope; exhaustion terminates continuity without advancing the stream marker.
 Backfill events use the same ingress envelope. The backfill owner waits for
 each coordinator acknowledgement within the recovery deadline, and admission
 failure or a missed acknowledgement terminates recovery rather than reporting
-success for an undelivered event. Retained replay and connected-reorg ingress
-are still tracked under issue #186, so these defaults do not establish full
-streaming continuity qualification.
+success for an undelivered event. Live events buffered during recovery have a
+100-event count limit and also reserve from the 16 MiB per-stream and 128 MiB
+node continuity envelope, with a 4 MiB per-event limit. Exhaustion terminates
+continuity and releases the reservation. Retained replay history and
+connected-reorg repair are still tracked under issue #186, so these defaults do
+not establish full streaming continuity qualification.
 
 ### UI Topology
 

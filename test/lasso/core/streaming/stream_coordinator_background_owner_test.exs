@@ -2,7 +2,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Request.ExecutionScope
-  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, StreamCoordinator}
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, ContinuityBudget, StreamCoordinator}
 
   defp new_head(number) do
     %{"hash" => "0x#{number}", "number" => "0x#{Integer.to_string(number, 16)}"}
@@ -511,6 +511,68 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
 
     assert await_state(pid, &(&1.failover_status == :degraded)).failover_context == nil
     assert Process.alive?(pid)
+  end
+
+  test "a byte-saturated recovery terminates continuity and releases its reservation" do
+    test_pid = self()
+
+    requester = fn _scope, _chain_id, "eth_blockNumber", [], _opts ->
+      send(test_pid, :backfill_waiting)
+      receive do: (:never -> {:ok, "0xa", %{}})
+    end
+
+    budget =
+      start_supervised!(
+        {ContinuityBudget,
+         name: :stream_recovery_test_budget,
+         node_limit: 1_024,
+         stream_limit: 512,
+         client_limit: 512}
+      )
+
+    {pid, profile, chain_id, key} =
+      start_coordinator(test_pid,
+        backfill_requester: requester,
+        continuity_budget: budget
+      )
+
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
+    :ok = ClientSubscriptionRegistry.add_client(profile, chain_id, "client-sub", self(), key)
+    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+
+    GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(10), 1})
+    assert_receive {:subscription_event, _}
+    GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
+    assert_receive :backfill_waiting
+
+    assert :ok =
+             StreamCoordinator.upstream_event(
+               profile,
+               chain_id,
+               key,
+               "ws-new",
+               "sub-new",
+               new_head(11),
+               2
+             )
+
+    await_state(pid, &(&1.failover_context.event_buffer_count == 1))
+    assert ContinuityBudget.stats(budget).stream_bytes > 0
+
+    assert :ok =
+             StreamCoordinator.upstream_event(
+               profile,
+               chain_id,
+               key,
+               "ws-new",
+               "sub-new",
+               Map.put(new_head(12), "extra", String.duplicate("x", 600)),
+               3
+             )
+
+    assert_receive {:subscription_terminated, "client-sub", :continuity_exhausted}
+    assert await_state(pid, &(&1.failover_status == :degraded)).state.markers.last_block_num == 10
+    assert ContinuityBudget.stats(budget).stream_bytes == 0
   end
 
   test "an abnormal coordinator death is observed through the execution scope" do
