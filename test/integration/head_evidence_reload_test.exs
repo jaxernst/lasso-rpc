@@ -22,8 +22,15 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
 
       result =
         case request["method"] do
-          "eth_chainId" -> "0x" <> Integer.to_string(opts[:chain_id], 16)
-          _ -> opts[:result]
+          "eth_chainId" ->
+            "0x" <> Integer.to_string(opts[:chain_id], 16)
+
+          "eth_blockNumber" ->
+            height = Agent.get(opts[:heights], &Map.fetch!(&1, opts[:result]))
+            "0x" <> Integer.to_string(height, 16)
+
+          _ ->
+            opts[:result]
         end
 
       send_resp(
@@ -45,12 +52,24 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
       "---\nname: Public\nslug: public\n---\nchains: {}\n"
     )
 
+    heights =
+      start_supervised!({Agent, fn -> %{"behind" => 90, "peer-a" => 100, "peer-b" => 100} end})
+
     endpoints =
       Map.new(["behind", "peer-a", "peer-b"], fn provider ->
         ref = {:head_reload, provider, chain_id}
 
         {:ok, _} =
-          Plug.Cowboy.http(Upstream, [chain_id: chain_id, result: provider], ref: ref, port: 0)
+          Plug.Cowboy.http(
+            Upstream,
+            [
+              chain_id: chain_id,
+              heights: heights,
+              result: provider
+            ],
+            ref: ref,
+            port: 0
+          )
 
         {provider, {ref, :ranch.get_port(ref)}}
       end)
@@ -95,10 +114,17 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert snapshot.qualification == :qualified
     assert {:ok, reference} = HeadSnapshot.reference(snapshot)
 
-    assert :ok =
-             Registry.put_height(chain_id, ids["behind"], 90, :http, %{
-               poll_references: [%{reference | captured_at_ms: System.system_time(:millisecond)}]
-             })
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      match?(
+        {:ok, %{height: 90, poll_references: [_ | _]}},
+        Registry.get_observation(chain_id, ids["behind"], :http)
+      )
+    end)
+
+    assert {:ok, %{poll_references: [%{scope_id: scope_id} | _]}} =
+             Registry.get_observation(chain_id, ids["behind"], :http)
+
+    assert scope_id == reference.scope_id
 
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :lagging
     assert_routed_to(slug, chain_id, "peer-a")
@@ -129,7 +155,12 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert {:ok, recovered} = HeadEvidence.snapshot(slug, chain_id)
     assert recovered.qualification == :qualified
     assert recovered.reference_height == 100
-    assert :ok = Registry.put_height(chain_id, ids["behind"], 100, :http)
+    Agent.update(heights, &Map.put(&1, "behind", 100))
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      match?({:ok, %{height: 100}}, Registry.get_observation(chain_id, ids["behind"], :http))
+    end)
+
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :synced
     assert_routed_to(slug, chain_id, "behind")
   end
@@ -141,12 +172,17 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
   end
 
   defp request(profile, chain_id) do
-    RequestPipeline.execute_via_channels(chain_id, "eth_blockNumber", [], %RequestOptions{
-      profile: profile,
-      strategy: :priority,
-      transport: :http,
-      timeout_ms: 5_000
-    })
+    RequestPipeline.execute_via_channels(
+      chain_id,
+      "eth_getBalance",
+      ["0x0000000000000000000000000000000000000000", "latest"],
+      %RequestOptions{
+        profile: profile,
+        strategy: :priority,
+        transport: :http,
+        timeout_ms: 5_000
+      }
+    )
   end
 
   defp write_profile(root, slug, chain_id, endpoints, provider_names) do
@@ -169,7 +205,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
         chain_id: #{chain_id}
         block_time_ms: 1000
         monitoring:
-          probe_interval_ms: 60000
+          probe_interval_ms: 200
         selection:
           max_lag_blocks: 2
         providers:
