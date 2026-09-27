@@ -413,9 +413,18 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
 
   defp canonical_application_error_category(:rate_limit), do: :quota
   defp canonical_application_error_category(:local_capacity_rejection), do: :local_safety
+  defp canonical_application_error_category(:unclassified_server_error), do: :ambiguous
+  defp canonical_application_error_category(:unknown_error), do: :ambiguous
 
   defp canonical_application_error_category(category)
-       when category in [:deterministic, :quota, :capability, :provider_failure, :local_safety],
+       when category in [
+              :deterministic,
+              :ambiguous,
+              :quota,
+              :capability,
+              :provider_failure,
+              :local_safety
+            ],
        do: category
 
   defp canonical_application_error_category(category) do

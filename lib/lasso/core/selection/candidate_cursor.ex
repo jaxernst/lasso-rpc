@@ -51,6 +51,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defstruct @enforce_keys ++
               [
                 candidate_labels: [],
+                preferred: [],
                 preferred_head_height: nil,
                 deferred_ranking: nil,
                 excluded_provider_ids: MapSet.new(),
@@ -249,17 +250,26 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   def next(%__MODULE__{} = cursor) do
     if current?(cursor) do
-      scan(cursor)
+      case cursor.preferred do
+        [channel | rest] -> return(channel, %{cursor | preferred: rest})
+        [] -> scan(cursor)
+      end
     else
       :stale
     end
   end
 
+  @doc "Restores a selected fallback ahead of the remaining candidates."
+  @spec prepend(t(), Channel.t()) :: t()
+  def prepend(cursor, channel),
+    do: %{cursor | preferred: [channel | cursor.preferred], returned: max(cursor.returned - 1, 0)}
+
   @spec exclude_provider(t(), String.t()) :: t()
   def exclude_provider(%__MODULE__{} = cursor, provider_id) when is_binary(provider_id) do
     %{
       cursor
-      | descriptors:
+      | preferred: Enum.reject(cursor.preferred, &(&1.provider_id == provider_id)),
+        descriptors:
           Enum.reject(cursor.descriptors, &(descriptor_provider_id(&1) == provider_id)),
         supported_deferred: reject_queued_provider(cursor.supported_deferred, provider_id),
         unsupported_deferred: reject_queued_provider(cursor.unsupported_deferred, provider_id),

@@ -58,6 +58,15 @@ defmodule Lasso.RPC.ExecutionProjector do
     )
   end
 
+  def project(
+        %AttemptTerminal.TransportFailure{
+          reason: :timeout,
+          identity: %{attempt_kind: :exploration}
+        },
+        1
+      ),
+      do: projection(true, :try_next_candidate, :none, :censored, :exploration_budget)
+
   def project(%AttemptTerminal.TransportFailure{} = terminal, 1) do
     breaker = if terminal.dispatch_certainty == :dispatched, do: :failure, else: :none
 
@@ -72,6 +81,9 @@ defmodule Lasso.RPC.ExecutionProjector do
       :transport_failure
     )
   end
+
+  def project(%AttemptTerminal.Deadline{identity: %{attempt_kind: :exploration}}, 1),
+    do: projection(true, :try_next_candidate, :none, :censored, :exploration_budget)
 
   def project(%AttemptTerminal.Deadline{} = terminal, 1) do
     breaker = if terminal.dispatch_certainty == :dispatched, do: :failure, else: :none
@@ -151,6 +163,12 @@ defmodule Lasso.RPC.ExecutionProjector do
 
   defp application_error_projection(:deterministic, _safety),
     do: projection(false, :return_response, :none, :application_response, :deterministic_error)
+
+  defp application_error_projection(:ambiguous, :replay_safe),
+    do: projection(true, :try_next_candidate, :none, :neutral, :ambiguous_application_error)
+
+  defp application_error_projection(:ambiguous, _safety),
+    do: projection(false, :return_response, :none, :neutral, :ambiguous_application_error)
 
   defp application_error_projection(:quota, _safety),
     do: projection(true, :try_next_candidate, :none, :capacity_signal, :upstream_quota)

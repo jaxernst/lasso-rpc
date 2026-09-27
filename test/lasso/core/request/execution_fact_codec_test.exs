@@ -95,6 +95,41 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
     end
   end
 
+  test "version two retains exploration and ambiguity while version one remains ordinary" do
+    exploration =
+      AttemptTerminal.Deadline.new(%{identity() | attempt_kind: :exploration}, :dispatched, 100)
+
+    ambiguous =
+      AttemptTerminal.Response.new(identity(), :application_error, 100,
+        error_code: -32_000,
+        error_category: :ambiguous
+      )
+
+    for fact <- [exploration, ambiguous] do
+      encoded = Codec.encode!(fact)
+
+      assert %{"version" => %{"major" => 2}, "identity" => %{"attempt_kind" => _}} =
+               Jason.decode!(encoded)
+
+      assert {:ok, ^fact} = Codec.decode(encoded)
+
+      downgraded = Jason.decode!(encoded) |> put_in(["version", "major"], 1) |> Jason.encode!()
+      assert {:error, :invalid_fact} = Codec.decode(downgraded)
+    end
+
+    ordinary = AttemptTerminal.Deadline.new(identity(), :dispatched, 100)
+
+    old_wire =
+      ordinary
+      |> Codec.encode!()
+      |> Jason.decode!()
+      |> put_in(["version", "major"], 1)
+      |> Map.update!("identity", &Map.delete(&1, "attempt_kind"))
+      |> Jason.encode!()
+
+    assert {:ok, ^ordinary} = Codec.decode(old_wire)
+  end
+
   test "version requires non-negative integer major and minor fields" do
     encoded = Codec.encode!(AttemptTerminal.Response.new(identity(), :success, 1))
     envelope = Jason.decode!(encoded)

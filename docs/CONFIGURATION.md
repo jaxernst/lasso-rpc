@@ -289,6 +289,28 @@ capabilities:
 
 When `capabilities` is omitted, defaults to permissive (only `local_only` methods blocked, no limits).
 
+## Read Exploration Policy
+
+Bounded read exploration is disabled by default. Operators may enable it in
+Elixir application configuration for adaptive routing experiments:
+
+```elixir
+config :lasso, :routing_exploration,
+  enabled: false,
+  sample_every: 100,
+  disabled_profiles: []
+```
+
+`enabled: true` opts in. `sample_every` is a positive integer denominator; 100
+samples eligible reads with 1% probability before admission and cooldown
+checks. `disabled_profiles` contains canonical file-profile IDs whose requests
+must use ordinary routing. These are operator controls, not request URL
+parameters. Fixed limits still apply: one active attempt per node/profile/
+chain/family, a one-second interval, ten-/thirty-second route cooldowns, at
+least 500 ms remaining, and a maximum attempt deadline of 100 ms or ten
+percent of the remaining request time. See [routing](ROUTING.md#bounded-read-exploration)
+for eligibility, fallback, censoring and telemetry semantics.
+
 ## Provider Credentials
 
 Use your own provider API keys alongside public providers:

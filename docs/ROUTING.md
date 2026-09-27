@@ -54,7 +54,7 @@ capacity awareness, or cluster-global balancing.
 
 Orders reliability-qualified upstream instances by recent mean successful-attempt latency. Evidence is local to the routing node and keyed by a bounded registered workload key rather than arbitrary RPC method strings.
 
-Client and system attempts use separate fixed method families: basic, state, logs, trace, transaction, and subscription. Unknown methods share one fallback partition. A successful `eth_blockNumber` read can qualify the basic family but does not qualify `eth_getBalance` or `eth_getLogs`; system observations can seed cold-start ordering in their family but cannot qualify client traffic. This partitioning does not enable exploratory attempts; routing still uses ordinary client requests until bounded exploration is separately configured and qualified.
+Client and system attempts use separate fixed method families: basic, state, logs, trace, transaction, and subscription. Unknown methods share one fallback partition. A successful `eth_blockNumber` read can qualify the basic family but does not qualify `eth_getBalance` or `eth_getLogs`; system observations can seed cold-start ordering in their family but cannot qualify client traffic. Exploration remains disabled unless an operator explicitly enables its bounded policy below.
 
 **Use When**:
 - Latency is the primary concern
@@ -92,6 +92,42 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
 
 **Configuration**:
 - `LW_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
+
+### Bounded read exploration
+
+Exploration is disabled by default. When enabled, an eligible `fastest` or
+`latency-weighted` client read may sample a different configured upstream that
+lacks qualified client evidence for the same method family. The ordinary first
+choice must already be qualified and eligible. System observations cannot
+qualify either route, and explicit capability and parameter restrictions still
+apply. Exploration learns routing latency evidence; it does not infer provider
+method support or change a file profile.
+
+Only known replay-safe unary reads can explore. Priority, load-balanced,
+provider overrides, system requests, writes, subscriptions and unknown methods
+retain ordinary routing. A request selects at most one exploratory attempt,
+which counts against Core's three-dispatch limit. At least 500 ms must remain
+before reservation. The exploration deadline is the smaller of 100 ms and ten
+percent of the remaining request budget, including admission and I/O. The
+original deadline stays in force, and the ordinary first choice remains the
+fallback. This is a capped attempt budget, not a whole-request latency promise.
+
+An exploration timeout is censored evidence and does not penalize provider
+reliability or its circuit breaker. Actual provider errors retain their normal
+attribution. Opaque server and vendor errors are ambiguous: replay-safe reads
+may fall back without a health penalty, while unsafe requests return the
+original error without replay. Each node admits at most one active exploration
+per configured profile, chain and family, at least one second apart. Route
+cooldowns are ten seconds after success and thirty seconds after other
+outcomes. Reload and route retirement remove stale reservations and cooldowns.
+
+The `[:lasso, :routing, :exploration, :selected]`, `:completed`, and `:skipped`
+telemetry events carry bounded profile, chain and workload-family metadata.
+Completed events distinguish outcome and success; skipped events include a
+bounded reason. Attempt facts retain `attempt_kind: :exploration`. The fact
+codec writes major version 2 and reads ordinary version-1 facts; version 1
+cannot express exploration or ambiguous response semantics. See
+[configuration](CONFIGURATION.md#read-exploration-policy) for opt-in settings.
 
 ### Priority
 

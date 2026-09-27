@@ -102,7 +102,14 @@ defmodule Lasso.RPC.AttemptTerminal.Response do
   alias Lasso.RPC.{AttemptIdentity, ExecutionFact}
 
   @kinds [:success, :application_error]
-  @error_categories [:deterministic, :quota, :capability, :provider_failure, :local_safety]
+  @error_categories [
+    :deterministic,
+    :ambiguous,
+    :quota,
+    :capability,
+    :provider_failure,
+    :local_safety
+  ]
   @enforce_keys [:identity, :kind, :io_duration_us]
   defstruct @enforce_keys ++ [:error_code, :error_category, :retry_after_ms]
   @type t :: %__MODULE__{}

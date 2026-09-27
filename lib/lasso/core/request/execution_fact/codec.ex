@@ -1,12 +1,12 @@
 defmodule Lasso.RPC.ExecutionFact.Codec do
-  @moduledoc "Bounded JSON codec for version-one tagged execution facts."
+  @moduledoc "Bounded JSON codec for version-two execution facts with ordinary version-one reads."
 
   alias Lasso.RPC.{AdmissionTerminal, AttemptIdentity, LateObservation}
   alias Lasso.RPC.AttemptTerminal
   alias Lasso.RPC.RequestTerminal
 
   @schema "lasso.execution-fact"
-  @major 1
+  @major 2
   @minor 0
   @max_bytes 4_096
 
@@ -34,6 +34,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
   def decode(json) when is_binary(json) and byte_size(json) <= @max_bytes do
     with {:ok, map} <- Jason.decode(json),
          :ok <- validate_envelope(map),
+         :ok <- validate_semantics(map),
          {:ok, fact} <- decode_fact(map) do
       {:ok, fact}
     else
@@ -60,9 +61,9 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
 
   defp validate_envelope(%{
          "schema" => @schema,
-         "version" => %{"major" => @major, "minor" => minor}
+         "version" => %{"major" => major, "minor" => minor}
        })
-       when is_integer(minor) and minor >= 0,
+       when major in [1, @major] and is_integer(minor) and minor >= 0,
        do: :ok
 
   defp validate_envelope(%{
@@ -73,6 +74,36 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
        do: {:error, :unsupported_major_version}
 
   defp validate_envelope(_), do: {:error, :invalid_envelope}
+
+  defp validate_semantics(%{"version" => %{"major" => major}} = map) do
+    valid? =
+      Enum.all?(attempt_maps(map), fn attempt ->
+        case attempt do
+          %{"identity" => identity} when is_map(identity) ->
+            kind = Map.get(identity, "attempt_kind")
+
+            if major == 1,
+              do: kind in [nil, "ordinary"] and Map.get(attempt, "error_category") != "ambiguous",
+              else: kind in ["ordinary", "exploration"]
+
+          _other ->
+            false
+        end
+      end)
+
+    if valid?, do: :ok, else: {:error, :invalid_fact}
+  end
+
+  defp attempt_maps(%{"stage" => "attempt"} = map), do: [map]
+
+  defp attempt_maps(%{
+         "stage" => "request",
+         "variant" => "upstream_response",
+         "attempt" => attempt
+       }),
+       do: [attempt]
+
+  defp attempt_maps(_map), do: []
 
   defp encode_fact(%AdmissionTerminal{} = fact) do
     {:ok,
@@ -206,6 +237,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       "circuit_scope" => Atom.to_string(identity.circuit_scope),
       "circuit_epoch" => identity.circuit_epoch,
       "execution_safety" => Atom.to_string(identity.execution_safety),
+      "attempt_kind" => Atom.to_string(identity.attempt_kind),
       "routing_intent" => identity.routing_intent,
       "workload_key" => identity.workload_key,
       "request_budget_ms" => identity.request_budget_ms,
@@ -373,6 +405,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       circuit_scope: circuit_scope(map["circuit_scope"]),
       circuit_epoch: map["circuit_epoch"],
       execution_safety: safety(map["execution_safety"]),
+      attempt_kind: attempt_kind(map["attempt_kind"]),
       routing_intent: map["routing_intent"],
       workload_key: map["workload_key"],
       request_budget_ms: map["request_budget_ms"],
@@ -390,6 +423,11 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       routing_intent: map["routing_intent"],
       workload_key: map["workload_key"]
     ]
+
+  defp attempt_kind(nil), do: :ordinary
+  defp attempt_kind("ordinary"), do: :ordinary
+  defp attempt_kind("exploration"), do: :exploration
+  defp attempt_kind(_other), do: raise(ArgumentError, "invalid attempt kind")
 
   defp request_common_attrs(map),
     do:
@@ -448,7 +486,14 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
           :local
         ],
         response_kind: [:success, :application_error],
-        response_category: [:deterministic, :quota, :capability, :provider_failure],
+        response_category: [
+          :deterministic,
+          :ambiguous,
+          :quota,
+          :capability,
+          :provider_failure,
+          :local_safety
+        ],
         invalid_response_reason: [
           :invalid_json,
           :invalid_envelope,

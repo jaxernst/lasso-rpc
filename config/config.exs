@@ -1,5 +1,10 @@
 import Config
 
+config :lasso, :routing_exploration,
+  enabled: false,
+  sample_every: 100,
+  disabled_profiles: []
+
 config :lasso, :block_publication_repo, Lasso.BlockPublication.Repo
 
 # Configure Phoenix

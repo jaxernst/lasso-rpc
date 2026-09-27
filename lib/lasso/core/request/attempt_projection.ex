@@ -541,6 +541,8 @@ defmodule Lasso.RPC.AttemptProjection do
         system_prior_keys,
         fastest_winner_keys
       )
+
+      Lasso.RPC.Selection.Exploration.reconcile(generation)
     end
 
     :ok

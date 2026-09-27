@@ -50,6 +50,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RequestOptions
   alias Lasso.RPC.RoutingEvidence.Workload
+  alias Lasso.RPC.Selection.Exploration
 
   # Type definitions
   @type chain_id :: pos_integer()
@@ -283,6 +284,7 @@ defmodule Lasso.RPC.RequestPipeline do
     candidates = get_channels_from_source(channel_source, ctx)
 
     {selected, remaining} = pop_candidate(candidates)
+    {selected, remaining, ctx} = maybe_explore(selected, remaining, ctx)
 
     ctx =
       RequestContext.mark_selection_end(ctx,
@@ -290,24 +292,44 @@ defmodule Lasso.RPC.RequestPipeline do
         selected: selected
       )
 
-    case request_open(ctx, caller_guard) do
-      :ok ->
-        case selected do
-          nil ->
-            handle_no_channels(ctx, selection_exhaustion_reason(candidates))
+    try do
+      case request_open(ctx, caller_guard) do
+        :ok ->
+          case selected do
+            nil ->
+              handle_no_channels(ctx, selection_exhaustion_reason(candidates))
 
-          %Channel{} = channel ->
-            ctx = RequestContext.mark_upstream_start(ctx)
-            attempt_channels({channel, remaining}, ctx, [], caller_guard)
-        end
+            %Channel{} = channel ->
+              ctx = RequestContext.mark_upstream_start(ctx)
+              attempt_channels({channel, remaining}, ctx, [], caller_guard)
+          end
 
-      {:error, :caller_abandoned} ->
-        finalize_caller_abandoned(ctx)
+        {:error, :caller_abandoned} ->
+          finalize_caller_abandoned(ctx)
 
-      {:error, :deadline_exhausted} ->
-        finalize_bounded_error(ctx, :deadline_exhausted)
+        {:error, :deadline_exhausted} ->
+          finalize_bounded_error(ctx, :deadline_exhausted)
+      end
+    after
+      Exploration.release(ctx.exploration_token)
     end
   end
+
+  defp maybe_explore(selected, remaining, ctx) do
+    case Exploration.select(selected, ctx) do
+      {:ok, exploratory, token} ->
+        remaining = prepend_candidate(remaining, selected)
+        {exploratory, remaining, %{ctx | exploration_token: token}}
+
+      :skip ->
+        {selected, remaining, ctx}
+    end
+  end
+
+  defp prepend_candidate(%CandidateCursor{} = cursor, channel),
+    do: CandidateCursor.prepend(cursor, channel)
+
+  defp prepend_candidate(channels, channel) when is_list(channels), do: [channel | channels]
 
   @spec get_channels_from_source(channel_source(), RequestContext.t()) :: candidates()
   defp get_channels_from_source(channel_source, ctx), do: channel_source.(ctx)
@@ -558,36 +580,18 @@ defmodule Lasso.RPC.RequestPipeline do
        when is_binary(instance_id) do
     breaker_id = {instance_id, channel.transport}
 
-    case CircuitBreaker.admit(breaker_id, ctx.execution_envelope.deadline_us) do
-      {:ok, receipt} ->
-        case ChainIdentity.check(instance_id, channel.transport) do
-          :ok ->
-            reserve_admitted_channel(
-              channel,
-              instance_id,
-              rest_channels,
-              ctx,
-              receipt,
-              caller_guard
-            )
-
-          {:error, :chain_identity_rejected} ->
-            abandon_unclaimed(receipt)
-
-            Logger.warning("HTTP provider chain identity rejected, skipping",
-              instance_id: instance_id,
-              request_id: ctx.request_id
-            )
-
-            ctx = RequestContext.increment_retries(ctx)
-
-            attempt_channels(
-              rest_channels,
-              %{ctx | terminal_reason: :admission_unavailable},
-              [],
-              caller_guard
-            )
+    case CircuitBreaker.admit(breaker_id, candidate_deadline(channel, ctx)) do
+      {:ok, %AdmissionReceipt{kind: :half_open} = receipt}
+      when not is_nil(ctx.exploration_token) ->
+        if Exploration.matches?(ctx.exploration_token, channel) do
+          abandon_unclaimed(receipt)
+          attempt_channels(rest_channels, ctx, [], caller_guard)
+        else
+          check_chain_identity(channel, instance_id, rest_channels, ctx, receipt, caller_guard)
         end
+
+      {:ok, receipt} ->
+        check_chain_identity(channel, instance_id, rest_channels, ctx, receipt, caller_guard)
 
       {:error, reason} ->
         handle_breaker_rejection(channel, rest_channels, ctx, reason, caller_guard)
@@ -604,6 +608,37 @@ defmodule Lasso.RPC.RequestPipeline do
     attempt_channels(rest_channels, ctx, [], caller_guard)
   end
 
+  defp check_chain_identity(channel, instance_id, rest_channels, ctx, receipt, caller_guard) do
+    case ChainIdentity.check(instance_id, channel.transport) do
+      :ok ->
+        reserve_admitted_channel(
+          channel,
+          instance_id,
+          rest_channels,
+          ctx,
+          receipt,
+          caller_guard
+        )
+
+      {:error, :chain_identity_rejected} ->
+        abandon_unclaimed(receipt)
+
+        Logger.warning("HTTP provider chain identity rejected, skipping",
+          instance_id: instance_id,
+          request_id: ctx.request_id
+        )
+
+        ctx = RequestContext.increment_retries(ctx)
+
+        attempt_channels(
+          rest_channels,
+          %{ctx | terminal_reason: :admission_unavailable},
+          [],
+          caller_guard
+        )
+    end
+  end
+
   defp reserve_admitted_channel(
          channel,
          instance_id,
@@ -614,6 +649,33 @@ defmodule Lasso.RPC.RequestPipeline do
        ) do
     reserved_at_us = System.monotonic_time(:microsecond)
 
+    if Exploration.matches?(ctx.exploration_token, channel) and
+         (not Exploration.current?(ctx.exploration_token) or
+            candidate_deadline(channel, ctx) - reserved_at_us < 25_000) do
+      abandon_unclaimed(receipt)
+      attempt_channels(rest_channels, ctx, [], caller_guard)
+    else
+      reserve_current_channel(
+        channel,
+        instance_id,
+        rest_channels,
+        ctx,
+        receipt,
+        caller_guard,
+        reserved_at_us
+      )
+    end
+  end
+
+  defp reserve_current_channel(
+         channel,
+         instance_id,
+         rest_channels,
+         ctx,
+         receipt,
+         caller_guard,
+         reserved_at_us
+       ) do
     case ExecutionEnvelope.reserve_dispatch(
            ctx.execution_envelope,
            instance_id,
@@ -622,7 +684,7 @@ defmodule Lasso.RPC.RequestPipeline do
          ) do
       {:ok, envelope, attempt_timeout_ms} ->
         attempt_deadline_us =
-          min(envelope.deadline_us, reserved_at_us + attempt_timeout_ms * 1_000)
+          min(candidate_deadline(channel, ctx), reserved_at_us + attempt_timeout_ms * 1_000)
 
         execute_owned_channel(
           channel,
@@ -638,6 +700,12 @@ defmodule Lasso.RPC.RequestPipeline do
         abandon_unclaimed(receipt)
         handle_dispatch_rejection(rest_channels, ctx, reason, caller_guard)
     end
+  end
+
+  defp candidate_deadline(channel, ctx) do
+    if Exploration.matches?(ctx.exploration_token, channel),
+      do: min(ctx.execution_envelope.deadline_us, ctx.exploration_token.attempt_deadline_us),
+      else: ctx.execution_envelope.deadline_us
   end
 
   defp execute_owned_channel(
@@ -716,6 +784,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
     ctx = commit_attempt_context(ctx, channel, identity.upstream_instance_id, outcome)
     ctx = %{ctx | terminal_attempt_projection: projection}
+
+    if Exploration.matches?(ctx.exploration_token, channel),
+      do: Exploration.complete(ctx.exploration_token, outcome.fact, qualification)
+
     handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision)
   end
 
@@ -826,6 +898,11 @@ defmodule Lasso.RPC.RequestPipeline do
       circuit_scope: :broad,
       circuit_epoch: receipt.epoch,
       execution_safety: envelope.execution_safety,
+      attempt_kind:
+        if(Exploration.matches?(ctx.exploration_token, channel),
+          do: :exploration,
+          else: :ordinary
+        ),
       routing_intent: Atom.to_string(ctx.opts.strategy),
       workload_key: origin_workload_key(ctx),
       request_budget_ms: envelope.original_timeout_ms,
