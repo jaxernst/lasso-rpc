@@ -28,6 +28,7 @@ defmodule Lasso.BlockSync.Worker do
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
   alias Lasso.Config.{ChainConfig, ConfigStore, MonitoringDefaults}
   alias Lasso.Providers.{Catalog, RestartCounter}
+  alias Lasso.RPC.Transport.WebSocket.Connection
 
   @reconnect_delay_ms 5_000
   @ws_active_poll_multiplier 3
@@ -316,7 +317,13 @@ defmodule Lasso.BlockSync.Worker do
       )
       when instance_id == state.instance_id and state.ws_strategy != nil do
     new_ws_state = WsStrategy.handle_invalidation(state.ws_strategy, reason)
-    {:noreply, %{state | ws_strategy: new_ws_state}}
+
+    state =
+      state
+      |> Map.put(:ws_strategy, new_ws_state)
+      |> handle_strategy_status(:ws, :failed)
+
+    {:noreply, state}
   end
 
   # WS reconnected
@@ -700,13 +707,22 @@ defmodule Lasso.BlockSync.Worker do
     reduce_http_polling(state)
   end
 
-  defp handle_strategy_status(state, :ws, :failed) do
+  defp handle_strategy_status(%{ws_strategy: nil} = state, :ws, :failed) do
     Logger.debug("WS subscription failed, HTTP polling continues",
       chain_id: state.chain_id,
       instance_id: state.instance_id
     )
 
     restore_http_polling(state)
+  end
+
+  defp handle_strategy_status(state, :ws, :failed) do
+    Logger.info("WS subscription invalidated, scheduling a fresh subscription",
+      chain_id: state.chain_id,
+      instance_id: state.instance_id
+    )
+
+    retire_ws_and_schedule_reconnect(state)
   end
 
   defp handle_strategy_status(state, :ws, status) when status in [:stale, :degraded] do
@@ -789,15 +805,8 @@ defmodule Lasso.BlockSync.Worker do
         nil ->
           add_ws_subscription(state)
 
-        ws_state ->
-          case WsStrategy.resubscribe(ws_state) do
-            {:ok, new_ws_state} ->
-              %{state | mode: :http_with_ws, ws_strategy: new_ws_state, ws_retry_count: 0}
-
-            {:error, _} ->
-              schedule_ws_reconnect(state.ws_retry_count)
-              %{state | ws_retry_count: state.ws_retry_count + 1}
-          end
+        _existing_strategy ->
+          state
       end
     else
       state
@@ -807,16 +816,33 @@ defmodule Lasso.BlockSync.Worker do
   defp handle_ws_disconnected(%{mode: nil} = state), do: state
 
   defp handle_ws_disconnected(state) do
+    if ws_connection_live?(state.instance_id) do
+      state
+    else
+      apply_ws_disconnected(state)
+    end
+  end
+
+  defp apply_ws_disconnected(state) do
     if state.ws_strategy do
       Logger.info("WS subscription disconnected, HTTP polling continues",
         chain_id: state.chain_id,
         instance_id: state.instance_id
       )
 
-      schedule_ws_reconnect(state.ws_retry_count)
+      retire_ws_and_schedule_reconnect(state)
+    else
+      restore_http_polling(state)
     end
+  end
 
-    restore_http_polling(state)
+  defp ws_connection_live?(instance_id) do
+    match?(
+      {:ok, {_connection_pid, _connection_id}},
+      Connection.transport_snapshot(instance_id, 250)
+    )
+  catch
+    :exit, _reason -> false
   end
 
   defp handle_manager_restarted(state) do
@@ -826,8 +852,7 @@ defmodule Lasso.BlockSync.Worker do
           %{state | ws_strategy: new_ws_state}
 
         {:error, _} ->
-          schedule_ws_reconnect(state.ws_retry_count)
-          %{state | ws_retry_count: state.ws_retry_count + 1}
+          retire_ws_and_schedule_reconnect(state)
       end
     else
       state
@@ -871,5 +896,17 @@ defmodule Lasso.BlockSync.Worker do
     exponent = min(retry_count, 4)
     delay = min(@reconnect_delay_ms * Bitwise.bsl(1, exponent), 60_000)
     Process.send_after(self(), :attempt_ws_reconnect, delay)
+  end
+
+  defp retire_ws_and_schedule_reconnect(state) do
+    retry_count = state.ws_retry_count
+
+    state =
+      state
+      |> teardown_ws_subscription()
+      |> restore_http_polling()
+
+    schedule_ws_reconnect(retry_count)
+    %{state | ws_retry_count: retry_count + 1}
   end
 end
