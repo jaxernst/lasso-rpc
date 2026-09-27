@@ -49,8 +49,9 @@ defmodule Lasso.RPC.HeadWsSourceAcceptanceTest do
       end)
     end)
 
-    assert {:ok, %{qualification: :unavailable}} = HeadEvidence.snapshot(profile, chain)
-    assert StatusHelpers.check_block_lag(chain, ids[minority], profile) == :unavailable
+    for {_provider, id} <- ids do
+      assert Registry.get_observation(chain, id, :ws) == {:error, :not_found}
+    end
 
     for {provider, hash} <- [{minority, "0xbbb"}, {majority_a, "0xaaa"}] do
       send_head(chain, provider, 100, hash)
