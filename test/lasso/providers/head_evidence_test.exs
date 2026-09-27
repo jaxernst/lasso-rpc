@@ -2,7 +2,9 @@ defmodule Lasso.Providers.HeadEvidenceTest do
   use ExUnit.Case, async: false
 
   alias Lasso.BlockSync.Registry
+  alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
+  alias Lasso.Observations.HeadComparison
   alias Lasso.Providers.{Catalog, HeadEvidence}
 
   test "current probe facts compare only the requesting profile's active upstreams" do
@@ -87,6 +89,102 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert after_removal.qualification == :uncorroborated
     assert after_removal.voter_count == 1
     assert after_removal.reference_height == 100
+  end
+
+  test "an HTTP poll retains both profile references captured before peer heads change" do
+    chain_id = System.unique_integer([:positive])
+    profile_a = "poll-a-#{chain_id}"
+    profile_b = "poll-b-#{chain_id}"
+
+    on_exit(fn ->
+      Registry.clear_chain(chain_id)
+      ConfigStore.unregister_chain_runtime(profile_a, chain_id)
+      ConfigStore.unregister_chain_runtime(profile_b, chain_id)
+      Catalog.build_from_config()
+    end)
+
+    assert :ok =
+             ConfigStore.register_chain_runtime(profile_a, chain_id, %{
+               block_time_ms: 1_000,
+               providers: [provider("shared"), provider("peer-a")]
+             })
+
+    assert :ok =
+             ConfigStore.register_chain_runtime(profile_b, chain_id, %{
+               block_time_ms: 1_000,
+               providers: [provider("shared"), provider("peer-b")]
+             })
+
+    Catalog.build_from_config()
+
+    ids_a =
+      Map.new(
+        Catalog.get_profile_providers(profile_a, chain_id),
+        &{&1.provider_id, &1.instance_id}
+      )
+
+    ids_b =
+      Map.new(
+        Catalog.get_profile_providers(profile_b, chain_id),
+        &{&1.provider_id, &1.instance_id}
+      )
+
+    shared = ids_a["shared"]
+    assert shared == ids_b["shared"]
+
+    for instance <- [shared, ids_a["peer-a"], ids_b["peer-b"]] do
+      assert :ok = Registry.put_height(chain_id, instance, 100, :ws)
+    end
+
+    assert {:ok, initial_a} = HeadEvidence.snapshot(profile_a, chain_id)
+    assert initial_a.qualification == :qualified
+
+    test_pid = self()
+
+    {:ok, strategy} =
+      HttpStrategy.start(chain_id, shared,
+        parent: self(),
+        initial_delay_ms: 0,
+        poll_interval_ms: 10_000,
+        route_resolver: fn ^shared, ^chain_id -> {:ok, profile_a, "shared"} end,
+        poll_runner: fn plan ->
+          send(test_pid, {:poll_started, self(), plan})
+          receive do: (:release -> {:ok, 99})
+        end
+      )
+
+    assert_receive {:http_strategy, :poll, ^shared, generation}
+    assert {:ok, strategy} = HttpStrategy.handle_message({:poll, generation}, strategy)
+    assert_receive {:poll_started, owner, plan}
+    assert plan.profile == profile_a
+    assert Enum.map(plan.head_references_at_poll_start, & &1.height) == [100, 100]
+
+    scope_ids = Enum.map(plan.head_references_at_poll_start, & &1.scope_id)
+    assert length(Enum.uniq(scope_ids)) == 2
+
+    assert :ok = Registry.put_height(chain_id, ids_a["peer-a"], 140, :ws)
+    assert :ok = Registry.put_height(chain_id, ids_b["peer-b"], 150, :ws)
+
+    send(owner, :release)
+    assert_receive {:http_strategy, :poll_result, ^shared, owner_id, ^owner, {:ok, 99}}
+
+    assert {:ok, strategy} =
+             HttpStrategy.handle_message(
+               {:poll_result, owner_id, owner, {:ok, 99}},
+               strategy
+             )
+
+    assert_receive {:block_height, ^shared, 99, metadata}
+    assert :ok = Registry.put_height(chain_id, shared, 99, :http, metadata)
+    assert {:ok, observation} = Registry.get_observation(chain_id, shared, :http)
+    assert observation.poll_references == plan.head_references_at_poll_start
+
+    policy = %HeadComparison.AssessmentPolicy{freshness_ms: 30_000, max_lag_blocks: 2}
+    assessment = HeadComparison.assess(initial_a, observation, policy, observation.observed_at_ms)
+    assert assessment.status == :eligible
+    assert assessment.lag == -1
+
+    HttpStrategy.stop(strategy)
   end
 
   defp provider(id) do

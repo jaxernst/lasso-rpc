@@ -25,7 +25,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Providers.Catalog
+  alias Lasso.Observations.{HeadReference, HeadSnapshot}
+  alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
 
   @default_poll_interval_ms 15_000
@@ -45,7 +46,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       :chain_id,
       :caller_pid,
       :started_at_us,
-      :deadline_us
+      :deadline_us,
+      :head_references_at_poll_start
     ]
     defstruct @enforce_keys
 
@@ -56,7 +58,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
             chain_id: pos_integer(),
             caller_pid: pid(),
             started_at_us: integer(),
-            deadline_us: integer()
+            deadline_us: integer(),
+            head_references_at_poll_start: [HeadReference.t()]
           }
   end
 
@@ -73,6 +76,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     :poll_plan,
     :poll_runner,
     :route_resolver,
+    :head_reference_resolver,
     :consecutive_failures,
     :last_height,
     :last_poll_time
@@ -92,6 +96,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
           poll_runner: (PollPlan.t() -> {:ok, non_neg_integer()} | {:error, term()}),
           route_resolver: (String.t(), pos_integer() ->
                              {:ok, String.t(), String.t()} | {:error, term()}),
+          head_reference_resolver: (String.t(), pos_integer(), integer() ->
+                                      [HeadReference.t()]),
           consecutive_failures: non_neg_integer(),
           last_height: non_neg_integer() | nil,
           last_poll_time: integer() | nil
@@ -130,7 +136,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       poll_owner_ref: nil,
       poll_plan: nil,
       poll_runner: Keyword.get(opts, :poll_runner, &run_poll/1),
-      route_resolver: Keyword.get(opts, :route_resolver, &resolve_route/2)
+      route_resolver: Keyword.get(opts, :route_resolver, &resolve_route/2),
+      head_reference_resolver: Keyword.get(opts, :head_reference_resolver, &head_references/3)
     }
 
     state = schedule_poll(state, initial_delay_ms)
@@ -298,6 +305,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   defp build_poll_plan(state, caller_pid) do
     started_at_us = System.monotonic_time(:microsecond)
+    started_at_ms = System.system_time(:millisecond)
 
     with {:ok, profile, provider_id} <-
            state.route_resolver.(state.instance_id, state.chain_id) do
@@ -309,10 +317,40 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
          chain_id: state.chain_id,
          caller_pid: caller_pid,
          started_at_us: started_at_us,
-         deadline_us: started_at_us + @default_timeout_ms * 1_000
+         deadline_us: started_at_us + @default_timeout_ms * 1_000,
+         head_references_at_poll_start:
+           state.head_reference_resolver.(state.instance_id, state.chain_id, started_at_ms)
        }}
     end
   end
+
+  defp head_references(instance_id, chain_id, captured_at_ms) do
+    snapshot = Catalog.snapshot()
+
+    references =
+      instance_id
+      |> Catalog.get_instance_refs()
+      |> Enum.sort()
+      |> Enum.flat_map(fn profile ->
+        with {:ok, head_snapshot} <- HeadEvidence.snapshot(profile, chain_id, captured_at_ms),
+             {:ok, reference} <- HeadSnapshot.reference(head_snapshot),
+             true <- valid_reference_time?(reference, captured_at_ms) do
+          [%{reference | captured_at_ms: captured_at_ms}]
+        else
+          _unqualified_or_stale -> []
+        end
+      end)
+
+    if snapshot && Catalog.snapshot() == snapshot &&
+         snapshot.generation == ConfigStore.route_generation(),
+       do: references,
+       else: []
+  end
+
+  defp valid_reference_time?(%HeadReference{observed_at_ms: nil}, _captured_at_ms), do: true
+
+  defp valid_reference_time?(%HeadReference{observed_at_ms: observed_at_ms}, captured_at_ms),
+    do: is_integer(observed_at_ms) and observed_at_ms <= captured_at_ms
 
   defp clear_poll_owner(state) do
     %{
@@ -332,7 +370,12 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
     case result do
       {:ok, height} ->
-        send(state.parent, {:block_height, state.instance_id, height, %{latency_ms: latency_ms}})
+        metadata = %{
+          latency_ms: latency_ms,
+          poll_references: if(plan, do: plan.head_references_at_poll_start, else: [])
+        }
+
+        send(state.parent, {:block_height, state.instance_id, height, metadata})
         write_health_success(state.instance_id)
         CircuitBreaker.signal_recovery_cast({state.instance_id, :http})
 

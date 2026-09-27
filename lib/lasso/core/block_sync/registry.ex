@@ -313,6 +313,7 @@ defmodule Lasso.BlockSync.Registry do
       block_timestamp: Map.get(metadata, :timestamp),
       latency_ms: Map.get(metadata, :latency_ms),
       sample_interval_ms: Map.get(metadata, :optimistic_credit_ms),
+      poll_references: Map.get(metadata, :poll_references, []),
       attributes: metadata
     }
 
