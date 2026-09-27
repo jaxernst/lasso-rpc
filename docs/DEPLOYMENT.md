@@ -325,6 +325,21 @@ the RPC call above to check the route you serve. The examples cover a single
 node. For multiple nodes, terminate TLS and authentication at the shared proxy
 and route each WebSocket connection to one backend for its lifetime.
 
+### Observed container footprint
+
+The [Core CI container verification run for source `f818a2e9`](https://github.com/jaxernst/lasso-rpc/actions/runs/36308993479)
+recorded one Linux AMD64 container at **195.9 MiB memory and 1.58% CPU** in a
+73-second controlled acceptance run. The checks exercised a local
+upstream, HTTP and WebSocket RPC, readiness, scraping, reload, and container
+replacement. This is a single Docker stats snapshot on a GitHub-hosted runner,
+not peak usage, sustained throughput, or a production sizing guarantee.
+
+Measure memory and CPU with your own profile count, upstream connections,
+request and subscription mix, and traffic peaks before choosing container
+limits. The per-request and per-node byte budgets in
+[Configuration](CONFIGURATION.md) bound some retained data but are not a total
+process-memory cap.
+
 ---
 
 ## Multi-Node Clustering
