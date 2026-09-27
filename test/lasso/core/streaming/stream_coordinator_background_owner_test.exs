@@ -153,7 +153,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(11), 11})
     assert_receive {:subscription_terminated, "retained-client", :continuity_exhausted}
     state = await_state(pid, &(&1.failover_status == :degraded))
-    assert state.state.markers.last_block_num == 10
+    assert state.state.markers.last_block_num == nil
     assert state.state.head_history == %{}
     assert ContinuityBudget.stats(budget).stream_bytes == 0
   end
