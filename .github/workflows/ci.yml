@@ -120,7 +120,7 @@ jobs:
           npm test --prefix examples/logical-read
 
       - name: Run hermetic integration and publication recovery tests
-        run: mix test --include integration --include publication_db --include anvil
+        run: mix test --only integration --only publication_db --only anvil
 
       - name: Validate correlated logical-read response evidence
         run: node examples/logical-read/verify-evidence.mjs logical-read-evidence.json
