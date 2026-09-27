@@ -1,8 +1,10 @@
 defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
   use Lasso.Test.LassoIntegrationCase
 
+  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.{Error, Quantity}
+  alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.{AttemptProjection, Observability, RequestOptions, RequestPipeline, Response}
 
   setup %{chain: chain} do
@@ -31,6 +33,18 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     assert {:ok, response, _} = request(chain)
     assert result(response) == "0x65"
     assert_received {:head_request, "head", ["latest", false]}
+  end
+
+  test "one upstream head observation is not a qualified retry reference", %{chain: chain} do
+    setup_providers([%{id: "head", priority: 1, behavior: :healthy}])
+    instance_id = Catalog.lookup_instance_id("public", chain, "head")
+    assert :ok = BlockSyncRegistry.put_height(chain, instance_id, 100, :http)
+    assert {:ok, %{qualification: :uncorroborated}} = HeadEvidence.snapshot("public", chain)
+
+    serve("head", header(100))
+    assert {:ok, response, ctx} = request(chain)
+    assert result(response) == "0x64"
+    assert ctx.head_policy.reference_height == nil
   end
 
   test "a lagging latest triggers an optimistic exact-block attempt on another provider", %{
