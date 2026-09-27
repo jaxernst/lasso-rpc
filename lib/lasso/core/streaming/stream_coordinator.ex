@@ -412,8 +412,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     if state.failover_context do
       context = state.failover_context
       buffer = context.event_buffer
-      count = Map.get(context, :event_buffer_count, length(buffer))
-      bytes = Map.get(context, :event_buffer_bytes, event_buffer_bytes(buffer))
+      count = Map.get_lazy(context, :event_buffer_count, fn -> length(buffer) end)
+      bytes = Map.get_lazy(context, :event_buffer_bytes, fn -> event_buffer_bytes(buffer) end)
       payload_bytes = :erlang.external_size(payload)
 
       cond do
