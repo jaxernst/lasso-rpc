@@ -2280,8 +2280,12 @@ defmodule Lasso.Config.ConfigStore do
     # provider URL run concurrently (auth rotation scenario).
     for instance_id <- removed do
       case Map.get(old_instance_chain_ids, instance_id) do
-        nil -> :ok
-        chain_id -> Lasso.BlockSync.Supervisor.stop_worker(chain_id, instance_id)
+        nil ->
+          :ok
+
+        chain_id ->
+          Lasso.BlockSync.Supervisor.stop_worker(chain_id, instance_id)
+          Lasso.BlockSync.Registry.remove_instance(chain_id, instance_id)
       end
 
       Lasso.Providers.RestartCounter.clear({:block_sync, instance_id})

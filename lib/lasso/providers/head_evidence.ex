@@ -9,7 +9,7 @@ defmodule Lasso.Providers.HeadEvidence do
 
   alias Lasso.BlockSync.Registry
   alias Lasso.Config.ConfigStore
-  alias Lasso.Observations.{HeadComparison, HeadObservation, HeadScope, HeadSnapshot}
+  alias Lasso.Observations.{HeadComparison, HeadScope, HeadSnapshot}
   alias Lasso.Providers.Catalog
 
   @default_block_time_ms 12_000
@@ -33,28 +33,7 @@ defmodule Lasso.Providers.HeadEvidence do
 
       observations =
         Enum.flat_map(scope.instance_ids, fn instance_id ->
-          case Registry.get_height(chain_id, instance_id) do
-            {:ok, {height, observed_at_ms, transport, metadata}} ->
-              attrs = %{
-                chain_id: chain_id,
-                instance_id: instance_id,
-                transport: transport,
-                height: height,
-                observed_at_ms: observed_at_ms,
-                block_hash: metadata_value(metadata, :hash),
-                parent_hash: metadata_value(metadata, :parent_hash),
-                block_timestamp: metadata_value(metadata, :timestamp),
-                latency_ms: metadata_value(metadata, :latency_ms)
-              }
-
-              case HeadObservation.new(attrs) do
-                {:ok, observation} -> [observation]
-                {:error, _invalid_legacy_fact} -> []
-              end
-
-            {:error, :not_found} ->
-              []
-          end
+          Registry.get_observations(chain_id, instance_id)
         end)
 
       {:ok, HeadComparison.derive(scope, observations, now_ms, generation)}
@@ -76,7 +55,4 @@ defmodule Lasso.Providers.HeadEvidence do
       agreement_window_ms: @agreement_window_ms
     }
   end
-
-  defp metadata_value(metadata, key) when is_map(metadata), do: Map.get(metadata, key)
-  defp metadata_value(_metadata, _key), do: nil
 end

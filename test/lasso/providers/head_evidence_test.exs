@@ -43,8 +43,22 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert empty.qualification == :unavailable
 
     assert :ok = Registry.put_height(chain_id, ids_a["a"], 100, :http)
+    assert :ok = Registry.put_height(chain_id, ids_a["a"], 100, :ws, %{hash: "0xabc"})
     assert :ok = Registry.put_height(chain_id, ids_a["b"], 100, :ws, %{hash: "0xabc"})
     assert :ok = Registry.put_height(chain_id, other.instance_id, 200, :http)
+
+    assert Enum.map(Registry.get_observations(chain_id, ids_a["a"]), & &1.transport) ==
+             [:http, :ws]
+
+    for height <- 101..164 do
+      assert :ok = Registry.put_height(chain_id, ids_a["a"], height, :http)
+    end
+
+    assert length(Registry.get_observations(chain_id, ids_a["a"])) == 2
+    assert {:ok, ws_fact} = Registry.get_observation(chain_id, ids_a["a"], :ws)
+    assert ws_fact.height == 100
+
+    assert :ok = Registry.put_height(chain_id, ids_a["a"], 100, :http)
 
     assert {:ok, public} = HeadEvidence.snapshot(profile_a, chain_id)
     assert public.qualification == :qualified
@@ -65,7 +79,9 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     refute public.scope_id == private.scope_id
 
     assert :ok = ConfigStore.unregister_provider_runtime(profile_a, chain_id, "b")
-    Catalog.build_from_config()
+    assert :ok = Lasso.RPC.ChainSupervisor.remove_provider(profile_a, chain_id, "b", ids_a["b"])
+    assert Registry.get_observations(chain_id, ids_a["b"]) == []
+    assert Registry.get_height(chain_id, ids_a["b"]) == {:error, :not_found}
 
     assert {:ok, after_removal} = HeadEvidence.snapshot(profile_a, chain_id)
     assert after_removal.qualification == :uncorroborated

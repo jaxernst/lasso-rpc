@@ -10,6 +10,7 @@ defmodule Lasso.BlockSync.Registry do
 
   Keys are tuples for efficient lookups:
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
+  - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
 
   ## Freshness
@@ -25,10 +26,12 @@ defmodule Lasso.BlockSync.Registry do
 
   alias Lasso.BlockSync.ObservationProjection
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
+  alias Lasso.Observations.HeadObservation
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
   @cache_retries 4
+  @observation_retries 4
 
   ## Client API
 
@@ -48,6 +51,7 @@ defmodule Lasso.BlockSync.Registry do
              is_integer(height) do
     timestamp = System.system_time(:millisecond)
     :ets.insert(@table, {{:height, chain_id, provider_id}, {height, timestamp, source, metadata}})
+    store_observation(chain_id, provider_id, height, timestamp, source, metadata)
 
     update_block_time(chain_id, height)
     revision = next_consensus_revision(chain_id)
@@ -69,6 +73,30 @@ defmodule Lasso.BlockSync.Registry do
       [{_key, value}] -> {:ok, value}
       [] -> {:error, :not_found}
     end
+  end
+
+  @doc "Get the latest valid head fact for one upstream transport."
+  @spec get_observation(pos_integer(), String.t(), :http | :ws) ::
+          {:ok, HeadObservation.t()} | {:error, :not_found}
+  def get_observation(chain_id, provider_id, transport)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) and
+             transport in [:http, :ws] do
+    case :ets.lookup(@table, {:head_observation, chain_id, provider_id, transport}) do
+      [{_key, %HeadObservation{} = observation}] -> {:ok, observation}
+      [] -> {:error, :not_found}
+    end
+  end
+
+  @doc "Get at most one current HTTP and WebSocket fact for an upstream."
+  @spec get_observations(pos_integer(), String.t()) :: [HeadObservation.t()]
+  def get_observations(chain_id, provider_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
+    Enum.flat_map([:http, :ws], fn transport ->
+      case get_observation(chain_id, provider_id, transport) do
+        {:ok, observation} -> [observation]
+        {:error, :not_found} -> []
+      end
+    end)
   end
 
   @doc """
@@ -213,8 +241,21 @@ defmodule Lasso.BlockSync.Registry do
   @spec clear_chain(pos_integer()) :: :ok
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
+    :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
+    :ok
+  end
+
+  @doc "Remove retained head facts after the final profile releases an upstream."
+  @spec remove_instance(pos_integer(), String.t()) :: :ok
+  def remove_instance(chain_id, provider_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
+    :ets.delete(@table, {:height, chain_id, provider_id})
+    :ets.delete(@table, {:head_observation, chain_id, provider_id, :http})
+    :ets.delete(@table, {:head_observation, chain_id, provider_id, :ws})
+    revision = next_consensus_revision(chain_id)
+    refresh_consensus_cache(chain_id, System.system_time(:millisecond), revision)
     :ok
   end
 
@@ -258,6 +299,59 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   ## Private Functions
+
+  defp store_observation(chain_id, provider_id, height, timestamp, transport, metadata)
+       when transport in [:http, :ws] and is_map(metadata) do
+    attrs = %{
+      chain_id: chain_id,
+      instance_id: provider_id,
+      height: height,
+      observed_at_ms: timestamp,
+      transport: transport,
+      block_hash: Map.get(metadata, :hash),
+      parent_hash: Map.get(metadata, :parent_hash),
+      block_timestamp: Map.get(metadata, :timestamp),
+      latency_ms: Map.get(metadata, :latency_ms),
+      sample_interval_ms: Map.get(metadata, :optimistic_credit_ms),
+      attributes: metadata
+    }
+
+    case HeadObservation.new(attrs) do
+      {:ok, observation} ->
+        key = {:head_observation, chain_id, provider_id, transport}
+        store_newer_observation(key, observation, @observation_retries)
+
+      {:error, _invalid_legacy_fact} ->
+        :ok
+    end
+  end
+
+  defp store_observation(_chain_id, _provider_id, _height, _timestamp, _transport, _metadata),
+    do: :ok
+
+  defp store_newer_observation(key, %HeadObservation{} = observation, retries)
+       when retries > 0 do
+    case :ets.lookup(@table, key) do
+      [{^key, %HeadObservation{observed_at_ms: current_at_ms}}]
+      when current_at_ms > observation.observed_at_ms ->
+        :ok
+
+      [{^key, %HeadObservation{}} = current] ->
+        updated = {key, observation}
+
+        case :ets.select_replace(@table, [{current, [], [{:const, updated}]}]) do
+          1 -> :ok
+          0 -> store_newer_observation(key, observation, retries - 1)
+        end
+
+      [] ->
+        if :ets.insert_new(@table, {key, observation}),
+          do: :ok,
+          else: store_newer_observation(key, observation, retries - 1)
+    end
+  end
+
+  defp store_newer_observation(_key, _observation, 0), do: :ok
 
   defp refresh_consensus_cache(chain_id, now_ms, revision) do
     case select_current_samples(chain_id, nil, now_ms) do

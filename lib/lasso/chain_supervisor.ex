@@ -172,6 +172,7 @@ defmodule Lasso.RPC.ChainSupervisor do
       BlockSync.Supervisor.stop_worker(chain_id, instance_id)
       stop_instance_supervisor(instance_id)
       InstanceState.clear(instance_id)
+      Lasso.BlockSync.Registry.remove_instance(chain_id, instance_id)
     end
 
     if Catalog.list_instances_for_chain(chain_id) == [] do
