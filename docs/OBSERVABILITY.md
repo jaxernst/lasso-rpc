@@ -136,12 +136,19 @@ credential value is retained in the alert.
 
 ## Block freshness
 
-Provider synchronization derives from timestamped block observations in ETS.
-HTTP observations may receive bounded time-alignment credit up to one polling
-interval; WebSocket observations remain direct evidence. Stale evidence is
-excluded, and consensus does not advance beyond an observed upstream height.
-See [Configuration](CONFIGURATION.md) for probe intervals, routing lag limits,
-and the dashboard lag status threshold.
+The local registry retains the latest HTTP and WebSocket head fact per physical
+upstream. A profile snapshot gives each active upstream one vote. It qualifies a
+reference only when at least two upstreams agree and form a strict majority;
+the reference is an observed height, not a projected or final block. HTTP lag
+uses the reference captured when its poll began, while WebSocket lag uses the
+current qualified reference. Missing, stale, conflicting, or wrong-profile
+evidence is unknown. The dashboard calls a provider lagging only when every
+assessable transport exceeds its threshold. Request routing uses the same
+transport assessment when `selection.max_lag_blocks` is set, but preserves all
+candidates if every route would be filtered. This local evidence does not prove
+fleet-wide agreement. See [Configuration](CONFIGURATION.md) for the operator
+knobs and [Architecture](ARCHITECTURE.md#block-height-monitoring) for the
+comparison rules.
 
 ## Block protection metadata
 

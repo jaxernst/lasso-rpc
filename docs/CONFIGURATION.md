@@ -81,7 +81,7 @@ chains:
 | `chain_id` | integer | Yes | EIP-155 chain ID |
 | `name` | string | No | Display name (defaults to chain key) |
 | `head_policy` | string | No | `off` (default), `local` (one running instance), or `global` ([durable fleet setup](BLOCK_CONTINUITY_OPERATIONS.md)). Covers block choice, not automatic pinning of state reads. |
-| `block_time_ms` | integer | No | Average block time in milliseconds. Used for optimistic lag calculation |
+| `block_time_ms` | integer | No | Average block time in milliseconds. Sets the bounded profile-head reference window and supports legacy chain-wide time alignment. |
 
 ### HTTP chain identity
 
@@ -106,7 +106,7 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `probe_interval_ms` | integer | 12000 | Health check polling interval. Set to ~1x block time for L1, ~2.5x for L2 |
-| `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold; this setting does not emit lag warning logs |
+| `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold for qualified profile-scoped transport evidence; this setting does not emit lag warning logs. |
 
 ### Selection
 
@@ -114,7 +114,7 @@ Controls provider eligibility filtering during request routing.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_lag_blocks` | integer | unset | Exclude providers lagging more than N blocks. L1: 1-2, L2: 3-10 |
+| `max_lag_blocks` | integer | unset | Filter HTTP/WS routes proven more than N blocks behind a qualified profile reference. Missing or ambiguous evidence stays eligible; if all routes lag, Core keeps them for availability. |
 | `archival_threshold` | integer | 128 | Blocks before data is considered "archival". Requests for blocks older than `head - threshold` are only routed to archival providers |
 
 ### WebSocket

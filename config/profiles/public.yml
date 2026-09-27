@@ -23,7 +23,7 @@ chains:
     # Type: string | Optional | Default: <chain_key>
     name: "Ethereum Mainnet"
 
-    # (Optional) Average block time in milliseconds, supplements optimistic lag calculation.
+    # (Optional) Average block time in milliseconds for bounded head comparison.
     block_time_ms: 12000
 
     # Health monitoring: Probe intervals and lag detection
@@ -33,7 +33,7 @@ chains:
 
     # Provider selection: Eligibility filtering
     selection:
-      max_lag_blocks: 1 # Exclude providers lagging more than this (L1: 1-2, L2: 3-5)
+      max_lag_blocks: 1 # Filter proven-lagging routes; unknown/all-lagging paths stay available.
       archival_threshold: 128 # Blocks before considering data "archival" (~25 min on Ethereum)
 
     # WebSocket subscriptions: newHeads tracking and failover

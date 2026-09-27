@@ -421,7 +421,7 @@ Lasso tracks blockchain state using HTTP polling as a reliable foundation with o
 **HTTP Polling** (Always Running):
 
 - Bounded observation delay (`probe_interval_ms`)
-- Enables optimistic lag calculation with known staleness
+- Captures available reference evidence before HTTP polls
 - Resilient to WebSocket failures
 
 **WebSocket Subscription** (Optional):
@@ -455,76 +455,53 @@ Per-provider GenServer managing block height tracking:
 
 **BlockSync.Registry** (`Lasso.BlockSync.Registry`)
 
-Centralized ETS-based block height storage:
+The local ETS registry keeps the compatibility latest-height row and at most one
+validated HTTP fact and one validated WebSocket fact per physical upstream.
+The HTTP fact carries any qualified profile references captured before that
+poll began. Removing the final profile reference to an upstream clears its
+retained facts; a profile reload does not leave a removed upstream voting.
 
-```elixir
-# Registry key structure
-{:height, chain, provider_id} => {height, timestamp, source, metadata}
+**Profile-scoped reference** (`Lasso.Providers.HeadEvidence` and
+`Lasso.Observations.HeadComparison`)
 
-# Example
-{:height, "arbitrum", "drpc"} => {421_535_503, 1736894871234, :http, %{latency_ms: 45}}
-```
+A snapshot contains only the active physical upstreams for one `(profile,
+chain)` pair. Each upstream has one vote, even when it has both transport
+facts or is shared by several profiles. Recent WebSocket evidence represents
+an upstream when it is close enough to the latest observation; otherwise the
+latest fact does. The comparison aligns observation times only to decide
+whether votes agree. Its reference height always comes from a concrete
+upstream observation, never from a projected block.
 
-- Single source of truth for height data
-- Both HTTP and WS write to same key (last write wins)
-- <1ms lookups for lag calculations
-- Supports consensus height derivation
+At least two agreeing upstreams and a strict majority of current voters are
+required for a **qualified** reference. A single voter is uncorroborated;
+conflicting heads are ambiguous, and no voters means unavailable. The
+reference freshness window is bounded from the configured `block_time_ms`
+(30–60 seconds), with a
+2-second agreement window. These are local observations, not fork finality or
+fleet-wide consensus.
 
-### Dynamic Block Time Measurement
+**Request and operator assessment**
 
-**BlockTimeMeasurement** (`Lasso.Core.BlockSync.BlockTimeMeasurement`)
+When `selection.max_lag_blocks` is set, selection captures one profile snapshot
+for the request and assesses HTTP and WebSocket routes separately. HTTP lag
+uses that poll's reference captured before its request;
+WebSocket lag uses the current qualified reference. A stale fact, missing
+poll reference, wrong scope, or unqualified snapshot is **unknown**, not a
+lagging verdict. Only a route proven beyond the threshold is filtered. If
+filtering would remove every route, Core preserves the candidates for
+standalone availability; the limit is therefore a preference, not a strict
+freshness guarantee. The dashboard uses the same transport assessment with
+`monitoring.lag_alert_threshold_blocks`. For its lag component, any eligible
+transport means synced; all assessable transports must lag before it reports
+lagging. Circuit, rate-limit, and connection states still affect overall
+provider status.
 
-Derives per-chain block intervals using Exponential Moving Average (EMA) for optimistic lag calculation:
-
-```elixir
-@ema_alpha 0.15        # Adapts in ~10-15 samples
-@min_block_time_ms 50  # Floor: filters multi-provider convergence noise
-@max_block_time_ms 60_000  # Ceiling: rejects chain halts
-@min_samples 5         # Warmup threshold
-```
-
-**Algorithm**:
-
-1. On height update: calculate `interval = elapsed_ms / blocks_advanced`
-2. If `min <= interval <= max`: update EMA
-3. After 5 samples: prefer dynamic measurement over config
-
-EMA adapts to variable block production (e.g., Arbitrum's 100ms-5s range) while smoothing noise.
-
-### Consensus Height Derivation
-
-Consensus height is the P75 of fresh provider observations. Freshness follows each worker's effective HTTP poll or WebSocket liveness window; callers can still supply an explicit override. With 4+ providers, P75 filters out an ahead-running outlier. With 1–3 providers, it is the maximum height.
-
-Before computing P75, HTTP samples are time-aligned toward the highest actually observed height using the measured block time and no more than one effective polling interval of advancement. WebSocket samples remain direct observations and are never projected. No aligned sample can exceed a height that was genuinely observed, so a single implausible head remains bounded by the percentile calculation.
-
-### Optimistic Lag Calculation
-
-Compensates for bounded HTTP observation delay on fast chains to prevent false lag detection. Stale evidence is unavailable for routing, and WebSocket observations receive no inferred advancement.
-
-**Algorithm**:
-
-```elixir
-elapsed_ms = now - timestamp
-block_time_ms = Registry.get_block_time_ms(chain) || config.block_time_ms
-credit_window_ms = observation.optimistic_credit_ms || div(observation.stale_after_ms, 3)
-staleness_credit = min(div(elapsed_ms, block_time_ms), div(credit_window_ms, block_time_ms))
-optimistic_height = min(height + staleness_credit, consensus_height)
-optimistic_lag = optimistic_height - consensus_height
-```
-
-**Example** (Arbitrum - 250ms blocks, 2s poll):
-
-```
-reported_height: 421,535,503
-consensus_height: 421,535,511
-raw_lag: -8 blocks
-
-elapsed: 2000ms → credit: 2000/250 = 8 blocks
-optimistic_height: 421,535,503 + 8 = 421,535,511
-optimistic_lag: 0 blocks
-```
-
-The worker stores the effective freshness and advancement windows with every observation. This keeps selection, consensus, and dashboard projections on the same contract without adding database or network work to request routing.
+The older chain-wide `ChainState.consensus_height/1` remains available for
+historical request analysis and compatibility callers. It derives a P75
+height from fresh observations (maximum with fewer than four providers),
+with bounded time alignment for HTTP samples. `BlockTimeMeasurement` tracks
+a dynamic interval for that older optimistic calculation. This chain-wide
+height does not qualify a profile-scoped routing or dashboard lag verdict.
 
 ### Health Probing
 
