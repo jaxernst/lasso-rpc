@@ -205,6 +205,9 @@ instead of starting with a broken provider. Declare
 methods, log-range limits, and pruning depth so Lasso routes around them. From a
 source checkout, `mix lasso.probe <provider_url>` tests a provider's method
 support, limits, and WebSocket subscriptions and recommends capability settings.
+It reports `eth_sendRawTransaction` and `eth_sendTransaction` as unverifiable:
+an invalid payload cannot prove support, and discovery never submits a real
+transaction. Test transaction behavior with your own controlled workload.
 
 Recreate the container after adding a profile:
 
