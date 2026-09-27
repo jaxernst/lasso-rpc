@@ -28,6 +28,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   alias Lasso.Core.Streaming.{
     ClientSubscriptionRegistry,
+    InstanceEventBus,
     InstanceSubscriptionManager,
     InstanceSubscriptionRegistry,
     ReplayWindow,
@@ -103,8 +104,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   @impl true
   def init({profile, chain_id}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.provider_event(profile, chain_id))
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_connection(profile, chain_id))
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_sub_manager_restarted(chain_id))
+    InstanceEventBus.subscribe(Lasso.Topics.ws_connection(profile, chain_id))
+    InstanceEventBus.subscribe(Lasso.Topics.instance_sub_manager_restarted(chain_id))
 
     {dedupe_cfg, max_backfill_blocks, backfill_timeout} =
       case ConfigStore.get_chain(profile, chain_id) do

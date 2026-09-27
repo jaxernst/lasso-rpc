@@ -117,14 +117,12 @@ defmodule Lasso.Testing.MockWSProvider do
       connection_id =
         "conn_mock_" <> (:crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower))
 
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
+      Lasso.Core.Streaming.InstanceEventBus.broadcast(
         Lasso.Topics.ws_connection(profile, chain_id),
         {:ws_connected, provider_id, connection_id}
       )
 
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
+      Lasso.Core.Streaming.InstanceEventBus.broadcast(
         Lasso.Topics.ws_conn_instance(instance_id),
         {:ws_connected, instance_id, connection_id}
       )

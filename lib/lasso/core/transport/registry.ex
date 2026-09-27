@@ -377,7 +377,7 @@ defmodule Lasso.RPC.TransportRegistry do
       capabilities: %{}
     }
 
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_connection(profile, chain_id))
+    Lasso.Core.Streaming.InstanceEventBus.subscribe(Lasso.Topics.ws_connection(profile, chain_id))
 
     {:ok, state}
   end

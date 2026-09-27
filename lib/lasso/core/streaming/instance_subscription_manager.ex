@@ -24,7 +24,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   require Logger
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Core.Streaming.InstanceSubscriptionRegistry
+  alias Lasso.Core.Streaming.{InstanceEventBus, InstanceSubscriptionRegistry}
   alias Lasso.Events.Subscription
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.Response
@@ -104,13 +104,12 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
   @impl true
   def init({chain_id, instance_id}) do
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_subs_instance(instance_id))
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_conn_instance(instance_id))
+    InstanceEventBus.subscribe(Lasso.Topics.ws_subs_instance(instance_id))
+    InstanceEventBus.subscribe(Lasso.Topics.ws_conn_instance(instance_id))
 
     Process.send_after(self(), :cleanup_check, @cleanup_interval_ms)
 
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
+    InstanceEventBus.broadcast(
       Lasso.Topics.instance_sub_manager_restarted(chain_id),
       {:instance_sub_manager_restarted, instance_id}
     )

@@ -70,7 +70,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   use GenServer, restart: :permanent
   require Logger
 
-  alias Lasso.Core.Streaming.{Ingress, InstanceSubscriptionManager}
+  alias Lasso.Core.Streaming.{Ingress, InstanceEventBus, InstanceSubscriptionManager}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
@@ -2627,15 +2627,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp broadcast_conn_event(state, event_builder) when is_function(event_builder, 1) do
     for {profile, provider_id} <- profile_provider_refs(state) do
-      Phoenix.PubSub.broadcast(
-        Lasso.PubSub,
+      InstanceEventBus.broadcast(
         Lasso.Topics.ws_connection(profile, state.endpoint.chain_id),
         event_builder.(provider_id)
       )
     end
 
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
+    InstanceEventBus.broadcast(
       Lasso.Topics.ws_conn_instance(state.instance_id),
       event_builder.(state.instance_id)
     )

@@ -27,6 +27,7 @@ defmodule Lasso.BlockSync.Worker do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
   alias Lasso.Config.{ConfigStore, MonitoringDefaults, ObservationConfig}
+  alias Lasso.Core.Streaming.InstanceEventBus
   alias Lasso.Observations.HeadObservation
   alias Lasso.Providers.{Catalog, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.WebSocket.Connection
@@ -127,12 +128,9 @@ defmodule Lasso.BlockSync.Worker do
       Lasso.Topics.instance_config_updated(state.instance_id)
     )
 
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.ws_conn_instance(state.instance_id))
+    InstanceEventBus.subscribe(Lasso.Topics.ws_conn_instance(state.instance_id))
 
-    Phoenix.PubSub.subscribe(
-      Lasso.PubSub,
-      Lasso.Topics.instance_sub_manager_restarted(state.chain_id)
-    )
+    InstanceEventBus.subscribe(Lasso.Topics.instance_sub_manager_restarted(state.chain_id))
 
     {config, auth_scope, last_emitted_coalesced} =
       load_config_with_telemetry(state.instance_id, state.chain_id, nil, nil)
