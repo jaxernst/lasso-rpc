@@ -2,7 +2,7 @@ defmodule Lasso.Config.EffectiveRuntimePolicyTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Core.Streaming.StreamCoordinator
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, StreamCoordinator}
   alias Lasso.Testing.MockWSProvider
 
   test "supervised instance circuit breakers consume application thresholds" do
@@ -48,6 +48,7 @@ defmodule Lasso.Config.EffectiveRuntimePolicyTest do
     chain = 9_000_000 + System.unique_integer([:positive])
     owner = self()
     :ok = ConfigStore.register_chain_runtime("public", chain, %{providers: []})
+    start_supervised!({ClientSubscriptionRegistry, {"public", chain}})
 
     on_exit(fn ->
       Lasso.ProfileChainSupervisor.stop_profile_chain("public", chain)

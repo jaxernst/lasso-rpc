@@ -128,10 +128,10 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
     GenServer.call(via(profile, chain_id), {:list_by_key, key})
   end
 
-  @spec dispatch(String.t(), pos_integer(), key, map()) :: :ok
+  @spec dispatch(String.t(), pos_integer(), key, map()) :: :ok | {:error, atom()}
   def dispatch(profile, chain_id, key, payload)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    GenServer.cast(via(profile, chain_id), {:dispatch, key, payload})
+    Lasso.Core.Streaming.Ingress.send(via(profile, chain_id), {:dispatch, key, payload}, :cast)
   end
 
   @spec terminate(String.t(), pos_integer(), key, term()) :: :ok
@@ -205,6 +205,10 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
   end
 
   @impl true
+  def handle_cast({:stream_ingress, token, message}, state) do
+    Lasso.Core.Streaming.Ingress.consume(token, fn -> handle_cast(message, state) end)
+  end
+
   def handle_cast({:dispatch, key, payload}, state) do
     ids = Map.get(state.by_key, key, [])
 

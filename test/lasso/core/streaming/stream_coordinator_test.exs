@@ -15,7 +15,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureLog
 
-  alias Lasso.Core.Streaming.StreamCoordinator
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, StreamCoordinator}
 
   # Test helpers for event creation
   defp new_heads_event(block_num) do
@@ -135,6 +135,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 10]
 
+      start_supervised!({ClientSubscriptionRegistry, {"public", chain}})
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> stop_if_alive(pid) end)
@@ -526,6 +527,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       key = {:newHeads}
       opts = [primary_provider_id: "provider_1", max_event_buffer: 3]
 
+      start_supervised!({ClientSubscriptionRegistry, {"public", chain}})
       {:ok, pid} = StreamCoordinator.start_link({"public", chain, key, opts})
 
       on_exit(fn -> stop_if_alive(pid) end)

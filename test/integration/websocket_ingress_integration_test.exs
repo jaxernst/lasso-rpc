@@ -1,7 +1,13 @@
 defmodule Lasso.Integration.WebSocketIngressTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Streaming.{Ingress, InstanceSubscriptionRegistry, StreamCoordinator}
+  alias Lasso.Core.Streaming.{
+    ClientSubscriptionRegistry,
+    Ingress,
+    InstanceSubscriptionRegistry,
+    StreamCoordinator
+  }
+
   alias Lasso.RPC.Transport.WebSocket.Handler
 
   test "a stalled upstream connection owner cannot accumulate unbounded frames" do
@@ -98,6 +104,39 @@ defmodule Lasso.Integration.WebSocketIngressTest do
 
     :ok = :sys.resume(pid)
     :sys.get_state(pid)
+    assert Ingress.stats().messages == before.messages
+  end
+
+  test "client fanout saturation terminates continuity without advancing the stream marker" do
+    profile = "client-ingress-#{System.unique_integer([:positive])}"
+    key = {:newHeads}
+    registry = start_supervised!({ClientSubscriptionRegistry, {profile, 1}})
+
+    coordinator =
+      start_supervised!({StreamCoordinator, {profile, 1, key, primary_provider_id: "upstream"}})
+
+    initial_stream = :sys.get_state(coordinator).state
+    :ok = :sys.suspend(registry)
+    on_exit(fn -> if Process.alive?(registry), do: :sys.resume(registry) end)
+    before = Ingress.stats()
+    payload = %{"hash" => "0x1", "number" => "0x1"}
+
+    for _ <- 1..128 do
+      assert :ok = ClientSubscriptionRegistry.dispatch(profile, 1, key, payload)
+    end
+
+    assert {:error, :owner_messages} =
+             ClientSubscriptionRegistry.dispatch(profile, 1, key, payload)
+
+    assert :ok = StreamCoordinator.upstream_event(profile, 1, key, "upstream", nil, payload, 1)
+
+    state = :sys.get_state(coordinator)
+    assert state.failover_status == :degraded
+    assert state.state == initial_stream
+    assert Ingress.stats().messages == before.messages + 128
+
+    :ok = :sys.resume(registry)
+    :sys.get_state(registry)
     assert Ingress.stats().messages == before.messages
   end
 end

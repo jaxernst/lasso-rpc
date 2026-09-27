@@ -344,27 +344,38 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   # Internal implementation
 
   defp process_event_normal(state, payload) do
-    case subscription_key(state.key) do
-      {:newHeads} ->
-        case StreamState.ingest_new_head(state.state, payload) do
-          {stream_state, :emit} ->
-            ClientSubscriptionRegistry.dispatch(state.profile, state.chain_id, state.key, payload)
-            {:noreply, %{state | state: stream_state}}
-
-          {stream_state, :skip} ->
-            {:noreply, %{state | state: stream_state}}
+    case ingest_event(state.state, state.key, payload) do
+      {stream_state, :emit} ->
+        case ClientSubscriptionRegistry.dispatch(
+               state.profile,
+               state.chain_id,
+               state.key,
+               payload
+             ) do
+          :ok -> {:noreply, %{state | state: stream_state}}
+          {:error, reason} -> fail_client_ingress(state, reason)
         end
 
-      {:logs, _filter} ->
-        case StreamState.ingest_log(state.state, payload) do
-          {stream_state, :emit} ->
-            ClientSubscriptionRegistry.dispatch(state.profile, state.chain_id, state.key, payload)
-            {:noreply, %{state | state: stream_state}}
-
-          {stream_state, :skip} ->
-            {:noreply, %{state | state: stream_state}}
-        end
+      {stream_state, :skip} ->
+        {:noreply, %{state | state: stream_state}}
     end
+  end
+
+  defp ingest_event(stream_state, key, payload) do
+    case subscription_key(key) do
+      {:newHeads} -> StreamState.ingest_new_head(stream_state, payload)
+      {:logs, _filter} -> StreamState.ingest_log(stream_state, payload)
+    end
+  end
+
+  defp fail_client_ingress(state, reason) do
+    Logger.error("Client subscription ingress exhausted",
+      chain_id: state.chain_id,
+      key: inspect(state.key),
+      reason: inspect(reason)
+    )
+
+    enter_degraded_mode(state, failover_budget(state))
   end
 
   defp buffer_event(state, payload) do
@@ -764,23 +775,24 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       key: inspect(state.key)
     )
 
-    # Drain buffered events through dedupe
-    new_state = drain_event_buffer(state)
+    case drain_event_buffer(state) do
+      {:ok, new_state} ->
+        final_state = %{
+          new_state
+          | primary_provider_id: provider_id,
+            failover_status: :active,
+            failover_context: nil,
+            failover_history: [],
+            recovery_deadline_us: nil
+        }
 
-    # Update primary provider
-    final_state = %{
-      new_state
-      | primary_provider_id: provider_id,
-        failover_status: :active,
-        failover_context: nil,
-        failover_history: [],
-        recovery_deadline_us: nil
-    }
+        duration_ms = System.monotonic_time(:millisecond) - state.failover_context.started_at
+        telemetry_failover_completed(final_state.chain_id, final_state.key, duration_ms)
+        {:noreply, final_state}
 
-    duration_ms = System.monotonic_time(:millisecond) - state.failover_context.started_at
-    telemetry_failover_completed(final_state.chain_id, final_state.key, duration_ms)
-
-    {:noreply, final_state}
+      {:error, reason} ->
+        fail_client_ingress(state, reason)
+    end
   end
 
   defp drain_event_buffer(state) do
@@ -807,31 +819,20 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             |> order_recovery_logs()
         end
 
-      Enum.reduce(ordered_buffer, state, fn payload, acc ->
-        case subscription_key(acc.key) do
-          {:newHeads} ->
-            case StreamState.ingest_new_head(acc.state, payload) do
-              {stream_state, :emit} ->
-                ClientSubscriptionRegistry.dispatch(acc.profile, acc.chain_id, acc.key, payload)
-                %{acc | state: stream_state}
-
-              {stream_state, :skip} ->
-                %{acc | state: stream_state}
+      Enum.reduce_while(ordered_buffer, {:ok, state}, fn payload, {:ok, acc} ->
+        case ingest_event(acc.state, acc.key, payload) do
+          {stream_state, :emit} ->
+            case ClientSubscriptionRegistry.dispatch(acc.profile, acc.chain_id, acc.key, payload) do
+              :ok -> {:cont, {:ok, %{acc | state: stream_state}}}
+              {:error, reason} -> {:halt, {:error, reason}}
             end
 
-          {:logs, _filter} ->
-            case StreamState.ingest_log(acc.state, payload) do
-              {stream_state, :emit} ->
-                ClientSubscriptionRegistry.dispatch(acc.profile, acc.chain_id, acc.key, payload)
-                %{acc | state: stream_state}
-
-              {stream_state, :skip} ->
-                %{acc | state: stream_state}
-            end
+          {stream_state, :skip} ->
+            {:cont, {:ok, %{acc | state: stream_state}}}
         end
       end)
     else
-      state
+      {:ok, state}
     end
   end
 

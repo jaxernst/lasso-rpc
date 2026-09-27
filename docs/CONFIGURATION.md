@@ -144,9 +144,10 @@ before they enter recipient mailboxes. The node-local ingress envelope is
 the affected upstream connection locally and reconnects without penalizing the
 provider circuit. The pool-to-coordinator mailbox uses the same envelope. If
 its reservation fails, the affected pool key stops delivering and its clients
-receive a continuity failure. Coordinator-to-client fanout and replay are still
-tracked under issue #186; these defaults do not establish full streaming
-continuity qualification.
+receive a continuity failure. Coordinator-to-client fanout uses the same
+envelope; exhaustion terminates continuity without advancing the stream marker.
+Backfill ingress and retained replay are still tracked under issue #186, so
+these defaults do not establish full streaming continuity qualification.
 
 ### UI Topology
 

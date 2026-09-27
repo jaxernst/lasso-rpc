@@ -92,6 +92,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     {pid, profile, chain_id, _key} =
       start_coordinator(test_pid, backfill_requester: requester, backfill_timeout: 5_000)
 
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
     on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
     GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(10), 1})
@@ -494,9 +495,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
       end
     end
 
-    {pid, _profile, _chain_id, _key} =
+    {pid, profile, chain_id, _key} =
       start_coordinator(test_pid, backfill_requester: requester)
 
+    start_supervised!({ClientSubscriptionRegistry, {profile, chain_id}})
     on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
     GenServer.cast(pid, {:upstream_event, "ws-old", "sub", new_head(10), 1})
