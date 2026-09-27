@@ -20,6 +20,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   alias Lasso.Core.Streaming.{
     ClientSubscriptionRegistry,
+    Ingress,
     ReplayWindow,
     StreamState
   }
@@ -82,12 +83,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           term(),
           integer()
         ) ::
-          :ok
+          :ok | {:error, atom()}
   def upstream_event(profile, chain_id, key, provider_id, upstream_id, payload, received_at)
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
-    GenServer.cast(
+    Ingress.send(
       via(profile, chain_id, key),
-      {:upstream_event, provider_id, upstream_id, payload, received_at}
+      {:upstream_event, provider_id, upstream_id, payload, received_at},
+      :cast
     )
   end
 
@@ -151,6 +153,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   @impl true
+  def handle_cast({:stream_ingress, token, message}, state) do
+    Ingress.consume(token, fn -> handle_cast(message, state) end)
+  end
+
   def handle_cast({:upstream_event, provider_id, _upstream_id, payload, _received_at}, state) do
     case state.failover_status do
       :active ->

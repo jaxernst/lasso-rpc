@@ -898,39 +898,52 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         state
       )
       when is_map(payload) do
-    Enum.each(state.keys, fn {pool_key, entry} ->
-      cond do
-        entry.subscription_key != subscription_key or entry.status != :active ->
-          :ok
+    keys =
+      Enum.reduce(state.keys, state.keys, fn {pool_key, entry}, keys ->
+        provider_id =
+          cond do
+            entry.subscription_key != subscription_key or entry.status != :active ->
+              nil
 
-        entry.instance_id == instance_id ->
-          StreamCoordinator.upstream_event(
-            state.profile,
-            state.chain_id,
-            pool_key,
-            entry.primary_provider_id,
-            nil,
-            payload,
-            received_at
-          )
+            entry.instance_id == instance_id ->
+              entry.primary_provider_id
 
-        Map.get(entry, :transitioning_from_instance_id) == instance_id ->
-          StreamCoordinator.upstream_event(
-            state.profile,
-            state.chain_id,
-            pool_key,
-            entry.transitioning_from,
-            nil,
-            payload,
-            received_at
-          )
+            Map.get(entry, :transitioning_from_instance_id) == instance_id ->
+              entry.transitioning_from
 
-        true ->
-          :ok
-      end
-    end)
+            true ->
+              nil
+          end
 
-    {:noreply, state}
+        if provider_id do
+          case StreamCoordinator.upstream_event(
+                 state.profile,
+                 state.chain_id,
+                 pool_key,
+                 provider_id,
+                 nil,
+                 payload,
+                 received_at
+               ) do
+            :ok ->
+              keys
+
+            {:error, _} ->
+              ClientSubscriptionRegistry.terminate(
+                state.profile,
+                state.chain_id,
+                pool_key,
+                :continuity_exhausted
+              )
+
+              Map.put(keys, pool_key, %{entry | status: :failed})
+          end
+        else
+          keys
+        end
+      end)
+
+    {:noreply, %{state | keys: keys}}
   end
 
   # Deferred release of old instance subscription after transition

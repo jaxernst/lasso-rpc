@@ -142,7 +142,9 @@ The v0.5 candidate also admits incoming upstream frames and instance fanout
 before they enter recipient mailboxes. The node-local ingress envelope is
 128 MiB, with 32 MiB and 128 queued messages per recipient. Exhaustion closes
 the affected upstream connection locally and reconnects without penalizing the
-provider circuit. The remaining pool-to-coordinator and replay paths are still
+provider circuit. The pool-to-coordinator mailbox uses the same envelope. If
+its reservation fails, the affected pool key stops delivering and its clients
+receive a continuity failure. Coordinator-to-client fanout and replay are still
 tracked under issue #186; these defaults do not establish full streaming
 continuity qualification.
 

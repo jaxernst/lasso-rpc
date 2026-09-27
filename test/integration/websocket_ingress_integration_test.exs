@@ -1,7 +1,7 @@
 defmodule Lasso.Integration.WebSocketIngressTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.Core.Streaming.{Ingress, InstanceSubscriptionRegistry}
+  alias Lasso.Core.Streaming.{Ingress, InstanceSubscriptionRegistry, StreamCoordinator}
   alias Lasso.RPC.Transport.WebSocket.Handler
 
   test "a stalled upstream connection owner cannot accumulate unbounded frames" do
@@ -66,6 +66,38 @@ defmodule Lasso.Integration.WebSocketIngressTest do
     Process.exit(consumer, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^consumer, :killed}
     assert :ok = Ingress.audit()
+    assert Ingress.stats().messages == before.messages
+  end
+
+  test "the public coordinator entrypoint bounds a paused coordinator mailbox" do
+    profile = "ingress-#{System.unique_integer([:positive])}"
+    key = {:newHeads}
+
+    pid =
+      start_supervised!({StreamCoordinator, {profile, 1, key, primary_provider_id: "upstream"}})
+
+    :ok = :sys.suspend(pid)
+
+    on_exit(fn ->
+      if Process.alive?(pid), do: :sys.resume(pid)
+    end)
+
+    before = Ingress.stats()
+    payload = %{"hash" => "0x1", "number" => "0x1"}
+
+    for _ <- 1..128 do
+      assert :ok =
+               StreamCoordinator.upstream_event(profile, 1, key, "upstream", nil, payload, 1)
+    end
+
+    assert {:error, :owner_messages} =
+             StreamCoordinator.upstream_event(profile, 1, key, "upstream", nil, payload, 1)
+
+    assert {:message_queue_len, 128} = Process.info(pid, :message_queue_len)
+    assert Ingress.stats().messages == before.messages + 128
+
+    :ok = :sys.resume(pid)
+    :sys.get_state(pid)
     assert Ingress.stats().messages == before.messages
   end
 end
