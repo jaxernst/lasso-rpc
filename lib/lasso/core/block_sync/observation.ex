@@ -96,18 +96,7 @@ defmodule Lasso.BlockSync.Observation do
       when is_binary(instance_id) and is_integer(chain_id) and chain_id > 0 and
              source in [:http, :ws, nil] do
     config = Worker.load_config(instance_id, chain_id)
-
-    poll_window_ms =
-      positive(Map.get(config, :poll_interval_ms), div(@default_stale_after_ms, 3)) * 3
-
-    new_heads_window_ms =
-      positive(Map.get(config, :staleness_threshold_ms), @default_stale_after_ms)
-
-    case source do
-      :http -> poll_window_ms
-      :ws -> new_heads_window_ms
-      nil -> max(poll_window_ms, new_heads_window_ms)
-    end
+    positive(Map.get(config, :evidence_freshness_ms), @default_stale_after_ms)
   rescue
     _error -> @default_stale_after_ms
   catch
