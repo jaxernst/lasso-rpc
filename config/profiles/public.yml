@@ -179,12 +179,6 @@ chains:
         url: "https://public-eth.nownodes.io"
         archival: true
 
-      - id: "ethereum_lava"
-        name: "Lava Ethereum"
-        priority: 15
-        url: "https://eth1.lava.build"
-        archival: false # Mixed PHE nodes
-
       - id: "ethereum_mevblocker"
         name: "MEV Blocker"
         priority: 16
@@ -262,14 +256,6 @@ chains:
           unsupported_methods: ["eth_protocolVersion"]
           limits:
             max_block_range: 10000
-
-      - id: "base_lava"
-        name: "Lava Base"
-        priority: 6
-        url: "https://base.lava.build"
-        archival: false # Mixed PHE nodes — returns empty results for log ranges it lacks data for
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # ARBITRUM ONE (L2)
