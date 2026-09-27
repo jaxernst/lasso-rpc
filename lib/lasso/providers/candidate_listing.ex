@@ -7,7 +7,7 @@ defmodule Lasso.Providers.CandidateListing do
   2. WS liveness (shared upstream connection state)
   3. Circuit breaker state
   4. Rate limit state
-  5. Lag filtering (BlockSync.Registry + ChainState)
+  5. Lag filtering (captured profile head evidence for request routing)
   6. Min block height filtering (block-height-aware routing)
   7. Archival filtering
   8. `subscribe_new_heads` capability filtering (newHeads-only)
@@ -20,6 +20,7 @@ defmodule Lasso.Providers.CandidateListing do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
+  alias Lasso.Observations.HeadSnapshot
   alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
   alias Lasso.RPC.{AttemptProjection, ChainState, RoutingPlan, SelectionFilters}
   alias Lasso.RPC.RoutingEvidence.Workload
@@ -302,11 +303,11 @@ defmodule Lasso.Providers.CandidateListing do
           candidate_gate_ready?(c, protocol, include_half_open, filters, mode)
       end)
       |> filter_by_lag(
-        plan.profile,
-        plan.chain_id,
+        plan,
         Map.get(filters, :max_lag_blocks),
         consensus_height,
-        warn_on_lag?
+        warn_on_lag?,
+        Map.get(filters, :head_snapshot)
       )
       |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
       |> filter_by_archival(Map.get(filters, :requires_archival))
@@ -542,16 +543,42 @@ defmodule Lasso.Providers.CandidateListing do
     end
   end
 
-  defp filter_by_lag(candidates, _profile, _chain_id, nil, _consensus_height, _warn_on_lag?),
+  defp filter_by_lag(candidates, _plan, nil, _consensus_height, _warn_on_lag?, _head_snapshot),
     do: candidates
 
   defp filter_by_lag(
          candidates,
-         profile,
-         chain_id,
+         %RoutingPlan{} = plan,
+         max_lag_blocks,
+         _consensus_height,
+         warn_on_lag?,
+         %HeadSnapshot{} = snapshot
+       )
+       when is_integer(max_lag_blocks) and max_lag_blocks >= 0 do
+    if matching_snapshot?(plan, snapshot) do
+      filter_by_head_snapshot(candidates, plan, max_lag_blocks, snapshot, warn_on_lag?)
+    else
+      candidates
+    end
+  end
+
+  defp filter_by_lag(
+         candidates,
+         _plan,
+         _max_lag_blocks,
+         _consensus_height,
+         _warn_on_lag?,
+         :unavailable
+       ),
+       do: candidates
+
+  defp filter_by_lag(
+         candidates,
+         %RoutingPlan{profile: profile, chain_id: chain_id},
          max_lag_blocks,
          consensus_height,
-         warn_on_lag?
+         warn_on_lag?,
+         nil
        )
        when is_integer(max_lag_blocks) do
     case resolve_consensus_height(chain_id, consensus_height) do
@@ -568,6 +595,58 @@ defmodule Lasso.Providers.CandidateListing do
       :unavailable ->
         candidates
     end
+  end
+
+  defp filter_by_lag(
+         candidates,
+         _plan,
+         _max_lag_blocks,
+         _consensus_height,
+         _warn_on_lag?,
+         _unsupported_snapshot
+       ),
+       do: candidates
+
+  defp matching_snapshot?(%RoutingPlan{} = plan, %HeadSnapshot{} = snapshot) do
+    snapshot.chain_id == plan.chain_id and snapshot.revision == plan.generation and
+      match?({:head_scope, _, _, _, _, _, _}, snapshot.scope_id) and
+      elem(snapshot.scope_id, 1) == plan.profile
+  end
+
+  defp filter_by_head_snapshot(candidates, plan, max_lag_blocks, snapshot, warn_on_lag?) do
+    now_ms = System.system_time(:millisecond)
+
+    filtered =
+      Enum.flat_map(candidates, fn candidate ->
+        transports =
+          Enum.reject(candidate.transports, fn transport ->
+            assessment =
+              LagCalculation.assess_transport(
+                plan.chain_id,
+                candidate.instance_id,
+                transport,
+                snapshot,
+                max_lag_blocks,
+                now_ms,
+                get_in(candidate, [:head_freshness_ms, transport])
+              )
+
+            assessment.status == :lagging
+          end)
+
+        if transports == [], do: [], else: [%{candidate | transports: transports}]
+      end)
+
+    if warn_on_lag? and candidates != [] and filtered == [] do
+      Logger.warning(
+        "All routes exceeded the qualified head lag threshold; preserving candidates for availability",
+        profile: plan.profile,
+        chain_id: plan.chain_id,
+        max_lag_blocks: max_lag_blocks
+      )
+    end
+
+    if filtered == [], do: candidates, else: filtered
   end
 
   defp filter_by_lag_with_consensus(

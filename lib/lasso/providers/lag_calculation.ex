@@ -1,11 +1,10 @@
 defmodule Lasso.Providers.LagCalculation do
   @moduledoc """
-  Shared time-aligned lag calculation used by provider selection and dashboards.
+  Shared transport assessment for provider selection and dashboard status.
 
-  HTTP height samples receive bounded advancement credit based on their age and
-  effective poll cadence. WebSocket observations are compared directly, stale
-  evidence is rejected, and no projection can advance a provider past the
-  captured consensus height.
+  A qualified profile-scoped reference and an HTTP poll-start reference are
+  required for a lagging verdict. The older optimistic calculation remains for
+  callers that explicitly use the chain-wide compatibility API.
   """
 
   alias Lasso.BlockSync.{Observation, ObservationProjection, Registry}

@@ -18,7 +18,7 @@ defmodule Lasso.RPC.Selection do
   require Logger
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Providers.{CandidateListing, Catalog}
+  alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence}
 
   alias Lasso.RPC.{
     AttemptProjection,
@@ -336,6 +336,7 @@ defmodule Lasso.RPC.Selection do
         exclude: Keyword.get(opts, :exclude, []),
         include_half_open: Keyword.get(opts, :include_half_open, true),
         max_lag_blocks: plan.max_lag_blocks,
+        head_snapshot: HeadEvidence.snapshot_for_plan(plan),
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
@@ -1120,6 +1121,7 @@ defmodule Lasso.RPC.Selection do
         protocol: protocol,
         include_half_open: include_half_open,
         max_lag_blocks: plan.max_lag_blocks,
+        head_snapshot: HeadEvidence.snapshot_for_plan(plan),
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: requires_subscribe_new_heads,

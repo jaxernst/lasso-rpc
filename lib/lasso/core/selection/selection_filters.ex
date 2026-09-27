@@ -9,6 +9,7 @@ defmodule Lasso.RPC.SelectionFilters do
   @type protocol :: :http | :ws | :both | nil
   @type circuit_state_filter :: :closed | :half_open | :open
 
+  alias Lasso.Observations.HeadSnapshot
   alias Lasso.RPC.RoutingEvidence.Workload
 
   @type t :: %__MODULE__{
@@ -17,6 +18,7 @@ defmodule Lasso.RPC.SelectionFilters do
           include_half_open: boolean(),
           exclude_rate_limited: boolean(),
           max_lag_blocks: non_neg_integer() | nil,
+          head_snapshot: HeadSnapshot.t() | :unavailable | nil,
           min_block: non_neg_integer() | nil,
           requires_archival: boolean(),
           requires_subscribe_new_heads: boolean(),
@@ -28,6 +30,7 @@ defmodule Lasso.RPC.SelectionFilters do
             include_half_open: false,
             exclude_rate_limited: false,
             max_lag_blocks: nil,
+            head_snapshot: nil,
             min_block: nil,
             requires_archival: false,
             requires_subscribe_new_heads: false,
@@ -43,6 +46,7 @@ defmodule Lasso.RPC.SelectionFilters do
     * `:include_half_open` - Include half-open circuit breaker providers (default: false)
     * `:exclude_rate_limited` - Exclude rate-limited providers (default: false)
     * `:max_lag_blocks` - Maximum acceptable block lag (nil = no limit)
+    * `:head_snapshot` - Profile-scoped reference captured for this request
     * `:min_block` - Minimum block height the provider must have (nil = no filter)
     * `:requires_archival` - Request requires archival data support (default: false)
     * `:requires_subscribe_new_heads` - Request is an `eth_subscribe newHeads`
@@ -64,6 +68,7 @@ defmodule Lasso.RPC.SelectionFilters do
       include_half_open: Keyword.get(opts, :include_half_open, false),
       exclude_rate_limited: Keyword.get(opts, :exclude_rate_limited, false),
       max_lag_blocks: Keyword.get(opts, :max_lag_blocks),
+      head_snapshot: Keyword.get(opts, :head_snapshot),
       min_block: Keyword.get(opts, :min_block),
       requires_archival: Keyword.get(opts, :requires_archival, false),
       requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
@@ -85,6 +90,7 @@ defmodule Lasso.RPC.SelectionFilters do
       exclude_rate_limited:
         to_boolean(map[:exclude_rate_limited] || Map.get(map, "exclude_rate_limited")),
       max_lag_blocks: map[:max_lag_blocks] || Map.get(map, "max_lag_blocks"),
+      head_snapshot: map[:head_snapshot],
       min_block: map[:min_block] || Map.get(map, "min_block"),
       requires_archival: to_boolean(map[:requires_archival] || Map.get(map, "requires_archival")),
       requires_subscribe_new_heads:
@@ -106,6 +112,7 @@ defmodule Lasso.RPC.SelectionFilters do
       include_half_open: filters.include_half_open,
       exclude_rate_limited: filters.exclude_rate_limited,
       max_lag_blocks: filters.max_lag_blocks,
+      head_snapshot: filters.head_snapshot,
       min_block: filters.min_block,
       requires_archival: filters.requires_archival,
       requires_subscribe_new_heads: filters.requires_subscribe_new_heads,

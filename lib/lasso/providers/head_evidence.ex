@@ -11,11 +11,28 @@ defmodule Lasso.Providers.HeadEvidence do
   alias Lasso.Config.ConfigStore
   alias Lasso.Observations.{HeadComparison, HeadScope, HeadSnapshot}
   alias Lasso.Providers.Catalog
+  alias Lasso.RPC.RoutingPlan
 
   @default_block_time_ms 12_000
   @default_freshness_ms 30_000
   @max_freshness_ms 60_000
   @agreement_window_ms 2_000
+
+  @doc "Captures head evidence for the exact routing-plan generation."
+  @spec snapshot_for_plan(RoutingPlan.t()) :: HeadSnapshot.t() | :unavailable
+  def snapshot_for_plan(%RoutingPlan{max_lag_blocks: nil}), do: :unavailable
+
+  def snapshot_for_plan(%RoutingPlan{} = plan) do
+    generation = plan.generation
+
+    case snapshot(plan.profile, plan.chain_id) do
+      {:ok, %HeadSnapshot{revision: ^generation} = snapshot} ->
+        snapshot
+
+      _unavailable ->
+        :unavailable
+    end
+  end
 
   @spec snapshot(String.t(), pos_integer(), integer()) ::
           {:ok, HeadSnapshot.t()} | {:error, :not_found}
