@@ -5,7 +5,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
   @behaviour Lasso.RPC.Transport.HTTP.Client
 
-  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission}
+  alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission, UpstreamResponse}
   alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Providers.ProviderHeaders
   alias Lasso.RPC.PreparedRequest
@@ -415,14 +415,11 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
          {{:returned, {:ok, %Finch.Response{status: status, body: body}}}, _state, _healthy?},
          context,
          lease,
-         _io_duration_us
+         io_duration_us
        ) do
     case handle_response(status, body) do
       {:error, reason} = error ->
-        AttemptProtocol.terminal(context, :transport_failure, %{
-          reason: http_status_reason(reason),
-          certainty: :dispatched
-        })
+        emit_http_error(context, reason, io_duration_us)
 
         error
 
@@ -534,15 +531,47 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   defp transport_message(_reason), do: "Connection error"
 
   defp handle_response(status, body) when status in 200..299, do: {:ok, {:raw, body}}
-  defp handle_response(429, body), do: {:error, {:rate_limit, %{status: 429, body: body}}}
-  defp handle_response(408, body), do: {:error, {:server_error, %{status: 408, body: body}}}
 
-  defp handle_response(status, body) when status >= 500,
+  defp handle_response(status, body) do
+    case UpstreamResponse.parse_unary(body) do
+      {:ok, %UpstreamResponse.Validated{kind: :error}} ->
+        {:ok, {:raw, body}}
+
+      _not_json_rpc_error ->
+        classify_http_error(status, body)
+    end
+  end
+
+  defp classify_http_error(429, body),
+    do: {:error, {:rate_limit, %{status: 429, body: body}}}
+
+  defp classify_http_error(408, body),
+    do: {:error, {:server_error, %{status: 408, body: body}}}
+
+  defp classify_http_error(status, body) when status >= 500,
     do: {:error, {:server_error, %{status: status, body: body}}}
 
-  defp handle_response(status, body), do: {:error, {:client_error, %{status: status, body: body}}}
+  defp classify_http_error(status, body),
+    do: {:error, {:client_error, %{status: status, body: body}}}
 
-  defp http_status_reason({:rate_limit, _body}), do: :rate_limited
+  defp emit_http_error(context, reason, io_duration_us) do
+    case reason do
+      {:rate_limit, _payload} ->
+        AttemptProtocol.terminal(context, :response, %{
+          response_kind: :error,
+          error_code: -32_005,
+          error_category: :rate_limit,
+          io_duration_us: io_duration_us
+        })
+
+      _other ->
+        AttemptProtocol.terminal(context, :transport_failure, %{
+          reason: http_status_reason(reason),
+          certainty: :dispatched
+        })
+    end
+  end
+
   defp http_status_reason({:server_error, _body}), do: :server_error
   defp http_status_reason({:client_error, _body}), do: :client_error
 

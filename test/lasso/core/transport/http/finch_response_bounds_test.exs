@@ -4,6 +4,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
   alias Lasso.Core.Request.RequestOwner
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission}
   alias Lasso.Core.Support.LogRangeLimit
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.{AttemptIdentity, AttemptTerminal}
   alias Lasso.RPC.Response
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: FinchClient
@@ -172,6 +173,62 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
     request.()
     assert_empty()
     assert UpstreamAdmission.stats(@admission).peak_response_bytes == byte_size(body) * 2
+  end
+
+  test "preserves a valid JSON-RPC error returned with HTTP 403" do
+    previous_client = Application.get_env(:lasso, :http_client)
+    Application.put_env(:lasso, :http_client, FinchClient)
+    on_exit(fn -> Application.put_env(:lasso, :http_client, previous_client) end)
+
+    body =
+      ~s({"jsonrpc":"2.0","id":"bounded","error":{"code":37,"message":"Quota exhausted","data":{"reset":"soon"}}})
+
+    response =
+      "HTTP/1.1 403 Forbidden\r\ncontent-length: #{byte_size(body)}\r\n" <>
+        "connection: close\r\n\r\n" <> body
+
+    {url, receive_request} = serve_once(response)
+    {:ok, channel} = HTTP.open(%{url: url, id: "test"}, instance_id: "bounded-instance")
+
+    assert {:error, %JError{code: 37, message: "Quota exhausted", data: %{"reset" => "soon"}},
+            _elapsed} =
+             HTTP.request(
+               channel,
+               %{"method" => "eth_getLogs", "params" => [], "id" => "bounded"},
+               1_000
+             )
+
+    receive_request.()
+  end
+
+  test "bare HTTP 429 projects quota evidence without penalizing the provider" do
+    body = "too many requests"
+
+    response =
+      "HTTP/1.1 429 Too Many Requests\r\ncontent-length: #{byte_size(body)}\r\n" <>
+        "connection: close\r\n\r\n" <> body
+
+    {url, receive_request} = serve_once(response)
+
+    outcome =
+      RequestOwner.execute(
+        attempt_identity(),
+        System.monotonic_time(:microsecond) + 1_000_000,
+        fn -> rpc(url, attempt_dispatch: AttemptProtocol.context()) end
+      )
+
+    assert outcome.result == {:error, {:rate_limit, %{status: 429, body: body}}}
+
+    assert %AttemptTerminal.Response{
+             kind: :application_error,
+             error_code: -32_005,
+             error_category: :quota
+           } = outcome.fact
+
+    assert outcome.projection.breaker_effect == :none
+    assert outcome.projection.fallback_eligible
+    receive_request.()
+    assert_empty()
   end
 
   test "generic consumers retain their byte lease through response processing" do
