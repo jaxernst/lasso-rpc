@@ -292,8 +292,9 @@ defmodule Lasso.RPC.SelectionTest do
         assert :ok = AttemptProjection.apply_control(event)
       end
 
-      public_scope = AttemptProjection.scope_state(profile, chain, generation)
-      assert is_nil(AttemptProjection.route_state(public_scope, instance_id, :http, "system"))
+      # Public's own background probes may also populate its system partition.
+      poller_scope = AttemptProjection.scope_state("poller-profile", chain, generation)
+      assert AttemptProjection.route_state(poller_scope, instance_id, :http, "system")
 
       assert {:ok, "z_fast"} =
                Selection.select_provider(profile, chain, "eth_blockNumber",
