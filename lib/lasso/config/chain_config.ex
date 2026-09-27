@@ -250,8 +250,10 @@ defmodule Lasso.Config.ChainConfig do
   """
   @spec should_subscribe_new_heads?(t(), Provider.t()) :: boolean()
   def should_subscribe_new_heads?(chain_config, provider) do
-    policy = Lasso.Config.ObservationConfig.resolve(chain_config, provider)
-    policy.background_observations and policy.subscribe_new_heads
+    case provider.subscribe_new_heads do
+      nil -> chain_config.websocket.subscribe_new_heads
+      value when is_boolean(value) -> value
+    end
   end
 
   @doc "Substitutes ${VAR_NAME} patterns with environment variable values."
