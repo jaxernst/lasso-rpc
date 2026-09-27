@@ -39,6 +39,22 @@ defmodule Lasso.Observations.HeadComparisonTest do
     assert snapshot.support == 2
   end
 
+  test "a pre-upgrade snapshot without a hash remains assessable during rolling deployment" do
+    observed = observation("a", :ws, 100, 0, %{block_hash: "0xaaa"})
+
+    snapshot =
+      HeadComparison.derive(
+        1,
+        [observed, observation("b", :ws, 100, 0, %{block_hash: "0xaaa"})],
+        @policy,
+        @now
+      )
+      |> Map.delete(:reference_block_hash)
+
+    assert %{status: :eligible} =
+             HeadComparison.assess(snapshot, observed, @assessment_policy, @now)
+  end
+
   test "one outlier cannot move a two-of-three reference" do
     snapshot =
       HeadComparison.derive(

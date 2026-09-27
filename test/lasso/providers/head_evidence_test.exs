@@ -4,6 +4,7 @@ defmodule Lasso.Providers.HeadEvidenceTest do
   alias Lasso.BlockSync.Registry
   alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Observations.{HeadComparison, HeadSnapshot}
   alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence, LagCalculation}
   alias Lasso.RPC.Selection.CandidateCursor
@@ -177,6 +178,22 @@ defmodule Lasso.Providers.HeadEvidenceTest do
 
     ids =
       Map.new(Catalog.get_profile_providers(profile, chain_id), &{&1.provider_id, &1.instance_id})
+
+    for instance_id <- Map.values(ids) do
+      assert true =
+               Snapshot.put(%Snapshot{
+                 breaker_id: {instance_id, :http},
+                 state: :closed,
+                 generation: 1,
+                 epoch: 1,
+                 owner_pid: self(),
+                 ready?: true,
+                 recovery_deadline_us: nil,
+                 half_open_capacity: 1,
+                 half_open_inflight: 0,
+                 control_health: :healthy
+               })
+    end
 
     assert :ok = Registry.put_height(chain_id, ids["ahead-a"], 100, :ws)
     assert :ok = Registry.put_height(chain_id, ids["ahead-b"], 100, :ws)

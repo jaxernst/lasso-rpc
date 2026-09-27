@@ -484,16 +484,15 @@ defmodule Lasso.RPC.Selection do
     candidate_entries =
       case matching_providers do
         [provider] ->
-          candidate_plan = %{plan | providers: [provider]}
-
           for candidate <-
                 candidates_from_inputs(
-                  candidate_plan,
+                  plan,
                   filters,
                   consensus_height,
                   :deferred_fastest,
                   learned_scope
                 ),
+              candidate.id == provider.id,
               winner_transport in candidate.transports do
             {ranking_channel(plan, candidate, winner_transport), candidate, winner_transport}
           end

@@ -546,7 +546,8 @@ defmodule Lasso.Providers.CandidateListing do
         has_ws = :ws in candidate.transports
 
         if include_half_open do
-          (has_http and cs.http != :open) or (has_ws and cs.ws != :open)
+          (has_http and cs.http in [:closed, :half_open]) or
+            (has_ws and cs.ws in [:closed, :half_open])
         else
           (has_http and cs.http == :closed) or (has_ws and cs.ws == :closed)
         end
@@ -554,7 +555,7 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   defp cb_ready?(cb_state, include_half_open) do
-    if include_half_open, do: cb_state != :open, else: cb_state == :closed
+    if include_half_open, do: cb_state in [:closed, :half_open], else: cb_state == :closed
   end
 
   defp rate_limit_ok?(candidate, protocol, filters) do

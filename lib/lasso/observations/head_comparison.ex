@@ -200,7 +200,7 @@ defmodule Lasso.Observations.HeadComparison do
       when is_integer(now_ms) do
     age_ms = age_ms(observation, now_ms)
     observation_hash = normalize_hash(observation.block_hash)
-    reference_hash = normalize_hash(snapshot.reference_block_hash)
+    reference_hash = normalize_hash(Map.get(snapshot, :reference_block_hash))
 
     cond do
       snapshot.chain_id != observation.chain_id ->
