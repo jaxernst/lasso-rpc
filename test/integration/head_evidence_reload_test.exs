@@ -41,9 +41,10 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     end
   end
 
-  test "file reload removes stale head voters and recovers routing on the new generation" do
+  test "file reload recovers routing without mixing another profile's head evidence" do
     chain_id = 700_000_000 + rem(System.unique_integer([:positive]), 100_000_000)
     slug = "head-reload-#{chain_id}"
+    other_slug = "head-other-#{chain_id}"
     root = Path.join(System.tmp_dir!(), slug)
     File.mkdir_p!(root)
 
@@ -53,10 +54,21 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     )
 
     heights =
-      start_supervised!({Agent, fn -> %{"behind" => 90, "peer-a" => 100, "peer-b" => 100} end})
+      start_supervised!(
+        {Agent,
+         fn ->
+           %{
+             "behind" => 90,
+             "peer-a" => 100,
+             "peer-b" => 100,
+             "other-a" => 200,
+             "other-b" => 200
+           }
+         end}
+      )
 
     endpoints =
-      Map.new(["behind", "peer-a", "peer-b"], fn provider ->
+      Map.new(["behind", "peer-a", "peer-b", "other-a", "other-b"], fn provider ->
         ref = {:head_reload, provider, chain_id}
 
         {:ok, _} =
@@ -95,6 +107,7 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
 
     Application.put_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch)
     write_profile(root, slug, chain_id, endpoints, ["behind", "peer-a", "peer-b"])
+    write_profile(root, other_slug, chain_id, endpoints, ["other-a", "other-b"])
     assert :ok = ConfigStore.reload()
 
     ids =
@@ -126,6 +139,30 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
 
     assert scope_id == reference.scope_id
 
+    other_ids =
+      Map.new(["other-a", "other-b"], &{&1, Catalog.lookup_instance_id(other_slug, chain_id, &1)})
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Enum.all?(other_ids, fn {_provider, id} ->
+        match?({:ok, %{height: 200}}, Registry.get_observation(chain_id, id, :http))
+      end)
+    end)
+
+    assert {:ok, other_snapshot} = HeadEvidence.snapshot(other_slug, chain_id)
+    assert other_snapshot.qualification == :qualified
+    assert other_snapshot.reference_height == 200
+    refute other_snapshot.scope_id == snapshot.scope_id
+
+    assert {:ok, %{qualification: :qualified, reference_height: 100}} =
+             HeadEvidence.snapshot(slug, chain_id)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      StatusHelpers.check_block_lag(chain_id, other_ids["other-a"], other_slug) == :synced
+    end)
+
+    assert StatusHelpers.check_block_lag(chain_id, other_ids["other-a"], slug) == :unavailable
+    assert_routed_to(other_slug, chain_id, "other-a")
+
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :lagging
     assert_routed_to(slug, chain_id, "peer-a")
 
@@ -142,6 +179,11 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     assert alone.qualification != :qualified
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :unavailable
     assert_routed_to(slug, chain_id, "behind")
+
+    assert {:ok, %{qualification: :qualified, reference_height: 200}} =
+             HeadEvidence.snapshot(other_slug, chain_id)
+
+    assert_routed_to(other_slug, chain_id, "other-a")
 
     write_profile(root, slug, chain_id, endpoints, ["behind", "peer-a", "peer-b"])
     assert :ok = ConfigStore.reload()
