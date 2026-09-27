@@ -130,6 +130,14 @@ Controls upstream WebSocket subscription behavior.
 
 Failover limits are captured from the active profile at the beginning of each recovery, including after YAML reload. An in-progress recovery keeps its captured limits. The effective block allowance is the greater of `max_backfill_blocks` and the blocks expected during one backfill-timeout horizon, with time-derived expansion capped at 2048 blocks. The backfill timeout is also bounded by the overall 30-second recovery deadline. Gaps beyond the effective allowance terminate continuity rather than silently skipping missing blocks.
 
+On the unreleased v0.5 candidate, RPC socket notifications also have a node-local
+delivery bound: 16 MiB and 32 queued notifications per client, within 128 MiB
+across the node. A client that cannot keep up loses its subscription and its
+WebSocket closes with code `1013`; the `[:lasso, :stream, :slow_consumer]`
+telemetry event names the reason. Reservations are reclaimed when a socket
+dies. These are runtime defaults, not profile YAML settings. Ingress and replay
+retention bounds are separate work under [issue #186](https://github.com/jaxernst/lasso-rpc/issues/186).
+
 ### UI Topology
 
 Dashboard visualization settings.

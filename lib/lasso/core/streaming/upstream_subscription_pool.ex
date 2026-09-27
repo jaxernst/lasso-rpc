@@ -142,7 +142,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   @impl true
   def handle_call(
         {:subscribe, client_pid, pool_key, subscription_key, provider_constraint,
-         request_owner_pid, deadline_us},
+         request_owner_pid, deadline_us, bounded_delivery?},
         from,
         state
       ) do
@@ -156,7 +156,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
              client_pid,
              pool_key,
              request_owner_pid,
-             deadline_us
+             deadline_us,
+             bounded_delivery?
            ) do
         :ok ->
           published_state =
@@ -244,7 +245,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
          client_pid,
          pool_key,
          nil,
-         nil
+         nil,
+         _bounded_delivery?
        ) do
     ClientSubscriptionRegistry.add_client(
       state.profile,
@@ -261,7 +263,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
          client_pid,
          pool_key,
          request_owner_pid,
-         deadline_us
+         deadline_us,
+         bounded_delivery?
        ) do
     result =
       ClientSubscriptionRegistry.add_client_owned(
@@ -271,7 +274,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         client_pid,
         pool_key,
         request_owner_pid,
-        deadline_us
+        deadline_us,
+        bounded_delivery?
       )
 
     case {result, authorize_operation(request_owner_pid, client_pid, deadline_us)} do
@@ -357,7 +361,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     provider_constraint = Keyword.get(opts, :provider_id)
 
     {:subscribe, client_pid, pool_key(key, provider_constraint), key, provider_constraint,
-     Keyword.get(opts, :request_owner_pid), Keyword.get(opts, :deadline_us)}
+     Keyword.get(opts, :request_owner_pid), Keyword.get(opts, :deadline_us),
+     Keyword.get(opts, :bounded_delivery?, false)}
   end
 
   defp unsubscribe_checked_message(subscription_id, opts) do

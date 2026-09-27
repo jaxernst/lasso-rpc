@@ -77,6 +77,7 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
              SubscriptionRouter.subscribe_request(work.profile, work.chain_id, key,
                provider_id: work.provider_id,
                client_pid: socket_pid,
+               bounded_delivery?: true,
                request_owner_pid: self(),
                deadline_us: work.deadline_us
              ),

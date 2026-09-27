@@ -10,7 +10,7 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
   use GenServer
   require Logger
 
-  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
+  alias Lasso.Core.Streaming.{ContinuityBudget, UpstreamSubscriptionPool}
 
   @type subscription_key :: {:newHeads} | {:logs, map()}
   @type key :: subscription_key() | {:route, String.t() | :routed, subscription_key()}
@@ -52,9 +52,44 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
         deadline_us
       )
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 do
+    add_client_owned(
+      profile,
+      chain_id,
+      subscription_id,
+      client_pid,
+      key,
+      request_owner_pid,
+      deadline_us,
+      false
+    )
+  end
+
+  @spec add_client_owned(
+          String.t(),
+          pos_integer(),
+          String.t(),
+          pid(),
+          key,
+          pid(),
+          integer(),
+          boolean()
+        ) :: :ok | {:error, :owner_down | :client_down | :deadline_expired}
+  def add_client_owned(
+        profile,
+        chain_id,
+        subscription_id,
+        client_pid,
+        key,
+        request_owner_pid,
+        deadline_us,
+        bounded_delivery?
+      )
+      when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and
+             is_boolean(bounded_delivery?) do
     GenServer.call(
       via(profile, chain_id),
-      {:add_owned, subscription_id, client_pid, key, request_owner_pid, deadline_us}
+      {:add_owned, subscription_id, client_pid, key, request_owner_pid, deadline_us,
+       bounded_delivery?}
     )
   end
 
@@ -127,13 +162,15 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
 
   @impl true
   def handle_call(
-        {:add_owned, subscription_id, client_pid, key, request_owner_pid, deadline_us},
+        {:add_owned, subscription_id, client_pid, key, request_owner_pid, deadline_us,
+         bounded_delivery?},
         _from,
         state
       ) do
     case authorize_mutation(request_owner_pid, client_pid, deadline_us) do
       :ok ->
-        {:reply, :ok, add_client_to_state(state, subscription_id, client_pid, key)}
+        {:reply, :ok,
+         add_client_to_state(state, subscription_id, client_pid, key, bounded_delivery?)}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -175,24 +212,80 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
       "Dispatching to #{length(ids)} clients for key #{inspect(key)}, subscription_ids=#{inspect(ids)}"
     )
 
-    Enum.each(ids, fn subscription_id ->
-      case Map.get(state.by_id, subscription_id) do
-        nil ->
-          Logger.warning("Subscription ID #{subscription_id} not found in by_id registry")
+    slow_clients =
+      ids
+      |> Enum.chunk_every(64)
+      |> Enum.reduce(MapSet.new(), fn chunk, slow_clients ->
+        rows =
+          Enum.flat_map(chunk, fn subscription_id ->
+            case Map.get(state.by_id, subscription_id) do
+              %{client_pid: pid} = subscription ->
+                if MapSet.member?(slow_clients, pid) do
+                  []
+                else
+                  notification = %{
+                    "jsonrpc" => "2.0",
+                    "method" => "eth_subscription",
+                    "params" => %{"subscription" => subscription_id, "result" => payload}
+                  }
 
-        %{client_pid: pid} ->
-          notification = %{
-            "jsonrpc" => "2.0",
-            "method" => "eth_subscription",
-            "params" => %{
-              "subscription" => subscription_id,
-              "result" => payload
-            }
-          }
+                  [{subscription, notification, :erlang.external_size(notification)}]
+                end
 
-          send(pid, {:subscription_event, notification})
-      end
-    end)
+              nil ->
+                []
+            end
+          end)
+
+        bounded = Enum.filter(rows, fn {subscription, _, _} -> subscription.bounded_delivery? end)
+
+        admissions =
+          ContinuityBudget.reserve_deliveries(
+            Enum.map(bounded, fn {subscription, _, bytes} -> {subscription.client_pid, bytes} end)
+          )
+
+        {slow_clients, []} =
+          Enum.reduce(rows, {slow_clients, admissions}, fn
+            {%{bounded_delivery?: false} = subscription, notification, _bytes},
+            {slow, admissions} ->
+              dispatch_to_client(subscription, notification)
+              {slow, admissions}
+
+            {subscription, notification, bytes}, {slow, [admission | admissions]} ->
+              pid = subscription.client_pid
+
+              cond do
+                MapSet.member?(slow, pid) ->
+                  if admission == :ok, do: ContinuityBudget.release_delivery(pid, bytes)
+                  {slow, admissions}
+
+                admission == :ok and not mailbox_full?(pid) ->
+                  send(pid, {:subscription_event, notification, {:continuity_delivery, bytes}})
+                  {slow, admissions}
+
+                true ->
+                  reason =
+                    case admission do
+                      :ok ->
+                        ContinuityBudget.release_delivery(pid, bytes)
+                        :mailbox_limit
+
+                      {:error, reason} ->
+                        reason
+                    end
+
+                  emit_slow_consumer(state, key, pid, reason, bytes)
+                  {MapSet.put(slow, pid), admissions}
+              end
+          end)
+
+        slow_clients
+      end)
+
+    state =
+      Enum.reduce(slow_clients, state, fn pid, acc ->
+        terminate_slow_client(acc, pid)
+      end)
 
     {:noreply, state}
   end
@@ -270,11 +363,16 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
     {removed_by_key, %{state | by_id: new_by_id, by_key: new_by_key}}
   end
 
-  defp add_client_to_state(state, subscription_id, client_pid, key) do
+  defp add_client_to_state(state, subscription_id, client_pid, key, bounded_delivery? \\ false) do
     client_monitors =
       Map.put_new_lazy(state.client_monitors, client_pid, fn -> Process.monitor(client_pid) end)
 
-    by_id = Map.put(state.by_id, subscription_id, %{client_pid: client_pid, key: key})
+    by_id =
+      Map.put(state.by_id, subscription_id, %{
+        client_pid: client_pid,
+        key: key,
+        bounded_delivery?: bounded_delivery?
+      })
 
     by_key =
       Map.update(state.by_key, key, [subscription_id], fn ids -> [subscription_id | ids] end)
@@ -332,5 +430,67 @@ defmodule Lasso.Core.Streaming.ClientSubscriptionRegistry do
       true ->
         :ok
     end
+  end
+
+  defp dispatch_to_client(%{client_pid: pid, bounded_delivery?: false}, notification) do
+    send(pid, {:subscription_event, notification})
+    :ok
+  end
+
+  defp mailbox_full?(pid) do
+    limit = Application.get_env(:lasso, :websocket_downstream_mailbox_limit, 32)
+
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, count} -> count >= limit
+      nil -> true
+    end
+  end
+
+  defp terminate_slow_client(state, pid) do
+    subscriptions =
+      Enum.filter(state.by_id, fn {_subscription_id, subscription} ->
+        subscription.client_pid == pid
+      end)
+
+    Enum.each(subscriptions, fn {subscription_id, _subscription} ->
+      send(pid, {:subscription_terminated, subscription_id, :slow_consumer})
+    end)
+
+    {removed_by_key, state} = remove_by_pid(state, pid)
+
+    client_monitors =
+      case Map.pop(state.client_monitors, pid) do
+        {nil, remaining} ->
+          remaining
+
+        {monitor, remaining} ->
+          Process.demonitor(monitor, [:flush])
+          remaining
+      end
+
+    state = %{state | client_monitors: client_monitors}
+
+    if map_size(removed_by_key) > 0 do
+      GenServer.cast(
+        UpstreamSubscriptionPool.via(state.profile, state.chain_id),
+        {:clients_removed, removed_by_key}
+      )
+    end
+
+    state
+  end
+
+  defp emit_slow_consumer(state, key, pid, reason, retained_bytes) do
+    :telemetry.execute(
+      [:lasso, :stream, :slow_consumer],
+      %{count: 1, retained_bytes: retained_bytes},
+      %{
+        chain_id: state.chain_id,
+        profile: state.profile,
+        key: inspect(key),
+        client_pid: inspect(pid),
+        reason: reason
+      }
+    )
   end
 end

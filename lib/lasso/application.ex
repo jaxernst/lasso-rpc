@@ -74,6 +74,9 @@ defmodule Lasso.Application do
         # Bound concurrent upstream work and retained HTTP response bytes.
         Lasso.Core.Transport.UpstreamAdmission,
 
+        # Own queued WebSocket delivery reservations and reclaim them on socket death.
+        Lasso.Core.Streaming.ContinuityBudget,
+
         # Cluster topology - single source of truth for cluster membership
         Lasso.Cluster.Topology,
 

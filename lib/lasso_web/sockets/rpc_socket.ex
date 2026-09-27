@@ -214,14 +214,26 @@ defmodule LassoWeb.RPCSocket do
 
   @impl true
   def handle_info(
-        {:subscription_event, %{"params" => %{"subscription" => subscription_id}} = payload},
+        {:subscription_event, payload, {:continuity_delivery, bytes}},
+        state
+      )
+      when is_integer(bytes) and bytes >= 0 do
+    result = handle_subscription_event(payload, state)
+
+    Lasso.Core.Streaming.ContinuityBudget.release_delivery(
+      Lasso.Core.Streaming.ContinuityBudget,
+      self(),
+      bytes
+    )
+
+    result
+  end
+
+  def handle_info(
+        {:subscription_event, %{"params" => %{"subscription" => _subscription_id}} = payload},
         state
       ) do
-    if Map.has_key?(state.subscriptions, subscription_id) do
-      push_subscription_event(payload, state)
-    else
-      {:ok, count_item_owner(state, :stale_subscription_event)}
-    end
+    handle_subscription_event(payload, state)
   end
 
   def handle_info({:subscription_event, _payload}, state) do
@@ -232,6 +244,14 @@ defmodule LassoWeb.RPCSocket do
   def handle_info({:subscription_terminated, subscription_id, :continuity_exhausted}, state) do
     if Map.has_key?(state.subscriptions, subscription_id) do
       {:stop, :continuity_exhausted, {1011, "Lasso subscription continuity exhausted"}, state}
+    else
+      {:ok, state}
+    end
+  end
+
+  def handle_info({:subscription_terminated, subscription_id, :slow_consumer}, state) do
+    if Map.has_key?(state.subscriptions, subscription_id) do
+      {:stop, :slow_consumer, {1013, "Lasso subscription client too slow"}, state}
     else
       {:ok, state}
     end
@@ -426,6 +446,20 @@ defmodule LassoWeb.RPCSocket do
   end
 
   ## Helper functions
+
+  defp handle_subscription_event(
+         %{"params" => %{"subscription" => subscription_id}} = payload,
+         state
+       ) do
+    if Map.has_key?(state.subscriptions, subscription_id) do
+      push_subscription_event(payload, state)
+    else
+      {:ok, count_item_owner(state, :stale_subscription_event)}
+    end
+  end
+
+  defp handle_subscription_event(_payload, state),
+    do: {:ok, count_item_owner(state, :stale_subscription_event)}
 
   defp push_subscription_event(payload, state) do
     case Jason.encode(payload) do

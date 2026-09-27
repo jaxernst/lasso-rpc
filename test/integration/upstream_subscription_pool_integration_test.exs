@@ -2,11 +2,14 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Streaming.ClientSubscriptionRegistry
+  alias Lasso.Core.Streaming.ContinuityBudget
   alias Lasso.Core.Streaming.SubscriptionRouter
   alias Lasso.Core.Streaming.StreamCoordinator
   alias Lasso.Core.Streaming.UpstreamSubscriptionPool
   alias Lasso.Testing.ChainHelper
   alias Lasso.Testing.MockWSProvider
+  alias Lasso.Test.Eventually
+  alias Lasso.Test.TelemetrySync
   alias LassoWeb.RPCSocket.ItemOwner
 
   @default_profile "public"
@@ -157,6 +160,71 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   end
 
   describe "subscription events" do
+    test "bounded fanout evicts a stalled client and reclaims its queued bytes", %{
+      chain: chain,
+      profile: profile
+    } do
+      key = {:newHeads}
+      before = ContinuityBudget.stats()
+
+      stalled =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      on_exit(fn -> if Process.alive?(stalled), do: Process.exit(stalled, :kill) end)
+      deadline_us = System.monotonic_time(:microsecond) + 10_000_000
+      opts = [bounded_delivery?: true, request_owner_pid: self(), deadline_us: deadline_us]
+
+      {:ok, stalled_id} =
+        UpstreamSubscriptionPool.subscribe_client(profile, chain, stalled, key, opts)
+
+      {:ok, live_id} =
+        UpstreamSubscriptionPool.subscribe_client(profile, chain, self(), key, opts)
+
+      {:ok, collector} =
+        TelemetrySync.attach_collector([:lasso, :stream, :slow_consumer],
+          match: [chain_id: chain]
+        )
+
+      on_exit(fn -> TelemetrySync.stop_collector(collector) end)
+
+      for sequence <- 1..40 do
+        :ok = ClientSubscriptionRegistry.dispatch(profile, chain, key, %{"number" => sequence})
+
+        assert_receive {:subscription_event,
+                        %{
+                          "params" => %{
+                            "subscription" => ^live_id,
+                            "result" => %{"number" => ^sequence}
+                          }
+                        }, {:continuity_delivery, bytes}},
+                       2_000
+
+        :ok = ContinuityBudget.release_delivery(ContinuityBudget, self(), bytes)
+        _stats = ContinuityBudget.stats()
+      end
+
+      assert {:ok, %{count: 1}, %{reason: reason}} =
+               TelemetrySync.await_event(collector, timeout: 2_000)
+
+      assert reason in [:client_message_limit, :mailbox_limit]
+      assert ClientSubscriptionRegistry.list_by_key(profile, chain, key) == [live_id]
+      assert ContinuityBudget.stats().delivery_bytes > before.delivery_bytes
+
+      Process.exit(stalled, :kill)
+
+      Eventually.assert_eventually(fn ->
+        ContinuityBudget.stats().delivery_bytes == before.delivery_bytes
+      end)
+
+      assert ContinuityBudget.stats().reclaimed > before.reclaimed
+      :ok = UpstreamSubscriptionPool.unsubscribe_client(profile, chain, live_id)
+      refute stalled_id in ClientSubscriptionRegistry.list_by_key(profile, chain, key)
+    end
+
     test "receives and routes newHeads events", %{
       chain: chain,
       provider: provider,
