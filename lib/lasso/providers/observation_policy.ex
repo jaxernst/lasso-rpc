@@ -18,15 +18,30 @@ defmodule Lasso.Providers.ObservationPolicy do
     instance_id
     |> Catalog.get_instance_refs()
     |> Enum.flat_map(fn profile ->
-      with {:ok, chain} <- ConfigStore.get_chain(profile, chain_id),
-           provider_id when is_binary(provider_id) <-
-             Catalog.reverse_lookup_provider_id(profile, chain_id, instance_id),
-           {:ok, provider} <- ChainConfig.get_provider_by_id(chain, provider_id) do
-        [{profile, chain, ObservationConfig.resolve(chain, provider)}]
-      else
-        _ -> []
+      case ConfigStore.get_chain(profile, chain_id) do
+        {:ok, chain} ->
+          policies_for_reference(profile, chain_id, instance_id, chain)
+          |> Enum.map(&{profile, chain, &1})
+
+        _ ->
+          []
       end
     end)
+  end
+
+  @doc "Resolves every provider entry in one profile that shares a physical instance."
+  @spec policies_for_reference(String.t(), pos_integer(), String.t(), ChainConfig.t()) :: [
+          policy()
+        ]
+  def policies_for_reference(profile, chain_id, instance_id, chain) do
+    provider_ids =
+      Catalog.get_profile_providers(profile, chain_id)
+      |> Enum.filter(&(&1.instance_id == instance_id))
+      |> Enum.map(& &1.provider_id)
+
+    chain.providers
+    |> Enum.filter(&(&1.id in provider_ids))
+    |> Enum.map(&ObservationConfig.resolve(chain, &1))
   end
 
   @spec effective(String.t(), pos_integer(), boolean()) :: map()

@@ -526,10 +526,8 @@ defmodule Lasso.BlockSync.Worker do
   @spec coalesce_config([{term(), term()}], String.t(), pos_integer(), boolean()) :: map()
   def coalesce_config(ref_configs, instance_id, chain_id, has_ws) do
     policies =
-      Enum.map(ref_configs, fn {ref, chain} ->
-        provider_id = Catalog.reverse_lookup_provider_id(ref, chain_id, instance_id)
-        provider = Enum.find(chain.providers, &(&1.id == provider_id))
-        ObservationConfig.resolve(chain, provider)
+      Enum.flat_map(ref_configs, fn {ref, chain} ->
+        ObservationPolicy.policies_for_reference(ref, chain_id, instance_id, chain)
       end)
 
     effective = ObservationPolicy.coalesce(policies, has_ws)

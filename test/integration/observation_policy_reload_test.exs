@@ -108,6 +108,30 @@ defmodule Lasso.Config.ObservationPolicyReloadTest do
     Lasso.Test.Eventually.assert_eventually(fn -> Agent.get(polls, & &1.heads) > 0 end)
     Lasso.Test.Eventually.assert_eventually(fn -> Agent.get(polls, & &1.identity) > 0 end)
 
+    write_same_profile_shared_instance(root, slug, chain_id, url)
+    assert :ok = ConfigStore.reload()
+    assert Catalog.lookup_instance_id(slug, chain_id, "rpc2") == instance_id
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      match?(
+        {:ok, %{mode: :http_only, config: %{poll_interval_ms: 2_000}}},
+        Worker.get_status(chain_id, instance_id)
+      )
+    end)
+
+    before_shared_poll = Agent.get(polls, & &1)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Agent.get(polls, & &1.heads) > before_shared_poll.heads
+    end)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Agent.get(polls, & &1.identity) > before_shared_poll.identity
+    end)
+
+    write_profile(root, slug, chain_id, url, true, 1_000, nil, 1_000)
+    assert :ok = ConfigStore.reload()
+
     write_profile(root, other_slug, chain_id, url, true, 5_000, 2_000)
     assert :ok = ConfigStore.reload()
     assert Catalog.lookup_instance_id(other_slug, chain_id, "rpc") == instance_id
@@ -176,6 +200,35 @@ defmodule Lasso.Config.ObservationPolicyReloadTest do
           - id: rpc
             url: #{url}
     #{provider_override}
+    """)
+  end
+
+  defp write_same_profile_shared_instance(root, slug, chain_id, url) do
+    File.write!(Path.join(root, "#{slug}.yml"), """
+    ---
+    name: Observation Reload
+    slug: #{slug}
+    ---
+    chains:
+      test:
+        chain_id: #{chain_id}
+        monitoring:
+          background_observations: true
+          http_heads_interval_ms: 5000
+          http_backup_interval_ms: 15000
+          chain_identity_interval_ms: 1000
+          evidence_freshness_ms: 5000
+        websocket:
+          subscribe_new_heads: false
+        providers:
+          - id: rpc
+            url: #{url}
+            observation_overrides:
+              background_observations: false
+          - id: rpc2
+            url: #{url}/
+            observation_overrides:
+              http_heads_interval_ms: 2000
     """)
   end
 end
