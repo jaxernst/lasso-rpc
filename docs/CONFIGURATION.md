@@ -146,8 +146,12 @@ provider circuit. The pool-to-coordinator mailbox uses the same envelope. If
 its reservation fails, the affected pool key stops delivering and its clients
 receive a continuity failure. Coordinator-to-client fanout uses the same
 envelope; exhaustion terminates continuity without advancing the stream marker.
-Backfill ingress and retained replay are still tracked under issue #186, so
-these defaults do not establish full streaming continuity qualification.
+Backfill events use the same ingress envelope. The backfill owner waits for
+each coordinator acknowledgement within the recovery deadline, and admission
+failure or a missed acknowledgement terminates recovery rather than reporting
+success for an undelivered event. Retained replay and connected-reorg ingress
+are still tracked under issue #186, so these defaults do not establish full
+streaming continuity qualification.
 
 ### UI Topology
 

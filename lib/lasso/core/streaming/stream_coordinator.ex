@@ -254,15 +254,31 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   @impl true
+  def handle_info({:stream_ingress, token, message}, state) do
+    Ingress.consume(token, fn -> handle_info(message, state) end)
+  end
+
   def handle_info(
-        {:backfill_event, owner_id, owner_pid, _provider_id, payload, _received_at},
+        {:backfill_event, owner_id, owner_pid, _provider_id, payload, _received_at, event_ref},
         %{failover_status: :backfilling, failover_context: context} = state
       )
       when context.backfill_owner_id == owner_id and context.backfill_owner_pid == owner_pid do
-    buffer_event(state, payload)
+    {:noreply, next_state} = result = buffer_event(state, payload)
+
+    outcome =
+      if next_state.failover_status == :backfilling,
+        do: :ok,
+        else: {:error, :continuity_exhausted}
+
+    send(owner_pid, {:backfill_event_ack, event_ref, outcome})
+    result
   end
 
-  def handle_info({:backfill_event, _owner_id, _owner_pid, _provider_id, _payload, _at}, state) do
+  def handle_info(
+        {:backfill_event, _owner_id, owner_pid, _provider_id, _payload, _at, event_ref},
+        state
+      ) do
+    send(owner_pid, {:backfill_event_ack, event_ref, {:error, :stale_backfill}})
     {:noreply, state}
   end
 
@@ -707,7 +723,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     case GapFiller.ensure_blocks(ctx.plan, from_n, to_n) do
       {:ok, blocks} ->
         emit_backfill_events(ctx.plan, owner_id, provider_id, blocks)
-        :ok
 
       {:error, reason} ->
         Logger.error("Block backfill failed: #{inspect(reason)}",
@@ -747,7 +762,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     case GapFiller.ensure_logs(ctx.plan, filter, from_n, to_n) do
       {:ok, logs} ->
         emit_backfill_events(ctx.plan, owner_id, provider_id, logs)
-        :ok
 
       {:error, reason} ->
         Logger.error("Log backfill failed: #{inspect(reason)}",
@@ -760,12 +774,29 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp emit_backfill_events(plan, owner_id, provider_id, events) do
-    Enum.each(events, fn event ->
-      send(
-        plan.caller_pid,
-        {:backfill_event, owner_id, self(), provider_id, event,
-         System.monotonic_time(:millisecond)}
-      )
+    Enum.reduce_while(events, :ok, fn event, :ok ->
+      event_ref = make_ref()
+
+      delivery =
+        Ingress.send(
+          plan.caller_pid,
+          {:backfill_event, owner_id, self(), provider_id, event,
+           System.monotonic_time(:millisecond), event_ref}
+        )
+
+      if delivery != :ok,
+        do: send(self(), {:backfill_event_ack, event_ref, {:error, :ingress_exhausted}})
+
+      receive do
+        {:backfill_event_ack, ^event_ref, :ok} ->
+          {:cont, :ok}
+
+        {:backfill_event_ack, ^event_ref, {:error, reason}} ->
+          {:halt, {:error, reason}}
+      after
+        max(div(plan.deadline_us - System.monotonic_time(:microsecond) + 999, 1_000), 0) ->
+          {:halt, {:error, :backfill_delivery_timeout}}
+      end
     end)
   end
 
