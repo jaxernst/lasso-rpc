@@ -341,16 +341,21 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         end
       end)
 
-    if snapshot && Catalog.snapshot() == snapshot &&
-         snapshot.generation == ConfigStore.route_generation(),
-       do: references,
-       else: []
+    case snapshot do
+      %{generation: generation} ->
+        if Catalog.snapshot() == snapshot and generation == ConfigStore.route_generation(),
+          do: references,
+          else: []
+
+      _unavailable ->
+        []
+    end
   end
 
   defp valid_reference_time?(%HeadReference{observed_at_ms: nil}, _captured_at_ms), do: true
 
   defp valid_reference_time?(%HeadReference{observed_at_ms: observed_at_ms}, captured_at_ms),
-    do: is_integer(observed_at_ms) and observed_at_ms <= captured_at_ms
+    do: observed_at_ms <= captured_at_ms
 
   defp clear_poll_owner(state) do
     %{
@@ -372,7 +377,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       {:ok, height} ->
         metadata = %{
           latency_ms: latency_ms,
-          poll_references: if(plan, do: plan.head_references_at_poll_start, else: [])
+          poll_references: plan.head_references_at_poll_start
         }
 
         send(state.parent, {:block_height, state.instance_id, height, metadata})
