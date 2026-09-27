@@ -14,13 +14,13 @@ defmodule Lasso.BlockSync.Strategy do
   ## Lifecycle
 
   1. Worker calls `start/3` to initialize the strategy
-  2. Strategy sends `{:block_height, height, metadata}` messages to parent
+  2. Strategy sends `{:head_observation, %HeadObservation{}}` messages to parent
   3. Strategy sends `{:health, latency_ms, success?}` for health metrics
   4. Strategy sends `{:status, status_atom}` for status changes
   5. Worker calls `stop/1` when strategy should terminate
   """
 
-  @type chain :: String.t()
+  @type chain :: pos_integer()
   @type provider_id :: String.t()
   @type height :: non_neg_integer()
   @type source :: :ws | :http
