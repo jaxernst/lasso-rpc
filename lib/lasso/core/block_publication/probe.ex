@@ -70,9 +70,13 @@ defmodule Lasso.BlockPublication.Probe do
            opts
          ) do
       {:ok, response, ctx} ->
-        with {:ok, header} <- Success.decode_result(response),
-             {:ok, locator} <- execution_locator(ctx) do
-          {:ok, header, locator}
+        try do
+          with {:ok, header} <- Success.decode_result(response),
+               {:ok, locator} <- execution_locator(ctx) do
+            {:ok, header, locator}
+          end
+        after
+          Success.release_capacity(response, :block_publication_consumed)
         end
 
       {:error, _, _} ->
