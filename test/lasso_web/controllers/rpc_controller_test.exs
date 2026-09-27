@@ -53,6 +53,80 @@ defmodule LassoWeb.RPCControllerWireContractTest do
   end
 
   describe "JSON-RPC wire contract" do
+    test "restricted methods never reach the provider in single or batch HTTP requests", %{
+      chain: chain
+    } do
+      caller = self()
+
+      setup_providers([
+        %{
+          id: "product-policy-upstream",
+          profile: "public",
+          behavior:
+            {:conditional,
+             fn method, params, _state ->
+               send(caller, {:upstream_request, method, params})
+               {:ok, "0x2a"}
+             end}
+        }
+      ])
+
+      restricted = Lasso.Config.MethodConstraints.disallowed_methods()
+
+      for method <- restricted do
+        conn =
+          post_json("/rpc/#{chain}", %{
+            "jsonrpc" => "2.0",
+            "id" => method,
+            "method" => method,
+            "params" => []
+          })
+
+        assert %{"id" => ^method, "error" => %{"code" => -32_601}} = json_response(conn, 200)
+        refute_received {:upstream_request, ^method, _}
+      end
+
+      batch =
+        restricted
+        |> Enum.with_index()
+        |> Enum.map(fn {method, id} ->
+          %{"jsonrpc" => "2.0", "id" => id, "method" => method, "params" => []}
+        end)
+
+      assert results = post_json("/rpc/#{chain}", batch) |> json_response(200)
+      assert length(results) == length(restricted)
+      assert Enum.all?(results, &match?(%{"error" => %{"code" => -32_601}}, &1))
+
+      for method <- restricted do
+        refute_received {:upstream_request, ^method, _}
+      end
+
+      assert {:error, %Lasso.JSONRPC.Error{code: -32_601}, _ctx} =
+               Lasso.RPC.RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_newFilter",
+                 [],
+                 %Lasso.RPC.RequestOptions{
+                   profile: "public",
+                   strategy: :load_balanced,
+                   timeout_ms: 2_000
+                 }
+               )
+
+      refute_received {:upstream_request, "eth_newFilter", _}
+
+      assert %{"result" => "0x2a"} =
+               post_json("/rpc/#{chain}", %{
+                 "jsonrpc" => "2.0",
+                 "id" => "control",
+                 "method" => "eth_getBalance",
+                 "params" => ["0x0000000000000000000000000000000000000000", "latest"]
+               })
+               |> json_response(200)
+
+      assert_receive {:upstream_request, "eth_getBalance", _}
+    end
+
     test "malformed envelopes and conflicting block selectors fail before upstream dispatch", %{
       chain: chain
     } do

@@ -20,7 +20,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   alias Lasso.BlockSync.Observation
-  alias Lasso.Config.ConfigStore
+  alias Lasso.Config.{ConfigStore, MethodConstraints}
   alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence, InstanceState}
 
   alias Lasso.RPC.{
@@ -113,10 +113,16 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       )
       when is_list(ranked_candidates) and
              (is_integer(consensus_height) or consensus_height == :unavailable) do
+    deferred_ranking = if MethodConstraints.disallowed?(method), do: nil, else: deferred_ranking
+
     descriptors =
-      Enum.map(ranked_candidates, fn {candidate, transport} ->
-        {:ranked, candidate, transport}
-      end)
+      if MethodConstraints.disallowed?(method) do
+        []
+      else
+        Enum.map(ranked_candidates, fn {candidate, transport} ->
+          {:ranked, candidate, transport}
+        end)
+      end
 
     limit = Keyword.get(opts, :limit, 1000)
 
@@ -179,9 +185,12 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       )
 
     descriptors =
-      plan
-      |> descriptors_fun.(strategy, transport, filters)
-      |> keep_head_eligible_routes(plan, filters, consensus_height)
+      if MethodConstraints.disallowed?(method) do
+        []
+      else
+        descriptors_fun.(plan, strategy, transport, filters)
+        |> keep_head_eligible_routes(plan, filters, consensus_height)
+      end
 
     limit = Keyword.get(opts, :limit, 1000)
 

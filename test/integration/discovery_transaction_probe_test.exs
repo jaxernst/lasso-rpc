@@ -26,7 +26,7 @@ defmodule Lasso.Discovery.TransactionProbeTest do
     end
   end
 
-  test "full discovery reports transaction support as unverifiable without dispatching it" do
+  test "full discovery avoids transaction and provider-local filter dispatch" do
     ref = {__MODULE__, make_ref()}
     prior_http_client = Application.get_env(:lasso, :http_client)
 
@@ -54,8 +54,14 @@ defmodule Lasso.Discovery.TransactionProbeTest do
 
     received = drain_methods([])
     assert "eth_blockNumber" in received
+    assert "eth_getLogs" in received
     refute "eth_sendRawTransaction" in received
     refute "eth_sendTransaction" in received
+
+    for method <- Lasso.Config.MethodConstraints.stateful_filter_methods() do
+      refute method in received
+      refute Enum.any?(results, &(&1.method == method))
+    end
 
     formatted = Formatter.format_table(%{url: url, methods: results})
     assert formatted =~ "Cannot verify safely: 1"

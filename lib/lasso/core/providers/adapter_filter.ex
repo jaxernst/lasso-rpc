@@ -12,6 +12,7 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   """
 
   require Logger
+  alias Lasso.Config.MethodConstraints
   alias Lasso.RPC.Channel
   alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Providers.Capabilities
@@ -53,27 +54,35 @@ defmodule Lasso.RPC.Providers.AdapterFilter do
   @spec method_supported?(Channel.t(), String.t()) :: boolean()
   def method_supported?(%Channel{provider_id: provider_id} = channel, method)
       when is_binary(method) do
-    category = MethodRegistry.method_category(method)
+    if MethodConstraints.disallowed?(method) do
+      false
+    else
+      category = MethodRegistry.method_category(method)
 
-    try do
-      :ok == Capabilities.supports_method?(method, category, provider_capabilities(channel))
-    rescue
-      error ->
-        Logger.error(
-          "Capabilities crash in supports_method?: #{provider_id}, #{Exception.message(error)}"
-        )
+      try do
+        :ok == Capabilities.supports_method?(method, category, provider_capabilities(channel))
+      rescue
+        error ->
+          Logger.error(
+            "Capabilities crash in supports_method?: #{provider_id}, #{Exception.message(error)}"
+          )
 
-        true
+          true
+      end
     end
   end
 
   # Private Implementation
 
   defp do_filter_channels(channels, method) do
-    {capable, filtered} =
-      Enum.split_with(channels, &method_supported?(&1, method))
+    if MethodConstraints.disallowed?(method) do
+      {:ok, [], channels}
+    else
+      {capable, filtered} =
+        Enum.split_with(channels, &method_supported?(&1, method))
 
-    apply_safety_check(capable, filtered, channels, method)
+      apply_safety_check(capable, filtered, channels, method)
+    end
   end
 
   defp safe_validate_params?(provider_id, method, params, profile, chain_id, caps) do

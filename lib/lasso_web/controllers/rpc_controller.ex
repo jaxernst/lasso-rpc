@@ -190,6 +190,20 @@ defmodule LassoWeb.RPCController do
             |> JError.to_response(response_id)
           )
         end
+
+      {:error, error} ->
+        conn = maybe_inject_observability_metadata(conn, nil)
+
+        if notification_request?(params) do
+          send_resp(conn, 204, "")
+        else
+          json(
+            conn,
+            error
+            |> JError.from()
+            |> JError.to_response(Map.get(params, "id"))
+          )
+        end
     end
   end
 

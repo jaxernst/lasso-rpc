@@ -6,6 +6,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   minimal requests and analyzing the responses.
   """
 
+  alias Lasso.Config.MethodConstraints
   alias Lasso.Discovery.{ErrorClassifier, ProbeEngine, TestParams}
   alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
@@ -121,6 +122,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
 
     categories
     |> Enum.flat_map(&MethodRegistry.category_methods/1)
+    |> Enum.reject(&MethodConstraints.disallowed?/1)
   end
 
   @doc """
@@ -188,7 +190,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     |> Enum.map(&MethodRegistry.method_category/1)
     |> Enum.uniq()
     |> Enum.filter(fn cat ->
-      category_methods = MethodRegistry.category_methods(cat)
+      category_methods =
+        Enum.reject(MethodRegistry.category_methods(cat), &MethodConstraints.disallowed?/1)
 
       if category_methods != [] do
         unsupported_in_cat = Enum.count(category_methods, &(&1 in unsupported_methods))

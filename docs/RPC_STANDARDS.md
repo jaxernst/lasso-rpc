@@ -26,18 +26,19 @@ replacement, transaction-hash reconciliation, receipts, and finality.
 
 ## Node-local methods
 
-The transport policy globally disallows `eth_sendTransaction`, `eth_accounts`,
-`eth_sign`, `eth_signTransaction`, and `personal_sign`. Provider capability
-policy can reject additional methods, including the `local_only` category.
-Do not treat a profile as an authentication or authorization boundary.
+Core rejects the registry's `local_only` methods, including
+`eth_sendTransaction`, `eth_accounts`, `eth_sign`, and `eth_signTransaction`,
+as well as `personal_sign`. Provider capability policy can reject additional
+methods. Do not treat a profile as an authentication or authorization boundary.
 
 ## Stateful filters and extensions
 
-RPC Core v0.4.5 can forward provider-local filter methods when capability policy
-permits them. They receive one dispatch per request and have **no cross-request
-affinity guarantee**. A filter ID created on one upstream may be invalid on a
-later selected upstream. Prefer `eth_getLogs` or supported WebSocket subscriptions;
-Core does not advertise a reliable multi-provider filter lifecycle.
+Current Core rejects provider-local filter lifecycle methods such as
+`eth_newFilter`, `eth_getFilterChanges`, and `eth_uninstallFilter`. Their filter
+IDs belong to one upstream, while Core does not provide cross-request provider
+affinity. Use `eth_getLogs` or supported WebSocket subscriptions instead. The
+released v0.4.5 could forward these methods when capability policy permitted
+them, without a reliable multi-provider filter lifecycle.
 
 Debug, trace, transaction-pool, bundler, and chain-specific methods depend on
 upstream support and configured restrictions. Their presence in a registry does

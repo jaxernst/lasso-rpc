@@ -21,7 +21,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   require Logger
 
-  alias Lasso.Config.{ConfigStore, ProfileValidator}
+  alias Lasso.Config.{ConfigStore, MethodConstraints, ProfileValidator}
   alias Lasso.Core.Request.{ExecutionScope, RequestOwner}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
@@ -146,44 +146,64 @@ defmodule Lasso.RPC.RequestPipeline do
         ExecutionScope.deadline_us(execution_scope)
       )
 
-    ctx = HeadPolicy.initialize(ctx)
-
     result =
-      case request_open(ctx, caller_guard) do
-        :ok ->
-          case prepare_request(ctx, rpc_request) do
-            {:ok, prepared_request} ->
-              ctx = RequestContext.set_prepared_request(ctx, prepared_request)
-
-              case request_open(ctx, caller_guard) do
-                :ok ->
-                  case validate_provider_override(chain_id, opts) do
-                    :ok ->
-                      execute_admitted_request(ctx, opts, caller_guard)
-
-                    {:error, jerr} ->
-                      finalize_error(jerr, ctx)
-                  end
-
-                {:error, :caller_abandoned} ->
-                  finalize_caller_abandoned(ctx)
-
-                {:error, :deadline_exhausted} ->
-                  finalize_bounded_error(ctx, :deadline_exhausted)
-              end
-
-            {:error, reason} ->
-              finalize_prepare_error(reason, ctx)
-          end
-
-        {:error, :caller_abandoned} ->
-          finalize_caller_abandoned(ctx)
-
-        {:error, :deadline_exhausted} ->
-          finalize_bounded_error(ctx, :deadline_exhausted)
+      if MethodConstraints.disallowed?(method) do
+        finalize_error(product_policy_error(), ctx)
+      else
+        execute_open_request(
+          HeadPolicy.initialize(ctx),
+          rpc_request,
+          chain_id,
+          opts,
+          caller_guard
+        )
       end
 
     finalize_request_terminal(result)
+  end
+
+  defp execute_open_request(ctx, rpc_request, chain_id, opts, caller_guard) do
+    case request_open(ctx, caller_guard) do
+      :ok ->
+        case prepare_request(ctx, rpc_request) do
+          {:ok, prepared_request} ->
+            ctx = RequestContext.set_prepared_request(ctx, prepared_request)
+
+            case request_open(ctx, caller_guard) do
+              :ok ->
+                case validate_provider_override(chain_id, opts) do
+                  :ok ->
+                    execute_admitted_request(ctx, opts, caller_guard)
+
+                  {:error, jerr} ->
+                    finalize_error(jerr, ctx)
+                end
+
+              {:error, :caller_abandoned} ->
+                finalize_caller_abandoned(ctx)
+
+              {:error, :deadline_exhausted} ->
+                finalize_bounded_error(ctx, :deadline_exhausted)
+            end
+
+          {:error, reason} ->
+            finalize_prepare_error(reason, ctx)
+        end
+
+      {:error, :caller_abandoned} ->
+        finalize_caller_abandoned(ctx)
+
+      {:error, :deadline_exhausted} ->
+        finalize_bounded_error(ctx, :deadline_exhausted)
+    end
+  end
+
+  defp product_policy_error do
+    JError.new(-32_601, "Method not supported by proxy",
+      category: :method_not_found,
+      retriable?: false,
+      breaker_penalty?: false
+    )
   end
 
   defp execute_admitted_request(ctx, opts, caller_guard) do

@@ -3,27 +3,35 @@ defmodule Lasso.Config.TransportPolicy do
   Centralizes JSON-RPC method constraints and transport requirements.
 
   - Defines which methods are WS-only
-  - Defines which methods are globally disallowed by the proxy
+  - Defines the hard product-policy boundary for methods Lasso never forwards
   - Provides helpers to compute allowed transports for a method
   """
 
   @type method :: String.t()
   @type transport :: :http | :ws
 
+  alias Lasso.RPC.MethodRegistry
+
   @ws_only_methods [
     "eth_subscribe",
     "eth_unsubscribe"
   ]
 
-  # Methods that operate on the upstream node's own keystore. Provider
-  # configuration cannot re-enable these methods.
-  @disallowed_methods [
-    "eth_sendTransaction",
-    "personal_sign",
-    "eth_sign",
-    "eth_signTransaction",
-    "eth_accounts"
+  @stateful_filter_methods [
+    "eth_newFilter",
+    "eth_newBlockFilter",
+    "eth_newPendingTransactionFilter",
+    "eth_getFilterChanges",
+    "eth_getFilterLogs",
+    "eth_uninstallFilter"
   ]
+
+  @signing_and_keystore_methods ["personal_sign"]
+
+  @product_restricted_methods Enum.uniq(
+                                MethodRegistry.category_methods(:local_only) ++
+                                  @signing_and_keystore_methods ++ @stateful_filter_methods
+                              )
 
   @doc """
   Returns true if the method requires WebSocket transport.
@@ -32,10 +40,21 @@ defmodule Lasso.Config.TransportPolicy do
   def ws_only?(method) when is_binary(method), do: method in @ws_only_methods
 
   @doc """
-  Returns true if the method is globally disallowed by the proxy.
+  Returns true if the hard product policy forbids forwarding the method.
+
+  This policy is independent of provider capabilities. Provider overrides and
+  capability safety fallbacks cannot make a restricted method routable.
   """
   @spec disallowed?(method) :: boolean()
-  def disallowed?(method) when is_binary(method), do: method in @disallowed_methods
+  def disallowed?(method) when is_binary(method), do: method in @product_restricted_methods
+
+  @doc "Methods Lasso never forwards to an upstream provider."
+  @spec disallowed_methods() :: [method]
+  def disallowed_methods, do: @product_restricted_methods
+
+  @doc "Stateful HTTP filter methods that require provider affinity Lasso does not provide."
+  @spec stateful_filter_methods() :: [method]
+  def stateful_filter_methods, do: @stateful_filter_methods
 
   @doc """
   For a given method, return the required transport if any.

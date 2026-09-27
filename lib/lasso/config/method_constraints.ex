@@ -16,6 +16,12 @@ defmodule Lasso.Config.MethodConstraints do
   @spec disallowed?(method) :: boolean()
   defdelegate disallowed?(method), to: TransportPolicy
 
+  @spec disallowed_methods() :: [method]
+  defdelegate disallowed_methods(), to: TransportPolicy
+
+  @spec stateful_filter_methods() :: [method]
+  defdelegate stateful_filter_methods(), to: TransportPolicy
+
   @spec required_transport_for(method) :: :http | :ws | nil
   defdelegate required_transport_for(method), to: TransportPolicy
 
