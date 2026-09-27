@@ -85,7 +85,12 @@ defmodule Lasso.Config.EffectiveRuntimePolicyTest do
         websocket: %{failover: %{max_backfill_blocks: 7, backfill_timeout_ms: 750}}
       })
 
-    GenServer.cast(pid, {:upstream_event, "old", "sub", %{"number" => "0x1", "hash" => "0x1"}, 1})
+    GenServer.cast(
+      pid,
+      {:upstream_event, "old", "sub",
+       %{"number" => "0x1", "hash" => "0x1", "parentHash" => "0x0"}, 1}
+    )
+
     GenServer.cast(pid, {:provider_unhealthy, "old", "new"})
     assert_receive {:backfill, "eth_blockNumber", timeout}, 1000
     assert timeout > 0 and timeout <= 750

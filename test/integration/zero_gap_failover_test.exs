@@ -58,7 +58,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
       assert Enum.map(collect_blocks(1, timeout: 3_000), &extract_block_number/1) == [205]
     end
 
-    test "handles out-of-order blocks during failover", %{chain: chain} do
+    test "repairs out-of-order live heads into canonical order before failover", %{chain: chain} do
       profile = "public"
       head = start_supervised!({Agent, fn -> 303 end})
 
@@ -90,8 +90,8 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
       assert Enum.map(collect_blocks(3, timeout: 2_000), &extract_block_number/1) == [
                300,
-               302,
-               301
+               301,
+               302
              ]
 
       :ok = MockWSProvider.simulate_provider_failure(chain, p1_id)
@@ -132,6 +132,7 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
     %{
       "number" => encode_hex(number),
       "hash" => "0x#{Integer.to_string(number * 1000, 16)}",
+      "parentHash" => "0x#{Integer.to_string((number - 1) * 1000, 16)}",
       "timestamp" => encode_hex(:os.system_time(:second))
     }
   end

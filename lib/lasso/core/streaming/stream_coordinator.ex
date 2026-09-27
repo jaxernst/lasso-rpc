@@ -34,6 +34,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       :max_backfill,
       :backfill_timeout,
       :continuity_policy,
+      :allow_head_regression,
+      :minimum_head,
       :excluded_providers,
       :plan
     ]
@@ -44,6 +46,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             max_backfill: non_neg_integer(),
             backfill_timeout: non_neg_integer(),
             continuity_policy: atom(),
+            allow_head_regression: boolean(),
+            minimum_head: non_neg_integer() | nil,
             excluded_providers: [String.t()],
             plan: GapFiller.Plan.t()
           }
@@ -135,6 +139,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         Keyword.get(opts, :backfill_requester, &Lasso.RPC.RequestPipeline.execute_owned/5),
       backfill_provider_selector:
         Keyword.get(opts, :backfill_provider_selector, &pick_best_http_provider/3),
+      live_backfill_provider_selector:
+        Keyword.get(
+          opts,
+          :live_backfill_provider_selector,
+          Keyword.get(opts, :backfill_provider_selector, &pick_backfill_http_provider/4)
+        ),
       replacement_requester:
         Keyword.get(opts, :replacement_requester, &request_pool_replacement/5),
       # Failover state machine
@@ -143,7 +153,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       failover_history: [],
       max_failover_attempts: Keyword.get(opts, :max_failover_attempts),
       failover_cooldown_ms: Keyword.get(opts, :failover_cooldown_ms, @failover_cooldown_ms),
-      max_event_buffer: Keyword.get(opts, :max_event_buffer, @max_event_buffer),
+      max_event_buffer:
+        Keyword.get(opts, :max_event_buffer, max(@max_event_buffer, max_backfill_blocks + 1)),
+      max_replay_buffer:
+        Keyword.get(
+          opts,
+          :max_replay_buffer,
+          max(Keyword.get(opts, :history_max_items, 4_096), max_backfill_blocks + 1)
+        ),
       max_event_bytes:
         Keyword.get(
           opts,
@@ -156,7 +173,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         ),
       continuity_budget: Keyword.get(opts, :continuity_budget, ContinuityBudget),
       recovery_timeout_ms: Keyword.get(opts, :recovery_timeout_ms, @default_recovery_timeout_ms),
-      recovery_deadline_us: nil
+      recovery_deadline_us: nil,
+      recovery_started_at_ms: nil,
+      recovery_attempts: 0
     }
 
     {:ok, state}
@@ -178,7 +197,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     case state.failover_status do
       :active ->
         if is_nil(state.primary_provider_id) or provider_id == state.primary_provider_id do
-          process_event_normal(state, payload)
+          process_event_normal(state, provider_id, payload)
         else
           drop_stale_provider_event(state, provider_id)
         end
@@ -280,7 +299,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         %{failover_status: :backfilling, failover_context: context} = state
       )
       when context.backfill_owner_id == owner_id and context.backfill_owner_pid == owner_pid do
-    {:noreply, next_state} = result = buffer_event(state, payload)
+    {:noreply, next_state} = result = buffer_replay_event(state, payload)
 
     outcome =
       if next_state.failover_status == :backfilling,
@@ -376,45 +395,59 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   # Internal implementation
 
-  defp process_event_normal(state, payload) do
-    case ingest_event(state.state, state.key, payload) do
-      {stream_state, :emit} ->
-        case reserve_retained_bytes(state, stream_state, 0) do
-          :ok ->
-            case ClientSubscriptionRegistry.dispatch(
-                   state.profile,
-                   state.chain_id,
-                   state.key,
-                   payload
-                 ) do
-              :ok -> {:noreply, %{state | state: stream_state}}
-              {:error, reason} -> fail_client_ingress(state, reason)
-            end
+  defp process_event_normal(state, provider_id, payload) do
+    case subscription_key(state.key) do
+      {:newHeads} ->
+        case StreamState.new_head_continuity(state.state, payload) do
+          :continuous ->
+            ingest_new_head(state, payload)
 
-          {:error, reason} ->
-            fail_client_ingress(state, reason)
+          :duplicate ->
+            {:noreply, state}
+
+          {:discontinuous, details} ->
+            initiate_live_reorg_repair(state, provider_id, payload, details)
+
+          {:error, :invalid_header} ->
+            continuity_resource_exhausted(
+              state,
+              :invalid_header,
+              StreamState.event_bytes(payload)
+            )
         end
+
+      {:logs, _filter} ->
+        case StreamState.log_continuity(state.state, payload) do
+          :continuous ->
+            ingest_log(state, payload)
+
+          {:discontinuous, details} ->
+            initiate_live_reorg_repair(state, provider_id, payload, details)
+
+          {:error, :invalid_log} ->
+            continuity_resource_exhausted(state, :invalid_log, StreamState.event_bytes(payload))
+        end
+    end
+  end
+
+  defp ingest_new_head(state, payload) do
+    case StreamState.ingest_new_head(state.state, payload) do
+      {stream_state, :emit} ->
+        retain_and_dispatch(state, stream_state, payload)
 
       {stream_state, :skip} ->
         {:noreply, %{state | state: stream_state}}
     end
   end
 
-  defp ingest_event(stream_state, key, payload) do
-    case subscription_key(key) do
-      {:newHeads} -> StreamState.ingest_new_head(stream_state, payload)
-      {:logs, _filter} -> StreamState.ingest_log(stream_state, payload)
+  defp ingest_log(state, payload) do
+    case StreamState.ingest_log(state.state, payload) do
+      {stream_state, :emit} ->
+        retain_and_dispatch(state, stream_state, payload)
+
+      {stream_state, :skip} ->
+        {:noreply, %{state | state: stream_state}}
     end
-  end
-
-  defp fail_client_ingress(state, reason) do
-    Logger.error("Client subscription ingress exhausted",
-      chain_id: state.chain_id,
-      key: inspect(state.key),
-      reason: inspect(reason)
-    )
-
-    enter_degraded_mode(state, failover_budget(state))
   end
 
   defp reserve_retained_bytes(state, stream_state, buffered_bytes) do
@@ -426,33 +459,72 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp buffer_event(state, payload) do
+    buffer_recovery_event(state, payload, :live)
+  end
+
+  defp buffer_replay_event(state, payload) do
+    buffer_recovery_event(state, payload, :replay)
+  end
+
+  defp buffer_recovery_event(state, payload, kind) do
     if state.failover_context do
       context = state.failover_context
-      buffer = context.event_buffer
-      count = Map.get_lazy(context, :event_buffer_count, fn -> length(buffer) end)
-      bytes = Map.get_lazy(context, :event_buffer_bytes, fn -> event_buffer_bytes(buffer) end)
+      live_buffer = context.event_buffer
+      replay_buffer = Map.get(context, :replay_buffer, [])
+      live_count = Map.get(context, :event_buffer_count, length(live_buffer))
+      replay_count = Map.get(context, :replay_buffer_count, length(replay_buffer))
+
+      live_bytes = Map.get(context, :event_buffer_bytes, event_buffer_bytes(live_buffer))
+
+      replay_bytes =
+        Map.get(context, :replay_buffer_bytes, event_buffer_bytes(replay_buffer))
+
       payload_bytes = StreamState.event_bytes(payload)
+
+      retained_bytes =
+        StreamState.retained_bytes(state.state) + live_bytes + replay_bytes + payload_bytes
 
       cond do
         payload_bytes > state.max_event_bytes ->
-          fail_recovery_buffer(state, :event_too_large, payload_bytes)
+          continuity_resource_exhausted(state, :event_too_large, payload_bytes)
 
-        count >= state.max_event_buffer ->
-          fail_recovery_buffer(state, :event_buffer_overflow, count)
+        recovery_buffer_full?(state, kind, live_count, replay_count) ->
+          buffer_limit = recovery_buffer_limit(state, kind)
+
+          Logger.error("Event buffer full, entering degraded mode",
+            chain_id: state.chain_id,
+            key: inspect(state.key),
+            buffer_kind: kind,
+            buffer_limit: buffer_limit
+          )
+
+          :telemetry.execute(
+            [:lasso, :stream, :event_buffer_overflow],
+            %{count: 1},
+            %{
+              chain_id: state.chain_id,
+              profile: state.profile,
+              key: inspect(state.key),
+              buffer_kind: kind,
+              buffer_limit: buffer_limit
+            }
+          )
+
+          enter_degraded_mode(state, failover_budget(state))
 
         true ->
-          case reserve_retained_bytes(state, state.state, bytes + payload_bytes) do
+          case reserve_retained_bytes(
+                 state,
+                 state.state,
+                 live_bytes + replay_bytes + payload_bytes
+               ) do
             :ok ->
-              updated_context =
-                context
-                |> Map.put(:event_buffer, [payload | buffer])
-                |> Map.put(:event_buffer_count, count + 1)
-                |> Map.put(:event_buffer_bytes, bytes + payload_bytes)
+              updated_context = put_recovery_event(context, kind, payload, payload_bytes)
 
               {:noreply, %{state | failover_context: updated_context}}
 
             {:error, reason} ->
-              fail_recovery_buffer(state, reason, bytes + payload_bytes)
+              continuity_resource_exhausted(state, reason, retained_bytes)
           end
       end
     else
@@ -460,31 +532,31 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp fail_recovery_buffer(state, reason, size) do
-    message =
-      if reason == :event_buffer_overflow,
-        do: "Event buffer full",
-        else: "Recovery buffer exhausted"
+  defp put_recovery_event(context, :live, payload, payload_bytes) do
+    count = Map.get(context, :event_buffer_count, length(context.event_buffer))
+    bytes = Map.get(context, :event_buffer_bytes, event_buffer_bytes(context.event_buffer))
 
-    Logger.error("#{message}, entering degraded mode",
-      chain_id: state.chain_id,
-      key: inspect(state.key),
-      reason: reason,
-      size: size
-    )
-
-    :telemetry.execute(
-      [:lasso, :stream, :event_buffer_overflow],
-      %{count: 1},
-      %{chain_id: state.chain_id, profile: state.profile, key: inspect(state.key), reason: reason}
-    )
-
-    enter_degraded_mode(state, failover_budget(state))
+    context
+    |> Map.put(:event_buffer, [payload | context.event_buffer])
+    |> Map.put(:event_buffer_count, count + 1)
+    |> Map.put(:event_buffer_bytes, bytes + payload_bytes)
   end
 
-  defp event_buffer_bytes(buffer) do
-    Enum.reduce(buffer, 0, fn payload, bytes -> bytes + :erlang.external_size(payload) end)
+  defp put_recovery_event(context, :replay, payload, payload_bytes) do
+    context
+    |> Map.put(:replay_buffer, [payload | Map.get(context, :replay_buffer, [])])
+    |> Map.update(:replay_buffer_count, 1, &(&1 + 1))
+    |> Map.update(:replay_buffer_bytes, payload_bytes, &(&1 + payload_bytes))
   end
+
+  defp recovery_buffer_full?(state, :live, live_count, _replay_count),
+    do: live_count >= state.max_event_buffer
+
+  defp recovery_buffer_full?(state, :replay, _live_count, replay_count),
+    do: replay_count >= state.max_replay_buffer
+
+  defp recovery_buffer_limit(state, :live), do: state.max_event_buffer
+  defp recovery_buffer_limit(state, :replay), do: state.max_replay_buffer
 
   defp drop_stale_provider_event(state, provider_id) do
     :telemetry.execute(
@@ -508,7 +580,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     deadline_us =
       System.monotonic_time(:microsecond) + state.recovery_timeout_ms * 1_000
 
-    state = %{state | recovery_deadline_us: deadline_us}
+    state = %{
+      state
+      | recovery_deadline_us: deadline_us,
+        recovery_started_at_ms: System.monotonic_time(:millisecond),
+        recovery_attempts: 0
+    }
 
     if is_binary(new_provider_id) do
       initiate_failover_with_buffer(state, old_provider_id, new_provider_id, [])
@@ -551,6 +628,218 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     }
   end
 
+  defp initiate_live_reorg_repair(state, provider_id, payload, details) when is_map(payload) do
+    initiate_live_reorg_repair(state, provider_id, [payload], details)
+  end
+
+  defp initiate_live_reorg_repair(state, provider_id, pending_events, details) do
+    state = if state.failover_status == :active, do: refresh_failover_config(state), else: state
+    recovery_budget = failover_budget(state)
+    recovery_attempts = state.recovery_attempts + 1
+    pending_bytes = event_buffer_bytes(pending_events)
+    retained_bytes = StreamState.retained_bytes(state.state) + pending_bytes
+    preferred_provider_id = state.primary_provider_id || provider_id
+
+    state = %{
+      state
+      | recovery_attempts: recovery_attempts,
+        recovery_started_at_ms:
+          state.recovery_started_at_ms || System.monotonic_time(:millisecond)
+    }
+
+    cond do
+      recovery_attempts > recovery_budget.attempts ->
+        Logger.error("Connected reorg repair attempt budget exhausted",
+          chain_id: state.chain_id,
+          key: inspect(state.key),
+          attempts: recovery_attempts,
+          attempts_budget: recovery_budget.attempts
+        )
+
+        enter_degraded_mode(state, recovery_budget)
+
+      length(pending_events) > state.max_event_buffer ->
+        continuity_resource_exhausted(state, :event_buffer_overflow, retained_bytes)
+
+      Enum.any?(pending_events, &(StreamState.event_bytes(&1) > state.max_event_bytes)) ->
+        continuity_resource_exhausted(state, :event_too_large, retained_bytes)
+
+      true ->
+        case reserve_retained_bytes(state, state.state, pending_bytes) do
+          :ok ->
+            start_live_reorg_with_provider(
+              state,
+              preferred_provider_id,
+              pending_events,
+              pending_bytes,
+              details
+            )
+
+          {:error, reason} ->
+            continuity_resource_exhausted(state, reason, retained_bytes)
+        end
+    end
+  end
+
+  defp start_live_reorg_with_provider(
+         state,
+         preferred_provider_id,
+         pending_events,
+         pending_bytes,
+         details
+       ) do
+    case select_backfill_provider(
+           state.live_backfill_provider_selector,
+           state.profile,
+           state.chain_id,
+           preferred_provider_id,
+           []
+         ) do
+      {:ok, http_provider} ->
+        start_live_reorg_backfill(
+          state,
+          preferred_provider_id,
+          http_provider,
+          pending_events,
+          pending_bytes,
+          details
+        )
+
+      {:error, reason} ->
+        failover_uncertified_live_provider(
+          state,
+          preferred_provider_id,
+          pending_events,
+          pending_bytes,
+          reason
+        )
+    end
+  end
+
+  defp failover_uncertified_live_provider(
+         state,
+         provider_id,
+         pending_events,
+         _pending_bytes,
+         reason
+       ) do
+    Logger.error("Live WebSocket provider cannot supply canonical HTTP reconciliation",
+      chain_id: state.chain_id,
+      key: inspect(state.key),
+      provider_id: provider_id,
+      reason: inspect(reason)
+    )
+
+    case pick_next_provider(state, [provider_id], include_half_open: false) do
+      {:ok, next_provider_id} ->
+        started_at_ms = state.recovery_started_at_ms || System.monotonic_time(:millisecond)
+
+        deadline_us =
+          state.recovery_deadline_us ||
+            System.monotonic_time(:microsecond) + state.recovery_timeout_ms * 1_000
+
+        state = %{
+          state
+          | recovery_deadline_us: deadline_us,
+            recovery_started_at_ms: started_at_ms
+        }
+
+        initiate_failover_with_buffer(
+          state,
+          provider_id,
+          next_provider_id,
+          Enum.reverse(pending_events)
+        )
+
+      {:error, :no_providers} ->
+        enter_degraded_mode(state, failover_budget(state))
+    end
+  end
+
+  defp start_live_reorg_backfill(
+         state,
+         provider_id,
+         http_provider,
+         pending_events,
+         pending_bytes,
+         details
+       ) do
+    started_at_us = System.monotonic_time(:microsecond)
+
+    deadline_us =
+      state.recovery_deadline_us || started_at_us + state.recovery_timeout_ms * 1_000
+
+    remaining_ms = recovery_remaining_ms(deadline_us)
+
+    if remaining_ms > 0 do
+      Process.send_after(self(), {:failover_deadline, deadline_us}, remaining_ms)
+
+      plan =
+        GapFiller.Plan.new(
+          state.profile,
+          state.chain_id,
+          http_provider,
+          self(),
+          min(state.backfill_timeout, remaining_ms),
+          deadline_us: deadline_us,
+          requester: state.backfill_requester
+        )
+
+      backfill_context = %BackfillContext{
+        profile: state.profile,
+        chain_id: state.chain_id,
+        max_backfill: state.max_backfill_blocks,
+        backfill_timeout: state.backfill_timeout,
+        continuity_policy: state.continuity_policy,
+        excluded_providers: [http_provider],
+        allow_head_regression: true,
+        minimum_head: max_pending_head(pending_events),
+        plan: plan
+      }
+
+      context = %{
+        old_provider_id: provider_id,
+        new_provider_id: provider_id,
+        http_provider_id: http_provider,
+        backfill_owner_id: nil,
+        backfill_owner_pid: nil,
+        backfill_owner_ref: nil,
+        backfill_task_ref: nil,
+        backfill_plan: plan,
+        backfill_context: backfill_context,
+        continuity_marker: continuity_marker(state.state, state.key),
+        continuity_snapshot: StreamState.continuity_snapshot(state.state),
+        started_at: div(started_at_us, 1_000),
+        event_buffer: Enum.reverse(pending_events),
+        event_buffer_count: length(pending_events),
+        event_buffer_bytes: pending_bytes,
+        initial_live_event_count: length(pending_events),
+        replay_buffer: [],
+        replay_buffer_count: 0,
+        replay_buffer_bytes: 0,
+        recovery_kind: :live_reorg,
+        attempt_count: 1
+      }
+
+      telemetry_live_reorg_started(
+        state.profile,
+        state.chain_id,
+        state.key,
+        provider_id,
+        http_provider,
+        details
+      )
+
+      state
+      |> Map.put(:failover_status, :backfilling)
+      |> Map.put(:failover_context, context)
+      |> Map.put(:recovery_deadline_us, deadline_us)
+      |> start_backfill_after_replacement(provider_id, nil)
+    else
+      enter_degraded_mode(state, failover_budget(state))
+    end
+  end
+
   # Failover initiation with preserved buffer (used during cascade)
   defp initiate_failover_with_buffer(state, old_provider_id, new_provider_id, initial_buffer) do
     Logger.info("Initiating failover: #{old_provider_id} -> #{new_provider_id}",
@@ -575,7 +864,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     else
       excluded_providers = [old_provider_id, new_provider_id] |> Enum.reject(&is_nil/1)
 
-      case state.backfill_provider_selector.(state.profile, state.chain_id, excluded_providers) do
+      case select_backfill_provider(
+             state.backfill_provider_selector,
+             state.profile,
+             state.chain_id,
+             new_provider_id,
+             excluded_providers
+           ) do
         {:ok, http_provider} ->
           start_replacement(
             state,
@@ -633,11 +928,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       max_backfill: state.max_backfill_blocks,
       backfill_timeout: state.backfill_timeout,
       continuity_policy: state.continuity_policy,
+      allow_head_regression: false,
+      minimum_head: nil,
       excluded_providers: [old_provider_id, new_provider_id],
       plan: plan
     }
 
     continuity_marker = continuity_marker(state.state, state.key)
+    continuity_snapshot = StreamState.continuity_snapshot(state.state)
 
     failover_context = %{
       old_provider_id: old_provider_id,
@@ -650,10 +948,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       backfill_plan: plan,
       backfill_context: backfill_ctx,
       continuity_marker: continuity_marker,
+      continuity_snapshot: continuity_snapshot,
       started_at: div(started_at_us, 1_000),
       event_buffer: initial_buffer,
       event_buffer_count: length(initial_buffer),
       event_buffer_bytes: event_buffer_bytes(initial_buffer),
+      initial_live_event_count: length(initial_buffer),
+      replay_buffer: [],
+      replay_buffer_count: 0,
+      replay_buffer_bytes: 0,
+      recovery_kind: :failover,
       attempt_count: recent_failures + 1
     }
 
@@ -716,6 +1020,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             context.backfill_context,
             key,
             context.continuity_marker,
+            context.continuity_snapshot,
             owner_id
           )
 
@@ -734,8 +1039,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     {:noreply, %{state | failover_status: :backfilling, failover_context: updated_context}}
   end
 
-  defp safely_execute_backfill(ctx, key, continuity_marker, owner_id) do
-    execute_backfill(ctx, key, continuity_marker, owner_id)
+  defp safely_execute_backfill(ctx, key, continuity_marker, continuity_snapshot, owner_id) do
+    execute_backfill(ctx, key, continuity_marker, continuity_snapshot, owner_id)
   rescue
     error ->
       Logger.error("Backfill error: #{inspect(error)}",
@@ -748,24 +1053,48 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     kind, reason -> {:error, {kind, reason}}
   end
 
-  defp execute_backfill(ctx, key, continuity_marker, owner_id) do
+  defp execute_backfill(ctx, key, continuity_marker, continuity_snapshot, owner_id) do
     case subscription_key(key) do
       {:newHeads} ->
-        backfill_blocks(ctx, key, continuity_marker, owner_id)
+        backfill_blocks(ctx, key, continuity_marker, continuity_snapshot, owner_id)
 
       {:logs, filter} ->
-        backfill_logs(ctx, key, filter, continuity_marker, owner_id)
+        backfill_logs(ctx, key, filter, continuity_marker, continuity_snapshot, owner_id)
     end
   end
 
-  defp backfill_blocks(ctx, key, last, owner_id) do
-    with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
+  defp backfill_blocks(ctx, key, last, snapshot, owner_id) do
+    with {:ok, head} <- GapFiller.fetch_head(ctx.plan),
+         :ok <- ensure_minimum_head(head, ctx.minimum_head) do
       case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
         {:none} ->
           :ok
 
+        {:regressed, _last_seen, observed_head} when ctx.allow_head_regression ->
+          backfill_canonical_blocks(
+            ctx,
+            key,
+            snapshot,
+            observed_head,
+            observed_head,
+            owner_id,
+            allow_observation_boundary: true
+          )
+
+        {:regressed, last_seen, observed_head} ->
+          Logger.error("Backfill source head regressed below the delivered stream",
+            chain_id: ctx.chain_id,
+            key: inspect(key),
+            last_seen: last_seen,
+            observed_head: observed_head
+          )
+
+          {:error, :head_regressed}
+
         {:range, from_n, to_n} ->
-          backfill_block_range(ctx, key, from_n, to_n, owner_id)
+          backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
+            allow_observation_boundary: ctx.allow_head_regression
+          )
 
         {:exceeded, from_n, to_n} ->
           Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
@@ -774,21 +1103,44 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           )
 
           if ctx.continuity_policy == :best_effort,
-            do: backfill_block_range(ctx, key, from_n, to_n, owner_id),
+            do:
+              backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
+                allow_observation_boundary: ctx.allow_head_regression
+              ),
             else: {:error, :gap_exceeded}
       end
     end
   end
 
-  defp backfill_block_range(ctx, key, from_n, to_n, owner_id) do
-    provider_id = ctx.plan.provider_id
+  defp ensure_minimum_head(_head, nil), do: :ok
+  defp ensure_minimum_head(head, minimum_head) when head >= minimum_head, do: :ok
+  defp ensure_minimum_head(_head, _minimum_head), do: {:error, :source_behind_observed_head}
 
-    case GapFiller.ensure_blocks(ctx.plan, from_n, to_n) do
-      {:ok, blocks} ->
-        emit_backfill_events(ctx.plan, owner_id, provider_id, blocks)
+  defp backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id, opts) do
+    history = Map.get(snapshot, :head_history, %{})
+    allow_observation_boundary = Keyword.fetch!(opts, :allow_observation_boundary)
 
+    with {:ok, ancestor, probed} <-
+           find_common_ancestor(
+             ctx.plan,
+             history,
+             from_n,
+             ctx.max_backfill,
+             allow_observation_boundary
+           ),
+         replay_from = max(ancestor + 1, from_n),
+         {:ok, blocks} <- fetch_unprobed_blocks(ctx.plan, probed, replay_from, to_n) do
+      blocks =
+        blocks
+        |> Map.values()
+        |> Enum.sort_by(&decode_hex(Map.get(&1, "number", "0x0")))
+
+      with :ok <- validate_canonical_branch(blocks) do
+        emit_backfill_events(ctx.plan, owner_id, ctx.plan.provider_id, blocks)
+      end
+    else
       {:error, reason} ->
-        Logger.error("Block backfill failed: #{inspect(reason)}",
+        Logger.error("Block ancestry reconciliation failed: #{inspect(reason)}",
           chain_id: ctx.chain_id,
           key: inspect(key)
         )
@@ -797,14 +1149,205 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp backfill_logs(ctx, key, filter, last, owner_id) do
-    with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
+  defp find_common_ancestor(
+         plan,
+         history,
+         from_n,
+         max_backfill,
+         allow_observation_boundary
+       ) do
+    lower_bound = max(from_n - max_backfill + 1, 0)
+
+    find_common_ancestor(
+      plan,
+      history,
+      from_n,
+      lower_bound,
+      %{},
+      max_backfill,
+      allow_observation_boundary
+    )
+  end
+
+  defp find_common_ancestor(
+         _plan,
+         history,
+         number,
+         lower_bound,
+         probed,
+         max_backfill,
+         allow_observation_boundary
+       )
+       when number < lower_bound do
+    if map_size(history) <= 1 or
+         (allow_observation_boundary and
+            initial_observation_window?(history, max_backfill)) do
+      {:ok, earliest_observed_height(history, lower_bound) - 1, probed}
+    else
+      {:error, :reorg_horizon_exceeded}
+    end
+  end
+
+  defp find_common_ancestor(
+         plan,
+         history,
+         number,
+         lower_bound,
+         probed,
+         max_backfill,
+         allow_observation_boundary
+       ) do
+    case Map.fetch(history, number) do
+      {:ok, retained} ->
+        with {:ok, [canonical]} <- GapFiller.ensure_blocks(plan, number, number) do
+          probed = Map.put(probed, number, canonical)
+
+          if Map.get(retained, "hash") == Map.get(canonical, "hash") do
+            {:ok, number, probed}
+          else
+            find_common_ancestor(
+              plan,
+              history,
+              number - 1,
+              lower_bound,
+              probed,
+              max_backfill,
+              allow_observation_boundary
+            )
+          end
+        end
+
+      :error ->
+        case match_retained_parent(
+               plan,
+               history,
+               number,
+               max_backfill,
+               allow_observation_boundary
+             ) do
+          :match ->
+            {:ok, number, probed}
+
+          :miss ->
+            find_common_ancestor(
+              plan,
+              history,
+              number - 1,
+              lower_bound,
+              probed,
+              max_backfill,
+              allow_observation_boundary
+            )
+
+          {:error, _reason} = error ->
+            error
+        end
+    end
+  end
+
+  defp match_retained_parent(
+         plan,
+         history,
+         number,
+         max_backfill,
+         allow_observation_boundary
+       ) do
+    earliest = earliest_observed_height(history, number + 1)
+
+    with false <- allow_observation_boundary,
+         true <- map_size(history) > 1,
+         true <- number == earliest - 1,
+         true <- initial_observation_window?(history, max_backfill),
+         %{"parentHash" => parent_hash} when is_binary(parent_hash) <- Map.get(history, earliest),
+         {:ok, [canonical]} <- GapFiller.ensure_blocks(plan, number, number) do
+      if Map.get(canonical, "hash") == parent_hash, do: :match, else: :miss
+    else
+      {:error, _reason} = error -> error
+      _other -> :miss
+    end
+  end
+
+  defp initial_observation_window?(history, max_backfill) when map_size(history) < max_backfill do
+    heights = history |> Map.keys() |> Enum.sort()
+
+    case heights do
+      [] -> false
+      [first | _] -> heights == Enum.to_list(first..List.last(heights))
+    end
+  end
+
+  defp initial_observation_window?(_history, _max_backfill), do: false
+
+  defp earliest_observed_height(history, fallback) do
+    history
+    |> Map.keys()
+    |> Enum.min(fn -> fallback end)
+  end
+
+  defp fetch_unprobed_blocks(_plan, probed, from_n, to_n) when from_n > to_n,
+    do: {:ok, probed}
+
+  defp fetch_unprobed_blocks(plan, probed, from_n, to_n) do
+    Enum.reduce_while(from_n..to_n, {:ok, probed}, fn number, {:ok, blocks} ->
+      if Map.has_key?(blocks, number) do
+        {:cont, {:ok, blocks}}
+      else
+        case GapFiller.ensure_blocks(plan, number, number) do
+          {:ok, [block]} -> {:cont, {:ok, Map.put(blocks, number, block)}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end
+    end)
+  end
+
+  defp validate_canonical_branch([]), do: :ok
+
+  defp validate_canonical_branch([first | rest]) do
+    with {:ok, first_number, first_hash} <- canonical_header_identity(first) do
+      Enum.reduce_while(rest, {:ok, first_number, first_hash}, fn block,
+                                                                  {:ok, previous_number,
+                                                                   previous_hash} ->
+        with {:ok, number, hash} <- canonical_header_identity(block),
+             true <- number == previous_number + 1,
+             true <- Map.get(block, "parentHash") == previous_hash do
+          {:cont, {:ok, number, hash}}
+        else
+          _ -> {:halt, {:error, :inconsistent_canonical_branch}}
+        end
+      end)
+      |> case do
+        {:ok, _number, _hash} -> :ok
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp canonical_header_identity(block) do
+    case {decode_hex(Map.get(block, "number")), Map.get(block, "hash")} do
+      {number, hash} when is_integer(number) and is_binary(hash) -> {:ok, number, hash}
+      _ -> {:error, :invalid_canonical_header}
+    end
+  end
+
+  defp backfill_logs(ctx, key, filter, last, snapshot, owner_id) do
+    with :ok <- ensure_history_complete(snapshot),
+         {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
       case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
         {:none} ->
           :ok
 
+        {:regressed, last_seen, observed_head} ->
+          Logger.error("Backfill source head regressed below the delivered stream",
+            chain_id: ctx.chain_id,
+            key: inspect(key),
+            last_seen: last_seen,
+            observed_head: observed_head
+          )
+
+          {:error, :head_regressed}
+
         {:range, from_n, to_n} ->
-          backfill_log_range(ctx, key, filter, from_n, to_n, owner_id)
+          backfill_log_range(ctx, key, filter, snapshot, from_n, to_n, owner_id)
 
         {:exceeded, from_n, to_n} ->
           Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
@@ -814,18 +1357,24 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
           if ctx.continuity_policy == :strict_abort,
             do: {:error, :gap_exceeded},
-            else: backfill_log_range(ctx, key, filter, from_n, to_n, owner_id)
+            else: backfill_log_range(ctx, key, filter, snapshot, from_n, to_n, owner_id)
       end
     end
   end
 
-  defp backfill_log_range(ctx, key, filter, from_n, to_n, owner_id) do
+  defp ensure_history_complete(%{history_overflowed: true}), do: {:error, :history_overflow}
+  defp ensure_history_complete(_snapshot), do: :ok
+
+  defp backfill_log_range(ctx, key, filter, snapshot, from_n, to_n, owner_id) do
     provider_id = ctx.plan.provider_id
+    retained_logs = Map.get(snapshot, :logs, [])
 
-    case GapFiller.ensure_logs(ctx.plan, filter, from_n, to_n) do
-      {:ok, logs} ->
-        emit_backfill_events(ctx.plan, owner_id, provider_id, logs)
-
+    with {:ok, orphaned_logs} <- find_orphaned_logs(ctx.plan, retained_logs),
+         replay_from <- replay_from_for_logs(orphaned_logs, from_n),
+         {:ok, logs} <- GapFiller.ensure_logs(ctx.plan, filter, replay_from, to_n) do
+      removals = Enum.map(orphaned_logs, &Map.put(&1, "removed", true))
+      emit_backfill_events(ctx.plan, owner_id, provider_id, removals ++ logs)
+    else
       {:error, reason} ->
         Logger.error("Log backfill failed: #{inspect(reason)}",
           chain_id: ctx.chain_id,
@@ -834,6 +1383,32 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
         {:error, reason}
     end
+  end
+
+  defp find_orphaned_logs(plan, retained_logs) do
+    retained_logs
+    |> Enum.group_by(&decode_hex(Map.get(&1, "blockNumber", "0x0")))
+    |> Enum.sort_by(fn {number, _logs} -> number end, :desc)
+    |> Enum.reduce_while({:ok, []}, fn {number, logs}, {:ok, orphaned} ->
+      case GapFiller.ensure_blocks(plan, number, number) do
+        {:ok, [canonical]} ->
+          canonical_hash = Map.get(canonical, "hash")
+          at_height = Enum.filter(logs, &(Map.get(&1, "blockHash") != canonical_hash))
+          {:cont, {:ok, at_height ++ orphaned}}
+
+        {:error, reason} ->
+          {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp replay_from_for_logs([], from_n), do: from_n
+
+  defp replay_from_for_logs(orphaned_logs, from_n) do
+    orphaned_logs
+    |> Enum.map(&decode_hex(Map.get(&1, "blockNumber", "0x0")))
+    |> Enum.min()
+    |> min(from_n)
   end
 
   defp emit_backfill_events(plan, owner_id, provider_id, events) do
@@ -864,9 +1439,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp complete_failover(state, provider_id, _upstream_id) do
-    Logger.info("Failover complete: now on provider #{provider_id}",
+    recovery_kind = Map.get(state.failover_context, :recovery_kind, :failover)
+
+    Logger.info("WebSocket continuity recovery complete",
       chain_id: state.chain_id,
-      key: inspect(state.key)
+      key: inspect(state.key),
+      provider_id: provider_id,
+      recovery_kind: recovery_kind
     )
 
     case drain_event_buffer(state) do
@@ -877,77 +1456,148 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             failover_status: :active,
             failover_context: nil,
             failover_history: [],
-            recovery_deadline_us: nil
+            recovery_deadline_us: nil,
+            recovery_started_at_ms: nil,
+            recovery_attempts: 0
         }
 
-        duration_ms = System.monotonic_time(:millisecond) - state.failover_context.started_at
-        telemetry_failover_completed(final_state.chain_id, final_state.key, duration_ms)
+        duration_ms =
+          System.monotonic_time(:millisecond) -
+            (state.recovery_started_at_ms || state.failover_context.started_at)
+
+        telemetry_recovery_completed(
+          recovery_kind,
+          final_state.profile,
+          final_state.chain_id,
+          final_state.key,
+          duration_ms
+        )
+
         {:noreply, final_state}
 
-      {:error, reason} ->
-        fail_client_ingress(state, reason)
+      {:repair, new_state, pending_events, details} ->
+        restart_state = %{
+          new_state
+          | primary_provider_id: provider_id,
+            failover_status: :active,
+            failover_context: nil
+        }
+
+        initiate_live_reorg_repair(restart_state, provider_id, pending_events, details)
+
+      {:error, reason, retained_bytes} ->
+        continuity_resource_exhausted(state, reason, retained_bytes)
     end
   end
 
   defp drain_event_buffer(state) do
-    if state.failover_context && state.failover_context.event_buffer != [] do
-      Logger.debug(
-        "Draining #{length(state.failover_context.event_buffer)} buffered events",
-        chain_id: state.chain_id,
-        key: inspect(state.key)
-      )
+    context = state.failover_context || %{}
+    live_buffer = context |> Map.get(:event_buffer, []) |> Enum.reverse()
+    replay_buffer = context |> Map.get(:replay_buffer, []) |> Enum.reverse()
 
-      # Sort deterministically before deduping
-      ordered_buffer =
-        case subscription_key(state.key) do
-          {:newHeads} ->
-            state.failover_context.event_buffer
-            |> Enum.reverse()
-            |> Enum.sort_by(fn payload ->
-              decode_hex(Map.get(payload, "number", "0x0"))
-            end)
+    Logger.debug("Draining WebSocket continuity buffers",
+      chain_id: state.chain_id,
+      key: inspect(state.key),
+      replay_events: length(replay_buffer),
+      live_events: length(live_buffer)
+    )
 
-          {:logs, _filter} ->
-            state.failover_context.event_buffer
-            |> Enum.reverse()
-            |> order_recovery_logs()
-        end
+    result =
+      case subscription_key(state.key) do
+        {:newHeads} ->
+          drain_head_buffers(state, replay_buffer, live_buffer, context)
 
-      initial_bytes =
-        Map.get_lazy(state.failover_context, :event_buffer_bytes, fn ->
-          event_buffer_bytes(state.failover_context.event_buffer)
-        end)
-
-      Enum.reduce_while(ordered_buffer, {:ok, state, initial_bytes}, fn
-        payload, {:ok, acc, buffered_bytes} ->
-          drain_buffered_event(acc, payload, buffered_bytes)
-      end)
-      |> case do
-        {:ok, drained_state, _remaining_bytes} -> {:ok, drained_state}
-        {:error, reason} -> {:error, reason}
+        {:logs, _filter} ->
+          drain_log_buffers(state, replay_buffer, live_buffer)
       end
+
+    case result do
+      {:ok, new_state} -> admit_drained_state(new_state)
+      {:repair, _new_state, _pending_events, _details} = repair -> repair
+      {:error, reason, retained_bytes} -> {:error, reason, retained_bytes}
+    end
+  catch
+    {:stream_ingress_exhausted, reason} ->
+      {:error, reason, StreamState.retained_bytes(state.state)}
+  end
+
+  defp drain_head_buffers(state, replay_buffer, live_buffer, context) do
+    replay_buffer =
+      Enum.sort_by(replay_buffer, &decode_hex(Map.get(&1, "number", "0x0")))
+
+    stream_state =
+      Enum.reduce(replay_buffer, state.state, &ingest_and_dispatch_head(&2, &1, state))
+
+    initial_count = Map.get(context, :initial_live_event_count, 0)
+    {pre_reconciliation, concurrent} = Enum.split(live_buffer, initial_count)
+
+    with {:ok, stream_state} <-
+           merge_live_heads(stream_state, pre_reconciliation, state, :http_observed),
+         {:ok, stream_state} <- merge_live_heads(stream_state, concurrent, state, :concurrent) do
+      {:ok, %{state | state: stream_state}}
     else
-      {:ok, state}
+      {:repair, stream_state, pending_events, details} ->
+        {:repair, %{state | state: stream_state}, pending_events, details}
+
+      {:error, reason, stream_state} ->
+        {:error, reason, StreamState.retained_bytes(stream_state)}
     end
   end
 
-  defp drain_buffered_event(state, payload, buffered_bytes) do
-    remaining_bytes = max(buffered_bytes - StreamState.event_bytes(payload), 0)
-    {stream_state, decision} = ingest_event(state.state, state.key, payload)
+  defp merge_live_heads(stream_state, [], _state, _phase), do: {:ok, stream_state}
 
-    with :ok <- reserve_retained_bytes(state, stream_state, remaining_bytes),
-         :ok <- dispatch_drained_event(state, payload, decision) do
-      {:cont, {:ok, %{state | state: stream_state}, remaining_bytes}}
-    else
-      {:error, reason} -> {:halt, {:error, reason}}
+  defp merge_live_heads(stream_state, [payload | rest], state, phase) do
+    case StreamState.new_head_continuity(stream_state, payload) do
+      :continuous ->
+        stream_state
+        |> ingest_and_dispatch_head(payload, state)
+        |> merge_live_heads(rest, state, phase)
+
+      :duplicate ->
+        merge_live_heads(stream_state, rest, state, phase)
+
+      {:discontinuous, details}
+      when phase == :http_observed and details.observed_number <= details.latest_number ->
+        telemetry_stale_reorg_head_dropped(state.profile, state.chain_id, state.key, details)
+        merge_live_heads(stream_state, rest, state, phase)
+
+      {:discontinuous, details} ->
+        {:repair, stream_state, [payload | rest], details}
+
+      {:error, :invalid_header} ->
+        {:error, :invalid_header, stream_state}
     end
   end
 
-  defp dispatch_drained_event(state, payload, :emit) do
-    ClientSubscriptionRegistry.dispatch(state.profile, state.chain_id, state.key, payload)
+  defp ingest_and_dispatch_head(stream_state, payload, state) do
+    case StreamState.ingest_new_head(stream_state, payload) do
+      {next_stream_state, :emit} ->
+        dispatch_buffered_event(state, payload)
+        next_stream_state
+
+      {next_stream_state, :skip} ->
+        next_stream_state
+    end
   end
 
-  defp dispatch_drained_event(_state, _payload, :skip), do: :ok
+  defp drain_log_buffers(state, replay_buffer, live_buffer) do
+    stream_state =
+      replay_buffer
+      |> Kernel.++(live_buffer)
+      |> order_recovery_logs()
+      |> Enum.reduce(state.state, fn payload, stream_state ->
+        case StreamState.ingest_log(stream_state, payload) do
+          {next_stream_state, :emit} ->
+            dispatch_buffered_event(state, payload)
+            next_stream_state
+
+          {next_stream_state, :skip} ->
+            next_stream_state
+        end
+      end)
+
+    {:ok, %{state | state: stream_state}}
+  end
 
   defp order_recovery_logs(events) do
     {rollbacks, additions} =
@@ -979,7 +1629,97 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
      decode_hex(Map.get(log, "logIndex", "0x0")), log_identity(log)}
   end
 
-  defp log_identity(log), do: {Map.get(log, "blockHash"), Map.get(log, "logIndex")}
+  defp log_identity(log) do
+    {Map.get(log, "blockHash"), Map.get(log, "transactionHash"), Map.get(log, "logIndex")}
+  end
+
+  defp dispatch_buffered_event(state, payload) do
+    case ClientSubscriptionRegistry.dispatch(state.profile, state.chain_id, state.key, payload) do
+      :ok -> :ok
+      {:error, reason} -> throw({:stream_ingress_exhausted, reason})
+    end
+  end
+
+  defp admit_drained_state(state) do
+    retained_bytes = StreamState.retained_bytes(state.state)
+
+    case reserve_retained_bytes(state, state.state, 0) do
+      :ok -> {:ok, state}
+      {:error, reason} -> {:error, reason, retained_bytes}
+    end
+  end
+
+  defp retain_and_dispatch(state, stream_state, payload) do
+    payload_bytes = StreamState.event_bytes(payload)
+    retained_bytes = StreamState.retained_bytes(stream_state)
+
+    if payload_bytes > state.max_event_bytes do
+      continuity_resource_exhausted(state, :event_too_large, payload_bytes)
+    else
+      case reserve_retained_bytes(state, stream_state, 0) do
+        :ok ->
+          case ClientSubscriptionRegistry.dispatch(
+                 state.profile,
+                 state.chain_id,
+                 state.key,
+                 payload
+               ) do
+            :ok -> {:noreply, %{state | state: stream_state}}
+            {:error, reason} -> continuity_resource_exhausted(state, reason, retained_bytes)
+          end
+
+        {:error, reason} ->
+          continuity_resource_exhausted(state, reason, retained_bytes)
+      end
+    end
+  end
+
+  defp continuity_resource_exhausted(state, reason, retained_bytes) do
+    :telemetry.execute(
+      [:lasso, :stream, :continuity_resource_exhausted],
+      %{count: 1, retained_bytes: retained_bytes},
+      %{
+        chain_id: state.chain_id,
+        profile: state.profile,
+        subscription_type: Subscription.subscription_type(state.key),
+        reason: reason,
+        limit_bytes: continuity_limit(state, reason)
+      }
+    )
+
+    Logger.error("WebSocket continuity resource bound exhausted",
+      chain_id: state.chain_id,
+      profile: state.profile,
+      key: inspect(state.key),
+      reason: reason,
+      retained_bytes: retained_bytes
+    )
+
+    enter_degraded_mode(state, failover_budget(state))
+  end
+
+  defp event_buffer_bytes(buffer) do
+    Enum.reduce(buffer, 0, fn payload, bytes -> bytes + StreamState.event_bytes(payload) end)
+  end
+
+  defp max_pending_head(events) do
+    events
+    |> Enum.map(fn event ->
+      event
+      |> Map.get("number", Map.get(event, "blockNumber", "0x0"))
+      |> decode_hex()
+    end)
+    |> Enum.max(fn -> 0 end)
+  end
+
+  defp continuity_limit(state, :event_too_large), do: state.max_event_bytes
+
+  defp continuity_limit(state, reason) when reason in [:node_limit, :stream_limit] do
+    stats = ContinuityBudget.stats(state.continuity_budget)
+    Map.get(stats, reason, 0)
+  end
+
+  defp continuity_limit(_state, _reason), do: 0
 
   defp handle_resubscribe_failure(state, reason) do
     Logger.error("Resubscription failed: #{inspect(reason)}",
@@ -1097,7 +1837,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
          state: StreamState.clear_history(state.state),
          failover_context: nil,
          failover_history: [],
-         recovery_deadline_us: nil
+         recovery_deadline_us: nil,
+         recovery_started_at_ms: nil,
+         recovery_attempts: 0
      }}
   end
 
@@ -1137,6 +1879,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       {:logs, _filter} ->
         StreamState.last_log_block(stream_state) || StreamState.last_block_num(stream_state)
     end
+  end
+
+  defp continuity_range(last_seen, head, _max_backfill, _policy)
+       when is_integer(last_seen) and head < last_seen do
+    {:regressed, last_seen, head}
   end
 
   defp continuity_range(last_seen, head, max_backfill, policy) when is_integer(last_seen) do
@@ -1179,6 +1926,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  defp select_backfill_provider(selector, profile, chain_id, preferred, excluded) do
+    case :erlang.fun_info(selector, :arity) do
+      {:arity, 4} -> selector.(profile, chain_id, preferred, excluded -- [preferred])
+      {:arity, 3} -> selector.(profile, chain_id, excluded)
+    end
+  end
+
+  # Disconnected failover retains Core's independent HTTP fallback. A live
+  # reorg uses the source provider's own HTTP endpoint to certify its branch.
   defp pick_best_http_provider(profile, chain_id, excluded) do
     case Selection.select_provider(
            profile,
@@ -1188,11 +1944,22 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
            protocol: :http,
            exclude: excluded
          ) do
-      {:ok, provider_id} ->
-        {:ok, provider_id}
+      {:ok, provider_id} -> {:ok, provider_id}
+      _ -> {:error, :no_http_provider}
+    end
+  end
 
-      _ ->
-        {:error, :no_http_provider}
+  @doc false
+  @spec pick_backfill_http_provider(String.t(), pos_integer(), String.t(), [String.t()]) ::
+          {:ok, String.t()} | {:error, :no_http_provider}
+  def pick_backfill_http_provider(profile, chain_id, preferred, excluded) do
+    with false <- preferred in excluded,
+         instance_id when is_binary(instance_id) <-
+           Catalog.lookup_instance_id(profile, chain_id, preferred),
+         {:ok, %{url: url}} when is_binary(url) <- Catalog.get_instance(instance_id) do
+      {:ok, preferred}
+    else
+      _ -> {:error, :no_http_provider}
     end
   end
 
@@ -1253,6 +2020,47 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     :telemetry.execute([:lasso, :subs, :failover, :completed], %{duration_ms: duration_ms}, %{
       chain_id: chain_id,
       key: inspect(key)
+    })
+  end
+
+  defp telemetry_recovery_completed(:live_reorg, profile, chain_id, key, duration_ms) do
+    :telemetry.execute(
+      [:lasso, :subs, :reorg_repair, :completed],
+      %{duration_ms: duration_ms},
+      %{profile: profile, chain_id: chain_id, key: inspect(key)}
+    )
+  end
+
+  defp telemetry_recovery_completed(_kind, _profile, chain_id, key, duration_ms) do
+    telemetry_failover_completed(chain_id, key, duration_ms)
+  end
+
+  defp telemetry_live_reorg_started(
+         profile,
+         chain_id,
+         key,
+         provider_id,
+         http_provider,
+         details
+       ) do
+    :telemetry.execute([:lasso, :subs, :reorg_repair, :started], %{count: 1}, %{
+      profile: profile,
+      chain_id: chain_id,
+      key: inspect(key),
+      provider_id: provider_id,
+      http_provider_id: http_provider,
+      latest_number: details.latest_number,
+      observed_number: details.observed_number
+    })
+  end
+
+  defp telemetry_stale_reorg_head_dropped(profile, chain_id, key, details) do
+    :telemetry.execute([:lasso, :subs, :reorg_repair, :stale_head_dropped], %{count: 1}, %{
+      profile: profile,
+      chain_id: chain_id,
+      key: inspect(key),
+      latest_number: details.latest_number,
+      observed_number: details.observed_number
     })
   end
 

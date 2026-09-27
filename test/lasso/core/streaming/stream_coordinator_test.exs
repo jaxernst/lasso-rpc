@@ -20,8 +20,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
   # Test helpers for event creation
   defp new_heads_event(block_num) do
     %{
-      "hash" => "0x#{:crypto.strong_rand_bytes(32) |> Base.encode16(case: :lower)}",
-      "number" => "0x#{Integer.to_string(block_num, 16)}"
+      "hash" => "0x#{block_num}",
+      "number" => "0x#{Integer.to_string(block_num, 16)}",
+      "parentHash" => "0x#{block_num - 1}"
     }
   end
 
@@ -618,7 +619,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         backfill_owner_ref: owner_ref,
         backfill_task_ref: owner_ref,
         started_at: now(),
-        event_buffer: [event1, event2, event3],
+        event_buffer: [event3, event2, event1],
         attempt_count: 1
       }
 
