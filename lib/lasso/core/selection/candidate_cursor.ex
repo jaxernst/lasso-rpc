@@ -177,7 +177,11 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         workload_key: workload_for_origin(Keyword.get(opts, :request_origin, :client))
       )
 
-    descriptors = descriptors_fun.(plan, strategy, transport, filters)
+    descriptors =
+      plan
+      |> descriptors_fun.(strategy, transport, filters)
+      |> keep_head_eligible_routes(plan, filters, consensus_height)
+
     limit = Keyword.get(opts, :limit, 1000)
 
     %__MODULE__{
@@ -542,6 +546,30 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         Enum.shuffle(descriptors)
     end
   end
+
+  # Per-provider materialization cannot decide the all-lagging fallback: a
+  # one-provider plan always looks all-lagging. Resolve that decision across
+  # the captured candidate set while keeping channel opening incremental.
+  defp keep_head_eligible_routes(
+         descriptors,
+         plan,
+         %{head_snapshot: %Lasso.Observations.HeadSnapshot{}} = filters,
+         consensus_height
+       ) do
+    eligible =
+      plan
+      |> CandidateListing.list_routing_candidates_from_plan(filters, consensus_height)
+      |> Enum.flat_map(fn candidate ->
+        Enum.map(candidate.transports, &{candidate.id, &1})
+      end)
+      |> MapSet.new()
+
+    Enum.filter(descriptors, fn {provider, transport} ->
+      MapSet.member?(eligible, {provider.id, transport})
+    end)
+  end
+
+  defp keep_head_eligible_routes(descriptors, _plan, _filters, _consensus_height), do: descriptors
 
   defp current?(cursor) do
     Catalog.snapshot() == cursor.snapshot and
