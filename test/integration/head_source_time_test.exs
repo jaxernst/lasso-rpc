@@ -1,7 +1,7 @@
 defmodule Lasso.RPC.HeadSourceTimeTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.BlockSync.{Registry, Worker}
+  alias Lasso.BlockSync.{Observation, Registry, Worker}
   alias Lasso.Observations.HeadObservation
 
   @moduletag :integration
@@ -46,6 +46,9 @@ defmodule Lasso.RPC.HeadSourceTimeTest do
     assert {:ok, {105, ^ws_at, :ws, _metadata}} = Registry.get_height(chain_id, instance_id)
     assert {:ok, 105} = Registry.get_consensus_height(chain_id)
 
+    assert {:ok, %{height: 101, source: :http}} =
+             Observation.read_transport(chain_id, instance_id, :http, ws_at, 90_000)
+
     send(worker, {:block_height, instance_id, 99, %{latency_ms: 1, observed_at_ms: http_at - 50}})
     assert {:ok, _status} = GenServer.call(worker, :get_status)
 
@@ -53,5 +56,20 @@ defmodule Lasso.RPC.HeadSourceTimeTest do
              Registry.get_observation(chain_id, instance_id, :http)
 
     assert {:ok, {105, ^ws_at, :ws, _metadata}} = Registry.get_height(chain_id, instance_id)
+
+    newer_http_at = ws_at + 100
+
+    send(
+      worker,
+      {:block_height, instance_id, 102, %{latency_ms: 1, observed_at_ms: newer_http_at}}
+    )
+
+    assert {:ok, _status} = GenServer.call(worker, :get_status)
+
+    assert {:ok, {102, ^newer_http_at, :http, _metadata}} =
+             Registry.get_height(chain_id, instance_id)
+
+    assert {:ok, %{height: 105, source: :ws}} =
+             Observation.read_transport(chain_id, instance_id, :ws, newer_http_at, 90_000)
   end
 end

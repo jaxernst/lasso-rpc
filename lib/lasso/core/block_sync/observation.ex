@@ -54,30 +54,32 @@ defmodule Lasso.BlockSync.Observation do
   def read_transport(chain_id, instance_id, transport, now_ms, compiled_freshness_ms)
       when transport in [:http, :ws] and is_integer(compiled_freshness_ms) and
              compiled_freshness_ms > 0 do
-    case Registry.get_height(chain_id, instance_id) do
-      {:ok, {height, observed_at_ms, ^transport, metadata}} ->
-        stale_after_ms =
-          Enum.max([
-            compiled_freshness_ms,
-            positive(Map.get(metadata, :stale_after_ms), 0),
-            3 * positive(Map.get(metadata, :sample_interval_ms), 0)
-          ])
+    case Registry.get_observation(chain_id, instance_id, transport) do
+      {:ok, %HeadObservation{} = fact} ->
+        classify_transport(
+          fact.height,
+          fact.observed_at_ms,
+          transport,
+          observation_metadata(fact),
+          now_ms,
+          compiled_freshness_ms
+        )
 
-        observation = %{
-          height: height,
-          observed_at_ms: observed_at_ms,
-          source: transport,
-          metadata: metadata,
-          stale_after_ms: stale_after_ms,
-          age_ms: max(0, now_ms - observed_at_ms)
-        }
+      {:error, :not_found} ->
+        case Registry.get_height(chain_id, instance_id) do
+          {:ok, {height, observed_at_ms, ^transport, metadata}} ->
+            classify_transport(
+              height,
+              observed_at_ms,
+              transport,
+              metadata,
+              now_ms,
+              compiled_freshness_ms
+            )
 
-        if fresh?(observation, now_ms),
-          do: {:ok, observation},
-          else: {:error, {:stale, observation}}
-
-      _missing_transport ->
-        {:error, :not_found}
+          _missing_transport ->
+            {:error, :not_found}
+        end
     end
   end
 
@@ -116,6 +118,45 @@ defmodule Lasso.BlockSync.Observation do
       positive(Map.get(observation.attributes, :stale_after_ms), 0),
       3 * positive(observation.sample_interval_ms, 0)
     ])
+  end
+
+  defp classify_transport(
+         height,
+         observed_at_ms,
+         transport,
+         metadata,
+         now_ms,
+         compiled_freshness_ms
+       ) do
+    stale_after_ms =
+      Enum.max([
+        compiled_freshness_ms,
+        positive(Map.get(metadata, :stale_after_ms), 0),
+        3 * positive(Map.get(metadata, :sample_interval_ms), 0)
+      ])
+
+    observation = %{
+      height: height,
+      observed_at_ms: observed_at_ms,
+      source: transport,
+      metadata: metadata,
+      stale_after_ms: stale_after_ms,
+      age_ms: max(0, now_ms - observed_at_ms)
+    }
+
+    if fresh?(observation, now_ms),
+      do: {:ok, observation},
+      else: {:error, {:stale, observation}}
+  end
+
+  defp observation_metadata(%HeadObservation{} = observation) do
+    observation.attributes
+    |> Map.put(:origin_member_id, observation.origin_member_id)
+    |> Map.put(:hash, observation.block_hash)
+    |> Map.put(:parent_hash, observation.parent_hash)
+    |> Map.put(:timestamp, observation.block_timestamp)
+    |> Map.put(:latency_ms, observation.latency_ms)
+    |> Map.put(:poll_references, observation.poll_references)
   end
 
   defp positive(value, _fallback) when is_integer(value) and value > 0, do: value
