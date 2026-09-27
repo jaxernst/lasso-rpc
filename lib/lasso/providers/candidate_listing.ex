@@ -295,9 +295,10 @@ defmodule Lasso.Providers.CandidateListing do
     learned_scope =
       learned_scope || AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
-    candidates =
+    gate_candidates =
       plan.providers
       |> Enum.map(&build_candidate(&1, learned_scope, plan, protocol, workload_key, mode))
+      |> Enum.map(&filter_routing_gate_transports(&1, filters, mode))
       |> Enum.filter(fn c ->
         transport_available?(c, protocol) and
           candidate_gate_ready?(c, protocol, include_half_open, filters, mode)
@@ -306,7 +307,10 @@ defmodule Lasso.Providers.CandidateListing do
       |> filter_by_archival(Map.get(filters, :requires_archival))
       |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
       |> filter_excluded(filters)
-      |> filter_by_lag(
+
+    candidates =
+      filter_by_lag(
+        gate_candidates,
         plan,
         Map.get(filters, :max_lag_blocks),
         consensus_height,
@@ -314,7 +318,14 @@ defmodule Lasso.Providers.CandidateListing do
         Map.get(filters, :head_snapshot)
       )
 
-    candidates
+    # Deferred ranking avoids gate reads on the common path. If head evidence
+    # changes the candidate set, resolve the real transport gates before the
+    # all-routes availability decision so an open sibling cannot mask fallback.
+    if mode in [:ranked, :fastest_ranked] and candidates != gate_candidates do
+      do_list_candidates(plan, filters, :routing, consensus_height, warn_on_lag?, learned_scope)
+    else
+      candidates
+    end
   end
 
   @doc """
@@ -489,8 +500,26 @@ defmodule Lasso.Providers.CandidateListing do
     {%{http: http_cb, ws: ws_cb}, %{http: http_rl, ws: ws_rl}}
   end
 
+  # Head fallback considers only transports that can actually be materialized.
+  # Ranked modes defer these gates until cursor admission.
+  defp filter_routing_gate_transports(candidate, filters, :routing) do
+    include_half_open = Map.get(filters, :include_half_open, false)
+    exclude_rate_limited = Map.get(filters, :exclude_rate_limited, false)
+
+    transports =
+      Enum.filter(candidate.transports, fn transport ->
+        cb_ready?(Map.fetch!(candidate.circuit_state, transport), include_half_open) and
+          (not exclude_rate_limited or
+             not Map.fetch!(candidate.rate_limited, transport))
+      end)
+
+    %{candidate | transports: transports}
+  end
+
+  defp filter_routing_gate_transports(candidate, _filters, _mode), do: candidate
+
   defp candidate_gate_ready?(_candidate, _protocol, _include_half_open, _filters, mode)
-       when mode in [:ranked, :fastest_ranked],
+       when mode in [:routing, :ranked, :fastest_ranked],
        do: true
 
   defp candidate_gate_ready?(candidate, protocol, include_half_open, filters, _mode) do

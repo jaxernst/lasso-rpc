@@ -2,6 +2,7 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
   use Lasso.Test.LassoIntegrationCase
 
   alias Lasso.BlockSync.Registry
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.Selection
@@ -70,6 +71,21 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
     end
 
     minority_id = Catalog.lookup_instance_id(profile, chain, minority)
+    assert {:ok, http_snapshot} = Snapshot.lookup({minority_id, :http})
+    assert true = Snapshot.put(%{http_snapshot | state: :open, epoch: http_snapshot.epoch + 1})
+
+    for strategy <- [:priority, :load_balanced, :fastest, :latency_weighted] do
+      restricted =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: strategy,
+          transport: :both,
+          exclude: [majority_a, majority_b]
+        )
+
+      assert {:ok, %{provider_id: ^minority, transport: :ws}, _} =
+               CandidateCursor.next(restricted)
+    end
+
     assert :ok = Registry.put_height(chain, minority_id, 90, :ws, %{hash: "0xbbb"})
 
     for strategy <- [:priority, :load_balanced] do
@@ -81,6 +97,18 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
         )
 
       assert {:ok, %{provider_id: ^minority}, _} = CandidateCursor.next(restricted)
+    end
+
+    for strategy <- [:priority, :load_balanced, :fastest, :latency_weighted] do
+      restricted =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: strategy,
+          transport: :both,
+          exclude: [majority_a, majority_b]
+        )
+
+      assert {:ok, %{provider_id: ^minority, transport: :ws}, _} =
+               CandidateCursor.next(restricted)
     end
   end
 end
