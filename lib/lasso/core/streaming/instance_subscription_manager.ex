@@ -198,6 +198,10 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   end
 
   @impl true
+  def handle_info({:stream_ingress, token, message}, state) do
+    Lasso.Core.Streaming.Ingress.consume(token, fn -> handle_info(message, state) end)
+  end
+
   def handle_info({:subscription_event, instance_id, upstream_id, payload, received_at}, state)
       when instance_id == state.instance_id do
     case Map.get(state.upstream_index, upstream_id) do
@@ -215,14 +219,18 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
         {:noreply, %{state | orphan_event_count: orphan_count}}
 
       sub_key ->
-        InstanceSubscriptionRegistry.dispatch(
-          state.instance_id,
-          sub_key,
-          {:instance_subscription_event, state.instance_id, sub_key, payload, received_at}
-        )
+        case InstanceSubscriptionRegistry.dispatch(
+               state.instance_id,
+               sub_key,
+               {:instance_subscription_event, state.instance_id, sub_key, payload, received_at}
+             ) do
+          :ok ->
+            {:noreply, update_subscription_liveness(state, sub_key, received_at)}
 
-        state = update_subscription_liveness(state, sub_key, received_at)
-        {:noreply, state}
+          {:error, :ingress_exhausted} ->
+            Connection.close_for_ingress_overload(state.instance_id)
+            handle_disconnect(state)
+        end
     end
   end
 

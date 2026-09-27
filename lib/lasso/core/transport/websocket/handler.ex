@@ -13,14 +13,20 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
     {:ok, state}
   end
 
-  @spec handle_frame({:text, String.t()}, map()) :: {:ok, map()}
+  @spec handle_frame({:text, String.t()}, map()) :: {:ok, map()} | {:close, map()}
   def handle_frame({:text, message}, state) do
     received_at = System.monotonic_time(:microsecond)
     parsed = UpstreamResponse.parse_ws_frame(message)
     validated_at = System.monotonic_time(:microsecond)
-    send_parsed_frame(state, parsed, message, received_at, validated_at)
 
-    {:ok, state}
+    case send_parsed_frame(state, parsed, message, received_at, validated_at) do
+      :ok ->
+        {:ok, state}
+
+      {:error, _} ->
+        send(state.parent, {:ws_local_overload, self(), state.connection_generation})
+        {:close, state}
+    end
   end
 
   def handle_frame(_frame, state), do: {:ok, state}
@@ -123,7 +129,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   end
 
   defp send_parsed_frame(state, parsed, message, received_at, validated_at) do
-    send(
+    Lasso.Core.Streaming.Ingress.send(
       state.parent,
       {:ws_message, self(), state.connection_generation, parsed, message, received_at,
        validated_at}

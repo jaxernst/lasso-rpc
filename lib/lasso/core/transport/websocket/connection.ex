@@ -70,6 +70,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   use GenServer, restart: :permanent
   require Logger
 
+  alias Lasso.Core.Streaming.{Ingress, InstanceSubscriptionManager}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
@@ -723,6 +724,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     do: {:reply, {:error, :stale_connection}, state}
 
   @impl true
+  def handle_cast(:close_for_ingress_overload, state),
+    do: {:noreply, close_for_local_ingress_overload(state)}
+
   def handle_cast({:cancel_transport, transport_id, generation, token}, state) do
     {:noreply, cancel_transport_by_key(state, transport_id, generation, token)}
   end
@@ -824,6 +828,19 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
+  def handle_info(
+        {:ws_local_overload, connection, generation},
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    {:noreply, close_for_local_ingress_overload(state)}
+  end
+
+  def handle_info({:ws_local_overload, _connection, _generation}, state), do: {:noreply, state}
+
+  def handle_info({:stream_ingress, token, message}, state) do
+    Ingress.consume(token, fn -> handle_info(message, state) end)
+  end
+
   def handle_info(
         {:ws_send_decision, connection, generation, {:transport, transport_id, token}, decision,
          decided_at_us},
@@ -2316,6 +2333,36 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp terminate_connection_generation(state, _connection, _generation), do: state
 
+  defp close_for_local_ingress_overload(%{connected: false} = state), do: state
+
+  defp close_for_local_ingress_overload(state) do
+    error =
+      JError.new(-32_000, "WebSocket local resource capacity exhausted",
+        provider_id: state.endpoint.id,
+        transport: :ws,
+        category: :local_capacity_rejection,
+        retriable?: true,
+        breaker_penalty?: false
+      )
+
+    state = cancel_stability_timer(state)
+    if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
+    if is_pid(state.connection), do: Process.exit(state.connection, :kill)
+    state = cleanup_pending_requests(state, error)
+
+    state = %{
+      state
+      | connected: false,
+        connection: nil,
+        connection_stable: false,
+        heartbeat_ref: nil
+    }
+
+    broadcast_conn_event(state, fn provider_id -> {:ws_disconnected, provider_id, error} end)
+    write_ws_status(state.instance_id, :disconnected, state.reconnect_attempts)
+    schedule_reconnect_with_circuit_check(state)
+  end
+
   defp remove_transport_entry(state, transport_id, pending) do
     cleanup_send_entry(pending)
     %{state | transport_pending: Map.delete(state.transport_pending, transport_id)}
@@ -2595,11 +2642,19 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp broadcast_subscription_event(state, sub_id, payload, received_at) do
-    Phoenix.PubSub.broadcast(
-      Lasso.PubSub,
-      Lasso.Topics.ws_subs_instance(state.instance_id),
-      {:subscription_event, state.instance_id, sub_id, payload, received_at}
-    )
+    case Ingress.send(
+           InstanceSubscriptionManager.via(state.instance_id),
+           {:subscription_event, state.instance_id, sub_id, payload, received_at}
+         ) do
+      :ok -> :ok
+      {:error, _} -> close_for_ingress_overload(state.instance_id)
+    end
+  end
+
+  @doc "Closes an overloaded socket locally without penalizing the provider circuit."
+  @spec close_for_ingress_overload(String.t()) :: :ok
+  def close_for_ingress_overload(instance_id) when is_binary(instance_id) do
+    GenServer.cast(via_instance_name(instance_id), :close_for_ingress_overload)
   end
 
   defp profile_provider_refs(%{

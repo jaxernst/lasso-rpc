@@ -135,8 +135,16 @@ delivery bound: 16 MiB and 32 queued notifications per client, within 128 MiB
 across the node. A client that cannot keep up loses its subscription and its
 WebSocket closes with code `1013`; the `[:lasso, :stream, :slow_consumer]`
 telemetry event names the reason. Reservations are reclaimed when a socket
-dies. These are runtime defaults, not profile YAML settings. Ingress and replay
-retention bounds are separate work under [issue #186](https://github.com/jaxernst/lasso-rpc/issues/186).
+dies. These are runtime defaults, not profile YAML settings. Remaining ingress
+and replay retention bounds are tracked under [issue #186](https://github.com/jaxernst/lasso-rpc/issues/186).
+
+The v0.5 candidate also admits incoming upstream frames and instance fanout
+before they enter recipient mailboxes. The node-local ingress envelope is
+128 MiB, with 32 MiB and 128 queued messages per recipient. Exhaustion closes
+the affected upstream connection locally and reconnects without penalizing the
+provider circuit. The remaining pool-to-coordinator and replay paths are still
+tracked under issue #186; these defaults do not establish full streaming
+continuity qualification.
 
 ### UI Topology
 

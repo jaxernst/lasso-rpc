@@ -276,6 +276,10 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   # newHeads events from InstanceSubscriptionManager via InstanceSubscriptionRegistry
+  def handle_info({:stream_ingress, token, message}, state) do
+    Lasso.Core.Streaming.Ingress.consume(token, fn -> handle_info(message, state) end)
+  end
+
   def handle_info(
         {:instance_subscription_event, instance_id, {:newHeads}, payload, _received_at},
         state

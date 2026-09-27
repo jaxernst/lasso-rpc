@@ -50,7 +50,17 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionRegistry do
     Registry.unregister(__MODULE__, key)
   end
 
-  @spec dispatch(String.t(), term(), term()) :: :ok
+  @spec dispatch(String.t(), term(), term()) :: :ok | {:error, :ingress_exhausted}
+  def dispatch(instance_id, sub_key, {:instance_subscription_event, _, _, _, _} = message) do
+    Registry.lookup(__MODULE__, {instance_id, sub_key})
+    |> Enum.reduce(:ok, fn {pid, _meta}, result ->
+      case Lasso.Core.Streaming.Ingress.send(pid, message) do
+        :ok -> result
+        {:error, _} -> {:error, :ingress_exhausted}
+      end
+    end)
+  end
+
   def dispatch(instance_id, sub_key, message) do
     Registry.dispatch(__MODULE__, {instance_id, sub_key}, fn entries ->
       for {pid, _meta} <- entries do

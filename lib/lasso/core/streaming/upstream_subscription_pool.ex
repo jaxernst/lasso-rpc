@@ -889,6 +889,10 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   @impl true
   # Events from InstanceSubscriptionManager via InstanceSubscriptionRegistry
+  def handle_info({:stream_ingress, token, message}, state) do
+    Lasso.Core.Streaming.Ingress.consume(token, fn -> handle_info(message, state) end)
+  end
+
   def handle_info(
         {:instance_subscription_event, instance_id, subscription_key, payload, received_at},
         state

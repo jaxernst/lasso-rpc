@@ -202,8 +202,11 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
           {:ok, _} = InstanceSubscriptionManager.ensure_subscription(instance_id, key)
 
           receive do
-            {:instance_subscription_event, ^instance_id, ^key, payload, _received_at} ->
-              send(test_pid, {:consumer1_received, payload})
+            {:stream_ingress, token,
+             {:instance_subscription_event, ^instance_id, ^key, payload, _received_at}} ->
+              Lasso.Core.Streaming.Ingress.consume(token, fn ->
+                send(test_pid, {:consumer1_received, payload})
+              end)
           after
             5000 -> send(test_pid, :consumer1_timeout)
           end
@@ -215,8 +218,11 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManagerTest do
           {:ok, _} = InstanceSubscriptionManager.ensure_subscription(instance_id, key)
 
           receive do
-            {:instance_subscription_event, ^instance_id, ^key, payload, _received_at} ->
-              send(test_pid, {:consumer2_received, payload})
+            {:stream_ingress, token,
+             {:instance_subscription_event, ^instance_id, ^key, payload, _received_at}} ->
+              Lasso.Core.Streaming.Ingress.consume(token, fn ->
+                send(test_pid, {:consumer2_received, payload})
+              end)
           after
             5000 -> send(test_pid, :consumer2_timeout)
           end

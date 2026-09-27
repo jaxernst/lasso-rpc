@@ -51,6 +51,8 @@ defmodule Lasso.Application do
       write_concurrency: true
     ])
 
+    Lasso.Core.Streaming.Ingress.create_tables!()
+
     children =
       [
         # Start PubSub for real-time messaging
@@ -76,6 +78,9 @@ defmodule Lasso.Application do
 
         # Own queued WebSocket delivery reservations and reclaim them on socket death.
         Lasso.Core.Streaming.ContinuityBudget,
+
+        # Bound payload-bearing internal WebSocket mailboxes before enqueue.
+        Lasso.Core.Streaming.Ingress,
 
         # Cluster topology - single source of truth for cluster membership
         Lasso.Cluster.Topology,
