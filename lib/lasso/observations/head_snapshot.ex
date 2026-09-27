@@ -31,6 +31,7 @@ defmodule Lasso.Observations.HeadSnapshot do
                 :reference_observed_at_ms,
                 :reference_instance_id,
                 :reference_transport,
+                :reference_block_hash,
                 :latest_observed_at_ms,
                 :latest_observed_instance_id,
                 :latest_observed_transport
@@ -55,6 +56,7 @@ defmodule Lasso.Observations.HeadSnapshot do
           reference_observed_at_ms: integer() | nil,
           reference_instance_id: String.t() | nil,
           reference_transport: HeadObservation.transport() | nil,
+          reference_block_hash: String.t() | nil,
           latest_observed_at_ms: integer() | nil,
           latest_observed_instance_id: String.t() | nil,
           latest_observed_transport: HeadObservation.transport() | nil

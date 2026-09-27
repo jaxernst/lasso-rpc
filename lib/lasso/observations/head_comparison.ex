@@ -53,6 +53,7 @@ defmodule Lasso.Observations.HeadComparison do
             | :poll_reference_missing
             | :poll_reference_scope_mismatch
             | :reference_stale
+            | :branch_conflict
             | :chain_mismatch
 
     @type t :: %__MODULE__{
@@ -69,6 +70,7 @@ defmodule Lasso.Observations.HeadComparison do
   @type vote :: %{
           instance_id: String.t(),
           height: non_neg_integer(),
+          block_hash: String.t() | nil,
           aligned_height: non_neg_integer(),
           observed_at_ms: integer(),
           transport: HeadObservation.transport(),
@@ -138,6 +140,7 @@ defmodule Lasso.Observations.HeadComparison do
         %{
           instance_id: observation.instance_id,
           height: observation.height,
+          block_hash: normalize_hash(observation.block_hash),
           aligned_height: alignment_height(observation, policy, comparison_at_ms),
           observed_at_ms: observation.observed_at_ms,
           transport: observation.transport,
@@ -161,6 +164,7 @@ defmodule Lasso.Observations.HeadComparison do
       reference_observed_at_ms: field(reference_vote, :observed_at_ms),
       reference_instance_id: field(reference_vote, :instance_id),
       reference_transport: field(reference_vote, :transport),
+      reference_block_hash: field(reference_vote, :block_hash),
       latest_observed_height: field(latest_vote, :height),
       latest_observed_at_ms: field(latest_vote, :observed_at_ms),
       latest_observed_instance_id: field(latest_vote, :instance_id),
@@ -215,6 +219,11 @@ defmodule Lasso.Observations.HeadComparison do
       HeadObservation.request_observation?(observation) and
           is_nil(HeadObservation.poll_reference_for(observation, snapshot.scope_id)) ->
         unknown(:poll_reference_scope_mismatch, age_ms)
+
+      observation.height == snapshot.reference_height and
+        is_binary(observation.block_hash) and is_binary(snapshot.reference_block_hash) and
+          normalize_hash(observation.block_hash) != snapshot.reference_block_hash ->
+        unknown(:branch_conflict, age_ms)
 
       true ->
         compared_height = height_for_assessment(observation)
@@ -314,14 +323,35 @@ defmodule Lasso.Observations.HeadComparison do
   defp largest_cluster([], _tolerance_blocks), do: []
 
   defp largest_cluster(votes, tolerance_blocks) do
+    branch_conflict? = conflicting_hashes?(votes)
+
     votes
     |> Enum.map(fn center ->
       Enum.filter(votes, fn vote ->
-        abs(vote.aligned_height - center.aligned_height) <= tolerance_blocks
+        if branch_conflict? do
+          is_binary(center.block_hash) and vote.height == center.height and
+            vote.block_hash == center.block_hash
+        else
+          abs(vote.aligned_height - center.aligned_height) <= tolerance_blocks
+        end
       end)
     end)
+    |> Enum.reject(&(&1 == []))
     |> Enum.max_by(&{length(&1), -spread(&1)}, fn -> [] end)
   end
+
+  # Conflicting concrete hashes at one height cannot be reconciled by an
+  # unversioned height from another upstream or by time alignment. Require a
+  # physical majority that reported the same concrete block in that case.
+  defp conflicting_hashes?(votes) do
+    votes
+    |> Enum.filter(&is_binary(&1.block_hash))
+    |> Enum.group_by(& &1.height, & &1.block_hash)
+    |> Enum.any?(fn {_height, hashes} -> length(Enum.uniq(hashes)) > 1 end)
+  end
+
+  defp normalize_hash(hash) when is_binary(hash) and hash != "", do: String.downcase(hash)
+  defp normalize_hash(_unknown), do: nil
 
   defp observation_order(%HeadObservation{} = observation) do
     {observation.observed_at_ms, transport_rank(observation.transport)}

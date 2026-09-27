@@ -631,7 +631,7 @@ defmodule Lasso.Providers.CandidateListing do
                 get_in(candidate, [:head_freshness_ms, transport])
               )
 
-            assessment.status == :lagging
+            assessment.status == :lagging or assessment.reason == :branch_conflict
           end)
 
         if transports == [], do: [], else: [%{candidate | transports: transports}]
@@ -639,7 +639,7 @@ defmodule Lasso.Providers.CandidateListing do
 
     if warn_on_lag? and candidates != [] and filtered == [] do
       Logger.warning(
-        "All routes exceeded the qualified head lag threshold; preserving candidates for availability",
+        "All routes failed qualified head eligibility; preserving candidates for availability",
         profile: plan.profile,
         chain_id: plan.chain_id,
         max_lag_blocks: max_lag_blocks

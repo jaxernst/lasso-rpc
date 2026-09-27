@@ -5,9 +5,60 @@ defmodule Lasso.Providers.HeadEvidenceTest do
   alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
   alias Lasso.Observations.{HeadComparison, HeadSnapshot}
-  alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence}
+  alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence, LagCalculation}
   alias Lasso.RPC.Selection.CandidateCursor
   alias LassoWeb.Dashboard.StatusHelpers
+
+  test "conflicting WebSocket block hashes need a concrete majority" do
+    chain_id = System.unique_integer([:positive])
+    profile = "branch-evidence-#{chain_id}"
+
+    on_exit(fn ->
+      Registry.clear_chain(chain_id)
+      ConfigStore.unregister_chain_runtime(profile, chain_id)
+      Catalog.build_from_config()
+    end)
+
+    assert :ok =
+             ConfigStore.register_chain_runtime(profile, chain_id, %{
+               block_time_ms: 1_000,
+               providers: Enum.map(["a", "b", "c", "d"], &provider/1)
+             })
+
+    Catalog.build_from_config()
+
+    ids =
+      Map.new(Catalog.get_profile_providers(profile, chain_id), &{&1.provider_id, &1.instance_id})
+
+    assert :ok = Registry.put_height(chain_id, ids["a"], 100, :ws, %{hash: "0xaaa"})
+    assert :ok = Registry.put_height(chain_id, ids["b"], 100, :ws, %{hash: "0xbbb"})
+    assert {:ok, split} = HeadEvidence.snapshot(profile, chain_id)
+    assert split.qualification == :ambiguous
+    assert split.voter_count == 2
+    assert StatusHelpers.check_block_lag(chain_id, ids["a"], profile) == :unavailable
+
+    assert :ok = Registry.put_height(chain_id, ids["c"], 100, :ws, %{hash: "0xaaa"})
+    assert {:ok, majority} = HeadEvidence.snapshot(profile, chain_id)
+    assert majority.qualification == :qualified
+    assert majority.support == 2
+    assert Enum.sort(majority.supporting_instances) == Enum.sort([ids["a"], ids["c"]])
+    assert majority.dissenting_instances == [ids["b"]]
+
+    assert LagCalculation.assess_transport(chain_id, ids["b"], :ws, majority, 2).reason ==
+             :branch_conflict
+
+    assert StatusHelpers.check_block_lag(chain_id, ids["b"], profile) == :unavailable
+
+    assert :ok = Registry.put_height(chain_id, ids["d"], 100, :ws)
+    assert {:ok, unknown_hash} = HeadEvidence.snapshot(profile, chain_id)
+    assert unknown_hash.qualification == :ambiguous
+
+    assert :ok = Registry.put_height(chain_id, ids["d"], 100, :ws, %{hash: "0xAAA"})
+    assert {:ok, recovered} = HeadEvidence.snapshot(profile, chain_id)
+    assert recovered.qualification == :qualified
+    assert recovered.support == 3
+    assert recovered.dissenting_instances == [ids["b"]]
+  end
 
   test "current probe facts compare only the requesting profile's active upstreams" do
     chain_id = System.unique_integer([:positive])

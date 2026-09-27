@@ -480,6 +480,11 @@ reference freshness window is bounded from the configured `block_time_ms`
 2-second agreement window. These are local observations, not fork finality or
 fleet-wide consensus.
 
+When recent WebSocket facts report different concrete hashes at the same
+height, height alignment cannot qualify them. A strict physical majority must
+report the same hash at that height; unknown hashes cannot break the tie. This
+detects an observed branch conflict, not canonical ancestry across heights.
+
 **Request and operator assessment**
 
 When `selection.max_lag_blocks` is set, selection captures one profile snapshot
@@ -487,7 +492,9 @@ for the request and assesses HTTP and WebSocket routes separately. HTTP lag
 uses that poll's reference captured before its request;
 WebSocket lag uses the current qualified reference. A stale fact, missing
 poll reference, wrong scope, or unqualified snapshot is **unknown**, not a
-lagging verdict. Only a route proven beyond the threshold is filtered. If
+lagging verdict. A same-height hash conflicting with the qualified majority is
+also unknown to operators and excluded as a routing preference. Only a route
+proven beyond the lag threshold or on that conflicting branch is filtered. If
 filtering would remove every route, Core preserves the candidates for
 standalone availability; the limit is therefore a preference, not a strict
 freshness guarantee. The dashboard uses the same transport assessment with
