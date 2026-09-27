@@ -84,6 +84,36 @@ defmodule Lasso.BlockSync.Registry do
     end
   end
 
+  @doc "Store a validated source observation while maintaining legacy height consumers."
+  @spec put_observation(HeadObservation.t()) :: :ok | :ignored
+  def put_observation(%HeadObservation{} = observation) do
+    metadata = observation_metadata(observation)
+    chain_id = observation.chain_id
+    key = {:height, chain_id, observation.instance_id}
+
+    stored? =
+      store_newer_height(
+        key,
+        {observation.height, observation.observed_at_ms, observation.transport, metadata},
+        @observation_retries
+      )
+
+    store_newer_observation(
+      {:head_observation, chain_id, observation.instance_id, observation.transport},
+      observation,
+      @observation_retries
+    )
+
+    if stored? do
+      update_block_time(chain_id, observation.height)
+      revision = next_consensus_revision(chain_id)
+      refresh_consensus_cache(chain_id, System.system_time(:millisecond), revision)
+      :ok
+    else
+      :ignored
+    end
+  end
+
   @doc """
   Get the stored height for a specific provider.
 
@@ -323,6 +353,15 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   ## Private Functions
+
+  defp observation_metadata(%HeadObservation{} = observation) do
+    observation.attributes
+    |> Map.put(:hash, observation.block_hash)
+    |> Map.put(:parent_hash, observation.parent_hash)
+    |> Map.put(:timestamp, observation.block_timestamp)
+    |> Map.put(:latency_ms, observation.latency_ms)
+    |> Map.put(:poll_references, observation.poll_references)
+  end
 
   defp store_newer_height(key, {_height, observed_at_ms, _source, _metadata} = value, retries)
        when retries > 0 do

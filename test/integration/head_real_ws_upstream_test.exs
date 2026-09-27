@@ -152,6 +152,29 @@ defmodule Lasso.RPC.HeadRealWsUpstreamTest do
       end)
     end)
 
+    handler_id = {:invalid_head, chain}
+    parent = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lasso, :block_sync, :observation, :invalid],
+        fn _event, _measurements, metadata, _config ->
+          send(parent, {:invalid_head, metadata.instance_id})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    minority_id = ids[minority]
+    worker_before_invalid = GenServer.whereis(Worker.via(chain, minority_id))
+    assert is_pid(worker_before_invalid)
+    send(connected[minority], {:head, %{"number" => "0xzz", "hash" => "0xbad"}})
+    assert_receive {:invalid_head, ^minority_id}, 5_000
+    assert GenServer.whereis(Worker.via(chain, minority_id)) == worker_before_invalid
+    assert Registry.get_observation(chain, minority_id, :ws) == {:error, :not_found}
+
     send_head(connected[hd(providers)], 100, "0xbbb")
     send_head(connected[Enum.at(providers, 1)], 100, "0xaaa")
 

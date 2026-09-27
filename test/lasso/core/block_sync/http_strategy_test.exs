@@ -3,6 +3,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
 
   alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.BlockSync.Worker
+  alias Lasso.Observations.HeadObservation
   alias Lasso.RPC.Response
 
   setup do
@@ -83,8 +84,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
                state
              )
 
-    assert_receive {:block_height, ^instance_id, 42,
-                    %{latency_ms: latency_ms, observed_at_ms: observed_at_ms}}
+    assert_receive {:head_observation,
+                    %HeadObservation{
+                      instance_id: ^instance_id,
+                      height: 42,
+                      latency_ms: latency_ms,
+                      observed_at_ms: observed_at_ms
+                    }}
 
     assert latency_ms >= 0
     assert observed_at_ms >= earliest_observed_at_ms

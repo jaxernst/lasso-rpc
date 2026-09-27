@@ -5,7 +5,7 @@ defmodule Lasso.Providers.HeadEvidenceTest do
   alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
-  alias Lasso.Observations.{HeadComparison, HeadSnapshot}
+  alias Lasso.Observations.{HeadComparison, HeadObservation, HeadSnapshot}
   alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence, LagCalculation}
   alias Lasso.RPC.Selection.CandidateCursor
   alias LassoWeb.Dashboard.StatusHelpers
@@ -350,8 +350,10 @@ defmodule Lasso.Providers.HeadEvidenceTest do
                strategy
              )
 
-    assert_receive {:block_height, ^shared, 99, metadata}
-    assert :ok = Registry.put_height(chain_id, shared, 99, :http, metadata)
+    assert_receive {:head_observation,
+                    %HeadObservation{instance_id: ^shared, height: 99} = source_observation}
+
+    assert :ok = Registry.put_observation(source_observation)
     assert {:ok, observation} = Registry.get_observation(chain_id, shared, :http)
     assert observation.poll_references == plan.head_references_at_poll_start
 

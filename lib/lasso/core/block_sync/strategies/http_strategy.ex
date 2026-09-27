@@ -25,7 +25,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Observations.{HeadReference, HeadSnapshot}
+  alias Lasso.Observations.{HeadObservation, HeadReference, HeadSnapshot}
   alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
 
@@ -375,13 +375,18 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
     case result do
       {:ok, height} ->
-        metadata = %{
-          latency_ms: latency_ms,
-          observed_at_ms: System.system_time(:millisecond),
-          poll_references: plan.head_references_at_poll_start
-        }
+        {:ok, observation} =
+          HeadObservation.http(%{
+            chain_id: state.chain_id,
+            instance_id: state.instance_id,
+            height: height,
+            observed_at_ms: System.system_time(:millisecond),
+            latency_ms: latency_ms,
+            sample_interval_ms: state.poll_interval_ms,
+            poll_references: if(plan, do: plan.head_references_at_poll_start, else: [])
+          })
 
-        send(state.parent, {:block_height, state.instance_id, height, metadata})
+        send(state.parent, {:head_observation, observation})
         write_health_success(state.instance_id)
         CircuitBreaker.signal_recovery_cast({state.instance_id, :http})
 

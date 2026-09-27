@@ -23,6 +23,7 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
   require Logger
 
   alias Lasso.Core.Streaming.{InstanceSubscriptionManager, InstanceSubscriptionRegistry}
+  alias Lasso.Observations.HeadObservation
 
   @default_staleness_threshold_ms 35_000
 
@@ -128,7 +129,13 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
 
   @spec handle_new_head(t(), map()) :: t()
   def handle_new_head(%__MODULE__{} = state, payload) do
-    process_new_head(state, payload)
+    handle_new_head(state, payload, System.monotonic_time(:millisecond))
+  end
+
+  @spec handle_new_head(t(), map(), integer()) :: t()
+  def handle_new_head(%__MODULE__{} = state, payload, received_at_ms)
+      when is_integer(received_at_ms) do
+    process_new_head(state, payload, received_at_ms)
   end
 
   @spec handle_invalidation(t(), term()) :: t()
@@ -186,68 +193,63 @@ defmodule Lasso.BlockSync.Strategies.WsStrategy do
     end
   end
 
-  defp process_new_head(state, payload) do
+  defp process_new_head(state, payload, received_at_ms) do
     now = System.system_time(:millisecond)
-    {height, metadata} = parse_block_payload(payload)
+    observed_at_ms = max(0, now - max(0, System.monotonic_time(:millisecond) - received_at_ms))
 
-    send(
-      state.parent,
-      {:block_height, state.instance_id, height, Map.put(metadata, :observed_at_ms, now)}
-    )
+    case HeadObservation.new_head(state.chain_id, state.instance_id, payload, observed_at_ms) do
+      {:ok, observation} ->
+        send(state.parent, {:head_observation, observation})
 
-    first_block = state.last_block_time == nil
+        first_block = state.last_block_time == nil
 
-    new_state = %{
-      state
-      | status: :active,
-        last_block_time: now,
-        last_height: height
-    }
+        new_state = %{
+          state
+          | status: :active,
+            last_block_time: now,
+            last_height: observation.height
+        }
 
-    cond do
-      first_block ->
-        Logger.debug("WS subscription active (first block received)",
-          chain_id: state.chain_id,
-          instance_id: state.instance_id,
-          height: height
-        )
+        cond do
+          first_block ->
+            Logger.debug("WS subscription active (first block received)",
+              chain_id: state.chain_id,
+              instance_id: state.instance_id,
+              height: observation.height
+            )
 
-        send(state.parent, {:status, state.instance_id, :ws, :active})
+            send(state.parent, {:status, state.instance_id, :ws, :active})
 
-      state.status == :stale ->
-        Logger.debug("WS subscription recovered from stale",
-          chain_id: state.chain_id,
-          instance_id: state.instance_id,
-          height: height
-        )
+          state.status == :stale ->
+            Logger.debug("WS subscription recovered from stale",
+              chain_id: state.chain_id,
+              instance_id: state.instance_id,
+              height: observation.height
+            )
 
-        send(state.parent, {:status, state.instance_id, :ws, :active})
+            send(state.parent, {:status, state.instance_id, :ws, :active})
 
-      true ->
-        :ok
-    end
-
-    new_state
-  end
-
-  defp parse_block_payload(payload) when is_map(payload) do
-    height =
-      case Map.get(payload, "number") do
-        "0x" <> hex -> String.to_integer(hex, 16)
-        nil -> nil
-      end
-
-    metadata = %{
-      hash: Map.get(payload, "hash"),
-      parent_hash: Map.get(payload, "parentHash"),
-      timestamp:
-        case Map.get(payload, "timestamp") do
-          "0x" <> hex -> String.to_integer(hex, 16)
-          nil -> nil
+          true ->
+            :ok
         end
-    }
 
-    {height, metadata}
+        new_state
+
+      {:error, reason} ->
+        Logger.warning("Ignoring malformed newHeads payload",
+          chain_id: state.chain_id,
+          instance_id: state.instance_id,
+          reason: inspect(reason)
+        )
+
+        :telemetry.execute(
+          [:lasso, :block_sync, :observation, :invalid],
+          %{count: 1},
+          %{chain_id: state.chain_id, instance_id: state.instance_id, transport: :ws}
+        )
+
+        state
+    end
   end
 
   defp check_staleness(state) do

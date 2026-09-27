@@ -27,6 +27,7 @@ defmodule Lasso.BlockSync.Worker do
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
   alias Lasso.Config.{ChainConfig, ConfigStore, MonitoringDefaults}
+  alias Lasso.Observations.HeadObservation
   alias Lasso.Providers.{Catalog, RestartCounter}
   alias Lasso.RPC.Transport.WebSocket.Connection
 
@@ -237,6 +238,29 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
+  def handle_info(
+        {:head_observation,
+         %HeadObservation{chain_id: chain_id, instance_id: instance_id} = observation},
+        state
+      )
+      when chain_id == state.chain_id and instance_id == state.instance_id do
+    source = observation.transport
+
+    attributes =
+      observation.attributes
+      |> Map.put(:stale_after_ms, observation_stale_after_ms(state, source))
+      |> maybe_put_optimistic_credit(state, source)
+
+    case BlockSyncRegistry.put_observation(%{observation | attributes: attributes}) do
+      :ok ->
+        broadcast_height_update(state, observation.height, source, observation.observed_at_ms)
+        {:noreply, maybe_clear_restart_count(state)}
+
+      :ignored ->
+        {:noreply, state}
+    end
+  end
+
   # Status changes from strategies
   def handle_info({:status, instance_id, transport, status}, state)
       when instance_id == state.instance_id do
@@ -294,11 +318,11 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   def handle_info(
-        {:instance_subscription_event, instance_id, {:newHeads}, payload, _received_at},
+        {:instance_subscription_event, instance_id, {:newHeads}, payload, received_at},
         state
       )
       when instance_id == state.instance_id and state.ws_strategy != nil and is_map(payload) do
-    new_ws_state = WsStrategy.handle_new_head(state.ws_strategy, payload)
+    new_ws_state = WsStrategy.handle_new_head(state.ws_strategy, payload, received_at)
     {:noreply, %{state | ws_strategy: new_ws_state}}
   end
 
