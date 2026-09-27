@@ -6,6 +6,7 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
   reducing code duplication and ensuring consistent behavior.
   """
 
+  alias Lasso.JSONRPC.BlockSelector
   alias Lasso.RPC.ChainState
 
   @spec get_adapter_config(map(), atom(), any()) :: any()
@@ -80,6 +81,12 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
     end
   end
 
+  @doc "Validates archive depth using the method's positional block selector."
+  @spec validate_block_age(String.t(), term(), map(), pos_integer()) :: :ok | {:error, term()}
+  def validate_block_age(method, params, ctx, max_age) do
+    validate_block_age([BlockSelector.extract(method, params)], ctx, max_age)
+  end
+
   @doc """
   Validates that a state method's block parameter is within the provider's archive depth.
 
@@ -117,6 +124,8 @@ defmodule Lasso.RPC.Providers.AdapterHelpers do
   end
 
   def validate_block_age(_params, _ctx, _max_age), do: :ok
+
+  defp parse_block_tag(%{"blockNumber" => block}), do: parse_block_tag(block)
 
   defp parse_block_tag("latest"), do: {:ok, :latest}
   defp parse_block_tag("pending"), do: {:ok, :latest}

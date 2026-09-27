@@ -89,7 +89,7 @@ defmodule Lasso.RPC.Providers.Capabilities do
   - `max_block_range` for eth_getLogs
   - `max_block_age` + `block_age_methods` for state methods
   """
-  @spec validate_params(String.t(), list(), map() | nil, map()) :: :ok | {:error, term()}
+  @spec validate_params(String.t(), term(), map() | nil, map()) :: :ok | {:error, term()}
   def validate_params(_method, _params, nil, _ctx), do: :ok
 
   def validate_params(method, params, capabilities, ctx) when is_map(capabilities) do
@@ -144,7 +144,7 @@ defmodule Lasso.RPC.Providers.Capabilities do
     age_methods = Map.get(limits, :block_age_methods, [])
 
     if max_age && method in age_methods do
-      AdapterHelpers.validate_block_age(params, ctx, max_age)
+      AdapterHelpers.validate_block_age(method, params, ctx, max_age)
     else
       :ok
     end
