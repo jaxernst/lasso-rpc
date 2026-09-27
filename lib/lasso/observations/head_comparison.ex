@@ -199,6 +199,8 @@ defmodule Lasso.Observations.HeadComparison do
       )
       when is_integer(now_ms) do
     age_ms = age_ms(observation, now_ms)
+    observation_hash = normalize_hash(observation.block_hash)
+    reference_hash = normalize_hash(snapshot.reference_block_hash)
 
     cond do
       snapshot.chain_id != observation.chain_id ->
@@ -221,8 +223,8 @@ defmodule Lasso.Observations.HeadComparison do
         unknown(:poll_reference_scope_mismatch, age_ms)
 
       observation.height == snapshot.reference_height and
-        is_binary(observation.block_hash) and is_binary(snapshot.reference_block_hash) and
-          normalize_hash(observation.block_hash) != snapshot.reference_block_hash ->
+        is_binary(observation_hash) and is_binary(reference_hash) and
+          observation_hash != reference_hash ->
         unknown(:branch_conflict, age_ms)
 
       true ->

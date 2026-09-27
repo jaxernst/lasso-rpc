@@ -49,7 +49,16 @@ defmodule Lasso.Providers.HeadEvidenceTest do
 
     assert StatusHelpers.check_block_lag(chain_id, ids["b"], profile) == :unavailable
 
+    assert :ok = Registry.put_height(chain_id, ids["d"], 100, :ws, %{hash: ""})
+
+    assert LagCalculation.assess_transport(chain_id, ids["d"], :ws, majority, 2).status ==
+             :eligible
+
     assert :ok = Registry.put_height(chain_id, ids["d"], 100, :ws)
+
+    assert LagCalculation.assess_transport(chain_id, ids["d"], :ws, majority, 2).status ==
+             :eligible
+
     assert {:ok, unknown_hash} = HeadEvidence.snapshot(profile, chain_id)
     assert unknown_hash.qualification == :ambiguous
 

@@ -56,5 +56,31 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
 
     assert cursor.filters.head_snapshot.qualification == :qualified
     assert {:ok, %{provider_id: ^majority_a}, _} = CandidateCursor.next(cursor)
+
+    # Hard exclusions must be applied before deciding the all-routes fallback.
+    for strategy <- [:priority, :load_balanced] do
+      restricted =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: strategy,
+          transport: :ws,
+          exclude: [majority_a, majority_b]
+        )
+
+      assert {:ok, %{provider_id: ^minority}, _} = CandidateCursor.next(restricted)
+    end
+
+    minority_id = Catalog.lookup_instance_id(profile, chain, minority)
+    assert :ok = Registry.put_height(chain, minority_id, 90, :ws, %{hash: "0xbbb"})
+
+    for strategy <- [:priority, :load_balanced] do
+      restricted =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: strategy,
+          transport: :ws,
+          exclude: [majority_a, majority_b]
+        )
+
+      assert {:ok, %{provider_id: ^minority}, _} = CandidateCursor.next(restricted)
+    end
   end
 end

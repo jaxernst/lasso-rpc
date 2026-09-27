@@ -302,6 +302,10 @@ defmodule Lasso.Providers.CandidateListing do
         transport_available?(c, protocol) and
           candidate_gate_ready?(c, protocol, include_half_open, filters, mode)
       end)
+      |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
+      |> filter_by_archival(Map.get(filters, :requires_archival))
+      |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
+      |> filter_excluded(filters)
       |> filter_by_lag(
         plan,
         Map.get(filters, :max_lag_blocks),
@@ -309,10 +313,6 @@ defmodule Lasso.Providers.CandidateListing do
         warn_on_lag?,
         Map.get(filters, :head_snapshot)
       )
-      |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
-      |> filter_by_archival(Map.get(filters, :requires_archival))
-      |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
-      |> filter_excluded(filters)
 
     candidates
   end
