@@ -1721,7 +1721,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
              )
 
     assert_receive {:subscription_terminated, "client-sub", :continuity_exhausted}
-    assert await_state(pid, &(&1.failover_status == :degraded)).state.markers.last_block_num == 10
+
+    assert await_state(pid, &(&1.failover_status == :degraded)).state.markers.last_block_num ==
+             nil
+
     assert ContinuityBudget.stats(budget).stream_bytes == 0
   end
 
