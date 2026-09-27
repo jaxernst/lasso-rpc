@@ -64,6 +64,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @invalid_params -32_602
   @internal_error -32_603
 
+  # Geth-compatible EVM execution error. Returned for reverts, out-of-gas,
+  # invalid opcodes, and related deterministic application failures.
   @evm_execution_error 3
 
   # Server error range: -32_000 to -32_099 (reserved by spec)

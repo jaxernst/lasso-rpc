@@ -159,7 +159,7 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTracker do
     :ok
   end
 
-  @doc false
+  @doc "Applies an authenticated dispatch observation to the tracker state machine."
   @spec handle_event([atom()], map(), map(), map()) :: :ok
   def handle_event([:finch, :send, :start], _measurements, metadata, %{token: token}) do
     with %{request: %{private: private}} <- metadata,
@@ -185,7 +185,7 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTracker do
     _ -> :ok
   end
 
-  @doc false
+  @doc "Applies a tracked dispatch failure without inventing positive send proof."
   @spec handle_failure_event([atom()], map(), map(), map()) :: :ok
   def handle_failure_event([:telemetry, :handler, :failure], _measurements, metadata, %{
         token: token

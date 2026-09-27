@@ -74,7 +74,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
   defp mean_latency(channel, summaries),
     do: RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms
 
-  @doc false
+  @doc "Converts latency samples into bounded relative selection weights."
   @spec relative_weights([number()], number()) :: [float()]
   def relative_weights(latencies, beta \\ @default_beta)
       when is_list(latencies) and is_number(beta) and beta > 0 do
@@ -85,7 +85,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
     end)
   end
 
-  @doc false
+  @doc "Returns a weighted permutation using the supplied uniform sampler."
   @spec weighted_permutation([{term(), number()}], (-> float())) :: [term()]
   def weighted_permutation(weighted_items, uniform_fn \\ &:rand.uniform/0) do
     weighted_items

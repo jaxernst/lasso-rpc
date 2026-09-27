@@ -95,7 +95,9 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     ErrorClassification.categorize_with_path(code, message, data)
   end
 
-  defp definitive_baseline_evidence?(:execution_revert, _path), do: true
+  defp definitive_baseline_evidence?(:execution_revert, path)
+       when path in [:data_selector, :definitive_code, :message_pattern],
+       do: true
 
   defp definitive_baseline_evidence?(_category, :definitive_code), do: true
   defp definitive_baseline_evidence?(:rate_limit, :definitive_capacity_message), do: true

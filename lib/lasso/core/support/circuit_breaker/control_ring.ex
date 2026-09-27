@@ -272,7 +272,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
     end
   end
 
-  @doc false
+  @doc "Publishes a bounded signal without waking the control owner."
   @spec publish_without_notify(AdmissionReceipt.t(), signal()) :: :ok | {:error, :stale}
   def publish_without_notify(
         %AdmissionReceipt{breaker_id: breaker_id, generation: generation, epoch: epoch} = receipt,
@@ -317,7 +317,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.ControlRing do
     ArgumentError -> {:error, :stale}
   end
 
-  @doc false
+  @doc "Publishes after the supplied test barrier without notifying the owner."
   @spec publish_after_barrier_without_notify(
           AdmissionReceipt.t(),
           signal(),

@@ -29,13 +29,13 @@ defmodule Lasso.RPC.RoutingEvidence do
     batch_get_summaries(profile, channels, chain_id, workload_key)
   end
 
-  @doc false
+  @doc "Returns current bounded routing summaries for a channel set."
   @spec batch_get_summaries(binary(), [Channel.t() | map()], pos_integer(), atom()) ::
           %{upstream_key() => Summary.t() | nil}
   def batch_get_summaries(profile, channels, chain_id, workload_key),
     do: AttemptProjection.batch_summaries(profile, channels, chain_id, workload_key)
 
-  @doc false
+  @doc "Returns the routing summary associated with a channel."
   @spec summary_for_channel(map(), map()) :: Summary.t() | nil
   def summary_for_channel(summaries, channel) do
     case Map.get(channel, :instance_id) do
@@ -55,7 +55,7 @@ defmodule Lasso.RPC.RoutingEvidence do
 
   def qualified?(_summary), do: false
 
-  @doc false
+  @doc "Records a bounded availability-degradation signal for a routing scope."
   @spec emit_availability_degradation(
           binary(),
           atom(),

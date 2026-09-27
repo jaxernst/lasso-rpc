@@ -4,8 +4,10 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
 
   Replay-safe reads try distinct physical instances before alternate transports
   within each availability tier. The cursor bounds sibling deferral and preserves
-  explicit recovered-head preference. Alternate transports remain available
-  after that first pass. Other methods keep their shuffled order. After shuffling,
+  explicit recovered-head preference. Previously attempted instances are deferred
+  when selection resumes across routing phases. Alternate
+  transports remain available after that first pass. Other methods keep their
+  shuffled order. After shuffling,
   the selection pipeline applies tiered reordering based on circuit breaker
   state and rate limit status:
 

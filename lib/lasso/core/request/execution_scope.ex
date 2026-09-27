@@ -39,7 +39,7 @@ defmodule Lasso.Core.Request.ExecutionScope do
     }
   end
 
-  @doc false
+  @doc "Opens the scope and installs its single caller-liveness guard."
   @spec open(t()) :: CallerGuard.t() | nil
   def open(%__MODULE__{owner_pid: owner_pid} = scope) do
     if owner_pid != self() do
@@ -49,7 +49,7 @@ defmodule Lasso.Core.Request.ExecutionScope do
     open_caller_guard(scope.caller_pid)
   end
 
-  @doc false
+  @doc "Closes the scope and retires its caller monitor without leaving mailbox residue."
   @spec close(CallerGuard.t() | nil) :: :ok
   def close(nil), do: :ok
 
@@ -58,22 +58,22 @@ defmodule Lasso.Core.Request.ExecutionScope do
     :ok
   end
 
-  @doc false
+  @doc "Reports whether the guarded caller may still authorize work."
   @spec caller_alive?(CallerGuard.t() | nil) :: boolean()
   def caller_alive?(nil), do: true
   def caller_alive?(%CallerGuard{caller_pid: caller_pid}), do: Process.alive?(caller_pid)
 
-  @doc false
+  @doc "Returns the monitor owned by an opened scope, when present."
   @spec caller_monitor(CallerGuard.t() | nil) :: reference() | nil
   def caller_monitor(nil), do: nil
   def caller_monitor(%CallerGuard{monitor_ref: monitor_ref}), do: monitor_ref
 
-  @doc false
+  @doc "Returns the caller whose liveness bounds the request."
   @spec caller_pid(CallerGuard.t() | nil) :: pid() | nil
   def caller_pid(nil), do: nil
   def caller_pid(%CallerGuard{caller_pid: caller_pid}), do: caller_pid
 
-  @doc false
+  @doc "Returns the absolute request cutoff carried by the scope."
   @spec deadline_us(t()) :: integer() | nil
   def deadline_us(%__MODULE__{deadline_us: deadline_us}), do: deadline_us
 

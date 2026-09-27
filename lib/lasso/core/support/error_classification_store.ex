@@ -69,6 +69,8 @@ defmodule Lasso.Core.Support.ErrorClassificationStore do
     GenServer.call(__MODULE__, {:configure, new_config})
   end
 
+  # Server
+
   @impl true
   def init(_opts) do
     table = :ets.new(@table, [:named_table, :set, :public, read_concurrency: true])
