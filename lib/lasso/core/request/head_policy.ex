@@ -9,10 +9,10 @@ defmodule Lasso.RPC.HeadPolicy do
   """
 
   alias Lasso.BlockPublication.Admission
-  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.{Error, Quantity}
-  alias Lasso.Providers.Catalog
+  alias Lasso.Observations.HeadSnapshot
+  alias Lasso.Providers.HeadEvidence
   alias Lasso.RPC.{HeadRecovery, PreparedRequest, RequestContext}
   alias Lasso.RPC.Response.Success
 
@@ -372,16 +372,9 @@ defmodule Lasso.RPC.HeadPolicy do
   end
 
   defp reference_height(profile, chain_id) do
-    with %{} = snapshot <- Catalog.snapshot(),
-         {:ok, plan} <- Catalog.get_routing_plan(snapshot, profile, chain_id),
-         {:ok, height} <-
-           BlockSyncRegistry.get_consensus_height_filtered(
-             chain_id,
-             Enum.map(plan.providers, & &1.instance_id)
-           ) do
-      height
-    else
-      _ -> nil
+    case HeadEvidence.snapshot(profile, chain_id) do
+      {:ok, %HeadSnapshot{qualification: :qualified, reference_height: height}} -> height
+      _unavailable -> nil
     end
   end
 end
