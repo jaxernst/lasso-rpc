@@ -321,7 +321,7 @@ defmodule Lasso.RPC.RequestPipelineTest do
 
       error = JError.new(-32_000, "No channels", category: :provider_error, retriable?: true)
 
-      assert %RequestTerminal.OrdinaryExhaustion{workload_key: "system"} =
+      assert %RequestTerminal.OrdinaryExhaustion{workload_key: "system_basic"} =
                RequestPipeline.build_request_terminal(:error, error, ctx)
     end
   end

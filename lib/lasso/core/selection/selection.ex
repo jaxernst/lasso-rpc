@@ -32,6 +32,8 @@ defmodule Lasso.RPC.Selection do
     TransportRegistry
   }
 
+  alias Lasso.RPC.RoutingEvidence.Workload
+  @client_workloads Workload.client_partitions()
   alias Lasso.RPC.Selection.CandidateCursor.DeferredRanking
   alias Lasso.RPC.Strategies.LoadBalanced
   alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
@@ -92,7 +94,7 @@ defmodule Lasso.RPC.Selection do
         selection_opts.protocol,
         include_half_open: selection_opts.include_half_open,
         requires_subscribe_new_heads: selection_opts.requires_subscribe_new_heads,
-        workload_key: workload_for_origin(selection_opts.request_origin)
+        workload_key: Workload.for_request(selection_opts.request_origin, method)
       )
 
     candidates =
@@ -112,7 +114,7 @@ defmodule Lasso.RPC.Selection do
             method,
             selection_opts.timeout
           )
-          |> Map.put(:workload_key, workload_for_origin(selection_opts.request_origin))
+          |> Map.put(:workload_key, Workload.for_request(selection_opts.request_origin, method))
           |> enrich_strategy_context(candidates, plan, strategy_mod)
 
         channels =
@@ -267,7 +269,14 @@ defmodule Lasso.RPC.Selection do
     case capture_selection_snapshot(profile, chain_id) do
       {:ok, snapshot, plan} ->
         strategy = Keyword.fetch!(opts, :strategy)
-        fastest_hint = fastest_hint(ranking_mode, plan)
+
+        fastest_hint =
+          fastest_hint(
+            ranking_mode,
+            plan,
+            Workload.for_request(Keyword.get(opts, :request_origin, :client), method)
+          )
+
         inputs = routing_inputs(plan, method, opts)
 
         case build_hinted_fastest_cursor(
@@ -311,7 +320,7 @@ defmodule Lasso.RPC.Selection do
 
   defp routing_inputs(plan, method, opts) do
     transport = Keyword.get(opts, :transport, :both)
-    workload_key = workload_for_origin(Keyword.get(opts, :request_origin, :client))
+    workload_key = Workload.for_request(Keyword.get(opts, :request_origin, :client), method)
 
     pool_protocol =
       case transport do
@@ -573,16 +582,16 @@ defmodule Lasso.RPC.Selection do
        ),
        do: :miss
 
-  defp fastest_hint(:fastest_winner, plan) do
+  defp fastest_hint(:fastest_winner, plan, workload) do
     scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
 
-    case AttemptProjection.fastest_winner(scope) do
+    case AttemptProjection.fastest_winner(scope, workload) do
       nil -> nil
       winner -> {winner, scope}
     end
   end
 
-  defp fastest_hint(:full, _plan), do: nil
+  defp fastest_hint(:full, _plan, _workload), do: nil
 
   defp preferred_head?(candidate, transport, chain_id, opts) do
     case Keyword.get(opts, :preferred_head_height) do
@@ -761,10 +770,11 @@ defmodule Lasso.RPC.Selection do
            method: method,
            plan: plan,
            timeout: timeout,
-           workload_key: :client,
+           workload_key: workload_key,
            strategy_mod: Lasso.RPC.Strategies.Fastest = strategy_mod
          } = ranking
-       ) do
+       )
+       when workload_key in @client_workloads do
     if Enum.any?(candidates, & &1.learned_feedback_degraded?) do
       {rank_channels_eager(channels, entries_by_key, ranking), nil}
     else
@@ -772,7 +782,7 @@ defmodule Lasso.RPC.Selection do
       now_us = System.monotonic_time(:microsecond)
 
       {qualified, remaining} =
-        split_client_qualified(channels, entries_by_key, plan.chain_id, now_us)
+        split_client_qualified(channels, entries_by_key, plan.chain_id, now_us, workload_key)
 
       case qualified do
         [] ->
@@ -783,8 +793,7 @@ defmodule Lasso.RPC.Selection do
              plan,
              timeout,
              strategy_mod,
-             scope,
-             now_us
+             {scope, now_us, workload_key}
            ), nil}
 
         _qualified ->
@@ -795,7 +804,7 @@ defmodule Lasso.RPC.Selection do
 
           prepared_ctx =
             strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
-            |> Map.put(:workload_key, :client)
+            |> Map.put(:workload_key, workload_key)
             |> Map.put(:routing_summaries, summaries)
             |> Map.put(:provider_priorities, plan.provider_priorities)
 
@@ -810,6 +819,8 @@ defmodule Lasso.RPC.Selection do
             )
             |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
 
+          AttemptProjection.cache_ranked_winner(scope, plan.providers, workload_key)
+
           deferred = %DeferredRanking{
             entries:
               Enum.map(remaining, fn {channel, _summary} ->
@@ -820,7 +831,7 @@ defmodule Lasso.RPC.Selection do
               end),
             scope: scope,
             chain_id: plan.chain_id,
-            workload_key: :client
+            workload_key: workload_key
           }
 
           {ranked, deferred}
@@ -836,7 +847,7 @@ defmodule Lasso.RPC.Selection do
     {rank_channels_eager(channels, entries_by_key, ranking), nil}
   end
 
-  defp split_client_qualified(channels, entries_by_key, chain_id, now_us) do
+  defp split_client_qualified(channels, entries_by_key, chain_id, now_us, workload_key) do
     channels
     |> Enum.map(fn channel ->
       {candidate, transport} =
@@ -849,7 +860,8 @@ defmodule Lasso.RPC.Selection do
           candidate.instance_id,
           transport,
           chain_id,
-          now_us
+          now_us,
+          workload_key
         )
 
       {channel, summary}
@@ -864,24 +876,22 @@ defmodule Lasso.RPC.Selection do
          plan,
          timeout,
          strategy_mod,
-         scope,
-         now_us
+         {scope, _now_us, workload_key}
        ) do
     summaries =
-      Map.new(channels_with_summaries, fn {channel, primary} ->
+      Map.new(channels_with_summaries, fn {channel, _primary} ->
         {candidate, transport} =
           Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
 
         summary =
-          AttemptProjection.complete_client_summary_bounded(
+          AttemptProjection.summarize_route_bounded(
             scope,
             candidate_route_record(scope, candidate, transport),
             candidate.instance_id,
             candidate.routing_instance_id,
             transport,
             plan.chain_id,
-            primary,
-            now_us
+            workload_key
           )
 
         {{channel.instance_id, transport}, summary}
@@ -889,7 +899,7 @@ defmodule Lasso.RPC.Selection do
 
     prepared_ctx =
       strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
-      |> Map.put(:workload_key, :client)
+      |> Map.put(:workload_key, workload_key)
       |> Map.put(:routing_summaries, summaries)
       |> Map.put(:provider_priorities, plan.provider_priorities)
 
@@ -1169,7 +1179,4 @@ defmodule Lasso.RPC.Selection do
 
     %{ctx | routing_summaries: summaries, provider_priorities: plan.provider_priorities}
   end
-
-  defp workload_for_origin(:system), do: :system
-  defp workload_for_origin(_origin), do: :client
 end

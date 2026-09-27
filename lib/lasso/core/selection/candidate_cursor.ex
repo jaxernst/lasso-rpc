@@ -183,7 +183,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         min_block: requirements.requested_block,
         requires_archival: requirements.requires_archival,
         requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
-        workload_key: workload_for_origin(Keyword.get(opts, :request_origin, :client))
+        workload_key: Workload.for_request(Keyword.get(opts, :request_origin, :client), method)
       )
 
     descriptors =
@@ -594,9 +594,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defp transports_to_check(:http), do: [:http]
   defp transports_to_check(:ws), do: [:ws]
   defp transports_to_check(_both), do: [:http, :ws]
-
-  defp workload_for_origin(:system), do: Workload.normalize(:system)
-  defp workload_for_origin(_origin), do: Workload.normalize(:client)
 
   defp descriptor_provider_id({provider, _transport}), do: provider.id
   defp descriptor_provider_id({:ranked, candidate, _transport}), do: candidate.id

@@ -236,7 +236,7 @@ defmodule Lasso.RPC.SelectionTest do
           profile,
           chain,
           :fastest,
-          :default
+          :client_basic
         )
 
       assert [%{provider_id: "provider_1"}] =
@@ -249,7 +249,7 @@ defmodule Lasso.RPC.SelectionTest do
                profile,
                chain,
                :fastest,
-               :default
+               :client_basic
              ) == before_count + 1
     end
 
@@ -294,7 +294,7 @@ defmodule Lasso.RPC.SelectionTest do
 
       # Public's own background probes may also populate its system partition.
       poller_scope = AttemptProjection.scope_state("poller-profile", chain, generation)
-      assert AttemptProjection.route_state(poller_scope, instance_id, :http, "system")
+      assert AttemptProjection.route_state(poller_scope, instance_id, :http, "system_basic")
 
       assert {:ok, "z_fast"} =
                Selection.select_provider(profile, chain, "eth_blockNumber",
@@ -707,6 +707,99 @@ defmodule Lasso.RPC.SelectionTest do
       end
     end
 
+    test "adaptive strategies use independent basic, state and log evidence", %{chain: chain} do
+      profile = "public"
+
+      setup_providers([
+        %{id: "basic_fast", priority: 10, behavior: :healthy, profile: profile},
+        %{id: "state_fast", priority: 20, behavior: :healthy, profile: profile},
+        %{id: "logs_fast", priority: 30, behavior: :healthy, profile: profile}
+      ])
+
+      generation = Catalog.active_generation()
+      now_us = System.monotonic_time(:microsecond)
+
+      cases = [
+        {"eth_blockNumber", "client_basic", "basic_fast"},
+        {"eth_call", "client_state", "state_fast"},
+        {"eth_getLogs", "client_logs", "logs_fast"}
+      ]
+
+      for {_method, workload, winner} <- cases,
+          {provider, offset} <- Enum.with_index(["basic_fast", "state_fast", "logs_fast"]) do
+        record_selection_successes(
+          chain,
+          profile,
+          provider,
+          generation,
+          now_us + offset * 10,
+          if(provider == winner, do: 10_000, else: 100_000),
+          workload
+        )
+      end
+
+      for {method, workload, winner} <- cases do
+        scope = AttemptProjection.scope_state(profile, chain)
+
+        assert %{route: {instance, :http}} =
+                 AttemptProjection.fastest_winner(scope, String.to_existing_atom(workload))
+
+        assert instance == Catalog.lookup_instance_id(profile, chain, winner)
+
+        assert {:ok, %{provider_id: ^winner}, _} =
+                 CandidateCursor.next(
+                   Selection.select_channel_candidates(profile, chain, method,
+                     strategy: :fastest,
+                     transport: :http
+                   )
+                 )
+
+        summaries =
+          AttemptProjection.batch_summaries(
+            profile,
+            Enum.map(["basic_fast", "state_fast", "logs_fast"], fn provider ->
+              %{
+                instance_id: Catalog.lookup_instance_id(profile, chain, provider),
+                transport: :http
+              }
+            end),
+            chain,
+            String.to_existing_atom(workload)
+          )
+
+        assert summaries[{instance, :http}].successful_mean_latency_ms == 10.0
+
+        if method == "eth_call" do
+          for state_method <- ["eth_getBalance", "eth_getCode"] do
+            assert {:ok, %{provider_id: ^winner}, _} =
+                     CandidateCursor.next(
+                       Selection.select_channel_candidates(profile, chain, state_method,
+                         strategy: :fastest,
+                         transport: :http
+                       )
+                     )
+          end
+        end
+
+        :rand.seed(:exsss, {101, 202, 303})
+
+        wins =
+          Enum.count(1..100, fn _ ->
+            {:ok, channel, _cursor} =
+              CandidateCursor.next(
+                Selection.select_channel_candidates(profile, chain, method,
+                  strategy: :latency_weighted,
+                  transport: :http
+                )
+              )
+
+            channel.provider_id == winner
+          end)
+
+        assert wins >= 90
+      end
+    end
+
     test "fastest winner is rechecked against learned rate limits at cursor admission", %{
       chain: chain
     } do
@@ -727,7 +820,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us,
         10_000,
-        "client"
+        "client_basic"
       )
 
       record_selection_successes(
@@ -737,7 +830,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us + 10,
         20_000,
-        "client"
+        "client_basic"
       )
 
       cursor =
@@ -788,7 +881,7 @@ defmodule Lasso.RPC.SelectionTest do
           generation,
           now_us,
           latency,
-          "client"
+          "client_basic"
         )
 
         Lasso.BlockSync.Registry.put_height(
@@ -892,7 +985,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us,
         10_000,
-        "client"
+        "client_basic"
       )
 
       record_selection_successes(
@@ -902,7 +995,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us + 10,
         20_000,
-        "client"
+        "client_basic"
       )
 
       record_selection_successes(
@@ -912,7 +1005,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us + 20,
         30_000,
-        "client"
+        "client_basic"
       )
 
       cursor =
@@ -1009,7 +1102,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us,
         20_000,
-        "client"
+        "client_basic"
       )
 
       record_selection_successes(
@@ -1019,7 +1112,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us + 10,
         80_000,
-        "system"
+        "system_basic"
       )
 
       cursor =
@@ -1040,7 +1133,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us + 20,
         10_000,
-        "system"
+        "system_basic"
       )
 
       assert {:ok, %{provider_id: "cold_fast"}, cursor} = CandidateCursor.next(cursor)
@@ -1086,7 +1179,7 @@ defmodule Lasso.RPC.SelectionTest do
         generation,
         now_us,
         20_000,
-        "client"
+        "client_basic"
       )
 
       cursor =
@@ -1177,7 +1270,7 @@ defmodule Lasso.RPC.SelectionTest do
       generation,
       emitted_at_us,
       duration_us,
-      "system"
+      "system_basic"
     )
   end
 
@@ -1263,7 +1356,7 @@ defmodule Lasso.RPC.SelectionTest do
         circuit_epoch: 1,
         execution_safety: :replay_safe,
         routing_intent: "fastest",
-        workload_key: "client",
+        workload_key: "client_basic",
         request_budget_ms: 100,
         candidate_admission_count: 1,
         dispatch_count: 1

@@ -54,6 +54,8 @@ capacity awareness, or cluster-global balancing.
 
 Orders reliability-qualified upstream instances by recent mean successful-attempt latency. Evidence is local to the routing node and keyed by a bounded registered workload key rather than arbitrary RPC method strings.
 
+Client and system attempts use separate fixed method families: basic, state, logs, trace, transaction, and subscription. Unknown methods share one fallback partition. A successful `eth_blockNumber` read can qualify the basic family but does not qualify `eth_getBalance` or `eth_getLogs`; system observations can seed cold-start ordering in their family but cannot qualify client traffic. This partitioning does not enable exploratory attempts; routing still uses ordinary client requests until bounded exploration is separately configured and qualified.
+
 **Use When**:
 - Latency is the primary concern
 - You're willing to concentrate load on the fastest provider

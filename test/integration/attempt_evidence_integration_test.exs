@@ -58,11 +58,46 @@ defmodule Lasso.RPC.AttemptEvidenceIntegrationTest do
              execute(chain, "sink-isolation", false, "sink-isolation-request", 1_000)
 
     scope = AttemptProjection.scope_state("public", chain)
-    row = AttemptProjection.route_state(scope, instance_id, :http, "default")
+    row = AttemptProjection.route_state(scope, instance_id, :http, "client_basic")
 
     assert row.status == :healthy
     assert row.usable_successes == 1
     assert request_event("sink-isolation-request").metadata.diagnostic == :request_returned
+  end
+
+  test "real reads retain separate basic and state routing evidence", %{chain: chain} do
+    setup_providers([%{id: "family-route", priority: 10, behavior: :healthy, profile: "public"}])
+    instance_id = Lasso.Providers.Catalog.lookup_instance_id("public", chain, "family-route")
+    options = %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 1_000}
+
+    assert {:ok, _result, _ctx} =
+             RequestPipeline.execute_via_channels(
+               chain,
+               "eth_getBalance",
+               ["0x" <> String.duplicate("0", 40), "latest"],
+               %{options | request_id: "state-family-read"}
+             )
+
+    scope = AttemptProjection.scope_state("public", chain)
+
+    assert %{usable_successes: 1} =
+             AttemptProjection.route_state(scope, instance_id, :http, "client_state")
+
+    assert AttemptProjection.route_state(scope, instance_id, :http, "client_basic") == nil
+
+    assert {:ok, _result, _ctx} =
+             RequestPipeline.execute_via_channels(
+               chain,
+               "eth_blockNumber",
+               [],
+               %{options | request_id: "basic-family-read"}
+             )
+
+    assert %{usable_successes: 1} =
+             AttemptProjection.route_state(scope, instance_id, :http, "client_basic")
+
+    assert %{usable_successes: 1} =
+             AttemptProjection.route_state(scope, instance_id, :http, "client_state")
   end
 
   test "dynamic channels retain the endpoint-derived instance identity", %{chain: chain} do

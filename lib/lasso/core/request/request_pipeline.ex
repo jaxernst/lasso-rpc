@@ -1446,7 +1446,7 @@ defmodule Lasso.RPC.RequestPipeline do
   defp request_workload_key(ctx), do: origin_workload_key(ctx)
 
   defp origin_workload_key(ctx),
-    do: Workload.encode(Workload.for_origin(ctx.opts.request_origin))
+    do: Workload.encode(Workload.for_request(ctx.opts.request_origin, ctx.method))
 
   defp release_execution_payloads(ctx) do
     opts = bounded_return_options(ctx.opts)
