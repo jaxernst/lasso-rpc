@@ -526,14 +526,15 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
   test "a D-1 stamp delivered after the prearmed cutoff marker is late" do
     for _iteration <- 1..20 do
       test_pid = self()
-      deadline_us = deadline_after(25)
 
       owner =
         spawn(fn ->
+          deadline_us = deadline_after(100)
+
           outcome =
             RequestOwner.execute(identity(), deadline_us, fn ->
-              send(test_pid, {:transport_waiting, self()})
-              assert_receive :complete_after_cutoff
+              send(test_pid, {:transport_waiting, self(), deadline_us})
+              assert_receive :complete_after_cutoff, 1_000
 
               AttemptProtocol.terminal_at(
                 AttemptProtocol.context(),
@@ -548,7 +549,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
           send(test_pid, {:owner_outcome, outcome})
         end)
 
-      assert_receive {:transport_waiting, task}
+      assert_receive {:transport_waiting, task, deadline_us}, 1_000
       assert :erlang.suspend_process(owner)
       wait_past(deadline_us)
 
@@ -557,10 +558,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
       end)
 
       send(task, :complete_after_cutoff)
-
-      await_mailbox(owner, fn messages ->
-        Enum.any?(messages, &match?({_task_ref, %RequestOwner.AttemptCompletion{}}, &1))
-      end)
+      await_down(task)
 
       assert :erlang.resume_process(owner)
 
