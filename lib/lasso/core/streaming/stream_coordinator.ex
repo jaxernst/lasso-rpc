@@ -1834,7 +1834,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
      %{
        state
        | failover_status: :degraded,
-         state: StreamState.clear_history(state.state),
+         state: StreamState.clear(state.state),
          failover_context: nil,
          failover_history: [],
          recovery_deadline_us: nil,

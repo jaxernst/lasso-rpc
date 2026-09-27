@@ -5,15 +5,16 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
 
   use Lasso.Test.LassoIntegrationCase, async: false
 
-  alias Lasso.Core.Streaming.UpstreamSubscriptionPool
+  alias Lasso.Core.Streaming.{ClientSubscriptionRegistry, UpstreamSubscriptionPool}
   alias Lasso.Testing.{IntegrationHelper, MockHTTPProvider, MockWSProvider}
 
   @moduletag :integration
 
   describe "WebSocket subscription zero-gap guarantee" do
-    test "degraded exhaustion closes clients and a new subscription starts fresh", %{
-      chain: chain
-    } do
+    test "degraded exhaustion resets continuity before teardown and a new subscription starts fresh",
+         %{
+           chain: chain
+         } do
       profile = "public"
       key = {:newHeads}
       head = start_supervised!({Agent, fn -> 200 end})
@@ -51,13 +52,27 @@ defmodule Lasso.Integration.ZeroGapFailoverTest do
         }
       end)
 
-      Lasso.Core.Streaming.StreamCoordinator.provider_unhealthy(
-        profile,
-        chain,
-        key,
-        p1_id,
-        p2_id
-      )
+      registry = ClientSubscriptionRegistry.via(profile, chain)
+      :ok = :sys.suspend(registry)
+
+      try do
+        Lasso.Core.Streaming.StreamCoordinator.provider_unhealthy(
+          profile,
+          chain,
+          key,
+          p1_id,
+          p2_id
+        )
+
+        Lasso.Test.Eventually.assert_eventually(fn ->
+          Process.alive?(original_pid) and
+            :sys.get_state(coordinator).failover_status == :degraded
+        end)
+
+        assert :sys.get_state(coordinator).state.markers.last_block_num == nil
+      after
+        :ok = :sys.resume(registry)
+      end
 
       Lasso.Test.Eventually.assert_eventually(fn -> GenServer.whereis(coordinator) == nil end)
       assert_receive {:subscription_terminated, ^old_sub_id, :continuity_exhausted}, 1_000

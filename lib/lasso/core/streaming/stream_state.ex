@@ -235,20 +235,6 @@ defmodule Lasso.Core.Streaming.StreamState do
     }
   end
 
-  @spec clear_history(t()) :: t()
-  def clear_history(%__MODULE__{} = state) do
-    %{
-      state
-      | retained_bytes: 0,
-        history_overflowed: false,
-        history_overflow_block: nil,
-        head_history: %{},
-        head_history_bytes: %{},
-        log_history: %{},
-        log_history_bytes: %{}
-    }
-  end
-
   @spec continuity_snapshot(t()) :: map()
   def continuity_snapshot(%__MODULE__{} = state) do
     %{
