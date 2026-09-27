@@ -31,10 +31,12 @@ defmodule Lasso.Logger.ChainFormatter do
 
     [
       base_prefix,
-      IO.iodata_to_binary(message),
+      message |> IO.iodata_to_binary() |> scrub_credentials(),
       metadata_line,
       "\n"
     ]
+    |> IO.iodata_to_binary()
+    |> Lasso.URLMask.mask_in_string()
   end
 
   # Render metadata as " => key=value key2=value2" if any keys remain
@@ -44,7 +46,20 @@ defmodule Lasso.Logger.ChainFormatter do
     # - Process metadata (pid, domain, application)
     filtered =
       Enum.reject(metadata, fn {key, _val} ->
-        key in [:time, :gl, :mfa, :module, :function, :file, :line, :pid, :domain, :application]
+        key in [
+          :time,
+          :gl,
+          :mfa,
+          :module,
+          :function,
+          :file,
+          :line,
+          :pid,
+          :domain,
+          :application,
+          :__sentry__,
+          :sentry
+        ]
       end)
 
     if filtered == [] do
@@ -53,11 +68,7 @@ defmodule Lasso.Logger.ChainFormatter do
       rendered =
         filtered
         |> Enum.map(fn {k, v} ->
-          value =
-            case v do
-              binary when is_binary(binary) -> binary
-              other -> inspect(other)
-            end
+          value = render_metadata_value(k, v)
 
           [to_string(k), "=", value]
         end)
@@ -65,5 +76,40 @@ defmodule Lasso.Logger.ChainFormatter do
 
       [" => ", rendered]
     end
+  end
+
+  @sensitive_key_tokens [
+    "authorization",
+    "cookie",
+    "token",
+    "secret",
+    "password",
+    "api_key",
+    "apikey",
+    "x-api-key",
+    "private_key",
+    "session_id",
+    "query_string",
+    "account_id",
+    "profile_id",
+    "user_id",
+    "email"
+  ]
+
+  defp render_metadata_value(key, value) do
+    key_string = key |> to_string() |> String.downcase()
+
+    if Enum.any?(@sensitive_key_tokens, &String.contains?(key_string, &1)) do
+      "[REDACTED]"
+    else
+      case value do
+        binary when is_binary(binary) -> scrub_credentials(binary)
+        other -> other |> inspect() |> scrub_credentials()
+      end
+    end
+  end
+
+  defp scrub_credentials(value) do
+    Regex.replace(~r/\blasso_(?:(?:ak|mk)_)?[A-Za-z0-9_-]{20,}/, value, "lasso_[FILTERED]")
   end
 end
