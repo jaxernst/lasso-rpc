@@ -26,10 +26,12 @@ defmodule Lasso.BlockSync.Worker do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
+  alias Lasso.Cluster.Topology
   alias Lasso.Config.{ConfigStore, MonitoringDefaults, ObservationConfig}
   alias Lasso.Core.Streaming.InstanceEventBus
+  alias Lasso.Events.HeadObserved
   alias Lasso.Observations.HeadObservation
-  alias Lasso.Providers.{Catalog, ObservationPolicy, RestartCounter}
+  alias Lasso.Providers.{Catalog, HeadEvidence, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.WebSocket.Connection
 
   @reconnect_delay_ms 5_000
@@ -225,6 +227,7 @@ defmodule Lasso.BlockSync.Worker do
       metadata
       |> Map.put(:stale_after_ms, observation_stale_after_ms(state, source))
       |> maybe_put_optimistic_credit(state, source)
+      |> Map.put(:origin_member_id, Topology.self_node_id())
 
     observed_at_ms = Map.get(metadata, :observed_at_ms, System.system_time(:millisecond))
 
@@ -237,7 +240,14 @@ defmodule Lasso.BlockSync.Worker do
            Map.delete(metadata, :observed_at_ms)
          ) do
       :ok ->
-        broadcast_height_update(state, height, source, observed_at_ms)
+        case BlockSyncRegistry.get_observation(state.chain_id, instance_id, source) do
+          {:ok, %HeadObservation{height: ^height, observed_at_ms: ^observed_at_ms} = observation} ->
+            broadcast_height_update(observation)
+
+          _missing_or_invalid ->
+            broadcast_legacy_height_update(state, height, source, observed_at_ms)
+        end
+
         {:noreply, maybe_clear_restart_count(state)}
 
       :ignored ->
@@ -258,9 +268,14 @@ defmodule Lasso.BlockSync.Worker do
       |> Map.put(:stale_after_ms, observation_stale_after_ms(state, source))
       |> maybe_put_optimistic_credit(state, source)
 
-    case BlockSyncRegistry.put_observation(%{observation | attributes: attributes}) do
+    observation =
+      observation
+      |> Map.put(:attributes, attributes)
+      |> HeadObservation.with_origin(Topology.self_node_id())
+
+    case BlockSyncRegistry.put_observation(observation) do
       :ok ->
-        broadcast_height_update(state, observation.height, source, observation.observed_at_ms)
+        broadcast_height_update(observation)
         {:noreply, maybe_clear_restart_count(state)}
 
       :ignored ->
@@ -413,10 +428,54 @@ defmodule Lasso.BlockSync.Worker do
     %{state | restart_count_cleared: true}
   end
 
-  defp broadcast_height_update(state, height, source, observed_at_ms) do
-    profiles = Catalog.get_instance_refs(state.instance_id)
+  defp broadcast_height_update(%HeadObservation{} = observation) do
+    profiles = Catalog.get_instance_refs(observation.instance_id)
 
     for profile <- profiles do
+      provider_id =
+        Catalog.reverse_lookup_provider_id(profile, observation.chain_id, observation.instance_id) ||
+          observation.instance_id
+
+      snapshot =
+        case HeadEvidence.snapshot(profile, observation.chain_id) do
+          {:ok, value} -> value
+          {:error, :not_found} -> nil
+        end
+
+      visible_observation = %{
+        observation
+        | poll_references:
+            Enum.filter(observation.poll_references, fn reference ->
+              not is_nil(snapshot) and reference.scope_id == snapshot.scope_id
+            end)
+      }
+
+      event = %HeadObserved{
+        profile: profile,
+        provider_id: provider_id,
+        node_id: observation.origin_member_id,
+        observation: visible_observation,
+        head_snapshot: snapshot
+      }
+
+      Phoenix.PubSub.broadcast(
+        Lasso.PubSub,
+        Lasso.Topics.block_sync(profile, observation.chain_id),
+        event
+      )
+
+      sync_msg = %{
+        chain_id: observation.chain_id,
+        provider_id: provider_id,
+        block_height: observation.height
+      }
+
+      Phoenix.PubSub.broadcast(Lasso.PubSub, Lasso.Topics.sync_updates(profile), sync_msg)
+    end
+  end
+
+  defp broadcast_legacy_height_update(state, height, source, observed_at_ms) do
+    for profile <- Catalog.get_instance_refs(state.instance_id) do
       provider_id =
         Catalog.reverse_lookup_provider_id(profile, state.chain_id, state.instance_id) ||
           state.instance_id

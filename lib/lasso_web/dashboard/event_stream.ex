@@ -44,7 +44,9 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
-  alias Lasso.Events.{RoutingDecision, Subscription}
+  alias Lasso.Events.{HeadObserved, RoutingDecision, Subscription}
+  alias Lasso.Observations.HeadObservation
+  alias Lasso.Providers.Catalog
   alias LassoWeb.Dashboard.TrafficCounters
 
   @batch_interval_ms 175
@@ -347,6 +349,39 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   # Block height updates - buffer when height changes for next batch flush
+  def handle_info(
+        %HeadObserved{
+          profile: profile,
+          provider_id: provider_id,
+          node_id: node_id,
+          observation:
+            %HeadObservation{chain_id: chain_id, instance_id: instance_id} = observation
+        },
+        %{profile: profile} = state
+      )
+      when is_binary(node_id) and node_id != "" do
+    if Catalog.lookup_instance_id(profile, chain_id, provider_id) == instance_id do
+      case update_block_height(
+             state,
+             provider_id,
+             chain_id,
+             node_id,
+             observation.height,
+             observation.transport,
+             observation.observed_at_ms
+           ) do
+        {:unchanged, state} ->
+          {:noreply, state}
+
+        {:changed, state} ->
+          {:noreply,
+           queue_block_update(state, provider_id, node_id, observation.height, chain_id)}
+      end
+    else
+      {:noreply, state}
+    end
+  end
+
   def handle_info(
         {:block_height_update, {profile, provider_id}, height, source, timestamp},
         state

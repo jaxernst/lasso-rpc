@@ -402,6 +402,7 @@ defmodule Lasso.BlockSync.Registry do
 
   defp observation_metadata(%HeadObservation{} = observation) do
     observation.attributes
+    |> Map.put(:origin_member_id, observation.origin_member_id)
     |> Map.put(:hash, observation.block_hash)
     |> Map.put(:parent_hash, observation.parent_hash)
     |> Map.put(:timestamp, observation.block_timestamp)
@@ -446,6 +447,7 @@ defmodule Lasso.BlockSync.Registry do
       block_timestamp: Map.get(metadata, :timestamp),
       latency_ms: Map.get(metadata, :latency_ms),
       sample_interval_ms: Map.get(metadata, :optimistic_credit_ms),
+      origin_member_id: Map.get(metadata, :origin_member_id),
       poll_references: Map.get(metadata, :poll_references, []),
       attributes: metadata
     }

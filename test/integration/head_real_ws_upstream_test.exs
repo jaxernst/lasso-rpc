@@ -3,6 +3,7 @@ defmodule Lasso.RPC.HeadRealWsUpstreamTest do
 
   alias Lasso.BlockSync.{Registry, Worker}
   alias Lasso.Config.ConfigStore
+  alias Lasso.Events.HeadObserved
   alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.Selection
   alias Lasso.RPC.Selection.CandidateCursor
@@ -78,6 +79,7 @@ defmodule Lasso.RPC.HeadRealWsUpstreamTest do
 
   test "real local WebSocket upstream heads inform operator and request routing", %{chain: chain} do
     profile = "public"
+    assert :ok = Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.block_sync(profile, chain))
     original_ws_client = Application.get_env(:lasso, :ws_client_module)
 
     Application.put_env(:lasso, :ws_client_module, Lasso.RPC.Transport.WebSocket.Client)
@@ -176,6 +178,16 @@ defmodule Lasso.RPC.HeadRealWsUpstreamTest do
     assert Registry.get_observation(chain, minority_id, :ws) == {:error, :not_found}
 
     send_head(connected[hd(providers)], 100, "0xbbb")
+
+    assert_receive %HeadObserved{
+                     profile: ^profile,
+                     provider_id: ^minority,
+                     node_id: node_id,
+                     observation: %{transport: :ws, height: 100, origin_member_id: node_id}
+                   },
+                   5_000
+
+    assert node_id == Lasso.Cluster.Topology.self_node_id()
     send_head(connected[Enum.at(providers, 1)], 100, "0xaaa")
 
     Lasso.Test.Eventually.assert_eventually(fn ->

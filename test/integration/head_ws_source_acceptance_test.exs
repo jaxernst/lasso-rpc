@@ -3,10 +3,13 @@ defmodule Lasso.RPC.HeadWsSourceAcceptanceTest do
 
   alias Lasso.BlockSync.{Registry, Worker}
   alias Lasso.Config.ConfigStore
+  alias Lasso.Events.HeadObserved
+  alias Lasso.Observations.HeadObservation
   alias Lasso.Providers.{Catalog, HeadEvidence}
   alias Lasso.RPC.Selection
   alias Lasso.RPC.Selection.CandidateCursor
   alias LassoWeb.Dashboard.StatusHelpers
+  alias LassoWeb.Dashboard.EventStream
 
   test "newHeads source events drive branch and lag evidence for operators and routing", %{
     chain: chain
@@ -104,6 +107,90 @@ defmodule Lasso.RPC.HeadWsSourceAcceptanceTest do
              |> CandidateCursor.next()
 
     assert {:ok, %{ws_status: %{status: :active}}} = Worker.get_status(chain, ids[majority_a])
+  end
+
+  test "dashboard attributes a delivered head to its remote member and active profile instance",
+       %{
+         chain: chain
+       } do
+    profile = "head-origin-#{chain}"
+    provider_id = "provider-#{chain}"
+    remote_node_id = "remote-member-#{chain}"
+
+    assert :ok =
+             ConfigStore.register_chain_runtime(profile, chain, %{
+               block_time_ms: 1_000,
+               providers: []
+             })
+
+    setup_providers([%{id: provider_id, priority: 1}], profile: profile)
+    instance_id = Catalog.lookup_instance_id(profile, chain, provider_id)
+    assert is_binary(instance_id)
+
+    {:ok, stream} = EventStream.ensure_started(profile)
+
+    on_exit(fn ->
+      if Process.alive?(stream) do
+        DynamicSupervisor.terminate_child(Lasso.Dashboard.StreamSupervisor, stream)
+      end
+    end)
+
+    observation = %HeadObservation{
+      chain_id: chain,
+      instance_id: instance_id,
+      transport: :ws,
+      height: 123,
+      observed_at_ms: System.system_time(:millisecond),
+      origin_member_id: remote_node_id
+    }
+
+    event = %HeadObserved{
+      profile: profile,
+      provider_id: provider_id,
+      node_id: remote_node_id,
+      observation: observation
+    }
+
+    topic = Lasso.Topics.block_sync(profile, chain)
+    assert :ok = Phoenix.PubSub.broadcast(Lasso.PubSub, topic, event)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      get_in(:sys.get_state(stream).block_heights, [
+        {provider_id, chain, remote_node_id},
+        :height
+      ]) == 123
+    end)
+
+    refute Map.has_key?(
+             :sys.get_state(stream).block_heights,
+             {provider_id, chain, Lasso.Cluster.Topology.self_node_id()}
+           )
+
+    assert :ok =
+             Phoenix.PubSub.broadcast(Lasso.PubSub, topic, %{
+               event
+               | observation: %{observation | instance_id: "stale-instance"},
+                 node_id: "rejected-member"
+             })
+
+    assert :ok =
+             Phoenix.PubSub.broadcast(Lasso.PubSub, topic, %{
+               event
+               | profile: "other",
+                 node_id: "other-profile-member"
+             })
+
+    :sys.get_state(stream)
+
+    refute Map.has_key?(
+             :sys.get_state(stream).block_heights,
+             {provider_id, chain, "rejected-member"}
+           )
+
+    refute Map.has_key?(
+             :sys.get_state(stream).block_heights,
+             {provider_id, chain, "other-profile-member"}
+           )
   end
 
   defp send_head(chain, provider, height, hash) do
