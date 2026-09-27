@@ -592,7 +592,9 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
       assert_receive {:item_owner_started, _item_ref, ^owner, _work}
 
       Process.exit(socket, :kill)
-      assert_receive {:item_owner_observed_socket_down, ^phase, ^owner, :killed}
+      assert_receive {:item_owner_observed_socket_down, ^phase, ^owner, reason}
+      # Monitor registration can race with exit even after the owner starts.
+      assert reason in [:killed, :noproc]
     end
   end
 
