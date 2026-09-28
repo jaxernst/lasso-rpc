@@ -151,6 +151,55 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   def invalid_param_error?(_), do: false
 
+  @doc "Returns a provider's Retry-After delay in milliseconds, when present."
+  @spec parse_retry_after([{String.t(), String.t()}] | nil, String.t() | nil) ::
+          non_neg_integer() | nil
+  def parse_retry_after(headers, body), do: retry_after_header(headers) || retry_after_body(body)
+
+  defp retry_after_header(nil), do: nil
+
+  defp retry_after_header(headers) when is_list(headers) do
+    case List.keyfind(headers, "retry-after", 0) do
+      {_, value} -> parse_retry_after_value(String.trim(value))
+      nil -> nil
+    end
+  end
+
+  defp parse_retry_after_value(value) do
+    case Integer.parse(value) do
+      {seconds, ""} when seconds >= 0 -> seconds * 1_000
+      _ -> parse_http_date_retry_after(value)
+    end
+  end
+
+  defp parse_http_date_retry_after(value) do
+    case :httpd_util.convert_request_date(String.to_charlist(value)) do
+      {{year, month, day}, {hour, min, sec}} ->
+        naive = NaiveDateTime.from_erl!({{year, month, day}, {hour, min, sec}})
+        dt = DateTime.from_naive!(naive, "Etc/UTC")
+        delay_ms = DateTime.diff(dt, DateTime.utc_now(), :millisecond)
+        if delay_ms > 0, do: delay_ms, else: nil
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp retry_after_body(nil), do: nil
+  defp retry_after_body(""), do: nil
+
+  defp retry_after_body(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"retry_after" => seconds}} when is_number(seconds) and seconds >= 0 ->
+        round(seconds * 1_000)
+
+      _ ->
+        nil
+    end
+  end
+
   defp map_core_category(:rate_limit, code), do: {:rate_limit, %{code: code}}
   defp map_core_category(:invalid_params, code), do: {:invalid_params, %{code: code}}
   defp map_core_category(:method_not_found, code), do: {:method_not_found, %{code: code}}

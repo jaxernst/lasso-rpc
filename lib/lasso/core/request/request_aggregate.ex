@@ -156,6 +156,7 @@ defmodule Lasso.RPC.RequestAggregate do
        }),
        do: true
 
+  defp success?(%RequestTerminal.LocalSuccess{}), do: true
   defp success?(_fact), do: false
 
   defp reusable_aggregates(

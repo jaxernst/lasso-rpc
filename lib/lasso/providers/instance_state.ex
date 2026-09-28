@@ -301,6 +301,37 @@ defmodule Lasso.Providers.InstanceState do
     end
   end
 
+  @doc "Records a local transport cooldown without shortening an active one."
+  @spec record_rate_limit(String.t(), :http | :ws, pos_integer()) :: :ok
+  def record_rate_limit(instance_id, transport, ttl_ms)
+      when is_binary(instance_id) and transport in [:http, :ws] and is_integer(ttl_ms) and
+             ttl_ms > 0 do
+    expiry_ms = System.monotonic_time(:millisecond) + ttl_ms
+    key = {:rate_limit, instance_id, transport}
+    put_longer_rate_limit(key, %{expiry_ms: expiry_ms, retry_after_ms: ttl_ms})
+  end
+
+  defp put_longer_rate_limit(key, %{expiry_ms: expiry_ms} = cooldown) do
+    case safe_lookup(key) do
+      [{^key, %{expiry_ms: existing_expiry}}] when existing_expiry >= expiry_ms ->
+        :ok
+
+      [{^key, existing}] ->
+        case :ets.select_replace(
+               :lasso_instance_state,
+               [{{key, existing}, [], [{:const, {key, cooldown}}]}]
+             ) do
+          1 -> :ok
+          0 -> put_longer_rate_limit(key, cooldown)
+        end
+
+      [] ->
+        if :ets.insert_new(:lasso_instance_state, {key, cooldown}),
+          do: :ok,
+          else: put_longer_rate_limit(key, cooldown)
+    end
+  end
+
   defp maybe_add_learned_rate_limit(keys, instance_id, transport, true, opts) do
     learned_key =
       case Keyword.get(opts, :learned_scope) do

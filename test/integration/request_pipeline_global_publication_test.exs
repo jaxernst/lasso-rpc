@@ -4,7 +4,7 @@ defmodule Lasso.RPC.RequestPipelineGlobalPublicationTest do
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Config.ConfigStore
   alias Lasso.JSONRPC.{Error, Quantity}
-  alias Lasso.RPC.{RequestOptions, RequestPipeline, RequestTerminal}
+  alias Lasso.RPC.{RequestAggregate, RequestOptions, RequestPipeline, RequestTerminal}
   alias Lasso.RPC.Response.Success
   require Lasso.Test.Eventually
 
@@ -27,6 +27,8 @@ defmodule Lasso.RPC.RequestPipelineGlobalPublicationTest do
     publication = publish(chain, 101)
     observer = self()
 
+    assert {:ok, %{client: before}} = RequestAggregate.snapshot("public", chain)
+
     set_behavior(
       "publication-upstream",
       {:conditional,
@@ -47,6 +49,19 @@ defmodule Lasso.RPC.RequestPipelineGlobalPublicationTest do
       assert %RequestTerminal.LocalSuccess{} =
                RequestPipeline.build_request_terminal(:ok, response, ctx)
     end
+
+    assert {:ok,
+            %{
+              client: %{
+                total: total,
+                successes: successes,
+                failures: failures
+              }
+            }} = RequestAggregate.snapshot("public", chain)
+
+    assert total == before.total + 3
+    assert successes == before.successes + 3
+    assert failures == before.failures
 
     assert {:ok, response, _} = request(chain, "eth_getBlockByNumber", ["latest", false])
     assert result(response) == publication["published"]["header"]

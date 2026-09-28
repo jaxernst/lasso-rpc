@@ -30,7 +30,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   alias Lasso.Config.MonitoringDefaults
   alias Lasso.Core.Support.CircuitBreaker
-  alias Lasso.Providers.{Catalog, ChainIdentity, ObservationPolicy, RestartCounter}
+  alias Lasso.Discovery.ErrorClassifier
+  alias Lasso.Providers.{Catalog, ChainIdentity, InstanceState, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
 
   @tick_interval_ms 200
@@ -352,9 +353,27 @@ defmodule Lasso.Providers.ProbeCoordinator do
       BoundedHTTP.bounded_request(
         request,
         [receive_timeout: @default_timeout_ms, upstream_instance_id: instance_id],
-        &handle_http_probe_response(&1, instance_id, chain_id, observation)
+        &handle_probe_response_with_cooldown(&1, instance_id, chain_id, observation)
       )
     end)
+  end
+
+  defp handle_probe_response_with_cooldown(response, instance_id, chain_id, observation) do
+    result = handle_http_probe_response(response, instance_id, chain_id, observation)
+
+    case {result, response} do
+      {{^instance_id, {:rate_limited, _}}, {:ok, payload}} ->
+        retry_after =
+          ErrorClassifier.parse_retry_after(Map.get(payload, :headers), Map.get(payload, :body))
+
+        if is_integer(retry_after) and retry_after > 0,
+          do: InstanceState.record_rate_limit(instance_id, :http, min(retry_after, 2_147_483_647))
+
+      _ ->
+        :ok
+    end
+
+    result
   end
 
   defp handle_http_probe_response(response, instance_id, chain_id, observation) do
@@ -522,19 +541,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
        })}
     )
 
-    now_ms = System.monotonic_time(:millisecond)
-    probe_expiry = now_ms + @probe_rate_limit_ttl_ms
-
-    case :ets.lookup(:lasso_instance_state, {:rate_limit, instance_id, :http}) do
-      [{_, %{expiry_ms: existing_expiry}}] when existing_expiry > now_ms ->
-        :ok
-
-      _ ->
-        :ets.insert(:lasso_instance_state, {
-          {:rate_limit, instance_id, :http},
-          %{expiry_ms: probe_expiry, retry_after_ms: @probe_rate_limit_ttl_ms}
-        })
-    end
+    InstanceState.record_rate_limit(instance_id, :http, @probe_rate_limit_ttl_ms)
   end
 
   defp read_existing_probe(instance_id) do
