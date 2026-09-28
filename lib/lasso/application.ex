@@ -118,7 +118,9 @@ defmodule Lasso.Application do
         Lasso.Benchmarking.Persistence,
         {Lasso.Core.ProjectionDispatcher,
          name: Lasso.ExecutionProjectionDispatcher,
-         lanes: Lasso.RPC.AttemptProjection.lane_configs()},
+         lanes:
+           Lasso.RPC.AttemptProjection.lane_configs() ++
+             [head_observations: Lasso.BlockSync.ClientObservation.lane_options()]},
 
         # Start centralized VM metrics collector for dashboard
         Lasso.VMMetricsCollector,

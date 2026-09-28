@@ -12,6 +12,7 @@ defmodule Lasso.Core.ProjectionDispatcher do
   alias Lasso.Core.ProjectionLane
 
   @sink_classes [
+    :head_observations,
     :learned_feedback,
     :diagnostics,
     :analytics,
@@ -24,7 +25,8 @@ defmodule Lasso.Core.ProjectionDispatcher do
   defstruct [:name, :registry, lanes: %{}]
 
   @type sink_class ::
-          :learned_feedback
+          :head_observations
+          | :learned_feedback
           | :diagnostics
           | :analytics
           | :ui

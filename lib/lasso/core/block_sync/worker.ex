@@ -81,6 +81,23 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Client API
 
+  @doc "Publishes client evidence independently of background-observation ownership."
+  @spec publish_client_observation(HeadObservation.t()) :: :ok
+  def publish_client_observation(
+        %HeadObservation{attributes: %{collection: collection}} = observation
+      )
+      when collection in [:client, :diagnostic] do
+    case BlockSyncRegistry.put_observation(observation) do
+      :ok ->
+        broadcast_height_update(observation)
+
+      :ignored ->
+        :ok
+    end
+
+    :ok
+  end
+
   @spec start_link({pos_integer(), String.t()}) :: GenServer.on_start()
   def start_link({chain_id, instance_id})
       when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do

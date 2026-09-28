@@ -27,7 +27,7 @@ defmodule Lasso.BlockSync.Registry do
   alias Lasso.BlockSync.ObservationProjection
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
   alias Lasso.Observations.{HeadComparison, HeadObservation, HeadScope, HeadSnapshot}
-  alias Lasso.Providers.HeadEvidence
+  alias Lasso.Providers.{Catalog, HeadEvidence}
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
@@ -173,6 +173,24 @@ defmodule Lasso.BlockSync.Registry do
 
       _missing_or_expired ->
         refresh_head_snapshot(scope, generation, now_ms, @cache_retries)
+    end
+  end
+
+  @doc "Reads a still-valid scoped snapshot without deriving a cold comparison."
+  @spec get_cached_head_snapshot(HeadScope.t()) ::
+          {:ok, HeadSnapshot.t()} | {:error, :no_data}
+  def get_cached_head_snapshot(%HeadScope{} = scope) do
+    now_ms = System.system_time(:millisecond)
+
+    with %{generation: generation} <- Catalog.snapshot(),
+         revision <- current_head_revision(scope.chain_id),
+         [{_key, ^revision, ^generation, %HeadSnapshot{} = snapshot}] <-
+           :ets.lookup(@table, scope.cache_key),
+         true <- now_ms <= snapshot.valid_through_ms,
+         ^revision <- current_head_revision(scope.chain_id) do
+      {:ok, snapshot}
+    else
+      _ -> {:error, :no_data}
     end
   end
 

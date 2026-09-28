@@ -86,7 +86,9 @@ defmodule Lasso.Providers.HeadEvidence do
     end
   end
 
-  defp policy(block_time_ms) do
+  @doc false
+  @spec policy(integer() | nil) :: HeadComparison.Policy.t()
+  def policy(block_time_ms) do
     block_time_ms =
       if is_integer(block_time_ms) and block_time_ms > 0,
         do: block_time_ms,

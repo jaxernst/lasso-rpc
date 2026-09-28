@@ -764,7 +764,12 @@ defmodule Lasso.RPC.RequestPipeline do
       RequestOwner.execute(
         identity,
         attempt_deadline_us,
-        build_transport_task(channel, prepared_request, timeout_ms),
+        build_transport_task(channel, prepared_request, timeout_ms)
+        |> Lasso.BlockSync.ClientObservation.wrap(
+          prepared_request,
+          identity,
+          ctx.opts.request_origin
+        ),
         caller_guard_options(caller_guard)
       )
 

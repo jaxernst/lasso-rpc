@@ -35,7 +35,7 @@ defmodule Lasso.Providers.Catalog do
   require Logger
 
   alias Lasso.Config.{ChainConfig, ConfigStore}
-  alias Lasso.Providers.{InstanceId, ProviderHeaders}
+  alias Lasso.Providers.{HeadEvidence, InstanceId, ProviderHeaders}
   alias Lasso.RPC.{BoundedIdentifier, RoutingPlan}
 
   @persistent_term_key :lasso_catalog_active
@@ -44,6 +44,9 @@ defmodule Lasso.Providers.Catalog do
           required(:table) => :ets.tid(),
           required(:generation) => non_neg_integer(),
           optional(:routing_plans) => %{{String.t(), pos_integer()} => RoutingPlan.t()},
+          optional(:head_scopes_by_instance) => %{
+            String.t() => [Lasso.Observations.HeadScope.t()]
+          },
           optional(:request_aggregates) => map()
         }
 
@@ -125,6 +128,44 @@ defmodule Lasso.Providers.Catalog do
       end
     )
   end
+
+  @doc "Indexes the distinct comparison scopes that observe each physical instance."
+  @spec head_scopes_by_instance(%{{String.t(), pos_integer()} => RoutingPlan.t()}) ::
+          %{String.t() => [Lasso.Observations.HeadScope.t()]}
+  def head_scopes_by_instance(routing_plans) when is_map(routing_plans) do
+    routing_plans
+    |> Map.values()
+    |> Enum.reduce(%{}, fn %RoutingPlan{providers: providers, head_scope: head_scope}, acc ->
+      Enum.reduce(providers, acc, fn provider, scopes_by_instance ->
+        Map.update(
+          scopes_by_instance,
+          provider.instance_id,
+          %{head_scope.scope_id => head_scope},
+          &Map.put(&1, head_scope.scope_id, head_scope)
+        )
+      end)
+    end)
+    |> Map.new(fn {instance_id, scopes} ->
+      {instance_id, scopes |> Map.values() |> Enum.sort_by(& &1.scope_id)}
+    end)
+  end
+
+  @doc "Returns the distinct profile head scopes that observe an upstream instance."
+  @spec head_scopes_for_instance(snapshot(), String.t()) ::
+          [Lasso.Observations.HeadScope.t()]
+  def head_scopes_for_instance(%{head_scopes_by_instance: scopes}, instance_id)
+      when is_map(scopes) and is_binary(instance_id) do
+    Map.get(scopes, instance_id, [])
+  end
+
+  def head_scopes_for_instance(%{routing_plans: plans}, instance_id)
+      when is_map(plans) and is_binary(instance_id) do
+    plans
+    |> head_scopes_by_instance()
+    |> Map.get(instance_id, [])
+  end
+
+  def head_scopes_for_instance(_snapshot, _instance_id), do: []
 
   @doc false
   # The `:persistent_term` key under which the active catalog ETS table
@@ -437,6 +478,14 @@ defmodule Lasso.Providers.Catalog do
       selection.max_lag_blocks ||
         Application.get_env(:lasso, :selection, []) |> Keyword.get(:max_lag_blocks)
 
+    head_scope =
+      Lasso.Observations.HeadScope.new(
+        profile,
+        chain_id,
+        Enum.map(providers, & &1.instance_id),
+        HeadEvidence.policy(chain_config.block_time_ms)
+      )
+
     %RoutingPlan{
       profile: profile,
       chain_id: chain_id,
@@ -444,6 +493,7 @@ defmodule Lasso.Providers.Catalog do
       providers: providers,
       provider_priorities: Map.new(providers, &{&1.id, &1.priority}),
       max_lag_blocks: max_lag_blocks,
+      head_scope: head_scope,
       archival_threshold:
         selection.archival_threshold || ChainConfig.Selection.default_archival_threshold()
     }

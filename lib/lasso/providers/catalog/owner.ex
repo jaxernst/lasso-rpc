@@ -163,11 +163,13 @@ defmodule Lasso.Providers.Catalog.Owner do
     previous_snapshot = Catalog.snapshot()
     old_table = Catalog.table()
     request_aggregates = RequestAggregate.prepare(generation, routing_plans, previous_snapshot)
+    head_scopes_by_instance = Catalog.head_scopes_by_instance(routing_plans)
 
     snapshot = %{
       table: new_table,
       generation: generation,
       routing_plans: routing_plans,
+      head_scopes_by_instance: head_scopes_by_instance,
       request_aggregates: request_aggregates
     }
 

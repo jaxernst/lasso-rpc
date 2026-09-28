@@ -8,7 +8,8 @@ defmodule Lasso.RPC.RoutingPlan do
     :providers,
     :provider_priorities,
     :max_lag_blocks,
-    :archival_threshold
+    :archival_threshold,
+    :head_scope
   ]
   defstruct @enforce_keys
 
@@ -32,6 +33,7 @@ defmodule Lasso.RPC.RoutingPlan do
           providers: [provider()],
           provider_priorities: %{String.t() => non_neg_integer()},
           max_lag_blocks: non_neg_integer() | nil,
-          archival_threshold: non_neg_integer()
+          archival_threshold: non_neg_integer(),
+          head_scope: Lasso.Observations.HeadScope.t()
         }
 end
