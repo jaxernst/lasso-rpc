@@ -7,9 +7,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   """
 
   alias Lasso.Config.MethodConstraints
-  alias Lasso.Discovery.{ErrorClassifier, ProbeEngine, TestParams}
+  alias Lasso.Discovery.{ErrorClassifier, MethodEvidence, ProbeEngine, Response, TestParams}
   alias Lasso.RPC.MethodRegistry
-  alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
 
   @levels %{
     critical: [:core],
@@ -30,7 +29,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     ]
   }
 
-  @type method_status :: :supported | :unsupported | :unknown | :timeout | :unverifiable
+  @type method_status ::
+          :supported | :recognized | :unsupported | :unknown | :timeout | :unverifiable
   @type method_result :: %{
           method: String.t(),
           status: method_status(),
@@ -107,10 +107,10 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
     provider_config = %{url: url}
     start_time = System.monotonic_time(:millisecond)
 
-    result = HttpClient.request_decoded(provider_config, method, params, timeout: timeout)
+    result = Response.request_decoded(provider_config, method, params, timeout: timeout)
 
     duration = System.monotonic_time(:millisecond) - start_time
-    classify_response(result, duration)
+    classify_response(result, duration, method)
   end
 
   @doc """
@@ -130,6 +130,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   """
   @spec group_by_status([method_result()]) :: %{
           supported: [method_result()],
+          recognized: [method_result()],
           unsupported: [method_result()],
           unknown: [method_result()],
           timeout: [method_result()],
@@ -138,6 +139,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   def group_by_status(results) do
     Enum.group_by(results, & &1.status)
     |> Map.put_new(:supported, [])
+    |> Map.put_new(:recognized, [])
     |> Map.put_new(:unsupported, [])
     |> Map.put_new(:unknown, [])
     |> Map.put_new(:timeout, [])
@@ -149,6 +151,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   """
   @spec count_by_status([method_result()]) :: %{
           supported: integer(),
+          recognized: integer(),
           unsupported: integer(),
           unknown: integer(),
           timeout: integer(),
@@ -159,6 +162,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
 
     %{
       supported: length(grouped.supported),
+      recognized: length(grouped.recognized),
       unsupported: length(grouped.unsupported),
       unknown: length(grouped.unknown),
       timeout: length(grouped.timeout),
@@ -214,10 +218,12 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
   end
 
   # Classifies HTTP response into a status
-  defp classify_response(result, duration) do
+  defp classify_response(result, duration, method) do
     case result do
-      {:ok, %{"result" => _result}} ->
-        %{status: :supported, duration_ms: duration, error: nil, error_code: nil}
+      {:ok, %{"result" => value}} ->
+        status = MethodEvidence.classify(method, value)
+        error = if status == :supported, do: nil, else: "Result could not be verified"
+        %{status: status, duration_ms: duration, error: error, error_code: nil}
 
       {:ok, %{"error" => %{"code" => -32_601} = error}} ->
         %{
@@ -228,9 +234,8 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
         }
 
       {:ok, %{"error" => %{"code" => -32_602} = error}} ->
-        # Invalid params means method exists
         %{
-          status: :supported,
+          status: :recognized,
           duration_ms: duration,
           error: Map.get(error, "message"),
           error_code: -32_602
@@ -244,6 +249,7 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
         status =
           case error_type do
             :method_not_found -> :unsupported
+            :invalid_params -> :recognized
             _ -> :unknown
           end
 

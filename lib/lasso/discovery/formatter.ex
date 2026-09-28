@@ -14,6 +14,7 @@ defmodule Lasso.Discovery.Formatter do
   # Status icons for terminal output
   @status_icons %{
     supported: "~G",
+    recognized: "~Y",
     unverifiable: "~Y",
     unsupported: "~R",
     unknown: "~Y",
@@ -109,6 +110,7 @@ defmodule Lasso.Discovery.Formatter do
     # Summary stats
     stats = [
       "#{status_icon(:supported)} Supported: #{by_status.supported}",
+      "#{status_icon(:recognized)} Recognized, unverified: #{by_status.recognized}",
       "#{status_icon(:unsupported)} Unsupported: #{by_status.unsupported}",
       "#{status_icon(:unknown)} Unknown: #{by_status.unknown}",
       "#{status_icon(:timeout)} Timeout: #{by_status.timeout}",
