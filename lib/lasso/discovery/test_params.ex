@@ -7,6 +7,8 @@ defmodule Lasso.Discovery.TestParams do
   contract addresses for log-related tests.
   """
 
+  alias Lasso.JSONRPC.Quantity
+
   # High-volume contracts for log testing (USDC contracts generate many Transfer events)
   @chain_contracts %{
     "ethereum" => "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
@@ -14,9 +16,9 @@ defmodule Lasso.Discovery.TestParams do
     "arbitrum" => "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
     "optimism" => "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",
     "polygon" => "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-    # Testnets - use mainnet contracts as structural fallback
-    "sepolia" => "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-    "base_sepolia" => "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    "ethereum-sepolia" => "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+    "base-sepolia" => "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "arbitrum-sepolia" => "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d"
   }
 
   # ERC-20 Transfer event signature
@@ -65,8 +67,29 @@ defmodule Lasso.Discovery.TestParams do
   @doc """
   Converts an integer to a hex string with 0x prefix.
   """
-  @spec int_to_hex(integer()) :: String.t()
-  def int_to_hex(int), do: "0x" <> Integer.to_string(int, 16)
+  @spec int_to_hex(non_neg_integer()) :: String.t()
+  def int_to_hex(int), do: Quantity.encode(int)
+
+  @doc "Builds read probes from one recent block when the endpoint provides a valid fixture."
+  @spec params_for(String.t(), map()) :: list()
+  def params_for(method, context) do
+    params = minimal_params_for(method)
+    block_hash = context[:block_hash] || @zero_hash
+    transaction_hash = context[:transaction_hash] || @zero_hash
+
+    case {method, params} do
+      {m, [_hash | rest]}
+      when m in ~w(eth_getTransactionByHash eth_getTransactionReceipt debug_traceTransaction trace_transaction trace_replayTransaction trace_get) ->
+        [transaction_hash | rest]
+
+      {m, [_hash | rest]}
+      when m in ~w(eth_getBlockByHash eth_getBlockTransactionCountByHash eth_getUncleCountByBlockHash eth_getTransactionByBlockHashAndIndex) ->
+        [block_hash | rest]
+
+      _ ->
+        params
+    end
+  end
 
   @doc """
   Returns minimal valid parameters for probing the given method.
@@ -74,8 +97,8 @@ defmodule Lasso.Discovery.TestParams do
   These parameters are designed to:
   - Be syntactically valid (won't fail JSON-RPC parsing)
   - Trigger -32601 (method not found) if method is unsupported
-  - Trigger -32602 (invalid params) or success if method is supported
-  - Avoid expensive operations (use zero addresses, "latest" blocks)
+  - Keep rejected parameters distinct from a validated read
+  - Bound simulations and avoid broadcasting transactions
   """
   @spec minimal_params_for(String.t()) :: list()
 
@@ -90,7 +113,15 @@ defmodule Lasso.Discovery.TestParams do
   def minimal_params_for("eth_maxPriorityFeePerGas"), do: []
 
   # EIP-4844
-  def minimal_params_for("eth_getBlobBaseFee"), do: []
+  def minimal_params_for("eth_blobBaseFee"), do: []
+
+  # Extended reads from the pinned execution-apis baseline
+  def minimal_params_for("eth_baseFee"), do: []
+  def minimal_params_for("eth_capabilities"), do: []
+  def minimal_params_for("eth_config"), do: []
+  def minimal_params_for("eth_fillTransaction"), do: [%{}]
+  def minimal_params_for("eth_getStorageValues"), do: [%{@zero_address => [@zero_hash]}, "latest"]
+  def minimal_params_for("eth_simulateV1"), do: [%{blockStateCalls: []}, "latest"]
 
   # Network methods
   def minimal_params_for("net_version"), do: []
@@ -101,11 +132,11 @@ defmodule Lasso.Discovery.TestParams do
 
   # State query methods
   def minimal_params_for("eth_call") do
-    [%{to: @zero_address, data: "0x"}, "latest"]
+    [%{to: @zero_address, data: "0x", gas: "0x186a0"}, "latest"]
   end
 
   def minimal_params_for("eth_estimateGas") do
-    [%{to: @zero_address, data: "0x"}]
+    [%{to: @zero_address, data: "0x", gas: "0x186a0"}, "latest"]
   end
 
   def minimal_params_for("eth_getBalance") do
@@ -126,6 +157,10 @@ defmodule Lasso.Discovery.TestParams do
 
   def minimal_params_for("eth_getProof") do
     [@zero_address, [], "latest"]
+  end
+
+  def minimal_params_for("eth_createAccessList") do
+    [%{to: @zero_address, data: "0x", gas: "0x186a0"}, "latest"]
   end
 
   # Transaction methods
@@ -180,7 +215,7 @@ defmodule Lasso.Discovery.TestParams do
   end
 
   # Fee history
-  def minimal_params_for("eth_feeHistory"), do: [4, "latest", []]
+  def minimal_params_for("eth_feeHistory"), do: ["0x4", "latest", []]
 
   # Log/filter methods
   def minimal_params_for("eth_getLogs") do
@@ -199,23 +234,37 @@ defmodule Lasso.Discovery.TestParams do
 
   # Debug methods
   def minimal_params_for("debug_traceTransaction") do
-    [@zero_hash, %{}]
+    [
+      @zero_hash,
+      %{tracer: "callTracer", timeout: "1s", reexec: 0, tracerConfig: %{onlyTopCall: true}}
+    ]
   end
 
-  def minimal_params_for("debug_traceBlockByNumber"), do: ["latest", %{}]
+  def minimal_params_for("debug_traceBlockByNumber"),
+    do: [
+      "0x0",
+      %{tracer: "callTracer", timeout: "1s", reexec: 0, tracerConfig: %{onlyTopCall: true}}
+    ]
 
   def minimal_params_for("debug_traceBlockByHash") do
-    [@zero_hash, %{}]
+    [
+      @zero_hash,
+      %{tracer: "callTracer", timeout: "1s", reexec: 0, tracerConfig: %{onlyTopCall: true}}
+    ]
   end
 
   def minimal_params_for("debug_traceCall") do
-    [%{to: @zero_address, data: "0x"}, "latest", %{}]
+    [
+      %{to: @zero_address, data: "0x", gas: "0x186a0"},
+      "latest",
+      %{tracer: "callTracer", timeout: "1s", reexec: 0, tracerConfig: %{onlyTopCall: true}}
+    ]
   end
 
   def minimal_params_for("debug_getBadBlocks"), do: []
 
   def minimal_params_for("debug_storageRangeAt") do
-    [@zero_hash, 0, @zero_address, 1]
+    [@zero_hash, 0, @zero_address, "0x0", 1]
   end
 
   def minimal_params_for("debug_getModifiedAccountsByNumber") do
@@ -227,18 +276,18 @@ defmodule Lasso.Discovery.TestParams do
   end
 
   # Trace methods
-  def minimal_params_for("trace_block"), do: ["latest"]
+  def minimal_params_for("trace_block"), do: ["0x0"]
 
   def minimal_params_for("trace_transaction") do
     [@zero_hash]
   end
 
   def minimal_params_for("trace_call") do
-    [%{to: @zero_address, data: "0x"}, ["trace"], "latest"]
+    [%{to: @zero_address, data: "0x", gas: "0x186a0"}, ["trace"], "latest"]
   end
 
   def minimal_params_for("trace_callMany") do
-    [[[%{to: @zero_address, data: "0x"}, ["trace"]]], "latest"]
+    [[[%{to: @zero_address, data: "0x", gas: "0x186a0"}, ["trace"]]], "latest"]
   end
 
   def minimal_params_for("trace_rawTransaction") do
@@ -246,7 +295,7 @@ defmodule Lasso.Discovery.TestParams do
   end
 
   def minimal_params_for("trace_replayBlockTransactions") do
-    ["latest", ["trace"]]
+    ["0x0", ["trace"]]
   end
 
   def minimal_params_for("trace_replayTransaction") do
