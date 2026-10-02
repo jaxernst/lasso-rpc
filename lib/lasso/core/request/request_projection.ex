@@ -472,6 +472,7 @@ defmodule Lasso.RPC.RequestProjection do
       [:lasso, :rpc, :request, :stop],
       %{duration: div(Map.fetch!(fact, :elapsed_us), 1_000)},
       %{
+        profile: Map.fetch!(fact, :profile),
         chain_id: Map.fetch!(fact, :chain_id),
         method: event.method,
         strategy: Map.fetch!(fact, :routing_intent),

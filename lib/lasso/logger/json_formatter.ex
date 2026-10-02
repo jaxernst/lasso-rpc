@@ -9,6 +9,8 @@ defmodule Lasso.Logger.JSONFormatter do
   alias Lasso.URLMask
 
   @safe_metadata [
+    :trace_id,
+    :span_id,
     :request_id,
     :chain,
     :chain_id,

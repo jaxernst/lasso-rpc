@@ -9,8 +9,7 @@ defmodule LassoWeb.ReadyController do
   use LassoWeb, :controller
 
   alias Lasso.Config.{ConfigStore, ProfileValidator}
-  alias Lasso.Providers.{CandidateListing, InstanceState}
-  alias Lasso.RPC.{ChainState, SelectionFilters}
+  alias Lasso.Providers.Readiness
 
   @spec ready(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def ready(conn, params) do
@@ -19,7 +18,11 @@ defmodule LassoWeb.ReadyController do
 
     with true <- configured != [],
          {:ok, chains} <- selected_chains(profile, configured, params) do
-      checks = Enum.map(chains, &check_chain(profile, &1))
+      checks =
+        Enum.map(chains, fn chain ->
+          profile |> Readiness.check_chain(chain) |> Map.take([:chain_id, :status, :reason])
+        end)
+
       ready? = Enum.all?(checks, &(&1.status == "ready"))
 
       conn
@@ -50,45 +53,4 @@ defmodule LassoWeb.ReadyController do
 
   defp selected_chains(_profile, _configured, %{"chain" => _invalid}), do: :error
   defp selected_chains(_profile, configured, _params), do: {:ok, Enum.sort(configured)}
-
-  defp check_chain(profile, chain_id) do
-    candidates =
-      profile
-      |> CandidateListing.list_candidates(
-        chain_id,
-        SelectionFilters.new(protocol: :http, exclude_rate_limited: true)
-      )
-      |> Enum.filter(&eligible_http_candidate?/1)
-
-    reason =
-      cond do
-        candidates == [] ->
-          "no_eligible_upstream"
-
-        match?(
-          {:ok, _},
-          ChainState.consensus_height(chain_id,
-            provider_ids: Enum.map(candidates, & &1.instance_id)
-          )
-        ) ->
-          nil
-
-        true ->
-          "stale_or_missing_head"
-      end
-
-    %{
-      chain_id: chain_id,
-      status: if(is_nil(reason), do: "ready", else: "not_ready"),
-      reason: reason
-    }
-  end
-
-  defp eligible_http_candidate?(candidate) do
-    http_status = InstanceState.read_health(candidate.instance_id).http_status
-
-    candidate.availability in [:up, :limited] and
-      candidate.transport_availability.http in [:up, :limited] and
-      InstanceState.status_to_availability(http_status) in [:up, :limited]
-  end
 end

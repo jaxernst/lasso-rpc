@@ -42,30 +42,33 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
   @spec start(pid(), reference(), Work.t()) :: {:ok, pid()} | {:error, term()}
   def start(socket_pid, item_ref, %Work{} = work)
       when is_pid(socket_pid) and is_reference(item_ref) do
-    Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-      context =
-        RequestContext.new(work.chain_id, work.method, work.params,
-          transport: :ws,
+    Task.Supervisor.start_child(
+      Lasso.TaskSupervisor,
+      Lasso.Observability.Tracing.wrap(fn ->
+        context =
+          RequestContext.new(work.chain_id, work.method, work.params,
+            transport: :ws,
+            strategy: work.strategy,
+            plug_start_time: work.started_at_us
+          )
+
+        opts = %RequestOptions{
+          profile: work.profile,
           strategy: work.strategy,
-          plug_start_time: work.started_at_us
-        )
+          timeout_ms: work.timeout_ms,
+          request_context: context,
+          provider_override: work.provider_id,
+          jsonrpc_id: work.jsonrpc_id,
+          jsonrpc_id_present?: work.jsonrpc_id_present?
+        }
 
-      opts = %RequestOptions{
-        profile: work.profile,
-        strategy: work.strategy,
-        timeout_ms: work.timeout_ms,
-        request_context: context,
-        provider_override: work.provider_id,
-        jsonrpc_id: work.jsonrpc_id,
-        jsonrpc_id_present?: work.jsonrpc_id_present?
-      }
+        scope = ExecutionScope.monitored(self(), socket_pid, work.deadline_us)
 
-      scope = ExecutionScope.monitored(self(), socket_pid, work.deadline_us)
+        result = execute(work, scope, socket_pid, context, opts)
 
-      result = execute(work, scope, socket_pid, context, opts)
-
-      send(socket_pid, {:rpc_item_result, item_ref, self(), result})
-    end)
+        send(socket_pid, {:rpc_item_result, item_ref, self(), result})
+      end)
+    )
   catch
     :exit, _reason -> {:error, :supervisor_unavailable}
   end

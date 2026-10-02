@@ -53,6 +53,15 @@ defmodule Lasso.PrometheusEndpointIntegrationTest do
              "lasso_circuit_state{profile=\"public\",chain=\"#{chain}\",provider=\"metrics_probe\""
 
     assert body =~ "# TYPE lasso_provider_head_lag_blocks gauge"
+    assert body =~ "# TYPE lasso_rpc_request_duration_seconds histogram"
+    assert body =~ "lasso_provider_info{"
+    assert body =~ "lasso_provider_head_observed{"
+    assert body =~ "lasso_vm_run_queue "
+    assert body =~ "lasso_observer_available 1"
+
+    assert body =~
+             ~s(lasso_rpc_request_duration_seconds_sum{profile="unknown",chain="#{chain}",provider="metrics_probe",method="eth_getLogs",transport="unknown",origin="unknown",outcome="error"} 0.001)
+
     refute body =~ "unbounded_user_method_#{chain}"
     assert Prometheus.stats().series <= 4_096
   end

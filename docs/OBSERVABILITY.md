@@ -4,6 +4,10 @@ Lasso exposes dashboard measurements, opt-in JSON-RPC response metadata, BEAM
 telemetry events, and operational logs. These signals describe different units:
 a client request can produce several upstream attempts during failover.
 
+Optional [OpenTelemetry tracing](TRACING.md) adds HTTP, routed-request and
+upstream-attempt spans, W3C propagation across workers and JSON-log correlation.
+It is disabled by default; metrics and JSON logs do not require a collector.
+
 ## Dashboard and metrics API
 
 The dashboard shows provider connectivity, circuit state, block freshness,
@@ -15,27 +19,25 @@ observations display as unavailable rather than a measured zero.
 `public` profile. It is a JSON endpoint. See [API Reference](API_REFERENCE.md#non-rpc-api-endpoints)
 for its fields and units.
 
-`GET /metrics` exposes Prometheus text for node-local routed request counts by
-chain, provider, method, and outcome; current local circuit state; and fresh
-provider head lag. The request series table is capped at 4,096 slots. Unknown
-methods share an `other` label, and observations that cannot fit increment
-`lasso_rpc_request_observations_dropped_total`. Circuit and lag samples scan at
-most 2,048 configured provider routes per scrape. A missing lag sample means
-the local registry has no fresh lag observation; it does not mean zero lag.
+`GET /metrics` exposes bounded node-local routed completion and upstream-attempt
+latency histograms, failover/admission events, circuit state and recovery,
+head evidence, WebSocket continuity budgets, HTTP ingress and BEAM pressure.
+Existing request/circuit/head metric names remain compatible.
 
-Import [the versioned Grafana dashboard](grafana/lasso-core-v1.json) into a
-Prometheus-backed Grafana instance. Scrape each Core node separately and retain
-an instance label in Prometheus when aggregating nodes. Restrict `/metrics` at
-the reverse proxy or private network boundary; the endpoint itself has no
-application authentication and includes configured provider identifiers.
+Import [Lasso — Operator Overview](grafana/lasso-core-v1.json) into Grafana.
+See the [Prometheus operator guide](PROMETHEUS.md) for metric semantics, limits,
+scrape setup, filters, queries and incident runbooks. Scrape each node separately.
+Keep `/metrics` private or protect it at your ingress: it has no application
+authentication and reports configured provider identifiers.
 
 The browser request tester generates real upstream traffic. Its HTTP success,
 error, and latency counters describe that browser's run. WebSocket connection
 counts describe open sockets; they do not prove every subscription succeeded.
 The activity feed records subscription confirmations and errors separately.
 
-System metrics are disabled by default. Set `LASSO_VM_METRICS_ENABLED=true`
-to collect and display VM metrics. Protect dashboard and operational endpoints
+The dashboard VM collector is disabled by default. Set `LASSO_VM_METRICS_ENABLED=true`
+to collect and display its VM metrics. Prometheus BEAM totals are available
+without this flag or a dashboard session. Protect dashboard and operational endpoints
 at your ingress if the deployment is reachable by untrusted clients.
 
 ## Response metadata

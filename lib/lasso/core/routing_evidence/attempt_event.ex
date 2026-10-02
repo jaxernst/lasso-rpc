@@ -29,7 +29,10 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEvent do
           outcome: outcome(),
           elapsed_io_ms: number() | nil,
           censoring_boundary_ms: number() | nil,
-          error_category: atom() | nil
+          error_category: atom() | nil,
+          profile: String.t() | nil,
+          method: String.t() | nil,
+          request_origin: :client | :system | nil
         }
 
   @enforce_keys [
@@ -43,7 +46,14 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEvent do
     :outcome
   ]
   defstruct @enforce_keys ++
-              [elapsed_io_ms: nil, censoring_boundary_ms: nil, error_category: nil]
+              [
+                elapsed_io_ms: nil,
+                censoring_boundary_ms: nil,
+                error_category: nil,
+                profile: nil,
+                method: nil,
+                request_origin: nil
+              ]
 
   @doc """
   Builds a terminal event from a transport result.
@@ -159,6 +169,9 @@ defmodule Lasso.RPC.RoutingEvidence.AttemptEvent do
   defp build(ctx, channel, upstream_instance_id, outcome, opts) do
     %__MODULE__{
       request_id: ctx.request_id,
+      profile: Map.get(ctx.opts || %{}, :profile),
+      method: ctx.method,
+      request_origin: Map.get(ctx.opts || %{}, :request_origin),
       upstream_instance_id: upstream_instance_id,
       chain_id: ctx.chain_id,
       provider_id: channel.provider_id,

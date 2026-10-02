@@ -138,5 +138,5 @@ defmodule LassoWeb.Endpoint do
     ]
   )
 
-  plug(LassoWeb.Router)
+  plug(LassoWeb.Plugs.TracedRouter)
 end

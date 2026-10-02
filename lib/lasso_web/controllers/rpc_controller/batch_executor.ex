@@ -78,7 +78,7 @@ defmodule LassoWeb.RPCController.BatchExecutor do
       send(parent, {:batch_item_result, item_ref, self(), result})
     end
 
-    case start_owner(state.supervisor, child) do
+    case start_owner(state.supervisor, Lasso.Observability.Tracing.wrap(child)) do
       {:ok, pid} ->
         monitor = Process.monitor(pid)
         active = %{item: item, monitor: monitor, pid: pid}

@@ -78,6 +78,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     with {:ok, request} <-
            build_request(provider, url, encoded, context),
          {:ok, tracker_token} <- tracker_token(context) do
+      request = %{request | headers: Lasso.Observability.Tracing.inject(request.headers)}
       run_request(request, finch_name, deadline_us, context, tracker_token, opts)
     end
   end
@@ -354,21 +355,23 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
       |> Keyword.put(:request_timeout, timeout_ms + 1_000)
 
     task =
-      Task.async(fn ->
-        DispatchTracker.inherit_attempt(context, tracker_token)
+      Task.async(
+        Lasso.Observability.Tracing.wrap(fn ->
+          DispatchTracker.inherit_attempt(context, tracker_token)
 
-        outcome =
-          try do
-            {:returned,
-             Finch.stream_while(request, finch_name, initial, stream_fun, finch_options)}
-          rescue
-            error -> {:raised, error, __STACKTRACE__}
-          catch
-            kind, reason -> {:caught, kind, reason, __STACKTRACE__}
-          end
+          outcome =
+            try do
+              {:returned,
+               Finch.stream_while(request, finch_name, initial, stream_fun, finch_options)}
+            rescue
+              error -> {:raised, error, __STACKTRACE__}
+            catch
+              kind, reason -> {:caught, kind, reason, __STACKTRACE__}
+            end
 
-        {outcome, DispatchTracker.attempt_state(context)}
-      end)
+          {outcome, DispatchTracker.attempt_state(context)}
+        end)
+      )
 
     case Task.yield(task, timeout_ms) do
       {:ok, {{:returned, result}, state}} ->

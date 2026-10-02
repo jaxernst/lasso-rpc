@@ -26,6 +26,9 @@ defmodule LassoWeb.ReadyEndpointIntegrationTest do
     assert %{"status" => "not_ready", "checks" => [%{"reason" => "no_eligible_upstream"}]} =
              build_conn() |> get(path) |> json_response(503)
 
+    assert Lasso.Observability.Prometheus.scrape() =~
+             ~s(lasso_chain_ready{profile="public",chain="#{chain}"} 0)
+
     setup_providers([%{id: "ready-upstream", profile: "public", behavior: :healthy}])
 
     Lasso.Test.Eventually.assert_eventually(fn ->
@@ -47,6 +50,12 @@ defmodule LassoWeb.ReadyEndpointIntegrationTest do
 
     assert %{"status" => "ready", "checks" => [%{"chain_id" => ^chain, "reason" => nil}]} =
              build_conn() |> get(path) |> json_response(200)
+
+    assert Lasso.Observability.Prometheus.scrape() =~
+             ~s(lasso_chain_ready{profile="public",chain="#{chain}"} 1)
+
+    assert Lasso.Observability.Prometheus.scrape() =~
+             ~s(lasso_chain_eligible_upstreams{profile="public",chain="#{chain}"} 1)
 
     :ets.insert(:lasso_instance_state, {
       {:health_block_sync, instance_id},

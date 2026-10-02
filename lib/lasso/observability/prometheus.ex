@@ -14,6 +14,7 @@ defmodule Lasso.Observability.Prometheus do
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Providers.Catalog
+  alias Lasso.Observability.{PrometheusMetrics, PrometheusRuntime}
 
   @event [:lasso, :rpc, :request, :stop]
   @handler_id "lasso-prometheus-request-stop"
@@ -38,8 +39,17 @@ defmodule Lasso.Observability.Prometheus do
     :ets.new(@requests, [:named_table, :set, :public, write_concurrency: true])
     :ets.new(@stats, [:named_table, :set, :public, write_concurrency: true])
     :ets.insert(@stats, {:dropped, 0})
+    PrometheusMetrics.init()
     :telemetry.detach(@handler_id)
-    :ok = :telemetry.attach(@handler_id, @event, &__MODULE__.handle_event/4, nil)
+
+    :ok =
+      :telemetry.attach_many(
+        @handler_id,
+        PrometheusMetrics.events(),
+        &__MODULE__.handle_event/4,
+        nil
+      )
+
     {:ok, %{}}
   end
 
@@ -51,7 +61,9 @@ defmodule Lasso.Observability.Prometheus do
 
   @doc false
   @spec handle_event([atom()], map(), map(), term()) :: :ok
-  def handle_event(@event, _measurement, metadata, _config) do
+  def handle_event(@event, measurements, metadata, config) do
+    PrometheusMetrics.handle_event(@event, measurements, metadata, config)
+
     key = {
       Map.get(metadata, :chain_id),
       provider_label(Map.get(metadata, :provider_id)),
@@ -66,6 +78,10 @@ defmodule Lasso.Observability.Prometheus do
     :ok
   rescue
     ArgumentError -> :ok
+  end
+
+  def handle_event(event, measurements, metadata, config) do
+    PrometheusMetrics.handle_event(event, measurements, metadata, config)
   end
 
   @doc "Current node-local request series occupancy and dropped observations."
@@ -92,8 +108,12 @@ defmodule Lasso.Observability.Prometheus do
         )
       end)
 
+    route_scan = routes()
+    chain_scan = chains()
+    routes = Enum.take(route_scan, @max_routes)
+
     {circuit_lines, lag_lines} =
-      Enum.reduce(routes(), {[], []}, fn route, {circuits, lags} ->
+      Enum.reduce(routes, {[], []}, fn route, {circuits, lags} ->
         {route_circuits, route_lag} = route_samples(route)
         {route_circuits ++ circuits, route_lag ++ lags}
       end)
@@ -114,11 +134,35 @@ defmodule Lasso.Observability.Prometheus do
        [
          "# HELP lasso_provider_head_lag_blocks Fresh provider blocks behind local consensus",
          "# TYPE lasso_provider_head_lag_blocks gauge"
-       ] ++ Enum.reverse(lag_lines))
+       ] ++
+       Enum.reverse(lag_lines) ++
+       PrometheusMetrics.scrape() ++
+       PrometheusRuntime.scrape() ++
+       PrometheusRuntime.readiness_samples(Enum.take(chain_scan, @max_routes)) ++
+       PrometheusRuntime.family(
+         "lasso_observer_route_scan_truncated",
+         :gauge,
+         "Configured route scan exceeded its cap",
+         [{if(length(route_scan) > @max_routes, do: 1, else: 0), []}]
+       ) ++
+       PrometheusRuntime.family(
+         "lasso_observer_chain_scan_truncated",
+         :gauge,
+         "Configured chain readiness scan exceeded its cap",
+         [{if(length(chain_scan) > @max_routes, do: 1, else: 0), []}]
+       ))
+    |> Stream.transform(MapSet.new(), fn line, headers ->
+      cond do
+        not String.starts_with?(line, "#") -> {[line], headers}
+        MapSet.member?(headers, line) -> {[], headers}
+        true -> {[line], MapSet.put(headers, line)}
+      end
+    end)
     |> Enum.join("\n")
     |> Kernel.<>("\n")
   rescue
-    ArgumentError -> "# Prometheus observer unavailable\n"
+    ArgumentError ->
+      "# HELP lasso_observer_available Local metrics observer is available\n# TYPE lasso_observer_available gauge\nlasso_observer_available 0\n"
   end
 
   defp record(key) do
@@ -150,6 +194,14 @@ defmodule Lasso.Observability.Prometheus do
     :ok
   end
 
+  defp chains do
+    ConfigStore.list_profiles()
+    |> Stream.flat_map(fn profile ->
+      ConfigStore.list_chains_for_profile(profile) |> Stream.map(&{profile, &1})
+    end)
+    |> Enum.take(@max_routes + 1)
+  end
+
   defp routes do
     ConfigStore.list_profiles()
     |> Stream.flat_map(fn profile ->
@@ -161,16 +213,16 @@ defmodule Lasso.Observability.Prometheus do
         end
       end)
     end)
-    |> Enum.take(@max_routes)
+    |> Enum.take(@max_routes + 1)
   end
 
   defp route_samples({profile, chain, provider}) do
     instance_id = Catalog.lookup_instance_id(profile, chain, provider)
 
     circuits =
-      for transport <- [:http, :ws], state <- [:closed, :open, :half_open] do
-        observed = circuit_state(instance_id, transport)
-
+      for transport <- [:http, :ws],
+          observed = circuit_state(instance_id, transport),
+          state <- [:closed, :open, :half_open] do
         sample("lasso_circuit_state", if(observed == state, do: 1, else: 0),
           profile: profile,
           chain: chain,
@@ -195,7 +247,8 @@ defmodule Lasso.Observability.Prometheus do
           []
       end
 
-    {circuits, lag}
+    evidence = PrometheusRuntime.route_samples(profile, chain, provider, instance_id, lag != [])
+    {circuits ++ evidence, lag}
   end
 
   defp circuit_state(id, transport) when is_binary(id) do

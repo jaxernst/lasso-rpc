@@ -99,6 +99,9 @@ defmodule Lasso.RPC.RoutingEvidence do
         %{count: 1, duration_ms: duration_ms},
         %{
           request_id: event.request_id,
+          profile: event.profile,
+          method: event.method,
+          request_origin: event.request_origin,
           upstream_instance_id: event.upstream_instance_id,
           chain_id: event.chain_id,
           provider_id: event.provider_id,

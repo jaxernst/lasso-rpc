@@ -268,7 +268,8 @@ upstream-backed application probe for the exact method and workload you serve.
 ### Prometheus scrape
 
 Scrape `GET /metrics` on each node to monitor routed request outcomes, local
-circuit states, and provider head lag. Keep this path on a private network or
+circuit states, provider head lag, request/attempt latency, stream pressure and
+BEAM totals. Keep this path on a private network or
 allow only your collector through the reverse proxy. It has no application
 authentication and reports provider identifiers. See [Observability](OBSERVABILITY.md)
 for series limits, units, and the versioned Grafana dashboard.
