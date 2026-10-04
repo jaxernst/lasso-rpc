@@ -8,7 +8,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   ## Classification Strategy
 
-  1. Structural revert data and definitive codes
+  1. Structural revert data and definitive codes (recognized plan restrictions may override -32600)
   2. Explicit execution/application message evidence
   3. Provider condition patterns such as rate limits, auth, and capabilities
   4. Code-based fallback for JSON-RPC, HTTP, and EIP-1193 codes
@@ -71,10 +71,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Server error range: -32_000 to -32_099 (reserved by spec)
 
   # Standard JSON-RPC codes with unambiguous meaning per spec.
-  # These bypass message-based classification entirely — the code is definitive.
-  # Excludes -32603 (internal_error) because providers reuse it for capability violations.
-  # Excludes -32603 (providers reuse for capability violations)
-  # and -32602 (providers like OnFinality use for block-not-found).
+  # These bypass general message classification. Recognized plan restrictions may
+  # override -32600; all other messages retain its invalid-request meaning.
+  # Excludes -32603 (providers reuse it for capability violations)
+  # and -32602 (providers like OnFinality use it for block-not-found).
   @definitive_error_codes [
     @parse_error,
     @invalid_request,
@@ -300,6 +300,21 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "state not available"
   ]
 
+  # Affirmative plan restrictions may override Invalid Request. A tier name or
+  # upgrade phrase alone is insufficient: either can appear in a quoted input.
+  @plan_restriction_patterns [
+    "under the free tier plan, you can make eth_getlogs requests with up to",
+    "free tier max block range is",
+    "free tier maximum block range is",
+    "free tier only allows",
+    "free tier is limited to",
+    "requires a premium plan",
+    "requires a paid plan",
+    "requires a paid tier",
+    "not available on the free tier",
+    "not supported on the free tier"
+  ]
+
   # ===========================================================================
   # Public API
   # ===========================================================================
@@ -307,9 +322,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
   @doc """
   Categorizes an error into a semantic category.
 
-  Structural revert evidence and definitive codes take priority. Otherwise,
-  bounded message classification detects provider conditions that use
-  inconsistent codes.
+  Structural revert evidence and protected codes take priority. Explicit plan
+  restrictions may override -32600; other definitive-code messages stay protected.
+  Otherwise, bounded message classification detects inconsistent provider codes.
 
   ## Examples
 
@@ -324,6 +339,11 @@ defmodule Lasso.Core.Support.ErrorClassification do
   """
   @spec categorize(integer() | nil, String.t() | nil) :: atom()
   def categorize(code, message)
+
+  def categorize(@invalid_request, message) when is_binary(message) do
+    {category, _path} = do_categorize(@invalid_request, message)
+    category
+  end
 
   def categorize(code, _message) when code in @definitive_error_codes do
     classify_by_code(code)
@@ -372,6 +392,19 @@ defmodule Lasso.Core.Support.ErrorClassification do
 
   def categorize_with_path(code, message, _data), do: do_categorize(code, message)
 
+  defp do_categorize(@invalid_request, message) when is_binary(message) do
+    message = message |> bounded_message() |> String.downcase()
+
+    # Argument and execution evidence takes precedence over plan restrictions.
+    if not contains_any?(message, ["invalid param"]) and
+         contains_any?(message, @plan_restriction_patterns) and
+         classify_by_message(message) == :capability_violation do
+      {:capability_violation, :message_pattern}
+    else
+      {:invalid_request, :definitive_code}
+    end
+  end
+
   defp do_categorize(code, _message)
        when code in @definitive_error_codes,
        do: {classify_by_code(code), :definitive_code}
@@ -396,6 +429,19 @@ defmodule Lasso.Core.Support.ErrorClassification do
   end
 
   defp do_categorize(code, _message), do: {classify_by_code(code), :code_based}
+
+  @doc """
+  Identifies the affirmative plan restrictions admitted under code -32600.
+
+  Structural revert data and argument/execution evidence remain protected. A
+  recognized restriction belongs to this upstream's plan, so a log-range
+  translator must not replace it with a terminal instruction to the caller.
+  """
+  @spec invalid_request_plan_restriction?(integer() | nil, String.t() | nil, term()) :: boolean()
+  def invalid_request_plan_restriction?(code, message, data) do
+    code == @invalid_request and
+      categorize_with_path(code, message, data) == {:capability_violation, :message_pattern}
+  end
 
   @doc """
   Returns true when a response unambiguously reports an exhausted allowance.
@@ -466,6 +512,12 @@ defmodule Lasso.Core.Support.ErrorClassification do
   """
   @spec retriable?(integer(), String.t() | nil) :: boolean()
   def retriable?(code, message)
+
+  def retriable?(@invalid_request, message) when is_binary(message) do
+    @invalid_request
+    |> categorize(message)
+    |> retriable_for_category?()
+  end
 
   def retriable?(code, _message) when code in @definitive_error_codes do
     retriable_by_code?(code)

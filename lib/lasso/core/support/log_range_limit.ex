@@ -7,6 +7,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   changing the caller's next action, which is to reduce the block range.
   """
 
+  alias Lasso.Core.Support.ErrorClassification
   alias Lasso.JSONRPC.Error, as: JError
 
   @message "eth_getLogs result exceeds a range or size limit; reduce the block range"
@@ -70,11 +71,12 @@ defmodule Lasso.Core.Support.LogRangeLimit do
 
   defp local_response_too_large?(_error), do: false
 
-  defp provider_range_limit?(%JError{category: category, message: message})
+  defp provider_range_limit?(%JError{category: category, message: message} = error)
        when category in @provider_categories and is_binary(message) do
     bounded_message = message |> String.slice(0, 4_096) |> String.downcase()
 
-    not Enum.any?(@argument_validation_patterns, &String.contains?(bounded_message, &1)) and
+    not ErrorClassification.invalid_request_plan_restriction?(error.code, message, error.data) and
+      not Enum.any?(@argument_validation_patterns, &String.contains?(bounded_message, &1)) and
       Enum.any?(@patterns, &String.contains?(bounded_message, &1))
   end
 

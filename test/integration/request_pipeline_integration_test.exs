@@ -22,6 +22,152 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   alias Lasso.Testing.MockProviderBehavior
   alias LassoWeb.Dashboard.EventStream
 
+  describe "provider limits reported as Invalid Request" do
+    @translated_limit "Free tier max block range is 10. Upgrade your plan."
+    @alchemy_limit "Under the Free tier plan, you can make eth_getLogs requests with up to a 10 block range. Upgrade to PAYG for expanded block range."
+
+    test "normalizes the upstream envelope and serves the same log window on a peer", %{
+      chain: chain
+    } do
+      filter = %{"fromBlock" => "0x100", "toBlock" => "0x1ff"}
+      logs = [%{"blockNumber" => "0x180", "data" => "0x01"}]
+      observer = self()
+
+      setup_providers([
+        %{
+          id: "plan_limited",
+          priority: 10,
+          background_observations: false,
+          behavior:
+            {:conditional,
+             fn method, params, _state ->
+               send(observer, {:limit_attempt, "plan_limited", method, params})
+               {:error, JError.new(-32_600, @translated_limit)}
+             end}
+        },
+        %{
+          id: "log_peer",
+          priority: 20,
+          background_observations: false,
+          behavior:
+            {:conditional,
+             fn method, params, _state ->
+               send(observer, {:limit_attempt, "log_peer", method, params})
+               {:ok, logs}
+             end}
+        }
+      ])
+
+      assert {:ok, response, ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_getLogs",
+                 [filter],
+                 %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+               )
+
+      assert {:ok, ^logs} = Response.Success.decode_result(response)
+      assert_receive {:limit_attempt, "plan_limited", "eth_getLogs", [^filter]}
+      assert_receive {:limit_attempt, "log_peer", "eth_getLogs", [^filter]}
+      assert ctx.retries == 1
+      assert [limited, peer] = ctx.attempted_channels
+      assert limited.category == :capability_violation
+      assert limited.code == -32_600
+      assert peer.outcome == :success
+      assert ctx.executed_channel.provider_id == "log_peer"
+    end
+
+    test "keeps invalid requests and structural reverts terminal with their original response", %{
+      chain: chain
+    } do
+      cases = [
+        {-32_600, "Invalid Request", %{"detail" => "missing method"}, :invalid_request},
+        {-32_600, "cannot unmarshal string 'free tier' into Go value", nil, :invalid_request},
+        {-32_600, "Invalid params: fromBlock must be a hex quantity, got 'free tier'", nil,
+         :invalid_request},
+        {-32_600, "Invalid params: fromBlock must be a hex quantity, got 'requires a paid plan'",
+         nil, :invalid_request},
+        {-32_600,
+         "Invalid parameter: fromBlock must be a hex quantity, got 'requires a paid plan'", nil,
+         :invalid_request},
+        {-32_600, "Invalid param: fromBlock must be a hex quantity, got 'requires a paid plan'",
+         nil, :invalid_request},
+        {-32_600,
+         "Invalid parameters: fromBlock must be a hex quantity, got 'free tier max block range is 10. Upgrade your plan.'",
+         nil, :invalid_request},
+        {3, @alchemy_limit, nil, :execution_revert},
+        {-32_600, @alchemy_limit, "0x08c379a0", :execution_revert}
+      ]
+
+      for {{code, message, data, category}, index} <- Enum.with_index(cases) do
+        provider_id = "protected_#{index}"
+        peer_id = "unused_peer_#{index}"
+
+        setup_providers([
+          %{
+            id: provider_id,
+            priority: 10,
+            background_observations: false,
+            behavior: {:error, JError.new(code, message, data: data)}
+          },
+          %{id: peer_id, priority: 20, background_observations: false, behavior: :healthy}
+        ])
+
+        assert {:error, error, ctx} =
+                 RequestPipeline.execute_via_channels(
+                   chain,
+                   "eth_call",
+                   [%{"to" => "0x0000000000000000000000000000000000000001"}, "latest"],
+                   %RequestOptions{
+                     profile: "public",
+                     provider_override: provider_id,
+                     failover_on_override: true,
+                     strategy: :priority,
+                     timeout_ms: 5_000
+                   }
+                 )
+
+        assert {error.code, error.message, error.data, error.category} ==
+                 {code, message, data, category}
+
+        assert error.retriable? == false
+        assert ctx.retries == 0
+        assert [attempt] = ctx.attempted_channels
+        assert attempt.channel.provider_id == provider_id
+      end
+    end
+
+    for {label, message} <- [{"Alchemy", @alchemy_limit}, {"translated", @translated_limit}] do
+      test "a sole #{label} range-capped upstream preserves its code, message and data", %{
+        chain: chain
+      } do
+        message = unquote(message)
+        data = %{"plan" => "free"}
+
+        setup_providers([
+          %{
+            id: "sole_plan_limited",
+            priority: 10,
+            background_observations: false,
+            behavior: {:error, JError.new(-32_600, message, data: data)}
+          }
+        ])
+
+        assert {:error, error, ctx} =
+                 RequestPipeline.execute_via_channels(
+                   chain,
+                   "eth_getLogs",
+                   [%{"fromBlock" => "0x100", "toBlock" => "0x1ff"}],
+                   %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
+                 )
+
+        assert {error.code, error.message, error.data} == {-32_600, message, data}
+        assert error.category == :capability_violation
+        assert length(ctx.attempted_channels) == 1
+      end
+    end
+  end
+
   describe "oversized eth_getLogs contract" do
     test "preserves argument validation even when a quoted value mentions a range limit", %{
       chain: chain
