@@ -73,7 +73,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     resolution
   end
 
-  @doc "Emits the legacy classification observation after a prepared error is retained."
+  @doc "Emits classification telemetry with a bounded fingerprint and data kind."
   @spec observe(ErrorResolution.t(), String.t() | nil, term()) :: :ok
   def observe(%ErrorResolution{} = resolution, message, data) do
     message_fingerprint = message |> bounded_message() |> message_fingerprint()
