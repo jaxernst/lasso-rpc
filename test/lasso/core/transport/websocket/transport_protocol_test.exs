@@ -2,7 +2,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Request.RequestOwner
-  alias Lasso.Core.Support.{CircuitBreaker, ErrorClassifier}
+  alias Lasso.Core.Support.{CircuitBreaker, ErrorClassifier, ErrorResolution}
   alias Lasso.Core.Support.CircuitBreaker.{ControlRing, Snapshot}
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission}
   alias Lasso.Core.Transport.UpstreamResponse
@@ -925,7 +925,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
           error_rules: [
             %{
               code: -32_000,
-              message_contains: "credits quota",
+              message_contains: "vendor opaque denial",
               category: :rate_limit
             }
           ]
@@ -939,14 +939,26 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
       Jason.encode!(%{
         "jsonrpc" => "2.0",
         "id" => transport_id,
-        "error" => %{"code" => -32_000, "message" => "Credits quota exhausted"}
+        "error" => %{"code" => -32_000, "message" => "Vendor opaque denial"}
       })
 
     :ok = TestSupport.ProtocolWSClient.acknowledge(ws_pid, transport_id, raw_error)
 
-    assert {:error, %JError{category: :rate_limit, retriable?: true, breaker_penalty?: false},
+    assert {:error,
+            %JError{category: :rate_limit, retriable?: true, breaker_penalty?: false} = error,
             _io_ms} =
              Task.await(task)
+
+    assert %ErrorResolution{
+             classification_path: :provider_rule,
+             baseline_category: :unclassified_server_error,
+             control_category: :rate_limit,
+             provider_health_failure?: false
+           } = error.resolution
+
+    assert error.resolution.scope.provider_id == channel.provider_id
+    refute Map.has_key?(Jason.decode!(Jason.encode!(error)), "resolution")
+    assert JError.to_map(error) == %{"code" => -32_000, "message" => "Vendor opaque denial"}
   end
 
   test "uses validation completion for eligibility and receipt time only for I/O duration",

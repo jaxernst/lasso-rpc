@@ -1,7 +1,7 @@
 defmodule Lasso.Core.Transport.AttemptProtocol do
   @moduledoc false
 
-  alias Lasso.Core.Support.ErrorClassification
+  alias Lasso.Core.Support.ErrorResolution
 
   @dispatch_context_key :lasso_attempt_dispatch_context
   @deadline_key :lasso_attempt_deadline_us
@@ -428,29 +428,8 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     end
   end
 
-  defp canonical_application_error_category(:rate_limit), do: :quota
-  defp canonical_application_error_category(:local_capacity_rejection), do: :local_safety
-  defp canonical_application_error_category(:unclassified_server_error), do: :ambiguous
-  defp canonical_application_error_category(:unknown_error), do: :ambiguous
-
-  defp canonical_application_error_category(category)
-       when category in [
-              :deterministic,
-              :ambiguous,
-              :quota,
-              :capability,
-              :provider_failure,
-              :local_safety
-            ],
-       do: category
-
-  defp canonical_application_error_category(category) do
-    cond do
-      ErrorClassification.breaker_penalty?(category) -> :provider_failure
-      ErrorClassification.retriable_for_category?(category) -> :capability
-      true -> :deterministic
-    end
-  end
+  defp canonical_application_error_category(category),
+    do: ErrorResolution.application_category(category)
 
   defp predispatch_reason(reason)
        when reason in [:pool_unavailable, :not_connected, :invalid_frame],

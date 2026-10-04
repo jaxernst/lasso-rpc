@@ -1741,13 +1741,16 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       pending ->
         duration_ms = div(System.monotonic_time(:microsecond) - pending.sent_at, 1000)
 
-        %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-          ErrorClassifier.classify(jerr.code, jerr.message,
+        resolution =
+          ErrorClassifier.resolve(jerr.code, jerr.message,
             data: jerr.data,
             provider_id: state.endpoint.id,
             profile: state.endpoint.profile,
             chain_id: state.endpoint.chain_id
           )
+
+        %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
+          resolution
 
         enriched = %{
           jerr
@@ -1755,7 +1758,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
             transport: :ws,
             category: category,
             retriable?: retriable?,
-            breaker_penalty?: breaker_penalty?
+            breaker_penalty?: breaker_penalty?,
+            resolution: resolution
         }
 
         emit_completion_telemetry(state.endpoint.id, pending.method, id, :error, duration_ms)

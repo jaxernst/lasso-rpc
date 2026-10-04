@@ -8,7 +8,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   3. Derives all properties (retriable?, breaker_penalty?) from the final category
   """
 
-  alias Lasso.Core.Support.ErrorClassification
+  alias Lasso.Core.Support.{ErrorClassification, ErrorResolution}
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.Providers.Capabilities
 
@@ -23,8 +23,13 @@ defmodule Lasso.Core.Support.ErrorClassifier do
           breaker_penalty?: boolean()
         }
   def classify(code, message, opts \\ []) do
+    code |> resolve(message, opts) |> ErrorResolution.classification()
+  end
+
+  @doc "Resolves static and provider policy once, retaining body-free provenance and control decisions."
+  @spec resolve(integer(), String.t() | nil, keyword()) :: ErrorResolution.t()
+  def resolve(code, message, opts \\ []) do
     message = bounded_message(message)
-    message_fingerprint = message_fingerprint(message)
     provider_id = Keyword.get(opts, :provider_id)
     profile = Keyword.get(opts, :profile)
     chain = Keyword.get(opts, :chain_id) || Keyword.get(opts, :chain)
@@ -50,33 +55,52 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     retriable? = ErrorClassification.retriable_for_category?(category)
     breaker_penalty? = ErrorClassification.breaker_penalty?(category)
 
+    resolution = %ErrorResolution{
+      code: code,
+      category: category,
+      control_category: control_category,
+      shared_control?: shared_control?,
+      classification_path: classification_path,
+      baseline_category: baseline_category,
+      baseline_path: baseline_path,
+      retriable?: retriable?,
+      breaker_penalty?: breaker_penalty?,
+      provider_health_failure?: ErrorClassification.provider_health_failure?(category),
+      scope: %{profile: profile, chain_id: chain, provider_id: provider_id}
+    }
+
+    if Keyword.get(opts, :emit?, true), do: observe(resolution, message, data)
+    resolution
+  end
+
+  @doc "Emits classification telemetry with a bounded fingerprint and data kind."
+  @spec observe(ErrorResolution.t(), String.t() | nil, term()) :: :ok
+  def observe(%ErrorResolution{} = resolution, message, data) do
+    message_fingerprint = message |> bounded_message() |> message_fingerprint()
+    provider_id = resolution.scope.provider_id
+
     emit_classification_telemetry(
-      code,
+      resolution.code,
       message_fingerprint,
       data_kind(data),
       provider_id,
-      category,
-      classification_path,
-      control_category,
-      shared_control?
+      resolution.category,
+      resolution.classification_path,
+      resolution.control_category,
+      resolution.shared_control?
     )
 
-    if category == :unclassified_server_error do
+    if resolution.category == :unclassified_server_error do
       Logger.warning("Unclassified upstream RPC error",
-        code: code,
+        code: resolution.code,
         provider_id: provider_id,
-        classification_path: classification_path,
+        classification_path: resolution.classification_path,
         message_fingerprint: message_fingerprint,
         data_kind: data_kind(data)
       )
     end
 
-    %{
-      category: category,
-      control_category: control_category,
-      retriable?: retriable?,
-      breaker_penalty?: breaker_penalty?
-    }
+    :ok
   end
 
   defp classify_with_path(code, message, data, provider_id, _profile, _chain, capabilities)

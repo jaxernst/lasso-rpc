@@ -18,6 +18,7 @@ defmodule Lasso.JSONRPC.Error do
   - `original_code` - Preserve original code before normalization
   - `source` - Where the error originated (:jsonrpc, :transport, etc.)
   - `transport` - Which transport generated this error (:http, :ws)
+  - `resolution` - Internal body-free provenance, excluded from JSON serialization
   """
 
   @derive {Jason.Encoder,
@@ -47,10 +48,11 @@ defmodule Lasso.JSONRPC.Error do
     :breaker_penalty?,
     :original_code,
     :source,
-    :transport
+    :transport,
+    :resolution
   ]
 
-  alias Lasso.Core.Support.{ErrorClassification, ErrorNormalizer}
+  alias Lasso.Core.Support.{ErrorClassification, ErrorNormalizer, ErrorResolution}
 
   @type t :: %__MODULE__{
           code: integer(),
@@ -63,7 +65,8 @@ defmodule Lasso.JSONRPC.Error do
           breaker_penalty?: boolean() | nil,
           original_code: integer() | nil,
           source: :jsonrpc | :transport | :infrastructure | :health_check | nil,
-          transport: :http | :ws | nil
+          transport: :http | :ws | nil,
+          resolution: ErrorResolution.t() | nil
         }
 
   @doc """
@@ -117,7 +120,8 @@ defmodule Lasso.JSONRPC.Error do
       breaker_penalty?: breaker_penalty?,
       original_code: original_code,
       source: Keyword.get(opts, :source),
-      transport: Keyword.get(opts, :transport)
+      transport: Keyword.get(opts, :transport),
+      resolution: Keyword.get(opts, :resolution)
     }
   end
 
