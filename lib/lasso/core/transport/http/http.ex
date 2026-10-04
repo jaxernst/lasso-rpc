@@ -307,13 +307,8 @@ defmodule Lasso.RPC.Transports.HTTP do
   defp settle_raw_response(%{validation: {:error, %JError{} = jerr}} = input) do
     release_response_lease(input, :jsonrpc_error)
 
-    %{
-      category: category,
-      control_category: control_category,
-      retriable?: retriable?,
-      breaker_penalty?: breaker_penalty?
-    } =
-      ErrorClassifier.classify(jerr.code, jerr.message,
+    resolution =
+      ErrorClassifier.resolve(jerr.code, jerr.message,
         data: jerr.data,
         provider_id: input.provider_id,
         profile: Map.get(input, :profile),
@@ -327,7 +322,7 @@ defmodule Lasso.RPC.Transports.HTTP do
       %{
         response_kind: :error,
         error_code: jerr.code,
-        error_category: control_category,
+        error_category: resolution.control_category,
         io_duration_us: input.io_duration_us
       },
       input.validated_at_us
@@ -339,9 +334,10 @@ defmodule Lasso.RPC.Transports.HTTP do
        | provider_id: input.provider_id,
          source: :jsonrpc,
          transport: :http,
-         category: category,
-         retriable?: retriable?,
-         breaker_penalty?: breaker_penalty?
+         category: resolution.category,
+         retriable?: resolution.retriable?,
+         breaker_penalty?: resolution.breaker_penalty?,
+         resolution: resolution
      }}
   end
 

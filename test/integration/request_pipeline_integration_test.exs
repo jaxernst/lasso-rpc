@@ -163,6 +163,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
         assert {error.code, error.message, error.data} == {-32_600, message, data}
         assert error.category == :capability_violation
+        assert error.resolution.category == :capability_violation
+        assert error.resolution.baseline_path == :message_pattern
+        assert JError.to_map(error) == %{"code" => -32_600, "message" => message, "data" => data}
+        refute Map.has_key?(Jason.decode!(Jason.encode!(error)), "resolution")
         assert length(ctx.attempted_channels) == 1
       end
     end

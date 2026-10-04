@@ -510,13 +510,8 @@ defmodule Lasso.RPC.Transports.WebSocket do
         end
 
       {:error, %JError{} = error} ->
-        %{
-          category: category,
-          control_category: control_category,
-          retriable?: retriable?,
-          breaker_penalty?: breaker_penalty?
-        } =
-          ErrorClassifier.classify(
+        resolution =
+          ErrorClassifier.resolve(
             error.code,
             error.message,
             [data: error.data, provider_id: provider_id] ++ Map.to_list(classification_context)
@@ -528,7 +523,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
           %{
             response_kind: :error,
             error_code: error.code,
-            error_category: control_category,
+            error_category: resolution.control_category,
             io_duration_us: io_duration_us
           },
           validated_at_us
@@ -539,9 +534,10 @@ defmodule Lasso.RPC.Transports.WebSocket do
            error
            | provider_id: provider_id,
              transport: :ws,
-             category: category,
-             retriable?: retriable?,
-             breaker_penalty?: breaker_penalty?
+             category: resolution.category,
+             retriable?: resolution.retriable?,
+             breaker_penalty?: resolution.breaker_penalty?,
+             resolution: resolution
          }}
 
       {:invalid, reason} ->

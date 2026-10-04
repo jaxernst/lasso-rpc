@@ -58,12 +58,12 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     code = raw_code
 
     # Unified classification with adapter priority
-    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, Keyword.put(classifier_opts(opts), :data, raw_data))
+    resolution =
+      ErrorClassifier.resolve(code, message, Keyword.put(classifier_opts(opts), :data, raw_data))
 
     # Extract retry-after hint if this is a rate limit error
     data =
-      if category == :rate_limit do
+      if resolution.category == :rate_limit do
         add_retry_after(raw_data, error)
       else
         raw_data
@@ -74,10 +74,11 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
       provider_id: provider_id,
       source: context,
       transport: transport,
-      category: category,
-      retriable?: retriable?,
-      breaker_penalty?: breaker_penalty?,
-      original_code: raw_code
+      category: resolution.category,
+      retriable?: resolution.retriable?,
+      breaker_penalty?: resolution.breaker_penalty?,
+      original_code: raw_code,
+      resolution: resolution
     )
   end
 
@@ -709,19 +710,20 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     context = Keyword.get(opts, :context, :jsonrpc)
     transport = Keyword.get(opts, :transport)
 
-    %{category: category, retriable?: retriable?, breaker_penalty?: breaker_penalty?} =
-      ErrorClassifier.classify(code, message, Keyword.put(classifier_opts(opts), :data, data))
+    resolution =
+      ErrorClassifier.resolve(code, message, Keyword.put(classifier_opts(opts), :data, data))
 
     JError.new(code, message,
       data: data,
       provider_id: provider_id,
       source: context,
       transport: transport,
-      category: category,
-      retriable?: retriable?,
-      breaker_penalty?: breaker_penalty?,
+      category: resolution.category,
+      retriable?: resolution.retriable?,
+      breaker_penalty?: resolution.breaker_penalty?,
       original_code: code,
-      http_status: transport_status(payload)
+      http_status: transport_status(payload),
+      resolution: resolution
     )
   end
 
