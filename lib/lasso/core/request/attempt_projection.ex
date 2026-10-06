@@ -2065,6 +2065,9 @@ defmodule Lasso.RPC.AttemptProjection do
         %{count: 1, duration_ms: duration_ms},
         %{
           request_id: attempt_event.request_id,
+          profile: identity(event.fact).profile,
+          request_origin:
+            if(Workload.system?(attempt_event.workload_key), do: :system, else: :client),
           upstream_instance_id: attempt_event.upstream_instance_id,
           chain_id: attempt_event.chain_id,
           provider_id: attempt_event.provider_id,

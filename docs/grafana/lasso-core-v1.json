@@ -1,7 +1,7 @@
 {
   "uid": "lasso-core-v1",
-  "title": "Lasso \u2014 Operator Overview",
-  "description": "Operator overview: sampled routed completions, non-success attempt diagnostics, failovers, chain-wide head evidence, circuits, WebSocket delivery and BEAM pressure.",
+  "title": "Lasso — Operator Overview",
+  "description": "Operator overview: exact routed completions, sampled latency, non-success attempt diagnostics, failovers, routing head lag, circuits, WebSocket delivery and BEAM pressure.",
   "tags": [
     "lasso",
     "rpc",
@@ -188,7 +188,7 @@
   "panels": [
     {
       "id": 1,
-      "title": "Service health \u2014 is traffic safe?",
+      "title": "Service health — is traffic safe?",
       "type": "row",
       "collapsed": false,
       "gridPos": {
@@ -328,7 +328,7 @@
     {
       "id": 3,
       "title": "Client completion success",
-      "description": "Final routed completion ratio after failover. Defaults to client traffic; choose system to inspect probes. Excludes invalid/local ingress paths. Request diagnostics sample successes above 256/s per profile, chain and origin; rates, ratios, failovers and latency are observation-based and biased above that cap.",
+      "description": "Final routed completion ratio after failover. Defaults to client traffic; choose system to inspect probes. Exact: RequestAggregate counts every routed request before detail sampling. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -343,7 +343,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(lasso_rpc_request_duration_seconds_count{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\",method=~\"$method\",origin=~\"$origin\",outcome=\"success\"}[$__rate_interval])) / sum(rate(lasso_rpc_request_duration_seconds_count{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\",method=~\"$method\",origin=~\"$origin\"}[$__rate_interval]))",
+          "expr": "sum(rate(lasso_rpc_route_requests_total{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",origin=~\"$origin\",outcome=\"success\"}[$__rate_interval])) / sum(rate(lasso_rpc_route_requests_total{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",origin=~\"$origin\"}[$__rate_interval]))",
           "legendFormat": "{{instance}}",
           "datasource": {
             "type": "prometheus",
@@ -385,7 +385,7 @@
     {
       "id": 4,
       "title": "Routed completions / sec",
-      "description": "Final completions, not individual attempts. Requests with missing origin are kept under unknown. Request diagnostics sample successes above 256/s per profile, chain and origin; rates, ratios, failovers and latency are observation-based and biased above that cap.",
+      "description": "Final completions, not individual attempts. Exact: RequestAggregate counts every routed request before detail sampling. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -400,7 +400,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(lasso_rpc_request_duration_seconds_count{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\",method=~\"$method\",origin=~\"$origin\"}[$__rate_interval]))",
+          "expr": "sum(rate(lasso_rpc_route_requests_total{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",origin=~\"$origin\"}[$__rate_interval]))",
           "legendFormat": "{{instance}}",
           "datasource": {
             "type": "prometheus",
@@ -510,7 +510,7 @@
     },
     {
       "id": 6,
-      "title": "Client latency \u2014 p50 / p95 / p99",
+      "title": "Client latency — p50 / p95 / p99",
       "description": "End-to-end routed duration includes failed attempts and retries. Seconds; sum buckets across nodes before computing quantiles. No traffic produces gaps. Request diagnostics sample successes above 256/s per profile, chain and origin; rates, ratios, failovers and latency are observation-based and biased above that cap.",
       "type": "timeseries",
       "datasource": {
@@ -591,7 +591,7 @@
     {
       "id": 7,
       "title": "Completion rate by outcome",
-      "description": "Final outcomes. Probe failures do not dilute client success unless system origin is selected. Request diagnostics sample successes above 256/s per profile, chain and origin; rates, ratios, failovers and latency are observation-based and biased above that cap.",
+      "description": "Final outcomes. Probe failures do not dilute client success unless system origin is selected. Exact: RequestAggregate counts every routed request before detail sampling. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -606,7 +606,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(chain,outcome)(rate(lasso_rpc_request_duration_seconds_count{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\",method=~\"$method\",origin=~\"$origin\"}[$__rate_interval]))",
+          "expr": "sum by(chain,outcome)(rate(lasso_rpc_route_requests_total{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",origin=~\"$origin\"}[$__rate_interval]))",
           "legendFormat": "{{chain}} / {{outcome}}",
           "datasource": {
             "type": "prometheus",
@@ -648,7 +648,7 @@
     },
     {
       "id": 8,
-      "title": "Routing & upstreams \u2014 where is time or redundancy being lost?",
+      "title": "Routing & upstreams — where is time or redundancy being lost?",
       "type": "row",
       "collapsed": false,
       "gridPos": {
@@ -662,7 +662,7 @@
     {
       "id": 9,
       "title": "Non-success attempt diagnostics",
-      "description": "Non-success dispatched attempt diagnostics only; excludes successful attempts. The canonical event supplies chain, provider, transport, outcome and category; profile, method and origin filters do not apply.",
+      "description": "Non-success dispatched attempt diagnostics only; excludes successful attempts. Method filters do not apply.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -677,7 +677,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(chain,provider,outcome)(rate(lasso_upstream_attempts_total{job=~\"$job\",instance=~\"$node\",chain=~\"$chain\",provider=~\"$provider\"}[$__rate_interval]))",
+          "expr": "sum by(chain,provider,outcome)(rate(lasso_upstream_attempts_total{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\",origin=~\"$origin\"}[$__rate_interval]))",
           "legendFormat": "{{chain}} / {{provider}} / {{outcome}}",
           "datasource": {
             "type": "prometheus",
@@ -720,7 +720,7 @@
     {
       "id": 11,
       "title": "Attempt failures by category",
-      "description": "Non-success dispatched attempt diagnostics only; excludes successful attempts. The canonical event supplies chain, provider, transport, outcome and category; profile, method and origin filters do not apply.",
+      "description": "Non-success dispatched attempt diagnostics only; excludes successful attempts. Method filters do not apply.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -735,7 +735,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by(chain,provider,category,outcome)(rate(lasso_upstream_attempts_total{job=~\"$job\",instance=~\"$node\",chain=~\"$chain\",provider=~\"$provider\",outcome!=\"usable_success\"}[$__rate_interval]))",
+          "expr": "sum by(chain,provider,category,outcome)(rate(lasso_upstream_attempts_total{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\",origin=~\"$origin\",outcome!=\"usable_success\"}[$__rate_interval]))",
           "legendFormat": "{{chain}} / {{provider}} / {{outcome}} / {{category}}",
           "datasource": {
             "type": "prometheus",
@@ -902,8 +902,8 @@
     },
     {
       "id": 14,
-      "title": "Chain-wide head lag \u2014 blocks",
-      "description": "Compatibility lag against chain-wide consensus, not transport-scoped routing eligibility. Freshness and route head scope can differ. Missing observations mean unavailable evidence, not zero lag.",
+      "title": "Head lag — blocks",
+      "description": "Routing's own per-transport assessment against each route's routing plan: its head scope and compiled freshness. Missing samples mean routing cannot assess that transport, not zero lag; Fresh evidence shows coverage.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -919,7 +919,7 @@
         {
           "refId": "A",
           "expr": "lasso_provider_head_lag_blocks{job=~\"$job\",instance=~\"$node\",profile=~\"$profile\",chain=~\"$chain\",provider=~\"$provider\"}",
-          "legendFormat": "{{instance}} / {{chain}} / {{provider}}",
+          "legendFormat": "{{instance}} / {{chain}} / {{provider}} / {{transport}}",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -1098,7 +1098,7 @@
     },
     {
       "id": 17,
-      "title": "Circuit transitions \u2014 node wide",
+      "title": "Circuit transitions — node wide",
       "description": "Physical upstream circuit events across selected nodes. Profile/chain/provider filters do not apply; use provider_info to join instance_id when diagnosing one upstream.",
       "type": "timeseries",
       "datasource": {
@@ -1156,7 +1156,7 @@
     },
     {
       "id": 19,
-      "title": "WebSocket delivery \u2014 transport health",
+      "title": "WebSocket delivery — transport health",
       "type": "row",
       "collapsed": false,
       "gridPos": {
@@ -1343,7 +1343,7 @@
     },
     {
       "id": 25,
-      "title": "Stream memory envelope \u2014 node wide",
+      "title": "Stream memory envelope — node wide",
       "description": "Combined ingress, replay history and downstream delivery reservations. Different from OS RSS and BEAM total memory. Snapshots update every 10 seconds without a dashboard subscriber.",
       "type": "timeseries",
       "datasource": {
@@ -1412,7 +1412,7 @@
     },
     {
       "id": 26,
-      "title": "Buffered messages \u2014 node wide",
+      "title": "Buffered messages — node wide",
       "description": "Queued admitted messages retained for delivery or internal processing.",
       "type": "timeseries",
       "datasource": {
@@ -1481,7 +1481,7 @@
     },
     {
       "id": 27,
-      "title": "Stream admission losses \u2014 node wide",
+      "title": "Stream admission losses — node wide",
       "description": "Admission losses indicate a bounded-memory protection triggered. Inspect slow consumers and reservations before raising limits.",
       "type": "timeseries",
       "datasource": {
@@ -1550,7 +1550,7 @@
     },
     {
       "id": 28,
-      "title": "Capacity & observability \u2014 node wide",
+      "title": "Capacity & observability — node wide",
       "type": "row",
       "collapsed": false,
       "gridPos": {
@@ -1966,7 +1966,7 @@
     },
     {
       "id": 35,
-      "title": "Credential health transitions \u2014 node wide",
+      "title": "Credential health transitions — node wide",
       "description": "Managed upstream authentication failures and recoveries over the selected window. Counts transitions, not current active alerts.",
       "type": "timeseries",
       "datasource": {

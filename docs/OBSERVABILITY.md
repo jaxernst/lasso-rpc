@@ -19,11 +19,12 @@ observations display as unavailable rather than a measured zero.
 `public` profile. It is a JSON endpoint. See [API Reference](API_REFERENCE.md#non-rpc-api-endpoints)
 for its fields and units.
 
-`GET /metrics` exposes bounded sampled routed-completion latency histograms,
-non-success attempt diagnostics, sampled completion failovers, circuit recovery,
-chain-wide head evidence, WebSocket continuity budgets and BEAM pressure.
-Successful request diagnostics sample above 256/s per profile, chain and origin;
-these are observation rates, not exact request counts.
+`GET /metrics` exposes exact per-route request totals, bounded sampled
+routed-completion latency histograms, non-success attempt diagnostics, sampled
+completion failovers, circuit recovery, routing's per-transport head lag,
+WebSocket continuity budgets and BEAM pressure. Successful request diagnostics
+sample above 256/s per profile, chain and origin; the `lasso_rpc_route_*`
+totals do not.
 Existing request/circuit/head metric names remain compatible.
 
 Import [Lasso — Operator Overview](grafana/lasso-core-v1.json) into Grafana.

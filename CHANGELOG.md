@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Expand `/metrics` into a bounded operator contract with conventional names for routed latency, non-success upstream attempts, failovers, circuit admission, WebSocket and subscription continuity, stream memory, credential health and BEAM runtime, plus a Grafana dashboard (`docs/grafana/lasso-core-v1.json`).
+- Add opt-in OpenTelemetry tracing with W3C trace context propagation and JSON-log trace correlation. Tracing is disabled by default and never affects routing results.
+- Export exact per-route request totals (`lasso_rpc_route_requests_total`, `lasso_rpc_route_duration_seconds_total`, `lasso_rpc_route_detail_sampled_out_total`) read from the request aggregate counters, so throughput and success ratios no longer depend on sampled diagnostics.
+- Add `Lasso.Observability.MetricsScope` so multi-tenant hosts can bound profile, chain and provider label values and choose which routes the scrape-time families cover.
+
+### Changed
+
+- `lasso_provider_head_lag_blocks` reports routing's own per-transport assessment against each route's routing plan and gains a `transport` label. Transports routing cannot assess have no sample.
+- `lasso_upstream_attempts_total` gains `profile` and `origin` labels, separating client-driven upstream failures from probes and other system traffic.
+- Request aggregate counters persist across catalog rebuilds while their routing scope stays published.
+
 ## [0.5.0] - 2026-09-28
 
 ### Added

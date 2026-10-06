@@ -49,6 +49,47 @@ defmodule Lasso.Observability.PrometheusMetricsTest do
     line |> String.split(" ") |> List.last() |> String.to_float()
   end
 
+  defmodule TenantScope do
+    @behaviour Lasso.Observability.MetricsScope
+
+    @impl true
+    def bound(%{profile: "tenant-" <> _} = meta),
+      do: %{meta | profile: "custom", provider_id: "custom"}
+
+    def bound(meta), do: meta
+
+    @impl true
+    def export_route?(profile), do: not String.starts_with?(profile, "tenant-")
+  end
+
+  test "a host metrics scope bounds labels before series are created" do
+    :persistent_term.put(Lasso.Observability.MetricsScope, TenantScope)
+    on_exit(fn -> :persistent_term.erase(Lasso.Observability.MetricsScope) end)
+
+    for tenant <- ["tenant-a", "tenant-b"] do
+      request(10, %{profile: tenant, provider_id: "#{tenant}-node"})
+
+      :telemetry.execute([:lasso, :rpc, :attempt, :terminal], %{}, %{
+        profile: tenant,
+        chain_id: 1,
+        provider_id: "#{tenant}-node",
+        transport: :http,
+        request_origin: :client,
+        outcome: :service_failure,
+        error_category: :rate_limit
+      })
+    end
+
+    body = output()
+    refute body =~ "tenant-"
+
+    assert body =~
+             ~s(lasso_rpc_request_duration_seconds_count{profile="custom",chain="1",provider="custom",method="eth_getLogs",transport="http",origin="client",outcome="success"} 2)
+
+    assert body =~
+             ~s(lasso_upstream_attempts_total{profile="custom",chain="1",provider="custom",transport="http",origin="client",outcome="service_failure",category="rate_limit"} 2)
+  end
+
   test "millisecond observations produce cumulative second buckets and an exact sum" do
     request(5)
     request(100)
@@ -250,7 +291,9 @@ defmodule Lasso.Observability.PrometheusMetricsTest do
 
       body = output()
       assert body =~ ~s(profile="#{profile}",chain="1",provider="#{provider}")
-      assert body =~ ~s(lasso_upstream_attempts_total{chain="1",provider="#{provider}")
+
+      assert body =~
+               ~s(lasso_upstream_attempts_total{profile="unknown",chain="1",provider="#{provider}")
 
       legacy =
         Prometheus.scrape()
@@ -294,7 +337,9 @@ defmodule Lasso.Observability.PrometheusMetricsTest do
 
       body = output()
       assert body =~ ~s(profile="#{encoded_profile}",chain="1",provider="#{encoded_provider}")
-      assert body =~ ~s(lasso_upstream_attempts_total{chain="1",provider="#{encoded_provider}")
+
+      assert body =~
+               ~s(lasso_upstream_attempts_total{profile="unknown",chain="1",provider="#{encoded_provider}")
 
       legacy =
         Prometheus.scrape()
@@ -532,7 +577,7 @@ defmodule Lasso.Observability.PrometheusMetricsTest do
     body = output()
 
     assert body =~
-             "lasso_upstream_attempts_total{chain=\"1\",provider=\"recorder\",transport=\"http\""
+             ~s(lasso_upstream_attempts_total{profile="public",chain="1",provider="recorder",transport="http",origin="client")
 
     assert body =~ ~s(outcome="service_failure",category="protocol_error")
     refute body =~ "lasso_upstream_attempt_duration_seconds"

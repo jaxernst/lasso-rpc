@@ -5,7 +5,13 @@ defmodule Lasso.Observability.Prometheus do
   Request observations use fixed ETS slots and a short probe budget. An
   unfamiliar method is folded into `other`; exhausted slots are counted rather
   than allocating more series on the request path. Circuit and head gauges are
-  read from current local state when scraped.
+  read from current local state when scraped. Head lag is routing's own
+  per-transport assessment against each route's routing plan.
+
+  Exact per-route request totals come from `Lasso.RPC.RequestAggregate`, which
+  counts every request before detail sampling; the duration histogram and the
+  per-provider request counter are observation-based and sampled above
+  256 successes per second per scope.
   """
 
   use GenServer
@@ -13,8 +19,14 @@ defmodule Lasso.Observability.Prometheus do
   alias Lasso.BlockSync.Registry, as: BlockRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
-  alias Lasso.Providers.Catalog
-  alias Lasso.Observability.{PrometheusMetrics, PrometheusRuntime}
+  alias Lasso.Providers.{Catalog, LagCalculation}
+
+  alias Lasso.Observability.{
+    MetricsScope,
+    PrometheusMetrics,
+    PrometheusRuntime,
+    RouteTotals
+  }
 
   @event [:lasso, :rpc, :request, :stop]
   @handler_id "lasso-prometheus-request-stop"
@@ -39,6 +51,7 @@ defmodule Lasso.Observability.Prometheus do
     :ets.new(@requests, [:named_table, :set, :public, write_concurrency: true])
     :ets.new(@stats, [:named_table, :set, :public, write_concurrency: true])
     :ets.insert(@stats, {:dropped, 0})
+    MetricsScope.install()
     PrometheusMetrics.init()
     :telemetry.detach(@handler_id)
 
@@ -50,7 +63,21 @@ defmodule Lasso.Observability.Prometheus do
         nil
       )
 
-    {:ok, %{}}
+    {:ok, %{route_totals: RouteTotals.new()}}
+  end
+
+  @impl true
+  def handle_call(:route_totals, _from, state) do
+    route_totals =
+      case Catalog.snapshot() do
+        %{request_aggregates: sets} when is_map(sets) ->
+          RouteTotals.advance(state.route_totals, sets)
+
+        _unpublished ->
+          state.route_totals
+      end
+
+    {:reply, RouteTotals.totals(route_totals), %{state | route_totals: route_totals}}
   end
 
   @impl true
@@ -63,6 +90,7 @@ defmodule Lasso.Observability.Prometheus do
   @spec handle_event([atom()], map(), map(), term()) :: :ok
   def handle_event(@event, measurements, metadata, config) do
     PrometheusMetrics.handle_event(@event, measurements, metadata, config)
+    metadata = MetricsScope.impl().bound(metadata)
 
     key = {
       Map.get(metadata, :chain_id),
@@ -71,7 +99,7 @@ defmodule Lasso.Observability.Prometheus do
       outcome_label(Map.get(metadata, :result))
     }
 
-    if is_integer(elem(key, 0)) and elem(key, 0) > 0 do
+    if (is_integer(elem(key, 0)) and elem(key, 0) > 0) or is_binary(elem(key, 0)) do
       record(key)
     end
 
@@ -136,6 +164,7 @@ defmodule Lasso.Observability.Prometheus do
          "# TYPE lasso_provider_head_lag_blocks gauge"
        ] ++
        Enum.reverse(lag_lines) ++
+       route_total_lines() ++
        PrometheusMetrics.scrape() ++
        PrometheusRuntime.scrape() ++
        PrometheusRuntime.readiness_samples(Enum.take(chain_scan, @max_routes)) ++
@@ -216,8 +245,41 @@ defmodule Lasso.Observability.Prometheus do
     :ok
   end
 
+  defp route_total_lines do
+    totals = GenServer.call(__MODULE__, :route_totals, 5_000)
+
+    families = [
+      {"lasso_rpc_route_requests_total",
+       "Completed routed requests, counted exactly before detail sampling",
+       fn counts -> [success: counts.successes, error: counts.total - counts.successes] end},
+      {"lasso_rpc_route_duration_seconds_total", "Summed completion time of routed requests",
+       fn counts -> [nil: counts.elapsed_us / 1_000_000] end},
+      {"lasso_rpc_route_detail_sampled_out_total",
+       "Successful requests excluded from detail telemetry by the sampling budget",
+       fn counts -> [nil: counts.sampled_out] end}
+    ]
+
+    for {name, help, values} <- families,
+        line <- family_lines(name, help, totals, values),
+        do: line
+  catch
+    :exit, _reason -> []
+  end
+
+  defp family_lines(name, help, totals, values) do
+    samples =
+      for {{profile, chain, origin}, counts} <- Enum.sort(totals),
+          {outcome, value} <- values.(counts) do
+        labels = [profile: profile, chain: chain, origin: origin]
+        sample(name, value, if(outcome, do: labels ++ [outcome: outcome], else: labels))
+      end
+
+    ["# HELP #{name} #{help}", "# TYPE #{name} counter" | samples]
+  end
+
   defp chains do
     ConfigStore.list_profiles()
+    |> Stream.filter(&MetricsScope.impl().export_route?/1)
     |> Stream.flat_map(fn profile ->
       ConfigStore.list_chains_for_profile(profile) |> Stream.map(&{profile, &1})
     end)
@@ -226,6 +288,7 @@ defmodule Lasso.Observability.Prometheus do
 
   defp routes do
     ConfigStore.list_profiles()
+    |> Stream.filter(&MetricsScope.impl().export_route?/1)
     |> Stream.flat_map(fn profile ->
       ConfigStore.list_chains_for_profile(profile)
       |> Stream.flat_map(fn chain ->
@@ -255,23 +318,46 @@ defmodule Lasso.Observability.Prometheus do
       end
 
     lag =
-      case instance_id && BlockRegistry.get_provider_lag(chain, instance_id) do
-        {:ok, blocks} ->
-          [
-            sample("lasso_provider_head_lag_blocks", max(-blocks, 0),
-              profile: profile,
-              chain: chain,
-              provider: provider
-            )
-          ]
-
-        _ ->
-          []
+      for transport <- [:http, :ws],
+          {:ok, blocks} <- [blocks_behind(profile, chain, instance_id, transport)] do
+        sample("lasso_provider_head_lag_blocks", blocks,
+          profile: profile,
+          chain: chain,
+          provider: provider,
+          transport: transport
+        )
       end
 
     evidence = PrometheusRuntime.route_samples(profile, chain, provider, instance_id, lag != [])
     {circuits ++ evidence, lag}
   end
+
+  # Routing reports lag as the signed offset from the reference, so an upstream behind it is negative.
+  defp blocks_behind(profile, chain, instance_id, transport) when is_binary(instance_id) do
+    now_ms = System.system_time(:millisecond)
+
+    with %{generation: generation} = catalog <- Catalog.snapshot(),
+         {:ok, plan} <- Catalog.get_routing_plan(catalog, profile, chain),
+         true <- instance_id in plan.head_scope.instance_ids,
+         %{} = route <- Enum.find(plan.providers, &(&1.instance_id == instance_id)),
+         {:ok, snapshot} <- BlockRegistry.get_head_snapshot(plan.head_scope, generation, now_ms),
+         %{status: status, lag: lag} when status in [:eligible, :lagging] and is_integer(lag) <-
+           LagCalculation.assess_transport(
+             chain,
+             instance_id,
+             transport,
+             snapshot,
+             0,
+             now_ms,
+             get_in(route, [:head_freshness_ms, transport])
+           ) do
+      {:ok, max(-lag, 0)}
+    else
+      _unassessable -> :unknown
+    end
+  end
+
+  defp blocks_behind(_profile, _chain, _instance_id, _transport), do: :unknown
 
   defp circuit_state(id, transport) when is_binary(id) do
     case Snapshot.lookup({id, transport}) do

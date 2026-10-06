@@ -41,9 +41,12 @@ or subscription keys.
 
 | Surface | Meaning | Useful dimensions |
 | --- | --- | --- |
-| `lasso_rpc_requests_total` | Existing compatible routed completion count | chain, provider, method, outcome |
+| `lasso_rpc_route_requests_total` | Exact routed completions, counted before detail sampling | profile, chain, origin, outcome |
+| `lasso_rpc_route_duration_seconds_total` | Exact summed completion time; divide by requests for the mean | profile, chain, origin |
+| `lasso_rpc_route_detail_sampled_out_total` | Successes excluded from detail telemetry by the sampling budget | profile, chain, origin |
+| `lasso_rpc_requests_total` | Sampled routed completion count by provider and method | chain, provider, method, outcome |
 | `lasso_rpc_request_duration_seconds` | Final routed latency, including attempts/failover | profile, chain, provider, method, transport, origin, outcome |
-| `lasso_upstream_attempts_total` | Non-success dispatched attempt diagnostics only | chain, provider, transport, outcome, category |
+| `lasso_upstream_attempts_total` | Non-success dispatched attempt diagnostics only | profile, chain, provider, transport, origin, outcome, category |
 | `lasso_rpc_failovers_total` | Sum of failovers recorded at final completion | route labels without outcome |
 | `lasso_circuit_state` | Existing one-hot local HTTP/WS circuit state | profile, chain, provider, transport, state |
 | `lasso_circuit_ready` / `lasso_circuit_failures` | Owner admission readiness and consecutive failures | profile, chain, provider, transport |
@@ -54,8 +57,8 @@ or subscription keys.
 | `lasso_chain_ready` / `lasso_chain_eligible_upstreams` | Same node-local HTTP readiness as `/api/ready` and eligible alternatives | profile, chain |
 | `lasso_provider_info` | Configured route to physical-instance mapping | profile, chain, provider, instance_id |
 | `lasso_provider_transport_configured` | Whether HTTP/WS is configured | profile, chain, provider, transport |
-| `lasso_provider_head_observed` | Fresh head-lag evidence exists (1/0) | profile, chain, provider |
-| `lasso_provider_head_lag_blocks` | Chain-wide compatibility lag in blocks; not scoped routing-policy evidence | profile, chain, provider |
+| `lasso_provider_head_observed` | Routing can assess head lag on at least one transport (1/0) | profile, chain, provider |
+| `lasso_provider_head_lag_blocks` | Blocks behind, as routing assesses the route against its routing plan | profile, chain, provider, transport |
 | `lasso_websocket_connections_total` | Physical connection/disconnection events; no active subscription count | chain, instance_id, event; route filters use provider_info |
 | `lasso_subscription_events_total` / `lasso_subscription_recovery_duration_seconds` | Failover, reorg repair, drops and slow-consumer termination | available profile/chain/provider, kind/reason |
 | `lasso_stream_budget_bytes` / `_messages` / `_owners` | Continuity reservations and queued deliveries | kind where applicable |
@@ -74,29 +77,49 @@ increment `lasso_observer_invalid_total`; they never fabricate zero latency.
 
 Attempt counters observe `[:lasso, :rpc, :attempt, :terminal]` from the canonical
 AttemptProjection path. It emits non-success dispatched diagnostics (failures,
-cancellations and policy rejections), not successful attempts. It does not supply
-profile, method or origin. Attempt panels do not apply those filters. There is no
+cancellations and policy rejections), not successful attempts. It carries profile
+and origin but not method, so attempt panels do not apply the method filter. Origin
+separates client-driven failures from probes and other system traffic. There is no
 successful-attempt latency metric or HTTP ingress metric in this exporter.
 An attempt failure may be recovered by another provider; it is not automatically
 a failed client request. Diagnostic delivery is bounded and can drop observations.
 
-Request counters, latency and completion-reported failovers consume request
-**diagnostics**, not exact execution counts. RequestAggregate samples successful
-detail above 256 completions/s per profile, chain and origin; failures remain
-admitted. This biases throughput, success ratios, latency and failovers under
-load. Observer drop counters measure observer admission losses, not upstream
-sampling or dispatcher drops. Do not use these series as exact load/SLO accounting.
-Exact scrape-time request counters are a separate upstream follow-up.
+The `lasso_rpc_route_*` counters are exact: RequestAggregate counts every routed
+request per profile, chain and origin before any sampling, and the scrape reads those
+counters. Use them for throughput, success ratios, mean latency and SLO accounting.
+A routing scope keeps its counters across catalog rebuilds; a scope that is removed
+is read twice more so its last requests are counted, and its total stays in the
+series.
 
-The head-lag gauge compares chain-wide observations. Routing uses transport-specific
-head scope and freshness; never compare this compatibility gauge with max_lag_blocks
-to decide routing eligibility. Scope-aware head lag is a separate upstream follow-up.
+The latency histogram, `lasso_rpc_requests_total` and completion-reported failovers
+consume request **diagnostics**. RequestAggregate samples successful detail above
+256 completions/s per profile, chain and origin; failures remain admitted. These
+series carry provider and method but are biased under load;
+`lasso_rpc_route_detail_sampled_out_total` shows how much was excluded. Observer
+drop counters measure observer admission losses, not upstream sampling or
+dispatcher drops.
+
+Head lag is routing's own per-transport assessment: each route is compared against
+its routing plan's head scope with that transport's compiled freshness, the same
+evidence selection uses. HTTP observations count only with a fresh poll reference
+for the scope. A transport routing cannot assess has no sample, so compare
+`lasso_provider_head_observed` with configured routes to see lag coverage.
 
 A fresh head observation does not prove routing eligibility: identity, circuit,
 method capability, lag policy and request range must still permit dispatch.
 Missing head lag means no fresh evidence, not zero lag. Disabled WS transports
 have no circuit snapshot; consult `lasso_provider_transport_configured` before
 interpreting missing circuit-admission samples as a failure.
+
+## Multi-tenant hosts
+
+Profile, chain and provider labels come from configuration. A host that lets
+tenants define profiles or providers should bound them before they become labels:
+set `config :lasso, :metrics_scope, MyScope` to a module implementing
+`Lasso.Observability.MetricsScope`. `bound/1` rewrites event metadata (for example,
+folding tenant profiles into `custom`), and `export_route?/1` keeps those profiles
+out of the scrape-time route families, where several routes would collapse onto one
+series. The default keeps every value.
 
 ## Common incidents
 

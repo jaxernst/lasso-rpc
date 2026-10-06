@@ -8,6 +8,7 @@ defmodule Lasso.Observability.PrometheusMetrics do
   wallet addresses or subscription keys become labels.
   """
 
+  alias Lasso.Observability.MetricsScope
   alias Lasso.RPC.BoundedIdentifier
 
   @table :lasso_prometheus_observations
@@ -110,7 +111,7 @@ defmodule Lasso.Observability.PrometheusMetrics do
 
   @doc false
   def handle_event(event, measurements, metadata, _config) do
-    observe(event, measurements, metadata)
+    observe(event, measurements, MetricsScope.impl().bound(metadata))
     :ok
   rescue
     ArgumentError -> :ok
@@ -124,9 +125,11 @@ defmodule Lasso.Observability.PrometheusMetrics do
 
   defp observe([:lasso, :rpc, :attempt, :terminal], _ms, meta) do
     labels = [
+      profile: identity(meta[:profile]),
       chain: chain(meta),
       provider: identity(meta[:provider_id]),
       transport: enum(meta[:transport]),
+      origin: enum(meta[:request_origin]),
       outcome: enum(meta[:outcome]),
       category: enum(meta[:error_category])
     ]
@@ -247,6 +250,7 @@ defmodule Lasso.Observability.PrometheusMetrics do
   defp chain(meta) do
     case meta[:chain_id] || meta[:chain] do
       id when is_integer(id) and id > 0 -> Integer.to_string(id)
+      label when is_binary(label) -> identity(label)
       _ -> "unknown"
     end
   end

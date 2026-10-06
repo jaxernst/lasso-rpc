@@ -2,10 +2,11 @@ defmodule Lasso.RPC.RequestAggregate do
   @moduledoc """
   Fixed-cardinality request outcome counters for active routing scopes.
 
-  Counter references are built with a catalog generation and published inside
-  the same immutable catalog snapshot as its routing plans. Request processes
-  update atomics directly; optional detailed diagnostics are admitted through a
-  per-origin, per-scope rate budget.
+  Counter references are published inside the same immutable catalog snapshot as
+  its routing plans. A routing scope keeps its counters across catalog
+  generations, so its counts accumulate for as long as the scope stays published
+  on this node. Request processes update atomics directly; optional detailed
+  diagnostics are admitted through a per-origin, per-scope rate budget.
   """
 
   alias Lasso.Providers.Catalog
@@ -25,14 +26,18 @@ defmodule Lasso.RPC.RequestAggregate do
   @system_sampled_out 8
 
   @type origin :: :client | :system
-  @type counter_set :: %{required(:counters) => term(), required(:budgets) => term()}
+  @type counter_set :: %{
+          required(:id) => pos_integer(),
+          required(:counters) => term(),
+          required(:budgets) => term()
+        }
 
   @doc false
   @spec prepare(non_neg_integer(), map(), Catalog.snapshot() | nil) ::
           %{{binary(), pos_integer()} => counter_set()}
   def prepare(generation, routing_plans, previous_snapshot)
       when is_integer(generation) and generation >= 0 and is_map(routing_plans) do
-    reusable = reusable_aggregates(generation, previous_snapshot)
+    reusable = published_aggregates(previous_snapshot)
 
     Map.new(routing_plans, fn {{profile, chain_id}, _plan} ->
       key = {profile, chain_id}
@@ -40,6 +45,7 @@ defmodule Lasso.RPC.RequestAggregate do
       {key,
        Map.get_lazy(reusable, key, fn ->
          %{
+           id: System.unique_integer([:positive, :monotonic]),
            counters: :atomics.new(8, signed: true),
            budgets: :atomics.new(2, signed: true)
          }
@@ -88,6 +94,11 @@ defmodule Lasso.RPC.RequestAggregate do
   rescue
     ArgumentError -> {:error, :not_found}
   end
+
+  @doc "Reads a counter set's cumulative client and system counts."
+  @spec read_counter_set(counter_set()) :: %{client: map(), system: map()}
+  def read_counter_set(%{counters: counters}),
+    do: %{client: read_origin(counters, :client), system: read_origin(counters, :system)}
 
   defp record(counters, fact, origin) do
     :atomics.add(counters, total_index(origin), 1)
@@ -159,14 +170,10 @@ defmodule Lasso.RPC.RequestAggregate do
   defp success?(%RequestTerminal.LocalSuccess{}), do: true
   defp success?(_fact), do: false
 
-  defp reusable_aggregates(
-         generation,
-         %{generation: generation, request_aggregates: aggregates}
-       )
-       when is_map(aggregates),
-       do: aggregates
+  defp published_aggregates(%{request_aggregates: aggregates}) when is_map(aggregates),
+    do: aggregates
 
-  defp reusable_aggregates(_generation, _snapshot), do: %{}
+  defp published_aggregates(_snapshot), do: %{}
 
   defp total_index(:client), do: @client_total
   defp total_index(:system), do: @system_total

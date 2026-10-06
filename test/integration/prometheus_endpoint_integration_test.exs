@@ -6,6 +6,7 @@ defmodule Lasso.PrometheusEndpointIntegrationTest do
   require Lasso.Test.Eventually
 
   alias Lasso.Observability.Prometheus
+  alias Lasso.Providers.Catalog
 
   test "a real HTTP scrape exposes bounded request and current route evidence", %{chain: chain} do
     setup_providers([%{id: "metrics_probe", profile: "public", behavior: :healthy}])
@@ -90,8 +91,54 @@ defmodule Lasso.PrometheusEndpointIntegrationTest do
 
     Lasso.Test.Eventually.assert_eventually(fn ->
       Prometheus.scrape() =~
-        ~s(lasso_upstream_attempts_total{chain="#{chain}",provider="canonical_failure",transport="http")
+        ~s(lasso_upstream_attempts_total{profile="public",chain="#{chain}",provider="canonical_failure",transport="http",origin="client")
     end)
+  end
+
+  test "route totals count every routed request and keep counting across catalog rebuilds",
+       %{chain: chain} do
+    setup_providers([%{id: "exact_a", profile: "public", behavior: :healthy}])
+
+    series =
+      ~s(lasso_rpc_route_requests_total{profile="public",chain="#{chain}",origin="client",outcome="success"})
+
+    for _ <- 1..3, do: assert(rpc(chain)["result"])
+    assert scrape() =~ "#{series} 3\n"
+
+    setup_providers([%{id: "exact_b", profile: "public", behavior: :healthy}])
+    assert rpc(chain)["result"]
+    body = scrape()
+    assert body =~ "#{series} 4\n"
+
+    assert body =~
+             ~s(lasso_rpc_route_requests_total{profile="public",chain="#{chain}",origin="client",outcome="error"} 0\n)
+  end
+
+  test "head lag is routing's per-transport assessment against the route's plan", %{chain: chain} do
+    setup_providers(
+      for id <- ["lag_a", "lag_b", "lag_c"], do: %{id: id, profile: "public", behavior: :healthy}
+    )
+
+    for {provider, height} <- [{"lag_a", 100}, {"lag_b", 100}, {"lag_c", 95}] do
+      instance_id = Catalog.lookup_instance_id("public", chain, provider)
+      :ok = Lasso.BlockSync.Registry.put_height(chain, instance_id, height, :ws)
+    end
+
+    lag =
+      &~s(lasso_provider_head_lag_blocks{profile="public",chain="#{chain}",provider="#{&1}",transport="ws"} #{&2}\n)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      body = Prometheus.scrape()
+      body =~ lag.("lag_a", 0) and body =~ lag.("lag_c", 5)
+    end)
+
+    body = Prometheus.scrape()
+
+    refute body =~
+             ~s(lasso_provider_head_lag_blocks{profile="public",chain="#{chain}",provider="lag_a",transport="http")
+
+    assert body =~
+             ~s(lasso_provider_head_observed{profile="public",chain="#{chain}",provider="lag_c"} 1)
   end
 
   test "multi-route scrape groups declarations before contiguous family samples", %{chain: chain} do
@@ -142,5 +189,31 @@ defmodule Lasso.PrometheusEndpointIntegrationTest do
     end
 
     assert body =~ ~s(chain="#{chain}")
+  end
+
+  defp rpc(chain) do
+    {:ok, _apps} = Application.ensure_all_started(:inets)
+    port = LassoWeb.Endpoint.config(:http)[:port]
+    url = String.to_charlist("http://127.0.0.1:#{port}/rpc/#{chain}")
+    body = Jason.encode!(%{jsonrpc: "2.0", method: "eth_getLogs", params: [], id: 1})
+
+    assert {:ok, {{_, 200, _}, _, response}} =
+             :httpc.request(:post, {url, [], ~c"application/json", body}, [], [])
+
+    Jason.decode!(to_string(response))
+  end
+
+  defp scrape do
+    port = LassoWeb.Endpoint.config(:http)[:port]
+
+    assert {:ok, {{_, 200, _}, _, body}} =
+             :httpc.request(
+               :get,
+               {String.to_charlist("http://127.0.0.1:#{port}/metrics"), []},
+               [],
+               []
+             )
+
+    to_string(body)
   end
 end

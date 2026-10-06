@@ -65,7 +65,7 @@ defmodule Lasso.RPC.RequestAggregateTest do
     assert generation == Catalog.active_generation()
   end
 
-  test "catalog publication replaces counters with the new generation", %{chain: chain} do
+  test "catalog publication keeps a published scope's counters", %{chain: chain} do
     setup_providers([
       %{id: "aggregate-provider", priority: 1, behavior: :healthy, profile: "public"}
     ])
@@ -85,7 +85,7 @@ defmodule Lasso.RPC.RequestAggregateTest do
       %{id: "aggregate-provider-b", priority: 1, behavior: :healthy, profile: "public"}
     ])
 
-    assert {:ok, %{generation: next_generation, client: %{total: 0}}} =
+    assert {:ok, %{generation: next_generation, client: %{total: 1}}} =
              RequestAggregate.snapshot("public", chain)
 
     assert next_generation > first_generation

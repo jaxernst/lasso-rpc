@@ -65,6 +65,21 @@ TESTS = [
 ]
 
 
+TOTALS = dict(job="lasso", instance="node-a", profile="public", chain="1", origin="client")
+ATTEMPT = dict(job="lasso", instance="node-a", profile="public", chain="1", provider="drpc",
+               transport="http", outcome="service_failure", category="rate_limit")
+TESTS.extend([
+    case("exact route totals give the success ratio", [
+        series("lasso_rpc_route_requests_total", TOTALS | dict(outcome="success"), "0+45x5"),
+        series("lasso_rpc_route_requests_total", TOTALS | dict(outcome="error"), "0+15x5"),
+    ], expression(3), [sample("{}", 0.75)]),
+    case("attempt diagnostics separate client from system traffic", [
+        series("lasso_upstream_attempts_total", ATTEMPT | dict(origin="client"), "0+60x5"),
+        series("lasso_upstream_attempts_total", ATTEMPT | dict(origin="system"), "0+600x5"),
+    ], expression(9), [sample('{chain="1",provider="drpc",outcome="service_failure"}', 1)]),
+])
+
+
 LONG_IDS = ["1:" + "a" * 63 + ":" + suffix for suffix in ["0123456789ab", "fedcba987654"]]
 LONG_WS = [series("lasso_websocket_connections_total", PHYSICAL | dict(instance_id=id, event="connected"),
                   f"0+{rate}x5") for id, rate in zip(LONG_IDS, [60, 120])]
