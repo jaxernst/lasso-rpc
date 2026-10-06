@@ -86,7 +86,7 @@ defmodule Lasso.Observability.Prometheus do
     :ok
   end
 
-  @doc false
+  @doc "Telemetry handler for request and route observations."
   @spec handle_event([atom()], map(), map(), term()) :: :ok
   def handle_event(@event, measurements, metadata, config) do
     PrometheusMetrics.handle_event(@event, measurements, metadata, config)

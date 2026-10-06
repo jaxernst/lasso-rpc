@@ -99,17 +99,17 @@ defmodule Lasso.Observability.PrometheusMetrics do
     [:lasso, :provider, :credential_health]
   ]
 
-  @doc false
+  @doc "Telemetry events the exporter observes."
   def events, do: @events
 
-  @doc false
+  @doc "Creates the observation tables; called once by `Lasso.Observability.Prometheus`."
   def init do
     :ets.new(@table, [:named_table, :set, :public, write_concurrency: true])
     :ets.new(@stats, [:named_table, :set, :public, write_concurrency: true])
     :ets.insert(@stats, [{:dropped, 0}, {:invalid, 0}])
   end
 
-  @doc false
+  @doc "Telemetry handler that records one bounded observation."
   def handle_event(event, measurements, metadata, _config) do
     observe(event, measurements, MetricsScope.impl().bound(metadata))
     :ok
@@ -407,7 +407,7 @@ defmodule Lasso.Observability.PrometheusMetrics do
       ]
   end
 
-  @doc false
+  @doc "Formats one exposition line, encoding profile and provider labels."
   def sample(name, value, labels) do
     encoded =
       Enum.map_join(labels, ",", fn {key, item} ->

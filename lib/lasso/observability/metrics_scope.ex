@@ -28,7 +28,7 @@ defmodule Lasso.Observability.MetricsScope do
   @spec impl() :: module()
   def impl, do: :persistent_term.get(__MODULE__, __MODULE__)
 
-  @doc false
+  @doc "Caches the configured implementation for the telemetry handlers."
   @spec install() :: :ok
   def install do
     :persistent_term.put(__MODULE__, Application.get_env(:lasso, :metrics_scope, __MODULE__))

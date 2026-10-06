@@ -166,7 +166,7 @@ defmodule Lasso.Observability.PrometheusRuntime do
   defp recovery_delay(%{recovery_deadline_us: deadline}),
     do: max(deadline - System.monotonic_time(:microsecond), 0) / 1_000_000
 
-  @doc false
+  @doc "Renders one metric family with its HELP and TYPE lines."
   def family(name, type, help, samples) do
     [
       "# HELP #{name} #{help}",
