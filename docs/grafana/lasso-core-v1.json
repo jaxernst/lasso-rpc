@@ -1,7 +1,7 @@
 {
   "uid": "lasso-core-v1",
   "title": "Lasso — Operator Overview",
-  "description": "Operator overview: exact routed completions, sampled latency, non-success attempt diagnostics, failovers, routing head lag, circuits, WebSocket delivery and BEAM pressure.",
+  "description": "Operator overview: routed completion totals, sampled latency, non-success attempt diagnostics, failovers, routing head lag, circuits, WebSocket delivery and BEAM pressure.",
   "tags": [
     "lasso",
     "rpc",
@@ -259,7 +259,7 @@
     {
       "id": 100,
       "title": "Unready chains",
-      "description": "Profile/chains with no eligible HTTP route or fresh head from that eligible set. Uses the same evidence as /api/ready. Missing data is unknown, not healthy.",
+      "description": "Profile/chains with no eligible HTTP route or fresh head from that eligible set. Standalone /api/ready applies the same check. Missing data is unknown, not healthy.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -328,7 +328,7 @@
     {
       "id": 3,
       "title": "Client completion success",
-      "description": "Final routed completion ratio after failover. Defaults to client traffic; choose system to inspect probes. Exact: RequestAggregate counts every routed request before detail sampling. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
+      "description": "Final routed completion ratio after failover. Defaults to client traffic; choose system to inspect probes. RequestAggregate counts every routed request before detail sampling; exact while the scope stays published. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -385,7 +385,7 @@
     {
       "id": 4,
       "title": "Routed completions / sec",
-      "description": "Final completions, not individual attempts. Exact: RequestAggregate counts every routed request before detail sampling. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
+      "description": "Final completions, not individual attempts. RequestAggregate counts every routed request before detail sampling; exact while the scope stays published. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -591,7 +591,7 @@
     {
       "id": 7,
       "title": "Completion rate by outcome",
-      "description": "Final outcomes. Probe failures do not dilute client success unless system origin is selected. Exact: RequestAggregate counts every routed request before detail sampling. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
+      "description": "Final outcomes. Probe failures do not dilute client success unless system origin is selected. RequestAggregate counts every routed request before detail sampling; exact while the scope stays published. Provider and method filters do not apply; per-provider and per-method views use sampled request diagnostics.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",

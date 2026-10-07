@@ -1,7 +1,18 @@
 defmodule Lasso.Observability.RouteTotalsTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.Observability.RouteTotals
+  alias Lasso.Observability.{MetricsScope, RouteTotals}
+
+  setup do
+    previous = :persistent_term.get(MetricsScope, nil)
+    :persistent_term.put(MetricsScope, MetricsScope)
+
+    on_exit(fn ->
+      if previous,
+        do: :persistent_term.put(MetricsScope, previous),
+        else: :persistent_term.erase(MetricsScope)
+    end)
+  end
 
   test "series are bounded by the published catalog and a hard limit" do
     sets = Map.new(1..3_000, &{{"public", &1}, counter_set(successes: 1)})

@@ -5,6 +5,11 @@ keep the Prometheus `instance` label and sum rates across nodes when calculating
 fleet throughput. No database, dashboard session, scheduler instrumentation flag,
 or additional exporter dependency is required.
 
+A standalone node serves `GET /metrics` and `GET /api/ready` on its main HTTP endpoint
+(port 4000 in the example below). A host that embeds Lasso may serve the same metric
+families on a separate listener and may not expose `/api/ready`; the families and
+their meanings do not change.
+
 ## Start here
 
 1. Import [Lasso — Operator Overview](grafana/lasso-core-v1.json) into Grafana.
@@ -41,8 +46,8 @@ or subscription keys.
 
 | Surface | Meaning | Useful dimensions |
 | --- | --- | --- |
-| `lasso_rpc_route_requests_total` | Exact routed completions, counted before detail sampling | profile, chain, origin, outcome |
-| `lasso_rpc_route_duration_seconds_total` | Exact summed completion time; divide by requests for the mean | profile, chain, origin |
+| `lasso_rpc_route_requests_total` | Routed completions, counted before detail sampling; exact while the routing scope stays published | profile, chain, origin, outcome |
+| `lasso_rpc_route_duration_seconds_total` | Summed completion time of the same requests; divide by requests for the mean | profile, chain, origin |
 | `lasso_rpc_route_detail_sampled_out_total` | Successes excluded from detail telemetry by the sampling budget | profile, chain, origin |
 | `lasso_rpc_requests_total` | Sampled routed completion count by provider and method | chain, provider, method, outcome |
 | `lasso_rpc_request_duration_seconds` | Final routed latency, including attempts/failover | profile, chain, provider, method, transport, origin, outcome |
@@ -54,7 +59,7 @@ or subscription keys.
 | `lasso_circuit_recovery_delay_seconds` | Remaining local monotonic recovery delay | profile, chain, provider, transport |
 | `lasso_circuit_transitions_total` / `lasso_circuit_failures_total` | Physical-instance transition/failure evidence | instance_id, transport, state, reason/category |
 | `lasso_circuit_recovery_attempts_total` | Proactive recovery attempts | instance_id, transport |
-| `lasso_chain_ready` / `lasso_chain_eligible_upstreams` | Same node-local HTTP readiness as `/api/ready` and eligible alternatives | profile, chain |
+| `lasso_chain_ready` / `lasso_chain_eligible_upstreams` | Node-local HTTP routing readiness and eligible alternatives per profile and chain; standalone `/api/ready` applies the same check | profile, chain |
 | `lasso_provider_info` | Configured route to physical-instance mapping | profile, chain, provider, instance_id |
 | `lasso_provider_transport_configured` | Whether HTTP/WS is configured | profile, chain, provider, transport |
 | `lasso_provider_head_observed` | Routing can assess head lag on at least one transport (1/0) | profile, chain, provider |
@@ -85,13 +90,16 @@ successful-attempt latency metric or HTTP ingress metric in this exporter.
 An attempt failure may be recovered by another provider; it is not automatically
 a failed client request. Diagnostic delivery is bounded and can drop observations.
 
-The `lasso_rpc_route_*` counters are exact: RequestAggregate counts every routed
-request per profile, chain and origin before any sampling, and the scrape reads those
+The `lasso_rpc_route_*` counters come from RequestAggregate, which counts every routed
+request per profile, chain and origin before any sampling; the scrape reads those
 counters. Use them for throughput, success ratios, mean latency and SLO accounting.
-A routing scope keeps its counters across catalog rebuilds; a scope that is removed
-is read twice more so its last requests are counted. Successes and errors are separate
-counters, so neither can move backwards. A series lasts while any published scope
-contributes to it, with at most 2,048 route-total series per node.
+They are exact while a routing scope stays published: a scope keeps its counters
+across catalog rebuilds, and a scope that a scrape has already read is read twice more
+after its removal. Requests that complete after their scope is removed, and requests
+on a scope published and removed between two scrapes, are not counted, so treat totals
+around the removal of a profile or chain as a lower bound. Successes and errors are
+separate counters, so neither can move backwards. A series lasts while any published
+scope contributes to it, with at most 2,048 route-total series per node.
 
 Observer failures stay inside the exporter. If a `MetricsScope` hook raises, the
 observation is dropped and counted in `lasso_observer_invalid_total`, and route-total

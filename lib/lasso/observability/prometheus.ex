@@ -242,7 +242,10 @@ defmodule Lasso.Observability.Prometheus do
             {:halt, :ok}
 
           [] ->
-            if :ets.insert_new(@requests, {slot, key, 0}) do
+            # A concurrent first observation of the same key may win this slot; count
+            # there instead of probing on and splitting the series.
+            if :ets.insert_new(@requests, {slot, key, 0}) or
+                 match?([{^slot, ^key, _count}], :ets.lookup(@requests, slot)) do
               :ets.update_counter(@requests, slot, {3, 1})
               {:halt, :ok}
             else

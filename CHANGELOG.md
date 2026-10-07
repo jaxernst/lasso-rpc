@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Concurrent first observations of a request series share one `lasso_rpc_requests_total` row instead of splitting into duplicate samples. Route totals are documented as exact while their routing scope stays published.
 - Exporter failures stay inside the exporter: a raising `MetricsScope` hook drops the observation and is counted, route-total reads keep their previous values, and telemetry handlers stay attached. Route totals count successes and errors separately, so neither moves backwards under concurrency, and are limited to 2,048 series per node.
 
 ## [0.5.1] - 2026-10-06
