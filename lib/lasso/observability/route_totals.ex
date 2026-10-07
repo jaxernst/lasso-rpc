@@ -63,8 +63,11 @@ defmodule Lasso.Observability.RouteTotals do
           not match?(%{id: ^id}, Map.get(tracked, route)),
           do: Map.put(entry, :reads_left, @retired_reads)
 
-    {retired_increments, retired} = read_retired(state.retired ++ displaced)
-    live = MapSet.new(Map.values(tracked) ++ retired, & &1.labels)
+    # A series stays through the advance that makes its last scope's final read, so that read
+    # lands in the existing total; the next advance then drops the series.
+    reading = state.retired ++ displaced
+    {retired_increments, retired} = read_retired(reading)
+    live = MapSet.new(Map.values(tracked) ++ reading, & &1.labels)
 
     totals =
       Map.filter(state.totals, fn {{profile, chain, _origin}, _} ->

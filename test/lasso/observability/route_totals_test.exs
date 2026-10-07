@@ -16,6 +16,18 @@ defmodule Lasso.Observability.RouteTotalsTest do
     assert state.retired == []
   end
 
+  test "a removed scope keeps its total through its final reads, then its series ends" do
+    set = counter_set(successes: 3)
+    key = {"public", "1", :client}
+
+    readings =
+      [%{{"public", 1} => set}, %{}, %{}, %{}]
+      |> Enum.scan(RouteTotals.new(), &RouteTotals.advance(&2, &1))
+      |> Enum.map(&get_in(RouteTotals.totals(&1), [key, :successes]))
+
+    assert readings == [3, 3, 3, nil]
+  end
+
   test "successes and failures accumulate as separate monotonic counts" do
     set = counter_set(successes: 2, failures: 1)
     state = RouteTotals.advance(RouteTotals.new(), %{{"public", 1} => set})
