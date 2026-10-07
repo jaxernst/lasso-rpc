@@ -111,9 +111,18 @@ defmodule Lasso.Observability.PrometheusMetrics do
 
   @doc "Telemetry handler that records one bounded observation."
   def handle_event(event, measurements, metadata, _config) do
-    with {:ok, bounded} <- bound(metadata), do: record(event, measurements, bounded)
+    with {:ok, bounded} <- bound(canonical(event, metadata)),
+         do: record(event, measurements, bounded)
+
     :ok
   end
+
+  # Connection events name the physical upstream in provider_id; exposing it as
+  # instance_id lets the scope bound it even after the instance leaves the catalog.
+  defp canonical([:lasso, :websocket, _kind], metadata),
+    do: Map.put_new(metadata, :instance_id, metadata[:provider_id])
+
+  defp canonical(_event, metadata), do: metadata
 
   @doc """
   Applies the host `Lasso.Observability.MetricsScope` to event metadata. A scope that
@@ -191,7 +200,7 @@ defmodule Lasso.Observability.PrometheusMetrics do
   defp observe([:lasso, :websocket, kind], _ms, meta) do
     counter("lasso_websocket_connections_total",
       chain: chain(meta),
-      instance_id: instance_identity(meta[:provider_id]),
+      instance_id: instance_identity(meta[:instance_id]),
       event: enum(kind)
     )
   end
