@@ -16,11 +16,11 @@ defmodule Lasso.RPC.RequestAggregate do
   @budget_base 512
   @budget_retries 8
 
-  @client_total 1
+  @client_failure 1
   @client_success 2
   @client_elapsed_us 3
   @client_sampled_out 4
-  @system_total 5
+  @system_failure 5
   @system_success 6
   @system_elapsed_us 7
   @system_sampled_out 8
@@ -101,10 +101,14 @@ defmodule Lasso.RPC.RequestAggregate do
     do: %{client: read_origin(counters, :client), system: read_origin(counters, :system)}
 
   defp record(counters, fact, origin) do
-    :atomics.add(counters, total_index(origin), 1)
     :atomics.add(counters, elapsed_index(origin), Map.fetch!(fact, :elapsed_us))
 
-    if success?(fact), do: :atomics.add(counters, success_index(origin), 1)
+    # Successes and failures are separate monotonic counters, so a reader never derives one
+    # from two reads that a concurrent completion can interleave.
+    if success?(fact),
+      do: :atomics.add(counters, success_index(origin), 1),
+      else: :atomics.add(counters, failure_index(origin), 1)
+
     :ok
   end
 
@@ -150,13 +154,13 @@ defmodule Lasso.RPC.RequestAggregate do
   end
 
   defp read_origin(counters, origin) do
-    total = :atomics.get(counters, total_index(origin))
     successes = :atomics.get(counters, success_index(origin))
+    failures = :atomics.get(counters, failure_index(origin))
 
     %{
-      total: total,
+      total: successes + failures,
       successes: successes,
-      failures: total - successes,
+      failures: failures,
       elapsed_us: :atomics.get(counters, elapsed_index(origin)),
       sampled_out: :atomics.get(counters, sampled_out_index(origin))
     }
@@ -175,8 +179,8 @@ defmodule Lasso.RPC.RequestAggregate do
 
   defp published_aggregates(_snapshot), do: %{}
 
-  defp total_index(:client), do: @client_total
-  defp total_index(:system), do: @system_total
+  defp failure_index(:client), do: @client_failure
+  defp failure_index(:system), do: @system_failure
   defp success_index(:client), do: @client_success
   defp success_index(:system), do: @system_success
   defp elapsed_index(:client), do: @client_elapsed_us

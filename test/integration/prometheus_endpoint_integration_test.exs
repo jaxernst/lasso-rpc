@@ -141,6 +141,70 @@ defmodule Lasso.PrometheusEndpointIntegrationTest do
              ~s(lasso_provider_head_observed{profile="public",chain="#{chain}",provider="lag_c"} 1)
   end
 
+  defmodule RaisingScope do
+    @behaviour Lasso.Observability.MetricsScope
+    @impl true
+    def bound(_meta), do: raise("scope failure")
+    @impl true
+    def export_route?(_profile), do: true
+  end
+
+  test "a failing metrics scope drops observations without crashing the exporter or its handlers",
+       %{chain: chain} do
+    setup_providers([%{id: "scope_fault", profile: "public", behavior: :healthy}])
+    exporter = Process.whereis(Prometheus)
+    handlers = :telemetry.list_handlers([:lasso, :rpc, :request, :stop])
+
+    :persistent_term.put(Lasso.Observability.MetricsScope, RaisingScope)
+    on_exit(fn -> :persistent_term.erase(Lasso.Observability.MetricsScope) end)
+
+    for _ <- 1..3, do: assert(rpc(chain)["result"])
+
+    bodies =
+      1..40
+      |> Task.async_stream(fn _ -> scrape() end, max_concurrency: 10)
+      |> Enum.map(fn {:ok, body} -> body end)
+
+    assert Process.whereis(Prometheus) == exporter
+    assert :telemetry.list_handlers([:lasso, :rpc, :request, :stop]) == handlers
+    assert Enum.all?(bodies, &(&1 =~ "lasso_observer_available 1"))
+    refute List.last(bodies) =~ ~r/lasso_observer_route_totals_errors_total 0\n/
+    refute List.last(bodies) =~ ~r/lasso_observer_invalid_total 0\n/
+
+    :persistent_term.erase(Lasso.Observability.MetricsScope)
+    assert rpc(chain)["result"]
+
+    assert scrape() =~
+             ~r/lasso_rpc_route_requests_total\{profile="public",chain="#{chain}",origin="client",outcome="success"\} [1-9]/
+  end
+
+  test "exact error totals never move while only successes complete", %{chain: chain} do
+    setup_providers([%{id: "coherent", profile: "public", behavior: :healthy}])
+    assert rpc(chain)["result"]
+
+    success =
+      ~r/lasso_rpc_route_requests_total\{profile="public",chain="#{chain}",origin="client",outcome="success"\} (\d+)/
+
+    error =
+      ~s(lasso_rpc_route_requests_total{profile="public",chain="#{chain}",origin="client",outcome="error"} 0\n)
+
+    producers =
+      Task.async(fn ->
+        Task.async_stream(1..60, fn _ -> rpc(chain) end, max_concurrency: 8) |> Stream.run()
+      end)
+
+    readings =
+      for _ <- 1..30 do
+        body = scrape()
+        assert body =~ error
+        [_, count] = Regex.run(success, body)
+        String.to_integer(count)
+      end
+
+    Task.await(producers, 30_000)
+    assert readings == Enum.sort(readings)
+  end
+
   test "multi-route scrape groups declarations before contiguous family samples", %{chain: chain} do
     setup_providers([
       %{id: "format_a", profile: "public", behavior: :healthy},

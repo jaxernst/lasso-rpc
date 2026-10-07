@@ -111,10 +111,33 @@ defmodule Lasso.Observability.PrometheusMetrics do
 
   @doc "Telemetry handler that records one bounded observation."
   def handle_event(event, measurements, metadata, _config) do
-    observe(event, measurements, MetricsScope.impl().bound(metadata))
+    with {:ok, bounded} <- bound(metadata), do: record(event, measurements, bounded)
+    :ok
+  end
+
+  @doc """
+  Applies the host `Lasso.Observability.MetricsScope` to event metadata. A scope that
+  raises drops the observation and counts it as invalid, so a faulty hook cannot detach
+  telemetry handlers or reach the process that emitted the event.
+  """
+  @spec bound(map()) :: {:ok, map()} | :error
+  def bound(metadata) do
+    {:ok, MetricsScope.impl().bound(metadata)}
+  rescue
+    _error -> count_invalid()
+  catch
+    _kind, _reason -> count_invalid()
+  end
+
+  @doc "Records one observation from metadata that `bound/1` has already bounded."
+  @spec record([atom()], map(), map()) :: :ok
+  def record(event, measurements, bounded) do
+    observe(event, measurements, bounded)
     :ok
   rescue
-    ArgumentError -> :ok
+    _error -> count_invalid() && :ok
+  catch
+    _kind, _reason -> count_invalid() && :ok
   end
 
   defp observe([:lasso, :rpc, :request, :stop], ms, meta) do
@@ -332,6 +355,13 @@ defmodule Lasso.Observability.PrometheusMetrics do
   end
 
   defp invalid, do: :ets.update_counter(@stats, :invalid, {2, 1})
+
+  defp count_invalid do
+    invalid()
+    :error
+  rescue
+    ArgumentError -> :error
+  end
 
   @doc "Observer occupancy and admission losses."
   def stats do

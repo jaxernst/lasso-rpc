@@ -69,6 +69,7 @@ or subscription keys.
 | `lasso_vm_*` | BEAM allocation, processes/limits, ports/limits, atoms/limits, ETS, run queue, schedulers, GC, reductions, I/O and uptime | node-local, kind/direction where applicable |
 | `lasso_build_info` | Running application/Elixir/OTP versions | version, elixir, otp |
 | `lasso_observer_*` | New observer occupancy, capacity, drops and invalid measurements | node-local |
+| `lasso_observer_route_totals_dropped_total` / `_errors_total` | Route-total increments refused by the 2,048-series limit, and route-total reads that failed and kept prior totals | node-local |
 
 `*_seconds` histograms export `_bucket`, `_sum`, and `_count`. Boundaries are
 5, 10, 25, 50, 100, 250, 500 ms; 1, 2.5, 5, 10, 30 seconds; and +Inf. Routed
@@ -88,8 +89,14 @@ The `lasso_rpc_route_*` counters are exact: RequestAggregate counts every routed
 request per profile, chain and origin before any sampling, and the scrape reads those
 counters. Use them for throughput, success ratios, mean latency and SLO accounting.
 A routing scope keeps its counters across catalog rebuilds; a scope that is removed
-is read twice more so its last requests are counted, and its total stays in the
-series.
+is read twice more so its last requests are counted. Successes and errors are separate
+counters, so neither can move backwards. A series lasts while any published scope
+contributes to it, with at most 2,048 route-total series per node.
+
+Observer failures stay inside the exporter. If a `MetricsScope` hook raises, the
+observation is dropped and counted in `lasso_observer_invalid_total`, and route-total
+reads keep their previous values and count `lasso_observer_route_totals_errors_total`;
+telemetry handlers stay attached and request processes are unaffected.
 
 The latency histogram, `lasso_rpc_requests_total` and completion-reported failovers
 consume request **diagnostics**. RequestAggregate samples successful detail above

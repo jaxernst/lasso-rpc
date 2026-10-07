@@ -35,6 +35,7 @@ defmodule Lasso.Observability.Prometheus do
   @max_series 4_096
   @max_probes 16
   @max_routes 2_048
+  @unavailable "# HELP lasso_observer_available Local metrics observer is available\n# TYPE lasso_observer_available gauge\nlasso_observer_available 0\n"
   @methods ~w(
     eth_blockNumber eth_call eth_chainId eth_estimateGas eth_feeHistory
     eth_getBalance eth_getBlockByHash eth_getBlockByNumber eth_getCode
@@ -68,16 +69,21 @@ defmodule Lasso.Observability.Prometheus do
 
   @impl true
   def handle_call(:route_totals, _from, state) do
-    route_totals =
-      case Catalog.snapshot() do
-        %{request_aggregates: sets} when is_map(sets) ->
-          RouteTotals.advance(state.route_totals, sets)
+    route_totals = advance_route_totals(state.route_totals)
+    {:reply, route_totals, %{state | route_totals: route_totals}}
+  end
 
-        _unpublished ->
-          state.route_totals
-      end
-
-    {:reply, RouteTotals.totals(route_totals), %{state | route_totals: route_totals}}
+  # Optional observer work must never take the exporter down: a failure keeps the
+  # committed totals and is counted for the scrape.
+  defp advance_route_totals(route_totals) do
+    case Catalog.snapshot() do
+      %{request_aggregates: sets} when is_map(sets) -> RouteTotals.advance(route_totals, sets)
+      _unpublished -> route_totals
+    end
+  rescue
+    _error -> %{route_totals | errors: route_totals.errors + 1}
+  catch
+    _kind, _reason -> %{route_totals | errors: route_totals.errors + 1}
   end
 
   @impl true
@@ -88,10 +94,20 @@ defmodule Lasso.Observability.Prometheus do
 
   @doc "Telemetry handler for request and route observations."
   @spec handle_event([atom()], map(), map(), term()) :: :ok
-  def handle_event(@event, measurements, metadata, config) do
-    PrometheusMetrics.handle_event(@event, measurements, metadata, config)
-    metadata = MetricsScope.impl().bound(metadata)
+  def handle_event(@event, measurements, metadata, _config) do
+    with {:ok, bounded} <- PrometheusMetrics.bound(metadata) do
+      PrometheusMetrics.record(@event, measurements, bounded)
+      record_request(bounded)
+    end
 
+    :ok
+  end
+
+  def handle_event(event, measurements, metadata, config) do
+    PrometheusMetrics.handle_event(event, measurements, metadata, config)
+  end
+
+  defp record_request(metadata) do
     key = {
       Map.get(metadata, :chain_id),
       provider_label(Map.get(metadata, :provider_id)),
@@ -106,10 +122,6 @@ defmodule Lasso.Observability.Prometheus do
     :ok
   rescue
     ArgumentError -> :ok
-  end
-
-  def handle_event(event, measurements, metadata, config) do
-    PrometheusMetrics.handle_event(event, measurements, metadata, config)
   end
 
   @doc "Current node-local request series occupancy and dropped observations."
@@ -184,8 +196,9 @@ defmodule Lasso.Observability.Prometheus do
     |> Enum.join("\n")
     |> Kernel.<>("\n")
   rescue
-    ArgumentError ->
-      "# HELP lasso_observer_available Local metrics observer is available\n# TYPE lasso_observer_available gauge\nlasso_observer_available 0\n"
+    _error -> @unavailable
+  catch
+    _kind, _reason -> @unavailable
   end
 
   # Route and chain builders can repeat a family. Emit each declaration once,
@@ -246,12 +259,13 @@ defmodule Lasso.Observability.Prometheus do
   end
 
   defp route_total_lines do
-    totals = GenServer.call(__MODULE__, :route_totals, 5_000)
+    route_totals = GenServer.call(__MODULE__, :route_totals, 5_000)
+    totals = RouteTotals.totals(route_totals)
 
     families = [
       {"lasso_rpc_route_requests_total",
        "Completed routed requests, counted exactly before detail sampling",
-       fn counts -> [success: counts.successes, error: counts.total - counts.successes] end},
+       fn counts -> [success: counts.successes, error: counts.failures] end},
       {"lasso_rpc_route_duration_seconds_total", "Summed completion time of routed requests",
        fn counts -> [nil: counts.elapsed_us / 1_000_000] end},
       {"lasso_rpc_route_detail_sampled_out_total",
@@ -259,9 +273,23 @@ defmodule Lasso.Observability.Prometheus do
        fn counts -> [nil: counts.sampled_out] end}
     ]
 
-    for {name, help, values} <- families,
-        line <- family_lines(name, help, totals, values),
-        do: line
+    for(
+      {name, help, values} <- families,
+      line <- family_lines(name, help, totals, values),
+      do: line
+    ) ++
+      PrometheusRuntime.family(
+        "lasso_observer_route_totals_dropped_total",
+        :counter,
+        "Route total increments not admitted because the series limit was reached",
+        [{route_totals.dropped, []}]
+      ) ++
+      PrometheusRuntime.family(
+        "lasso_observer_route_totals_errors_total",
+        :counter,
+        "Route total reads that failed and kept the previous totals",
+        [{route_totals.errors, []}]
+      )
   catch
     :exit, _reason -> []
   end
