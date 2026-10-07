@@ -135,9 +135,13 @@ defmodule Lasso.Observability.PrometheusMetrics do
     observe(event, measurements, bounded)
     :ok
   rescue
-    _error -> count_invalid() && :ok
+    _error ->
+      count_invalid()
+      :ok
   catch
-    _kind, _reason -> count_invalid() && :ok
+    _kind, _reason ->
+      count_invalid()
+      :ok
   end
 
   defp observe([:lasso, :rpc, :request, :stop], ms, meta) do
