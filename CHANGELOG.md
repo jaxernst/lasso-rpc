@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-06
+
 ### Added
 
 - Expand `/metrics` into a bounded operator contract with conventional names for routed latency, non-success upstream attempts, failovers, circuit admission, WebSocket and subscription continuity, stream memory, credential health and BEAM runtime, plus a Grafana dashboard (`docs/grafana/lasso-core-v1.json`).
@@ -19,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `lasso_provider_head_lag_blocks` reports routing's own per-transport assessment against each route's routing plan and gains a `transport` label. Transports routing cannot assess have no sample.
 - `lasso_upstream_attempts_total` gains `profile` and `origin` labels, separating client-driven upstream failures from probes and other system traffic.
 - Request aggregate counters persist across catalog rebuilds while their routing scope stays published.
+
+### Fixed
+
+- Restore provider eligibility when a 429 rate-limit cooldown expires. Preserve monotonic deadlines even when their values are negative; v0.5.0 could leave a provider rate-limited until restart after its first 429. Anyone whose providers return 429 should upgrade; restarting only masks the issue.
+- Record successful upstream execution before a terminal head-policy rejection, preserving accurate provider health and attempt diagnostics.
+
+### Compatibility
+
+- No required profile schema or publication-journal migration. Retain existing journals and follow the documented replacement procedure for enrolled global deployments.
+- This patch includes the additive observability features listed above. OpenTelemetry remains opt-in and disabled by default.
+- Prometheus consumers should review the new metric families and the added `transport`, `profile`, and `origin` labels described above.
 
 ## [0.5.0] - 2026-09-28
 
@@ -350,7 +363,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.5...v0.5.0
 [0.4.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.3...v0.4.4

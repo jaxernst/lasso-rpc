@@ -83,7 +83,7 @@ You need Docker with the Compose plugin, curl, and OpenSSL. Start in an empty di
 
 ```bash
 mkdir lasso && cd lasso
-curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.5.0/compose.yml --output compose.yml
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.5.1/compose.yml --output compose.yml
 (umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
 docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
