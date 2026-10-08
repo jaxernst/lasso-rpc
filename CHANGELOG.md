@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The `latency-weighted` strategy is now `balanced-fast`, positioned between `load-balanced` and `fastest`. `latency-weighted` stays a permanent alias in HTTP and WebSocket URLs and the `strategy` query parameter, and routes identically. `lasso_meta.strategy` and request logs report `balanced_fast`, and the dashboard shows Balanced Fast. The module is `Lasso.RPC.Strategies.BalancedFast`, and its exponent is set with `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); `LW_BETA` is no longer read.
+- `GET /api/ready` without parameters now reports replica readiness: configuration loaded, catalog published, and distribution running when clustering is configured. It no longer reflects upstream state, so a dead upstream no longer takes every replica out of service. `?profile=&chain=` keeps the strict upstream-backed check, and `?profile=` alone still checks every chain in that profile. The scoped check now counts half-open HTTP routes with recovery capacity as eligible, as routing admits them.
 
 ### Fixed
 
