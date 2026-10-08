@@ -101,6 +101,8 @@ defmodule LassoWeb.RPCController do
   def rpc_load_balanced(conn, params), do: rpc_with_strategy(conn, params, :load_balanced)
   @spec rpc_balanced_fast(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_balanced_fast(conn, params), do: rpc_with_strategy(conn, params, :balanced_fast)
+  @spec rpc_priority(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def rpc_priority(conn, params), do: rpc_with_strategy(conn, params, :priority)
 
   defp rpc_with_strategy(conn, params, strategy_atom) do
     conn

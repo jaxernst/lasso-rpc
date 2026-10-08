@@ -28,6 +28,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 POST /rpc/fastest/:chain
 POST /rpc/load-balanced/:chain
 POST /rpc/balanced-fast/:chain
+POST /rpc/priority/:chain
 POST /rpc/round-robin/:chain
 ```
 
@@ -49,6 +50,7 @@ POST /rpc/profile/:profile/:chain
 POST /rpc/profile/:profile/fastest/:chain
 POST /rpc/profile/:profile/load-balanced/:chain
 POST /rpc/profile/:profile/balanced-fast/:chain
+POST /rpc/profile/:profile/priority/:chain
 POST /rpc/profile/:profile/provider/:provider_id/:chain
 ```
 
