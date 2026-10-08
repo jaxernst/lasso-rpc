@@ -291,10 +291,8 @@ Profile routes accept strategies and provider overrides too; see the
 `:chain` is a configured name such as `ethereum` or its EIP-155 ID, `1`. Routes
 without a profile use `public`.
 
-`GET /api/health` answers while Lasso runs. `GET /api/ready` answers 200 only
-when every chain in the profile has an eligible upstream with a current head;
-add `?chain=ethereum` to check one chain. See
-[liveness and routing readiness](docs/DEPLOYMENT.md#liveness-and-routing-readiness).
+`GET /api/health` reports liveness and `GET /api/ready` reports routing
+readiness; [Deployment](docs/DEPLOYMENT.md) describes both.
 
 ## Troubleshooting
 
