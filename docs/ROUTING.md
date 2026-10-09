@@ -25,6 +25,9 @@ The pipeline ensures that healthy providers receive preference while recovering 
 
 Strategies control the initial ordering of providers. Select via URL path segment: `/rpc/:strategy/:chain`.
 
+`lasso_meta.strategy` reports the strategy that routed the request as an atom name with an
+underscore, such as `load_balanced` or `balanced_fast`. URLs use the hyphenated slug.
+
 ### Load Balanced (Default)
 
 **URL**: `/rpc/load-balanced/:chain`
