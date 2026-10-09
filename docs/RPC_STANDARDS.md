@@ -17,6 +17,15 @@ one upstream dispatch. Provider error classification does not override execution
 safety. The registry classifies methods; it does not certify upstream semantics
 or full compliance with every Ethereum specification.
 
+A replay-safe read that receives `-32601` from one upstream continues to another
+within its bounded attempts, and the rejected attempt consumes one of them.
+Unknown methods and `eth_sendRawTransaction` keep their single dispatch, so that
+upstream's `-32601` is the answer. When every upstream a request reached rejects
+the method, Lasso returns that rejection with the upstream's message and data
+instead of `-32000`. A rejection mixed with any other outcome, such as a provider
+failure, quota exhaustion, or timeout, returns the availability error. Lasso
+keeps no record that a provider lacks a method beyond the request that observed it.
+
 ## Signed transaction submission
 
 `eth_sendRawTransaction` receives one upstream dispatch. Lasso does not retry or
