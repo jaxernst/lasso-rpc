@@ -114,7 +114,7 @@ defmodule Lasso.Config.FileSchemaTest do
     previous_state = :sys.get_state(ConfigStore)
     previous_profile = ConfigStore.get_profile("public")
     generation = ConfigStore.route_generation()
-    on_exit(fn -> :sys.replace_state(ConfigStore, fn _ -> previous_state end) end)
+    on_exit(fn -> TestHelper.restore_config_store_backend(previous_state) end)
 
     :sys.replace_state(ConfigStore, fn state ->
       %{state | backend_module: FileBackend, backend_state: ctx.backend}
@@ -138,7 +138,7 @@ defmodule Lasso.Config.FileSchemaTest do
   test "an empty profile directory cannot replace the running configuration", ctx do
     original = :sys.get_state(ConfigStore)
     generation = ConfigStore.route_generation()
-    on_exit(fn -> :sys.replace_state(ConfigStore, fn _ -> original end) end)
+    on_exit(fn -> TestHelper.restore_config_store_backend(original) end)
 
     :sys.replace_state(ConfigStore, fn state ->
       %{state | backend_module: FileBackend, backend_state: ctx.backend}
@@ -159,7 +159,7 @@ defmodule Lasso.Config.FileSchemaTest do
     profile = ConfigStore.get_profile("public")
 
     on_exit(fn ->
-      :sys.replace_state(ConfigStore, fn _ -> original_state end)
+      TestHelper.restore_config_store_backend(original_state)
 
       if is_nil(original_backend),
         do: Application.delete_env(:lasso, :backend_config),

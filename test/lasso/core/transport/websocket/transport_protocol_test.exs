@@ -332,6 +332,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
     task = request_task(context.channel, "accepted-owner-death", 5_000)
 
     assert_receive {:protocol_ws_accepted_before_write, ws_pid, transport_id, _payload}
+    ws_monitor = Process.monitor(ws_pid)
 
     assert eventually(fn ->
              match?(
@@ -354,7 +355,6 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     pending = transport_pending(context.connection_pid, transport_id)
     cleanup_expiry_us = expire_send_cleanup(context.connection_pid, transport_id, pending)
-    ws_monitor = Process.monitor(ws_pid)
 
     send(
       context.connection_pid,

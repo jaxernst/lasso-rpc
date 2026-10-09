@@ -60,7 +60,7 @@ defmodule Lasso.Config.ObservationPolicyReloadTest do
     original_client = Application.get_env(:lasso, :http_client)
 
     on_exit(fn ->
-      :sys.replace_state(ConfigStore, fn _ -> original_state end)
+      TestHelper.restore_config_store_backend(original_state)
       ConfigStore.reload()
       Application.put_env(:lasso, :http_client, original_client)
       Plug.Cowboy.shutdown(ref)

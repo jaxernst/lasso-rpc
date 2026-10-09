@@ -73,6 +73,31 @@ defmodule TestHelper do
   Helper functions for test setup and cleanup.
   """
 
+  def restore_config_store_backend(original_state) do
+    :sys.replace_state(Lasso.Config.ConfigStore, fn state ->
+      if state.retry_timer && state.retry_timer != original_state.retry_timer do
+        Process.cancel_timer(state.retry_timer)
+      end
+
+      retry_timer =
+        if original_state.retry_timer && Process.read_timer(original_state.retry_timer) != false,
+          do: original_state.retry_timer,
+          else: nil
+
+      state
+      |> Map.merge(
+        Map.take(original_state, [
+          :backend_module,
+          :backend_config,
+          :backend_state,
+          :retry_interval_ms,
+          :db_degraded
+        ])
+      )
+      |> Map.put(:retry_timer, retry_timer)
+    end)
+  end
+
   def ensure_clean_state() do
     # Clean benchmark store if it's running
     try do

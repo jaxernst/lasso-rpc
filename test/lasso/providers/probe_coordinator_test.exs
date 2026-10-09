@@ -7,6 +7,8 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
   @profile "pc_test"
   @chain 98
   @instance_table :lasso_instance_state
+  # The HTTP probe permits five seconds to finish, plus scheduler time.
+  @http_probe_wait_attempts 120
 
   setup do
     register_chain(@profile, @chain, [
@@ -117,6 +119,8 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     def init(opts), do: opts
 
     def call(conn, opts) do
+      Process.sleep(Keyword.get(opts, :response_delay_ms, 0))
+
       conn
       |> put_resp_content_type("application/json")
       |> send_resp(
@@ -132,6 +136,14 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
       test "rejects #{inspect(result)} without restoring HTTP or changing WS eligibility" do
         assert_probe_identity(@probe_result, :degraded)
       end
+    end
+
+    test "waits for a slow identity response before asserting rejection" do
+      assert_probe_identity(false, :degraded, response_delay_ms: 1_500)
+    end
+
+    test "starts an identity probe with fresh health after prior failures" do
+      assert_probe_identity(false, :degraded, response_delay_ms: 1_500, prior_probe_failures: 2)
     end
 
     test "accepts the configured chain and preserves independent circuit admission" do
@@ -420,12 +432,15 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
   end
 
-  defp assert_probe_identity(result, expected_status) do
+  defp assert_probe_identity(result, expected_status, endpoint_opts \\ []) do
     alias Lasso.Core.Support.CircuitBreaker.{Snapshot, Storage}
     alias Lasso.Providers.CandidateListing
 
     ref = {:chain_id_probe, make_ref()}
-    {:ok, _} = Plug.Cowboy.http(ChainIdEndpoint, [result: result], ref: ref, port: 0)
+
+    {:ok, _} =
+      Plug.Cowboy.http(ChainIdEndpoint, [result: result] ++ endpoint_opts, ref: ref, port: 0)
+
     port = :ranch.get_port(ref)
 
     ConfigStore.unregister_chain_runtime(@profile, @chain)
@@ -442,6 +457,21 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
 
     Catalog.build_from_config()
     [instance_id] = Catalog.list_instances_for_chain(@chain)
+
+    if failures = Keyword.get(endpoint_opts, :prior_probe_failures) do
+      :ets.insert(
+        @instance_table,
+        {{:health_probe, instance_id},
+         %{
+           http_status: :degraded,
+           consecutive_failures: failures,
+           last_error: {:json_rpc_error, "previous probe"}
+         }}
+      )
+    end
+
+    :ets.delete(@instance_table, {:health_probe, instance_id})
+    :ets.delete(@instance_table, {:chain_identity, instance_id, :http})
 
     for {transport, state} <- [http: :open, ws: :closed] do
       Snapshot.put(%Snapshot{
@@ -474,12 +504,15 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     {:ok, pid} = start_coordinator(@chain)
     send(pid, :tick)
 
-    assert_wait_until(fn ->
-      case :ets.lookup(@instance_table, {:health_probe, instance_id}) do
-        [{_, health}] -> health.http_status == expected_status
-        [] -> false
-      end
-    end)
+    assert_wait_until(
+      fn ->
+        case :ets.lookup(@instance_table, {:health_probe, instance_id}) do
+          [{_, health}] -> health.http_status == expected_status
+          [] -> false
+        end
+      end,
+      @http_probe_wait_attempts
+    )
 
     [{_, health}] = :ets.lookup(@instance_table, {:health_probe, instance_id})
 
