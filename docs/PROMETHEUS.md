@@ -59,7 +59,7 @@ or subscription keys.
 | `lasso_circuit_recovery_delay_seconds` | Remaining local monotonic recovery delay | profile, chain, provider, transport |
 | `lasso_circuit_transitions_total` / `lasso_circuit_failures_total` | Physical-instance transition/failure evidence | instance_id, transport, state, reason/category |
 | `lasso_circuit_recovery_attempts_total` | Proactive recovery attempts | instance_id, transport |
-| `lasso_chain_ready` / `lasso_chain_eligible_upstreams` | Node-local HTTP routing readiness and eligible alternatives per profile and chain; standalone `/api/ready` applies the same check | profile, chain |
+| `lasso_chain_ready` / `lasso_chain_eligible_upstreams` | Node-local HTTP routing readiness and eligible alternatives per profile and chain; the scoped `/api/ready?profile=&chain=` probe on a standalone node applies the same check | profile, chain |
 | `lasso_provider_info` | Configured route to physical-instance mapping | profile, chain, provider, instance_id |
 | `lasso_provider_transport_configured` | Whether HTTP/WS is configured | profile, chain, provider, transport |
 | `lasso_provider_head_observed` | Routing can assess head lag on at least one transport (1/0) | profile, chain, provider |

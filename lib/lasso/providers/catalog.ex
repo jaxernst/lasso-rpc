@@ -360,6 +360,15 @@ defmodule Lasso.Providers.Catalog do
     end
   end
 
+  @doc "Reports whether the published routing catalog still has a live table."
+  @spec ready?() :: boolean()
+  def ready? do
+    case snapshot() do
+      %{table: table} -> table_available?(table)
+      nil -> false
+    end
+  end
+
   # Private
 
   defp safe_lookup(key) do

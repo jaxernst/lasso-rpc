@@ -67,7 +67,7 @@ defmodule Lasso.Observability.PrometheusRuntime do
       ])
   end
 
-  @doc "HTTP routing readiness using the same checks as /api/ready."
+  @doc "HTTP routing readiness using the same check as the scoped /api/ready probe."
   def readiness_samples(chains) do
     chains
     |> Enum.uniq()

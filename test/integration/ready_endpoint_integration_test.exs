@@ -66,6 +66,33 @@ defmodule LassoWeb.ReadyEndpointIntegrationTest do
              build_conn() |> get(path) |> json_response(503)
   end
 
+  test "a dead upstream on one chain leaves the replica ready and the scoped probe not ready",
+       %{chain: chain} do
+    setup_providers([%{id: "dead-upstream", profile: "public", behavior: :healthy}])
+    instance_id = Catalog.lookup_instance_id("public", chain, "dead-upstream")
+    assert is_binary(instance_id)
+
+    :ets.insert(:lasso_instance_state, {
+      {:health_block_sync, instance_id},
+      %{http_status: :unhealthy, last_health_check: System.system_time(:millisecond)}
+    })
+
+    assert %{
+             "status" => "ready",
+             "reason" => nil,
+             "checks" => %{"configuration" => true, "catalog" => true, "cluster" => true}
+           } = build_conn() |> get("/api/ready") |> json_response(200)
+
+    assert %{
+             "status" => "not_ready",
+             "checks" => [%{"chain_id" => ^chain, "reason" => "no_eligible_upstream"}]
+           } =
+             build_conn() |> get("/api/ready?profile=public&chain=#{chain}") |> json_response(503)
+
+    assert %{"status" => "not_ready", "profile" => "public"} =
+             build_conn() |> get("/api/ready?profile=public") |> json_response(503)
+  end
+
   test "unknown chain is not ready", %{chain: chain} do
     path = "/api/ready?profile=public&chain=#{chain + 1_000_000}"
 

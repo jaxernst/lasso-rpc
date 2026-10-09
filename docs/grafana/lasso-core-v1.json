@@ -259,7 +259,7 @@
     {
       "id": 100,
       "title": "Unready chains",
-      "description": "Profile/chains with no eligible HTTP route or fresh head from that eligible set. Standalone /api/ready applies the same check. Missing data is unknown, not healthy.",
+      "description": "Profile/chains with no eligible HTTP route or fresh head from that eligible set. The scoped /api/ready?profile=&chain= probe applies the same check. Missing data is unknown, not healthy.",
       "type": "stat",
       "datasource": {
         "type": "prometheus",

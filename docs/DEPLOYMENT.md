@@ -240,30 +240,39 @@ Set the variable in your environment or secrets manager:
 export ALCHEMY_API_KEY="your-key-here"
 ```
 
-### Liveness and routing readiness
+### Liveness and readiness
+
+Use `GET /api/health` for liveness and `GET /api/ready` for readiness.
 
 `GET /api/health` confirms that the application is running and reports cluster
-topology. It is a liveness check, not a routing readiness check.
-For a known fleet size, set `LASSO_EXPECTED_CLUSTER_NODES` to a positive integer
-on each node. The health response reports missing peers against that count and
-includes a cached topology snapshot age and `current`, `stale`, or `unavailable`
-status. A suspended or unavailable topology worker does not delay or fail the
-local liveness response; monitor `cluster.status` separately from HTTP status.
+topology. For a known fleet size, set `LASSO_EXPECTED_CLUSTER_NODES` to a
+positive integer on each node. The health response reports missing peers
+against that count and includes a cached topology snapshot age and `current`,
+`stale`, or `unavailable` status. A suspended or unavailable topology worker
+does not delay or fail the local liveness response; monitor `cluster.status`
+separately from HTTP status.
 
-`GET /api/ready` checks every configured chain in the default `public` profile.
-It returns HTTP 200 only when each chain has an eligible, non-rate-limited HTTP
-upstream and a fresh head observation from that eligible set. Otherwise it
-returns HTTP 503 with a per-chain reason. Set `profile` and `chain` to scope a
-load-balancer probe to the route your application uses:
+`GET /api/ready` returns HTTP 200 once this replica can serve as well as its
+peers: configuration is loaded, the catalog is published, and distribution is
+running when clustering is configured; before that it returns HTTP 503 with a
+reason. It does not reflect upstream state, because an upstream outage affects
+every replica alike and would otherwise take the whole fleet out of service.
+
+Set `profile` and `chain` for the strict routing check on the route your
+application uses. It returns HTTP 200 only when the chain has an eligible,
+non-rate-limited HTTP upstream and a fresh head observation from that eligible
+set, and HTTP 503 with a per-chain reason otherwise. Omit `chain` to check every
+chain in the profile:
 
 ```bash
 curl --fail-with-body 'http://localhost:4000/api/ready?profile=my-app&chain=ethereum'
 ```
 
-Readiness uses recent local routing state and makes no upstream request of its
-own. It can remain unavailable during startup until head monitoring observes a
-block. Protect both endpoints at the deployment boundary, and keep a separate
-upstream-backed application probe for the exact method and workload you serve.
+The scoped check reads recent local routing state and makes no upstream request
+of its own. It can remain unavailable during startup until head monitoring
+observes a block. Protect both endpoints at the deployment boundary, and keep a
+separate upstream-backed application probe for the exact method and workload
+you serve.
 
 ### Prometheus scrape
 
@@ -327,10 +336,11 @@ curl -u operator -H 'Content-Type: application/json' \
 
 Also load `/dashboard` in a browser and test a WebSocket client against
 `wss://rpc.example.com/ws/rpc/ethereum` with credentials in its upgrade
-request. A 200 health response is not upstream readiness; use `/api/ready` and
-the RPC call above to check the route you serve. The examples cover a single
-node. For multiple nodes, terminate TLS and authentication at the shared proxy
-and route each WebSocket connection to one backend for its lifetime.
+request. A 200 health or readiness response is not upstream readiness; use the
+scoped `/api/ready?chain=` probe and the RPC call above to check the route you
+serve. The examples cover a single node. For multiple nodes, terminate TLS and
+authentication at the shared proxy and route each WebSocket connection to one
+backend for its lifetime.
 
 ### Observed container footprint
 
@@ -462,7 +472,7 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 - [ ] `PHX_SERVER=true` set
 - [ ] `LASSO_NODE_ID` set to a unique, stable value
 - [ ] Provider credentials set when referenced by profile configuration
-- [ ] Health check (`GET /api/health`) monitored by orchestrator
+- [ ] Liveness (`GET /api/health`) and readiness (`GET /api/ready`) probes configured in the orchestrator
 - [ ] Profile YAML validated (startup crashes on unresolved `${ENV_VAR}`)
 - [ ] Client request limits enforced at the reverse proxy; profile rate settings only configure the dashboard tester
 - [ ] TLS terminated at reverse proxy / load balancer

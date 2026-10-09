@@ -350,17 +350,23 @@ fleet size when set, and `cluster.status` compares responding nodes with the
 expected count. A missing configured peer is therefore visible in diagnostics
 without changing this node's liveness result.
 
-### Routing readiness
+### Readiness
 
 ```
+GET /api/ready
 GET /api/ready?profile=public&chain=ethereum
 ```
 
-Returns HTTP 200 when the selected chain has an eligible HTTP upstream and a
-fresh head observation from that candidate set; otherwise it returns HTTP 503
-with a reason. Omit `chain` to check all configured chains in the selected
-profile. Omit `profile` to use `public`. The check reads local state without
-issuing a new upstream request.
+Without parameters, returns HTTP 200 once this replica can serve as well as its
+peers: configuration loaded, catalog published, and distribution running when
+clustering is configured. The body lists each check and a reason when one
+fails. Upstream state is not consulted.
+
+With `profile` or `chain`, returns HTTP 200 when each selected chain has an
+eligible HTTP upstream and a fresh head observation from that candidate set;
+otherwise it returns HTTP 503 with a per-chain reason. Omit `chain` to check
+all configured chains in the selected profile. Omit `profile` to use `public`.
+The check reads local state without issuing a new upstream request.
 
 ### Chain Status
 
