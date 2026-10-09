@@ -55,7 +55,8 @@ defmodule LassoWeb.Router do
     post("/fastest/:chain_id", RPCController, :rpc_fastest)
     post("/load-balanced/:chain_id", RPCController, :rpc_load_balanced)
     post("/round-robin/:chain_id", RPCController, :rpc_load_balanced)
-    post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
+    post("/balanced-fast/:chain_id", RPCController, :rpc_balanced_fast)
+    post("/latency-weighted/:chain_id", RPCController, :rpc_balanced_fast)
 
     # Provider override endpoints
     post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)
@@ -70,7 +71,8 @@ defmodule LassoWeb.Router do
       post("/fastest/:chain_id", RPCController, :rpc_fastest)
       post("/load-balanced/:chain_id", RPCController, :rpc_load_balanced)
       post("/round-robin/:chain_id", RPCController, :rpc_load_balanced)
-      post("/latency-weighted/:chain_id", RPCController, :rpc_latency_weighted)
+      post("/balanced-fast/:chain_id", RPCController, :rpc_balanced_fast)
+      post("/latency-weighted/:chain_id", RPCController, :rpc_balanced_fast)
 
       # Provider override endpoints
       post("/provider/:provider_id/:chain_id", RPCController, :rpc_provider_override)

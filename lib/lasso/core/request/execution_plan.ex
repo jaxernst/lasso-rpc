@@ -23,7 +23,7 @@ defmodule Lasso.RPC.ExecutionPlan do
 
   defmodule Policy do
     @moduledoc false
-    @strategies [:fastest, :load_balanced, :latency_weighted, :priority]
+    @strategies [:fastest, :load_balanced, :balanced_fast, :priority]
     @enforce_keys [:strategy]
     defstruct @enforce_keys ++ [provider_override: nil, failover_on_override: false]
 

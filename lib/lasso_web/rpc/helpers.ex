@@ -29,14 +29,16 @@ defmodule LassoWeb.RPC.Helpers do
   Normalizes strategy tokens from params/routes into strategy atoms.
   """
   @spec normalize_strategy_token(String.t() | nil) ::
-          :load_balanced | :latency_weighted | :fastest | :priority | nil
+          :load_balanced | :balanced_fast | :fastest | :priority | nil
   def normalize_strategy_token("fastest"), do: :fastest
   def normalize_strategy_token("load-balanced"), do: :load_balanced
   def normalize_strategy_token("load_balanced"), do: :load_balanced
   def normalize_strategy_token("round-robin"), do: :load_balanced
   def normalize_strategy_token("round_robin"), do: :load_balanced
-  def normalize_strategy_token("latency-weighted"), do: :latency_weighted
-  def normalize_strategy_token("latency_weighted"), do: :latency_weighted
+  def normalize_strategy_token("balanced-fast"), do: :balanced_fast
+  def normalize_strategy_token("balanced_fast"), do: :balanced_fast
+  def normalize_strategy_token("latency-weighted"), do: :balanced_fast
+  def normalize_strategy_token("latency_weighted"), do: :balanced_fast
   def normalize_strategy_token("priority"), do: :priority
   def normalize_strategy_token(_), do: nil
 

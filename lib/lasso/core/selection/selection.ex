@@ -45,7 +45,7 @@ defmodule Lasso.RPC.Selection do
 
   Options:
   - :params => [term()] (RPC params for request analysis, default [])
-  - :strategy => :fastest | :priority | :load_balanced | :latency_weighted (default :load_balanced)
+  - :strategy => :fastest | :priority | :load_balanced | :balanced_fast (default :load_balanced)
   - :protocol => :http | :ws | :both (default :both)
   - :exclude => [provider_id] (default [])
   - :include_half_open => boolean (default false)
@@ -162,7 +162,7 @@ defmodule Lasso.RPC.Selection do
   health, and performance metrics to return ordered candidate channels.
 
   Options:
-  - :strategy => :fastest | :priority | :load_balanced | :latency_weighted
+  - :strategy => :fastest | :priority | :load_balanced | :balanced_fast
   - :transport => :http | :ws | :both (default :both)
   - :exclude => [provider_id]
   - :limit => integer (maximum channels to return)
@@ -204,7 +204,7 @@ defmodule Lasso.RPC.Selection do
           :fastest_winner
         )
 
-      {:latency_weighted, Lasso.RPC.Strategies.LatencyWeighted} ->
+      {:balanced_fast, Lasso.RPC.Strategies.BalancedFast} ->
         select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod, :full)
 
       _custom_or_unknown ->
@@ -652,7 +652,7 @@ defmodule Lasso.RPC.Selection do
          workload_key,
          _opts
        )
-       when strategy in [:fastest, :priority, :load_balanced, :latency_weighted] do
+       when strategy in [:fastest, :priority, :load_balanced, :balanced_fast] do
     maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
     [channel]
   end
@@ -717,7 +717,7 @@ defmodule Lasso.RPC.Selection do
          workload_key,
          _strategy_mod
        )
-       when strategy in [:fastest, :priority, :load_balanced, :latency_weighted] do
+       when strategy in [:fastest, :priority, :load_balanced, :balanced_fast] do
     maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
     [channel]
   end
@@ -750,7 +750,7 @@ defmodule Lasso.RPC.Selection do
       |> enrich_strategy_context(candidates, plan, strategy_mod)
 
     if Enum.any?(candidates, & &1.learned_feedback_degraded?) and
-         strategy in [:fastest, :latency_weighted] do
+         strategy in [:fastest, :balanced_fast] do
       Enum.sort_by(channels, &{&1.provider_id, &1.transport})
     else
       strategy_mod.rank_channels(

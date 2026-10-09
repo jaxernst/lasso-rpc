@@ -15,9 +15,11 @@ defmodule LassoWeb.RPC.HelpersTest do
       assert Helpers.normalize_strategy_token("round_robin") == :load_balanced
     end
 
-    test "supports latency weighted aliases" do
-      assert Helpers.normalize_strategy_token("latency-weighted") == :latency_weighted
-      assert Helpers.normalize_strategy_token("latency_weighted") == :latency_weighted
+    test "supports balanced-fast and its latency-weighted alias" do
+      assert Helpers.normalize_strategy_token("balanced-fast") == :balanced_fast
+      assert Helpers.normalize_strategy_token("balanced_fast") == :balanced_fast
+      assert Helpers.normalize_strategy_token("latency-weighted") == :balanced_fast
+      assert Helpers.normalize_strategy_token("latency_weighted") == :balanced_fast
     end
 
     test "returns nil for unknown strategy" do

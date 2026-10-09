@@ -1,6 +1,7 @@
-defmodule Lasso.RPC.Strategies.LatencyWeighted do
+defmodule Lasso.RPC.Strategies.BalancedFast do
   @moduledoc """
-  Produces a weighted random permutation of reliability-qualified upstreams.
+  Produces a weighted random permutation of reliability-qualified upstreams, spreading load
+  while favoring the quickest providers.
 
   Weights are dimensionless latency ratios. Sampling uses exponential-race keys, which produces a
   correct weighted permutation without a weight floor or hidden success-rate multiplier.
@@ -32,7 +33,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
       [] ->
         RoutingEvidence.emit_availability_degradation(
           profile,
-          :latency_weighted,
+          :balanced_fast,
           chain_id,
           ctx.workload_key,
           length(channels)
@@ -61,7 +62,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
         _ ->
           latencies = Enum.map(measured, &mean_latency(&1, summaries))
-          beta = Application.get_env(:lasso, :lw_beta, @default_beta)
+          beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
 
           measured
           |> Enum.zip(relative_weights(latencies, beta))

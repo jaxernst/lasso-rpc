@@ -108,7 +108,7 @@ defmodule LassoWeb.Dashboard.Components.SimulatorControls do
 
   @impl true
   def handle_event("select_strategy", %{"strategy" => strategy}, socket)
-      when strategy in ["fastest", "load-balanced", "latency-weighted"] do
+      when strategy in ["fastest", "load-balanced", "balanced-fast"] do
     socket =
       socket
       |> assign(:selected_strategy, strategy)

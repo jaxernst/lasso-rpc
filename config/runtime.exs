@@ -152,10 +152,10 @@ config :lasso,
   upstream_response_byte_limit:
     positive_integer_env.("LASSO_UPSTREAM_RESPONSE_BYTE_LIMIT", 16 * 1_024 * 1_024)
 
-if value = System.get_env("LW_BETA") do
+if value = System.get_env("BALANCED_FAST_BETA") do
   case Float.parse(value) do
-    {beta, ""} when beta > 0 -> config :lasso, :lw_beta, beta
-    _ -> raise "LW_BETA must be a positive number"
+    {beta, ""} when beta > 0 -> config :lasso, :balanced_fast_beta, beta
+    _ -> raise "BALANCED_FAST_BETA must be a positive number"
   end
 end
 

@@ -29,7 +29,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @qualified_reliability 0.75
   @max_count 9_223_372_036_854_775_807
   @default_workload "client"
-  @availability_dimensions for strategy <- [:fastest, :latency_weighted],
+  @availability_dimensions for strategy <- [:fastest, :balanced_fast],
                                workload <- Workload.partitions(),
                                do: {strategy, workload}
 

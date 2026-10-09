@@ -90,7 +90,7 @@ defmodule Lasso.RPC.Selection.Exploration do
 
     Keyword.get(policy, :enabled, false) == true and
       profile not in Keyword.get(policy, :disabled_profiles, []) and
-      opts.strategy in [:fastest, :latency_weighted] and opts.provider_override == nil and
+      opts.strategy in [:fastest, :balanced_fast] and opts.provider_override == nil and
       opts.request_origin == :client and envelope.execution_safety == :replay_safe and
       is_nil(ctx.exploration_token) and
       envelope.dispatch_count == 0 and

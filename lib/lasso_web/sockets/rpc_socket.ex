@@ -813,7 +813,8 @@ defmodule LassoWeb.RPCSocket do
     "fastest" => :fastest,
     "load-balanced" => :load_balanced,
     "round-robin" => :load_balanced,
-    "latency-weighted" => :latency_weighted,
+    "balanced-fast" => :balanced_fast,
+    "latency-weighted" => :balanced_fast,
     "priority" => :priority
   }
 

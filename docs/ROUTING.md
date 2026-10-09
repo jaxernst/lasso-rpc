@@ -68,12 +68,12 @@ Client and system attempts use separate fixed method families: basic, state, log
 - Preserves all live candidates and emits an availability degradation when none qualifies
 - Still subject to health tiering (closed-circuit providers preferred)
 
-### Latency Weighted
+### Balanced Fast
 
-**URL**: `/rpc/latency-weighted/:chain`
-**Module**: `Lasso.RPC.Strategies.LatencyWeighted`
+**URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias)
+**Module**: `Lasso.RPC.Strategies.BalancedFast`
 
-Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency.
+Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
 
 **Use When**:
 - You want a balance between performance and distribution
@@ -91,12 +91,12 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
 - When no candidate qualifies, emits an availability degradation and orders routes with recent latency measurements before shuffled unmeasured routes; a wholly unmeasured pool is shuffled uniformly.
 
 **Configuration**:
-- `LW_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
+- `BALANCED_FAST_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
 
 ### Bounded read exploration
 
 Exploration is disabled by default. When enabled, an eligible `fastest` or
-`latency-weighted` client read may sample a different configured upstream that
+`balanced-fast` client read may sample a different configured upstream that
 lacks qualified client evidence for the same method family. The ordinary first
 choice must already be qualified and eligible. System observations cannot
 qualify either route, and explicit capability and parameter restrictions still
@@ -245,7 +245,7 @@ Strategy behavior can be tuned via environment variables:
 
 | Variable | Strategy | Default | Description |
 |----------|----------|---------|-------------|
-| `LW_BETA` | Latency Weighted | 3.0 | Latency exponent |
+| `BALANCED_FAST_BETA` | Balanced Fast | 3.0 | Latency exponent |
 
 See [CONFIGURATION.md](CONFIGURATION.md#routing-strategies) for the application default and URL strategy configuration.
 

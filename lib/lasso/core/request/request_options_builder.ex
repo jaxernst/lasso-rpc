@@ -72,7 +72,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   Useful for CLI tools, internal services, or tests that don't have a Plug.Conn.
 
   ## Options (precedence: overrides > params > defaults)
-  - `:strategy` - Strategy atom (:load_balanced, :fastest, :latency_weighted, :priority)
+  - `:strategy` - Strategy atom (:load_balanced, :fastest, :balanced_fast, :priority)
   - `:provider_override` / `:provider_id` - Force specific provider
   - `:transport` - Transport preference (:http, :ws, :both)
   - `:failover_on_override` - Retry on other providers if override fails (default: false)
@@ -206,7 +206,8 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   defp parse_strategy("load_balanced"), do: :load_balanced
   defp parse_strategy("round_robin"), do: :load_balanced
   defp parse_strategy("fastest"), do: :fastest
-  defp parse_strategy("latency_weighted"), do: :latency_weighted
+  defp parse_strategy("balanced_fast"), do: :balanced_fast
+  defp parse_strategy("latency_weighted"), do: :balanced_fast
   defp parse_strategy(nil), do: nil
   defp parse_strategy(_), do: nil
 

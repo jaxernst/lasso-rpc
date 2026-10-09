@@ -8,7 +8,7 @@ Elixir/OTP application providing RPC provider orchestration and routing for bloc
 
 - **Multi-profile isolation**: Independent routing configurations per profile with isolated metrics and circuit breakers
 - **Transport-agnostic routing**: Unified pipeline routes across HTTP and WebSocket based on real-time performance
-- **Provider orchestration**: Pluggable selection strategies (`:fastest`, `:latency_weighted`, `:load_balanced`)
+- **Provider orchestration**: Pluggable selection strategies (`:fastest`, `:balanced_fast`, `:load_balanced`, `:priority`)
 - **WebSocket subscription management**: Intelligent multiplexing with automatic failover and gap-filling
 - **Circuit breaker protection**: Per-provider, per-transport breakers prevent cascade failures
 - **Method-specific benchmarking**: Passive latency measurement per-chain, per-method, per-transport
@@ -573,7 +573,7 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 - Lowest recent successful mean among reliability-qualified upstream instances
 - Reads published routing-evidence summaries rather than BenchmarkStore lifetime averages
 
-**:latency_weighted**
+**:balanced_fast**
 
 - Scale-free relative latency weights with exponential-race permutation
 - Reliability qualification remains separate from the latency weight
