@@ -22,12 +22,14 @@ within its bounded attempts, and the rejected attempt consumes one of them.
 Unknown methods and `eth_sendRawTransaction` keep their single dispatch, so that
 upstream's `-32601` is the answer. When a request ends unsuccessfully and every
 upstream it reached rejected the method, Lasso returns that rejection with the
-upstream's message and data instead of `-32000`. A later success or terminal
+upstream's message and data instead of `-32000`. The request retains only the
+latest rejection whole, so when a later candidate fails before dispatch the
+caller receives the availability error instead. A later success or terminal
 upstream error is returned as before. When the request ends unsuccessfully after
-a rejection mixed with another outcome, the rejection is not the answer: the
-caller receives the other outcome's error, or the availability error when the
-rejection came last. Lasso keeps no record that a provider lacks a method beyond
-the request that observed it.
+a rejection mixed with another outcome, the rejection is not the answer. The
+caller receives the other outcome's error or the availability error, in either
+order, depending on how the exhausted request ends. Lasso keeps no record that a
+provider lacks a method beyond the request that observed it.
 
 ## Signed transaction submission
 
