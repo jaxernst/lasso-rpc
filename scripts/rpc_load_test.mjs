@@ -885,7 +885,7 @@ async function run() {
         const afterRpc = pathParts.slice(rpcIndex + 1);
         
         // Determine if there's a strategy (check if first part is a valid strategy)
-        const validStrategies = ["load-balanced", "fastest", "balanced-fast"];
+        const validStrategies = ["load-balanced", "fastest", "balanced-fast", "latency-weighted"];
         let strategy = null;
         let chain = null;
         
