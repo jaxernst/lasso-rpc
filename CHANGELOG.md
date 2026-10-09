@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `balanced-fast` no longer fails a request when a provider's mean successful latency reads 0. Weighting treats a zero mean as unmeasured, as qualification already does.
 - Concurrent first observations of a request series share one `lasso_rpc_requests_total` row instead of splitting into duplicate samples. Route totals are documented as exact while their routing scope stays published.
 - Exporter failures stay inside the exporter: a raising `MetricsScope` hook drops the observation and is counted, route-total reads keep their previous values, and telemetry handlers stay attached. Route totals count successes and errors separately, so neither moves backwards under concurrency, and are limited to 2,048 series per node.
+- A `RELEASE_COOKIE` that starts with `+` or `-` is now used as the distribution cookie, prefixed with `lasso`. `erl` parsed such a value as a flag: a leading `+` stopped the node before boot with `bad -n option`, which hits about 1 in 64 random base64 cookies, and a leading `-` was dropped, so the node used `~/.erlang.cookie` and could not cluster with nodes on other hosts. Release commands print a warning, and nodes and operator commands that share the configured value still agree.
 
 ## [0.5.1] - 2026-10-06
 

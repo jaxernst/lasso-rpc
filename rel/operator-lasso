@@ -3,6 +3,19 @@ set -eu
 
 bin_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
 
+# erl parses any argument that starts with "+" or "-" as a flag, so such a cookie
+# never reaches -setcookie: a leading "+" stops the VM before boot, and a leading
+# "-" leaves the node on ~/.erlang.cookie. Every operator command runs through
+# this script, so the node, rpc, eval and remote shells derive the same prefixed
+# cookie from the same configured value.
+case "${RELEASE_COOKIE:-}" in
+  [+-]*)
+    echo "lasso: RELEASE_COOKIE starts with '+' or '-', which erl parses as a flag; using 'lasso' followed by RELEASE_COOKIE as the distribution cookie. Generate cookies with: openssl rand -hex 32" >&2
+    RELEASE_COOKIE="lasso${RELEASE_COOKIE}"
+    export RELEASE_COOKIE
+    ;;
+esac
+
 case "${1:-}" in
   check-config)
     shift

@@ -447,7 +447,7 @@ The dashboard aggregates data across all nodes for unified observability with re
 | `CLUSTER_NODE_BASENAME` | For clustering | Erlang distribution node basename |
 | `RELEASE_DISTRIBUTION` | For clustering | Set to `name` for long node names |
 | `RELEASE_NODE` | For clustering | `<basename>@<reachable-private-IP>` |
-| `RELEASE_COOKIE` | Release/container | Private distribution secret; identical across cluster members |
+| `RELEASE_COOKIE` | Release/container | Private distribution secret; identical across cluster members. Generate it with `openssl rand -hex 32`. A value that starts with `+` or `-` is used with a `lasso` prefix, because `erl` parses such arguments as flags |
 
 ### Provider Keys
 

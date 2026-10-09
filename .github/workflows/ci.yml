@@ -292,6 +292,37 @@ jobs:
           test "$before" = "$after"
           curl --fail --silent --show-error http://127.0.0.1:4000/api/health
 
+      - name: Boot with a distribution cookie that starts with a flag character
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name lasso-rpc-cookie \
+            --env LASSO_NODE_ID=ci-cookie \
+            --env PHX_HOST=localhost \
+            --env PHX_SCHEME=http \
+            --env SECRET_KEY_BASE="$(openssl rand -hex 64)" \
+            --env RELEASE_COOKIE="+n$(openssl rand -hex 32)" \
+            lasso-rpc:ci
+
+          trap 'docker logs lasso-rpc-cookie || true; docker rm --force lasso-rpc-cookie >/dev/null 2>&1 || true' EXIT
+
+          ready=false
+          for _ in $(seq 1 60); do
+            if docker exec lasso-rpc-cookie curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" != true ]; then
+            echo "Container with a '+' cookie did not become healthy within 60 seconds" >&2
+            exit 1
+          fi
+
+          docker exec lasso-rpc-cookie /app/bin/lasso check-config
+          test "$(docker exec lasso-rpc-cookie /app/bin/lasso rpc 'IO.puts(Node.alive?())')" = true
+
       - name: Exercise the candidate distribution with a controlled upstream
         run: |
           version="$(awk -F '"' '/^[[:space:]]*version:/ {print $2; exit}' mix.exs)"
