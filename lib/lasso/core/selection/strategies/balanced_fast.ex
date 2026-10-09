@@ -50,10 +50,7 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
 
   defp weighted_available(channels, summaries) do
     {measured, unmeasured} =
-      Enum.split_with(channels, fn channel ->
-        summary = RoutingEvidence.summary_for_channel(summaries, channel)
-        summary && summary.state != :stale && is_number(summary.successful_mean_latency_ms)
-      end)
+      Enum.split_with(channels, &measured?(RoutingEvidence.summary_for_channel(summaries, &1)))
 
     weighted =
       case measured do
@@ -71,6 +68,13 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
 
     weighted ++ Enum.shuffle(unmeasured)
   end
+
+  # As in qualification, a zero mean is not a usable latency measurement.
+  defp measured?(%{state: state, successful_mean_latency_ms: mean})
+       when state != :stale and is_number(mean),
+       do: mean > 0
+
+  defp measured?(_summary), do: false
 
   defp mean_latency(channel, summaries),
     do: RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms

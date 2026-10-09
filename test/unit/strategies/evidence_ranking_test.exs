@@ -174,6 +174,24 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     end
   end
 
+  test "balanced fast ranks a zero mean latency as unmeasured instead of failing" do
+    channels = channels(["instant", "measured"])
+
+    put_summaries(%{
+      {"instant-instance", :http} => summary("instant", :unqualified, 0.0, 0.0),
+      {"measured-instance", :http} => summary("measured", :unqualified, 5.0, 6.0)
+    })
+
+    ctx = BalancedFast.prepare_context("public", 1, "eth_getBalance", 5_000)
+
+    for _ <- 1..20 do
+      assert ["measured", "instant"] ==
+               channels
+               |> BalancedFast.rank_channels("eth_getBalance", ctx, "public", 1)
+               |> Enum.map(& &1.provider_id)
+    end
+  end
+
   defp channels(provider_ids) do
     Enum.map(provider_ids, fn provider_id ->
       %{
