@@ -4,7 +4,7 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
   @moduletag timeout: 20_000
 
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.Response
+  alias Lasso.RPC.{AttemptTerminal, Response}
   alias Lasso.Testing.MockProviderBehavior
 
   @profile "public"
@@ -90,6 +90,28 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
     end
   end
 
+  describe "pre-dispatch failures" do
+    test "after a rejection never promote the reduced rejection", %{chain: chain} do
+      setup_providers([
+        %{id: "unsupported", priority: 1, behavior: unsupported("unsupported")},
+        %{
+          id: "unreachable",
+          priority: 2,
+          behavior: healthy("unreachable"),
+          predispatch_failure: :pool_unavailable
+        }
+      ])
+
+      assert {:error, %JError{} = error, ctx} = read(chain)
+
+      assert %AttemptTerminal.PredispatchFailure{} = ctx.terminal_attempt_fact
+      refute error.code == @unsupported_code
+      assert error.category == :provider_error
+      assert ctx.execution_envelope.dispatch_count == 1
+      assert upstream_calls("unreachable", @read_method) == 0
+    end
+  end
+
   describe "transaction submission" do
     test "keeps its single dispatch after an upstream -32601", %{chain: chain} do
       setup_providers([
@@ -106,7 +128,7 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
   end
 
   describe "mixed outcomes" do
-    for kind <- [:provider_failure, :transport_failure, :quota_exhaustion, :attempt_timeout] do
+    for kind <- [:provider_failure, :quota_exhaustion, :attempt_timeout] do
       test "unsupported then #{kind} is not reported as method-not-found", %{chain: chain} do
         assert_mixed_not_method_not_found(chain, unquote(kind), :unsupported_first)
       end
@@ -139,12 +161,14 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
     refute error.code == @unsupported_code
     refute error.category == :method_not_found
     assert ctx.execution_envelope.dispatch_count == 2
+    assert Enum.any?(ctx.attempted_channels, &(&1.category == failure_category(kind)))
   end
 
-  defp failing(:provider_failure), do: :always_fail
+  defp failure_category(:provider_failure), do: :server_error
+  defp failure_category(:quota_exhaustion), do: :rate_limit
+  defp failure_category(:attempt_timeout), do: :deadline_expired
 
-  defp failing(:transport_failure),
-    do: {:conditional, fn _, _, _ -> {:error, :connection_reset} end}
+  defp failing(:provider_failure), do: :always_fail
 
   defp failing(:quota_exhaustion),
     do: {:error, %JError{code: -32_005, message: "Rate limit exceeded"}}

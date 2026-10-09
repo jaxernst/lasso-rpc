@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A request that ends after every upstream it reached rejected the method returns that upstream's `-32601` with its message and data instead of `-32000`. A `-32601` mixed with another outcome, such as a provider failure, quota exhaustion, or timeout, no longer becomes the answer because it happened to come last; the availability error is returned instead. Retry behavior is unchanged: replay-safe reads continue to another upstream within their attempt budget, and unknown methods and `eth_sendRawTransaction` keep their single dispatch.
+- A request that ends unsuccessfully after every upstream it reached rejected the method returns that upstream's `-32601` with its message and data instead of `-32000`. A `-32601` mixed with another outcome, such as a provider failure, quota exhaustion, or timeout, no longer becomes the answer because it happened to come last; the other outcome's error or the availability error is returned instead. Retry behavior is unchanged: replay-safe reads continue to another upstream within their attempt budget, and unknown methods and `eth_sendRawTransaction` keep their single dispatch.
 - Concurrent first observations of a request series share one `lasso_rpc_requests_total` row instead of splitting into duplicate samples. Route totals are documented as exact while their routing scope stays published.
 - Exporter failures stay inside the exporter: a raising `MetricsScope` hook drops the observation and is counted, route-total reads keep their previous values, and telemetry handlers stay attached. Route totals count successes and errors separately, so neither moves backwards under concurrency, and are limited to 2,048 series per node.
 

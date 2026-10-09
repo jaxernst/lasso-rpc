@@ -113,6 +113,14 @@ defmodule Lasso.Testing.MockHTTPProvider do
     end
   end
 
+  @doc "The pre-dispatch failure reason this mock was configured with, or nil."
+  def predispatch_failure(provider_id) do
+    case Registry.lookup(Lasso.Registry, {:http_provider, provider_id}) do
+      [{pid, _}] -> GenServer.call(pid, :predispatch_failure)
+      [] -> nil
+    end
+  end
+
   @doc """
   Stops a mock HTTP provider.
   """
@@ -171,6 +179,7 @@ defmodule Lasso.Testing.MockHTTPProvider do
     state = %{
       provider_id: provider_id,
       behavior: behavior,
+      predispatch_failure: Map.get(spec, :predispatch_failure),
       call_count: 0,
       start_time: System.monotonic_time(:millisecond)
     }
@@ -185,6 +194,9 @@ defmodule Lasso.Testing.MockHTTPProvider do
   end
 
   @impl true
+  def handle_call(:predispatch_failure, _from, state),
+    do: {:reply, state.predispatch_failure, state}
+
   def handle_call({:execute_request, method, params}, _from, state) do
     # Increment call count
     state = %{state | call_count: state.call_count + 1}

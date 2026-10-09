@@ -52,7 +52,10 @@ defmodule Lasso.Testing.BehaviorHttpClient do
       # Route to mock provider
       Logger.debug("Routing request to mock HTTP provider: #{provider_id}")
 
-      with :ok <- AttemptProtocol.send_confirmed(Keyword.get(opts, :attempt_dispatch)) do
+      dispatch_context = Keyword.get(opts, :attempt_dispatch)
+
+      with :ok <- check_predispatch(provider_id, dispatch_context),
+           :ok <- AttemptProtocol.send_confirmed(dispatch_context) do
         MockHTTPProvider.execute_request(provider_id, method, params)
       end
       |> case do
@@ -88,6 +91,17 @@ defmodule Lasso.Testing.BehaviorHttpClient do
     else
       # Return a mock response as raw bytes to prevent hanging
       {:ok, {:raw, Jason.encode!(%{"jsonrpc" => "2.0", "id" => request_id, "result" => "0x1"})}}
+    end
+  end
+
+  defp check_predispatch(provider_id, dispatch_context) do
+    case MockHTTPProvider.predispatch_failure(provider_id) do
+      nil ->
+        :ok
+
+      reason ->
+        AttemptProtocol.predispatch_failure(dispatch_context, reason)
+        {:error, {:network_error, "Request not dispatched"}}
     end
   end
 
