@@ -829,6 +829,9 @@ defmodule LassoWeb.RPCSocket do
       |> String.split("/", trim: true)
 
     case path_segments do
+      ["ws", "rpc", "profile", _profile, "priority", _chain] ->
+        {:priority, nil}
+
       # Pattern: ["ws", "rpc", "provider", provider_id, _chain_id]
       ["ws", "rpc", "provider", provider_id | _] ->
         {nil, provider_id}

@@ -207,7 +207,7 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
-| `background_observations` | boolean | No | `false` stops this provider's periodic identity checks, block-height polls, and `newHeads` feed (default: true). It still serves client requests and subscriptions |
+| `background_observations` | boolean | No | `false` removes this provider reference's periodic identity checks, block-height polls, and `newHeads` demand (default: true). Shared upstreams may still observe for another enabled reference; client requests and subscriptions remain available |
 | `observation_overrides` | map | No | Sparse per-provider overrides for `background_observations`, `subscribe_new_heads`, and the HTTP head, backup, and chain-identity intervals |
 | `capabilities` | map | No | Provider capabilities (see Capabilities below) |
 | `sharing_mode` | string | No | `auto` shares identical upstream runtime; `isolated` separates it by profile |

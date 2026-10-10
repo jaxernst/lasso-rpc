@@ -232,18 +232,19 @@ Profiles separate routing configuration; they are not access controls. Profile
 
 Lasso tracks every provider's block height so it can tell when one falls
 behind. That tracking runs on every node and spends provider quota beside your
-own traffic. With default settings, each provider costs:
+own traffic. With no `block_time_ms` or cadence overrides, each distinct
+upstream costs:
 
-| Background request | Rate per provider, per node |
+| Background request | Rate per upstream, per node |
 |--------------------|-----------------------------|
 | `newHeads` notification, when the provider has a `ws_url` | One per block |
 | `eth_blockNumber` | One per 12 s, or one per 36 s while its feed is current |
 | `eth_chainId` | One per 12 s |
 
-Heads also come from your own traffic: every routed `eth_blockNumber` and
-`eth_getBlockByNumber("latest")` response counts for the provider that served
-it. A chain needs one head feed, and any provider with a free WebSocket can
-carry it. Turn background tracking off for providers that bill per request:
+Successful routed `eth_blockNumber` and `eth_getBlockByNumber("latest")`
+responses also provide head evidence for the provider that served them. A chain
+needs one head feed, and any provider with a free WebSocket can carry it. Turn
+background tracking off for providers that bill per request:
 
 ```yaml
 providers:
@@ -257,8 +258,10 @@ providers:
 
 A provider with `background_observations: false` keeps serving requests and
 subscriptions, and Lasso learns its height from the head reads routed to it.
-The [configuration reference](docs/CONFIGURATION.md#monitoring) lists the
-intervals and per-provider overrides.
+Profiles sharing the same upstream share its background work; another enabled
+reference can keep that work running. The
+[configuration reference](docs/CONFIGURATION.md#monitoring) lists the intervals
+and per-provider overrides.
 
 Current limits:
 
