@@ -2,6 +2,7 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Test.Eventually
 
   setup_all do
     # Ensure test environment is ready with all services
@@ -472,37 +473,47 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
       {:ok, pid} =
         CircuitBreaker.start_link(
-          {id, %{failure_threshold: 1, recovery_timeout: 60, success_threshold: 1}}
+          {id, %{failure_threshold: 1, recovery_timeout: 60_000, success_threshold: 1}}
         )
+
+      assert_state = fn expected ->
+        Eventually.assert_eventually(
+          fn -> CircuitBreaker.get_state(id).state == expected end,
+          timeout: 5_000,
+          interval: 5
+        )
+      end
+
+      recover = fn ->
+        generation = :sys.get_state(pid).recovery_timer_gen
+        send(pid, {:attempt_proactive_recovery, generation - 1})
+        assert :sys.get_state(pid).state == :open
+        send(pid, {:attempt_proactive_recovery, generation})
+        assert_state.(:half_open)
+      end
 
       # Open the circuit
       assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :open
+      assert_state.(:open)
 
       # Check internal state - consecutive_open_count should be 0
       internal = :sys.get_state(pid)
       assert internal.consecutive_open_count == 0
 
-      # Wait for proactive recovery -> half_open
-      Process.sleep(90)
-      assert CircuitBreaker.get_state(id).state == :half_open
+      # Deliver the current recovery generation instead of racing the timer.
+      recover.()
 
       # Fail during half_open -> reopen (consecutive_open_count should be 1)
       assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "fail" end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :open
+      assert_state.(:open)
       internal = :sys.get_state(pid)
       assert internal.consecutive_open_count == 1
 
-      # Wait for second recovery (2x backoff: 120ms + jitter)
-      Process.sleep(160)
-      assert CircuitBreaker.get_state(id).state == :half_open
+      recover.()
 
       # Succeed -> close (consecutive_open_count resets to 0)
       assert {:executed, {:ok, :ok}} = CircuitBreaker.call(id, fn -> {:ok, :ok} end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :closed
+      assert_state.(:closed)
       internal = :sys.get_state(pid)
       assert internal.consecutive_open_count == 0
     end
