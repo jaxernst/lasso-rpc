@@ -33,6 +33,49 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
       provider_type: :ws
     )
 
+    # Check the mock-owned WS state without materializing a channel before the cursor.
+    catalog = Catalog.snapshot()
+    assert %{generation: generation} = catalog
+    assert generation == ConfigStore.route_generation()
+
+    assert {:ok, %{profile: ^profile, chain_id: ^chain, generation: ^generation} = plan} =
+             Catalog.get_routing_plan(catalog, profile, chain)
+
+    assert length(plan.providers) == 3
+
+    for {provider, priority} <- [{minority, 1}, {majority_a, 2}, {majority_b, 3}] do
+      assert %{
+               id: ^provider,
+               priority: ^priority,
+               instance_id: instance_id,
+               transports: transports
+             } = Enum.find(plan.providers, &(&1.id == provider))
+
+      assert is_binary(instance_id)
+      assert :ws in transports
+      assert Catalog.lookup_instance_id(profile, chain, provider) == instance_id
+
+      assert [{mock_pid, _}] =
+               Elixir.Registry.lookup(Lasso.Registry, {:ws_conn_instance, instance_id})
+
+      assert [{{:ws_status, ^instance_id}, %{status: :connected}}] =
+               :ets.lookup(:lasso_instance_state, {:ws_status, instance_id})
+
+      assert {:ok,
+              %Snapshot{
+                breaker_id: {^instance_id, :ws},
+                owner_pid: ^mock_pid,
+                ready?: true,
+                state: :closed,
+                control_health: :healthy
+              }} = Snapshot.lookup({instance_id, :ws})
+
+      assert Process.alive?(mock_pid)
+    end
+
+    assert Catalog.snapshot() == catalog
+    assert ConfigStore.route_generation() == generation
+
     for {provider, hash} <- [{minority, "0xbbb"}, {majority_a, "0xaaa"}] do
       instance_id = Catalog.lookup_instance_id(profile, chain, provider)
       assert :ok = Registry.put_height(chain, instance_id, 100, :ws, %{hash: hash})
