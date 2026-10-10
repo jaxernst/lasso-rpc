@@ -316,7 +316,7 @@ The `websocket_url` mirrors the HTTP request path — for example, a request to
 |------|---------|
 | `-32700` | Parse error (malformed JSON) |
 | `-32600` | Invalid Request (missing required fields, batch too large) |
-| `-32601` | Method not found or not supported on this transport |
+| `-32601` | Method not found, not supported on this transport, or rejected by every upstream the request reached |
 | `-32602` | Invalid params (unsupported chain, missing chain_id) |
 | `-32603` | Internal error |
 | `-32000` | Server error (for example, upstream rate limiting or exhausted routing) |

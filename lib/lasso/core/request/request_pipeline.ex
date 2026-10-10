@@ -563,15 +563,51 @@ defmodule Lasso.RPC.RequestPipeline do
       attempts: length(ctx.attempted_channels)
     )
 
-    jerr =
-      (ctx.head_policy && ctx.head_policy.last_error) ||
-        JError.new(-32_000, "No channels available",
-          category: :provider_error,
-          retriable?: true
-        )
-
-    finalize_error(jerr, %{ctx | terminal_reason: ctx.terminal_reason || :providers_exhausted})
+    ctx = %{ctx | terminal_reason: ctx.terminal_reason || :providers_exhausted}
+    finalize_exhaustion(exhaustion_error(ctx), ctx)
   end
+
+  defp finalize_exhaustion(%JError{} = jerr, ctx),
+    do: finalize_error(method_not_found_terminal(jerr, ctx), ctx)
+
+  defp exhaustion_error(ctx) do
+    (ctx.head_policy && ctx.head_policy.last_error) ||
+      JError.new(-32_000, "No channels available",
+        category: :provider_error,
+        retriable?: true
+      )
+  end
+
+  # The caller learns the method is unsupported only when every upstream the request reached
+  # said so and the context still holds the latest rejection whole. That rejection then replaces
+  # Lasso's generic exhaustion error. A rejection mixed with any other outcome never becomes
+  # the answer. A later pre-dispatch failure also prevents promotion: the terminal attempt
+  # must still be the response that supplied the rejection.
+  defp method_not_found_terminal(%JError{category: :provider_error} = generic, ctx) do
+    if rejection_is_answer?(ctx), do: ctx.last_attempt_error, else: generic
+  end
+
+  defp method_not_found_terminal(%JError{category: :method_not_found} = rejection, ctx) do
+    if rejection_is_answer?(ctx), do: rejection, else: exhaustion_error(ctx)
+  end
+
+  defp method_not_found_terminal(terminal_error, _ctx), do: terminal_error
+
+  defp rejection_is_answer?(%RequestContext{
+         last_attempt_error: %JError{category: :method_not_found},
+         terminal_attempt_fact: %AttemptTerminal.Response{},
+         attempted_channels: [_ | _] = attempts
+       }),
+       do: Enum.all?(attempts, &(&1.category == :method_not_found))
+
+  defp rejection_is_answer?(_ctx), do: false
+
+  defp mixed_method_not_found?(%RequestContext{attempted_channels: attempts}, %JError{
+         category: :method_not_found
+       }),
+       do: Enum.any?(attempts, &(&1.category != :method_not_found))
+
+  defp mixed_method_not_found?(_ctx, _reason), do: false
 
   @spec execute_on_channel(
           Channel.t(),
@@ -1055,7 +1091,12 @@ defmodule Lasso.RPC.RequestPipeline do
         attempt_channels([], ctx, [], caller_guard)
 
       {nil, _remaining} ->
-        handle_owner_terminal(outcome, channel, ctx)
+        if mixed_method_not_found?(ctx, reason) do
+          ctx = record_owner_failure(ctx, channel, outcome.fact, reason)
+          attempt_channels([], ctx, [], caller_guard)
+        else
+          handle_owner_terminal(outcome, channel, ctx)
+        end
     end
   end
 
@@ -1366,7 +1407,7 @@ defmodule Lasso.RPC.RequestPipeline do
     do: finalize_error(%{error | retriable?: false}, ctx)
 
   defp finalize_dispatch_exhaustion(%RequestContext{last_attempt_error: %JError{} = error} = ctx),
-    do: finalize_error(%{error | retriable?: false}, ctx)
+    do: finalize_exhaustion(%{error | retriable?: false}, ctx)
 
   defp finalize_dispatch_exhaustion(
          %RequestContext{attempted_channels: [_ | _] = attempted_channels} = ctx
@@ -1381,7 +1422,7 @@ defmodule Lasso.RPC.RequestPipeline do
         retriable?: false
       )
 
-    finalize_error(jerr, ctx)
+    finalize_exhaustion(jerr, ctx)
   end
 
   defp finalize_dispatch_exhaustion(ctx),

@@ -197,7 +197,24 @@ chains:
             write_profile("public", profile("public"))
             write_profile("custom", profile("custom"))
             execute("rm", "-f", "/data/config/profiles/testnet.yml")
-            assert rpc("IO.inspect(Lasso.Config.ConfigStore.reload())") == ":ok"
+            reload_stdout = rpc("IO.inspect(Lasso.Config.ConfigStore.reload())")
+            try:
+                assert reload_stdout == ":ok"
+            except AssertionError:
+                try:
+                    reload_diagnostic = reload_stdout
+                    for value in [credential, secret, cookie]:
+                        reload_diagnostic = reload_diagnostic.replace(value, "[redacted]")
+                    reload_bytes = reload_diagnostic.encode("utf-8")
+                    report["controlled_profile_reload_stdout"] = {
+                        "prefix": reload_bytes[:4096].decode("utf-8", errors="ignore"),
+                        "total_redacted_bytes": len(reload_bytes),
+                        "truncated": len(reload_bytes) > 4096,
+                    }
+                except BaseException:
+                    # Diagnostics must preserve the original assertion and traceback.
+                    pass
+                raise
             payload = {"jsonrpc": "2.0", "method": "eth_getBalance", "params": ["0x0000000000000000000000000000000000000001", "latest"], "id": 34}
             for path in ["/rpc/ethereum", "/rpc/profile/custom/ethereum", "/rpc/profile/custom/provider/first/ethereum"]:
                 status, body = request(path, payload)

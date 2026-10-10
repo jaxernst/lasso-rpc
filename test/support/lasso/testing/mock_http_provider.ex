@@ -50,7 +50,9 @@ defmodule Lasso.Testing.MockHTTPProvider do
       GenServer.start_link(
         __MODULE__,
         {chain, spec},
-        name: {:via, Registry, {Lasso.Registry, {:http_provider, provider_id}}}
+        name:
+          {:via, Registry,
+           {Lasso.Registry, {:http_provider, provider_id}, Map.get(spec, :predispatch_failure)}}
       )
 
     # Create provider config
@@ -110,6 +112,14 @@ defmodule Lasso.Testing.MockHTTPProvider do
 
       [] ->
         {:error, :provider_not_found}
+    end
+  end
+
+  @doc "The pre-dispatch failure reason this mock was configured with, or nil."
+  def predispatch_failure(provider_id) do
+    case Registry.lookup(Lasso.Registry, {:http_provider, provider_id}) do
+      [{_pid, reason}] -> reason
+      [] -> nil
     end
   end
 
