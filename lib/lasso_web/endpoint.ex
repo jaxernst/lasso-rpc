@@ -28,7 +28,7 @@ defmodule LassoWeb.Endpoint do
   # routes (with literal segments) must be defined LAST
 
   # Supported routing strategies for provider selection
-  @rpc_strategies ~w(fastest load-balanced round-robin balanced-fast latency-weighted)
+  @rpc_strategies ~w(fastest load-balanced round-robin balanced-fast latency-weighted priority)
 
   # Socket configuration shared across all endpoints
   @socket_config [

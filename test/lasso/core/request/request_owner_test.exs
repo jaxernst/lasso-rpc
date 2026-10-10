@@ -719,8 +719,8 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
           {true, :normal, :traps},
           {true, :unrelated_failure, :traps}
         ] do
-      helper =
-        spawn(fn ->
+      {helper, monitor} =
+        spawn_monitor(fn ->
           Process.flag(:trap_exit, prior)
 
           outcome =
@@ -737,6 +737,9 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
                 await_mailbox(self(), fn messages ->
                   Enum.any?(messages, &match?({:EXIT, ^linked, ^reason}, &1))
                 end)
+
+                send(parent, {:helper_before_restore, self(), linked})
+                assert_receive {:restore, ^parent}, 1_000
               end
             )
 
@@ -750,20 +753,33 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
           send(parent, {:helper_survived, self(), outcome, pending_exit})
         end)
 
-      monitor = Process.monitor(helper)
+      try do
+        # Start the restoration assertion only once the unrelated exit is pending.
+        assert_receive {:helper_before_restore, ^helper, linked}, 1_000
+        assert {:trap_exit, true} = Process.info(helper, :trap_exit)
+        assert {:messages, messages} = Process.info(helper, :messages)
+        assert {:EXIT, linked, reason} in messages
+        send(helper, {:restore, parent})
 
-      case expected do
-        :dies ->
-          assert_receive {:DOWN, ^monitor, :process, ^helper, :unrelated_failure}
-          refute_receive {:helper_survived, ^helper, _outcome, _pending}
+        case expected do
+          :dies ->
+            assert_receive {:DOWN, ^monitor, :process, ^helper, :unrelated_failure}
+            refute_receive {:helper_survived, ^helper, _outcome, _pending}
 
-        :survives ->
-          assert_receive {:helper_survived, ^helper, outcome, nil}
-          assert outcome.committed?
+          :survives ->
+            assert_receive {:helper_survived, ^helper, outcome, nil}
+            assert outcome.committed?
+            assert_receive {:DOWN, ^monitor, :process, ^helper, :normal}, 1_000
 
-        :traps ->
-          assert_receive {:helper_survived, ^helper, outcome, ^reason}
-          assert outcome.committed?
+          :traps ->
+            assert_receive {:helper_survived, ^helper, outcome, ^reason}
+            assert outcome.committed?
+            assert_receive {:DOWN, ^monitor, :process, ^helper, :normal}, 1_000
+        end
+      after
+        if Process.alive?(helper), do: Process.exit(helper, :kill)
+        await_down(helper)
+        Process.demonitor(monitor, [:flush])
       end
     end
   end

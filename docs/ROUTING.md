@@ -136,7 +136,7 @@ cannot express exploration or ambiguous response semantics. See
 
 ### Priority
 
-**URL**: `/rpc/:chain` when `config :lasso, :provider_selection_strategy, :priority` is set. The shipped default is `:load_balanced`.
+**URL**: `/rpc/priority/:chain`, or `/rpc/:chain` when `config :lasso, :provider_selection_strategy, :priority` is set. The shipped default is `:load_balanced`.
 **Module**: `Lasso.RPC.Strategies.Priority`
 
 Selects providers in the order defined by the `priority` field in the profile. Lower priority values are tried first.

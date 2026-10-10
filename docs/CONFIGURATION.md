@@ -114,6 +114,11 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 | `evidence_freshness_ms` | integer | 30000–60000 from block time | Freshness window for retained head evidence. |
 | `subscribe_new_heads` | boolean | WebSocket setting | Override automatic `newHeads` observation for the chain. |
 
+Routed client `eth_blockNumber` and `eth_getBlockByNumber("latest")` responses
+are head observations for the transport that served them, sampled at most every
+250 ms per transport. A provider with background observations off keeps head
+evidence while it serves those reads.
+
 The new intervals accept `0` to disable that activity, or at least 1000 ms. When profiles share a physical upstream, Core uses the shortest positive interval requested by an enabled reference. A disabled reference does not turn off another profile's observations. After a YAML reload, the worker applies the new demand without restarting client requests.
 
 ### Selection
@@ -202,7 +207,7 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
-| `background_observations` | boolean | No | Disable this provider's periodic observation demand without disabling client routing |
+| `background_observations` | boolean | No | `false` removes this provider reference's periodic identity checks, block-height polls, and `newHeads` demand (default: true). Shared upstreams may still observe for another enabled reference; client requests and subscriptions remain available |
 | `observation_overrides` | map | No | Sparse per-provider overrides for `background_observations`, `subscribe_new_heads`, and the HTTP head, backup, and chain-identity intervals |
 | `capabilities` | map | No | Provider capabilities (see Capabilities below) |
 | `sharing_mode` | string | No | `auto` shares identical upstream runtime; `isolated` separates it by profile |
@@ -231,7 +236,7 @@ Strategies control how providers are selected for each request. Set via URL path
 
 | Strategy | URL Slug | Description |
 |----------|----------|-------------|
-| **Priority** | `/rpc/:chain` with application default set to `:priority` | Select by `priority` field (lowest first) |
+| **Priority** | `/rpc/priority/:chain` | Select by `priority` field (lowest first) |
 | **Fastest** | `/rpc/fastest/:chain` | Lowest recent mean latency among reliability-qualified upstreams |
 | **Load Balanced** | `/rpc/load-balanced/:chain` | Randomized order with a bounded distinct-instance first pass for replay-safe fallback |
 | **Balanced Fast** | `/rpc/balanced-fast/:chain` | Weighted permutation using relative successful-attempt latency |

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `POST /rpc/priority/:chain` and `/rpc/profile/:profile/priority/:chain` route requests with the `priority` strategy. WebSocket clients can connect at `/ws/rpc/priority/:chain`, which previously resolved `priority` as the chain name.
+
 ### Changed
 
 - The `latency-weighted` strategy is now `balanced-fast`, positioned between `load-balanced` and `fastest`. `latency-weighted` stays a permanent alias in HTTP and WebSocket URLs and the `strategy` query parameter, and routes identically. `lasso_meta.strategy` and request logs report `balanced_fast`, and the dashboard shows Balanced Fast. The module is `Lasso.RPC.Strategies.BalancedFast`, and its exponent is set with `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); `LW_BETA` is no longer read.

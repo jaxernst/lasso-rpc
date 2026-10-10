@@ -228,6 +228,52 @@ need a container recreate.
 Profiles separate routing configuration; they are not access controls. Profile
 `rps_limit` applies to the dashboard tester, not incoming RPC traffic.
 
+### Head tracking and provider quota
+
+Lasso tracks every provider's block height so it can tell when one falls
+behind. That tracking runs on every node and spends provider quota beside your
+own traffic. With no `block_time_ms` or cadence overrides, each distinct
+upstream costs:
+
+| Background request | Rate per upstream, per node |
+|--------------------|-----------------------------|
+| `newHeads` notification, when the provider has a `ws_url` | One per block |
+| `eth_blockNumber` | One per 12 s, or one per 36 s while its feed is current |
+| `eth_chainId` | One per 12 s |
+
+Successful routed `eth_blockNumber` and `eth_getBlockByNumber("latest")`
+responses also provide head evidence for the provider that served them. A chain
+needs one head feed, and any provider with a free WebSocket can carry it. Turn
+background tracking off for providers that bill per request:
+
+```yaml
+providers:
+  - id: own-node
+    url: http://10.0.0.5:8545
+    ws_url: ws://10.0.0.5:8546
+  - id: metered
+    url: https://rpc.example.com/${METERED_KEY}
+    background_observations: false
+```
+
+A provider with `background_observations: false` keeps serving requests and
+subscriptions, and Lasso learns its height from the head reads routed to it.
+Profiles sharing the same upstream share its background work; another enabled
+reference can keep that work running. The
+[configuration reference](docs/CONFIGURATION.md#monitoring) lists the intervals
+and per-provider overrides.
+
+Current limits:
+
+- Lag filtering needs `selection.max_lag_blocks` and a reference head that a
+  majority of at least two providers agree on.
+- Head comparison assumes 12-second blocks unless `block_time_ms` is set, so
+  set it on faster chains.
+- Methods Lasso does not recognize, such as vendor extensions, get one attempt
+  on whichever provider the strategy picks. List them in `unsupported_methods`
+  on providers that lack them, or send them to
+  `/rpc/provider/:provider_id/:chain`.
+
 ## Endpoints
 
 | Route | HTTP (POST) | WebSocket |
@@ -237,14 +283,18 @@ Profiles separate routing configuration; they are not access controls. Profile
 | Provider override | `/rpc/provider/:provider_id/:chain` | `/ws/rpc/provider/:provider_id/:chain` |
 | Profile | `/rpc/profile/:profile/:chain` | `/ws/rpc/profile/:profile/:chain` |
 
-Strategies are `load-balanced` (the default), `fastest`, and `balanced-fast`,
-which spreads load while favoring the quickest providers; `latency-weighted` is
-an alias.
+Strategies are `load-balanced` (the default), `fastest`, `balanced-fast`, which
+spreads load while favoring the quickest providers, and `priority`, which tries
+providers in their configured `priority` order; `latency-weighted` is an alias of
+`balanced-fast`.
 Profile routes accept strategies and provider overrides too; see the
 [API reference](docs/API_REFERENCE.md).
 
 `:chain` is a configured name such as `ethereum` or its EIP-155 ID, `1`. Routes
 without a profile use `public`.
+
+`GET /api/health` reports liveness and `GET /api/ready` reports routing
+readiness; [Deployment](docs/DEPLOYMENT.md) describes both.
 
 ## Troubleshooting
 
