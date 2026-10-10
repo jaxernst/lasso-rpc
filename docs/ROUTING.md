@@ -25,19 +25,24 @@ The pipeline ensures that healthy providers receive preference while recovering 
 
 Strategies control the initial ordering of providers. Select via URL path segment: `/rpc/:strategy/:chain`.
 
+`lasso_meta.strategy` reports the strategy that routed the request as an atom name with an
+underscore, such as `load_balanced` or `balanced_fast`. URLs use the hyphenated slug.
+
 ### Load Balanced (Default)
 
 **URL**: `/rpc/load-balanced/:chain`
 **Module**: `Lasso.RPC.Strategies.LoadBalanced`
 
-Starts from a randomized candidate order. For replay-safe unary reads, fallback
+Randomizes physical provider instances first, then the transports within each
+instance. An upstream offering both HTTP and WebSocket receives one first-pick
+share. For replay-safe unary reads, fallback
 tries distinct physical provider instances before sibling transports within each
 availability tier. Alternate transports remain available; a healthy alternate
 still precedes a different provider in a lower availability tier. The lazy cursor
 bounds healthy-sibling deferral by its remaining candidate limit, and explicit
 recovered-head preference takes precedence over diversity.
 
-Unsafe or unknown methods retain their shuffled order and existing replay limits.
+Unsafe or unknown methods retain the instance-shuffled order and existing replay limits.
 This ordering does not increase the three-dispatch budget or deadline, infer
 archive capabilities, or guarantee successful historical reads. A hash selector
 can leave more distinct providers eligible than the budget can cover. Trying
@@ -68,12 +73,12 @@ Client and system attempts use separate fixed method families: basic, state, log
 - Preserves all live candidates and emits an availability degradation when none qualifies
 - Still subject to health tiering (closed-circuit providers preferred)
 
-### Latency Weighted
+### Balanced Fast
 
-**URL**: `/rpc/latency-weighted/:chain`
-**Module**: `Lasso.RPC.Strategies.LatencyWeighted`
+**URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias)
+**Module**: `Lasso.RPC.Strategies.BalancedFast`
 
-Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency.
+Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
 
 **Use When**:
 - You want a balance between performance and distribution
@@ -91,12 +96,12 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
 - When no candidate qualifies, emits an availability degradation and orders routes with recent latency measurements before shuffled unmeasured routes; a wholly unmeasured pool is shuffled uniformly.
 
 **Configuration**:
-- `LW_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
+- `BALANCED_FAST_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
 
 ### Bounded read exploration
 
 Exploration is disabled by default. When enabled, an eligible `fastest` or
-`latency-weighted` client read may sample a different configured upstream that
+`balanced-fast` client read may sample a different configured upstream that
 lacks qualified client evidence for the same method family. The ordinary first
 choice must already be qualified and eligible. System observations cannot
 qualify either route, and explicit capability and parameter restrictions still
@@ -245,7 +250,7 @@ Strategy behavior can be tuned via environment variables:
 
 | Variable | Strategy | Default | Description |
 |----------|----------|---------|-------------|
-| `LW_BETA` | Latency Weighted | 3.0 | Latency exponent |
+| `BALANCED_FAST_BETA` | Balanced Fast | 3.0 | Latency exponent |
 
 See [CONFIGURATION.md](CONFIGURATION.md#routing-strategies) for the application default and URL strategy configuration.
 

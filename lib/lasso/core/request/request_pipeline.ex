@@ -78,7 +78,7 @@ defmodule Lasso.RPC.RequestPipeline do
   ## Options
 
   Takes a `RequestOptions` struct with:
-  - `strategy` - Routing strategy (:fastest, :load_balanced, :latency_weighted, :priority)
+  - `strategy` - Routing strategy (:fastest, :load_balanced, :balanced_fast, :priority)
   - `provider_override` - Force specific provider (optional)
   - `transport` - Transport preference (:http, :ws, :both)
   - `failover_on_override` - Retry on other providers if override fails

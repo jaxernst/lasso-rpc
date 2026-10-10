@@ -10,7 +10,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   require Logger
 
   # Available routing strategies (must match router.ex and endpoint.ex)
-  @available_strategies ["load-balanced", "latency-weighted", "fastest"]
+  @available_strategies ["load-balanced", "balanced-fast", "fastest"]
 
   @doc """
   Returns list of available routing strategies.
@@ -114,14 +114,14 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
 
   @doc "Get display name for a strategy"
   def strategy_display_name("load-balanced"), do: "Load Balanced"
-  def strategy_display_name("latency-weighted"), do: "Latency Weighted"
+  def strategy_display_name("balanced-fast"), do: "Balanced Fast"
   def strategy_display_name("fastest"), do: "Fastest"
   def strategy_display_name(other), do: other |> String.replace("-", " ") |> String.capitalize()
 
   # Strategy icons
   defp strategy_icon("fastest"), do: "⚡"
   defp strategy_icon("load-balanced"), do: "🔄"
-  defp strategy_icon("latency-weighted"), do: "⚖️"
+  defp strategy_icon("balanced-fast"), do: "⚖️"
   defp strategy_icon(_), do: "🎯"
 
   @doc "Get description for a strategy"
@@ -129,8 +129,8 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
     "Distributes requests evenly across all available providers — good for general purpose workloads"
   end
 
-  def strategy_description("latency-weighted") do
-    "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling"
+  def strategy_description("balanced-fast") do
+    "Spreads requests while favoring faster providers, for fast reads without concentrating load on one"
   end
 
   def strategy_description("fastest") do

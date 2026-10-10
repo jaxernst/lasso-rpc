@@ -586,7 +586,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         end)
 
       :load_balanced ->
-        Enum.shuffle(descriptors)
+        LoadBalanced.shuffle_instances(descriptors, fn {provider, _transport} ->
+          provider.instance_id || {plan.profile, plan.chain_id, provider.id}
+        end)
     end
   end
 

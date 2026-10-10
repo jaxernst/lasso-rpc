@@ -710,7 +710,7 @@ defmodule Lasso.RPC.SelectionTest do
         %{id: "provider", priority: 10, behavior: :healthy, profile: profile}
       ])
 
-      for strategy <- [:fastest, :latency_weighted] do
+      for strategy <- [:fastest, :balanced_fast] do
         cursor =
           Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
             strategy: strategy,
@@ -746,7 +746,7 @@ defmodule Lasso.RPC.SelectionTest do
         %{id: "provider_b", priority: 20, behavior: :healthy, profile: profile}
       ])
 
-      for strategy <- [:fastest, :latency_weighted] do
+      for strategy <- [:fastest, :balanced_fast] do
         cursor =
           Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
             strategy: strategy,
@@ -848,7 +848,7 @@ defmodule Lasso.RPC.SelectionTest do
             {:ok, channel, _cursor} =
               CandidateCursor.next(
                 Selection.select_channel_candidates(profile, chain, method,
-                  strategy: :latency_weighted,
+                  strategy: :balanced_fast,
                   transport: :http
                 )
               )

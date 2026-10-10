@@ -1396,8 +1396,8 @@ const EndpointSelector = {
       const descriptions = {
         "load-balanced":
           "Distributes requests evenly across all available providers — good for general purpose workloads",
-        "latency-weighted":
-          "Load balanced favoring faster providers — good for high-throughput workloads like indexing and backfilling",
+        "balanced-fast":
+          "Spreads requests while favoring faster providers, for fast reads without concentrating load on one",
         fastest:
           "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls",
       };

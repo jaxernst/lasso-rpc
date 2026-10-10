@@ -38,7 +38,7 @@ config :lasso, LassoWeb.Endpoint,
   secret_key_base: "YourSecretKeyBaseHere" <> String.duplicate("a", 32)
 
 # Default provider selection strategy
-# Options: :fastest, :load_balanced, :latency_weighted
+# Options: :fastest, :load_balanced, :balanced_fast, :priority
 config :lasso, :provider_selection_strategy, :load_balanced
 
 config :lasso, :profile_aliases, %{"default" => "public"}

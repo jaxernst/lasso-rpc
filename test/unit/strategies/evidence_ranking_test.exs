@@ -5,7 +5,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.AttemptProjection
   alias Lasso.RPC.RoutingEvidence.Summary
-  alias Lasso.RPC.Strategies.{Fastest, LatencyWeighted}
+  alias Lasso.RPC.Strategies.{Fastest, BalancedFast}
 
   setup do
     clear_test_control()
@@ -124,8 +124,8 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
   end
 
   test "relative latency weights are scale invariant and have no absolute floor" do
-    weights_ms = LatencyWeighted.relative_weights([10.0, 20.0, 40.0], 2.0)
-    weights_scaled = LatencyWeighted.relative_weights([100.0, 200.0, 400.0], 2.0)
+    weights_ms = BalancedFast.relative_weights([10.0, 20.0, 40.0], 2.0)
+    weights_scaled = BalancedFast.relative_weights([100.0, 200.0, 400.0], 2.0)
 
     Enum.zip(weights_ms, weights_scaled)
     |> Enum.each(fn {left, right} -> assert_in_delta left, right, 1.0e-12 end)
@@ -139,7 +139,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     first_counts =
       Enum.reduce(1..30_000, %{fast: 0, slow: 0}, fn _, counts ->
         first =
-          LatencyWeighted.weighted_permutation(fast: 1.0, slow: 0.5)
+          BalancedFast.weighted_permutation(fast: 1.0, slow: 0.5)
           |> hd()
 
         Map.update!(counts, first, &(&1 + 1))
@@ -150,7 +150,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     assert fast_share < 0.685
   end
 
-  test "latency weighted excludes unqualified evidence from weighted preference" do
+  test "balanced fast excludes unqualified evidence from weighted preference" do
     channels = channels(["unqualified", "qualified"])
 
     put_summaries(%{
@@ -158,11 +158,11 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
       {"qualified-instance", :http} => summary("qualified", :qualified, 100.0, 120.0)
     })
 
-    ctx = LatencyWeighted.prepare_context("public", 1, "eth_getBalance", 5_000)
+    ctx = BalancedFast.prepare_context("public", 1, "eth_getBalance", 5_000)
 
     for _ <- 1..100 do
       assert [first | _] =
-               LatencyWeighted.rank_channels(
+               BalancedFast.rank_channels(
                  channels,
                  "eth_getBalance",
                  ctx,
@@ -171,6 +171,24 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
                )
 
       assert first.provider_id == "qualified"
+    end
+  end
+
+  test "balanced fast ranks a zero mean latency as unmeasured instead of failing" do
+    channels = channels(["instant", "measured"])
+
+    put_summaries(%{
+      {"instant-instance", :http} => summary("instant", :unqualified, 0.0, 0.0),
+      {"measured-instance", :http} => summary("measured", :unqualified, 5.0, 6.0)
+    })
+
+    ctx = BalancedFast.prepare_context("public", 1, "eth_getBalance", 5_000)
+
+    for _ <- 1..20 do
+      assert ["measured", "instant"] ==
+               channels
+               |> BalancedFast.rank_channels("eth_getBalance", ctx, "public", 1)
+               |> Enum.map(& &1.provider_id)
     end
   end
 

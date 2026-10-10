@@ -99,20 +99,24 @@ defmodule Lasso.Config.EffectiveRuntimePolicyTest do
     assert state.failover_context.backfill_context.max_backfill == 7
   end
 
-  test "LW_BETA runtime setting rejects invalid tuning" do
-    previous = System.get_env("LW_BETA")
+  test "BALANCED_FAST_BETA runtime setting rejects invalid tuning" do
+    previous = System.get_env("BALANCED_FAST_BETA")
 
     on_exit(fn ->
-      if previous, do: System.put_env("LW_BETA", previous), else: System.delete_env("LW_BETA")
+      if previous,
+        do: System.put_env("BALANCED_FAST_BETA", previous),
+        else: System.delete_env("BALANCED_FAST_BETA")
     end)
 
-    System.put_env("LW_BETA", "2.5")
-    assert Config.Reader.read!("config/runtime.exs", env: :test)[:lasso][:lw_beta] == 2.5
+    System.put_env("BALANCED_FAST_BETA", "2.5")
+
+    assert Config.Reader.read!("config/runtime.exs", env: :test)[:lasso][:balanced_fast_beta] ==
+             2.5
 
     for value <- ["0", "-2", "not-a-number"] do
-      System.put_env("LW_BETA", value)
+      System.put_env("BALANCED_FAST_BETA", value)
 
-      assert_raise RuntimeError, "LW_BETA must be a positive number", fn ->
+      assert_raise RuntimeError, "BALANCED_FAST_BETA must be a positive number", fn ->
         Config.Reader.read!("config/runtime.exs", env: :test)
       end
     end

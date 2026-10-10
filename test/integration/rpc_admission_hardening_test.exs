@@ -7,7 +7,7 @@ defmodule Lasso.RPC.AdmissionHardeningTest do
   alias Lasso.RPC.{RequestOptions, RequestPipeline, Selection}
   alias Lasso.RPC.Selection.CandidateCursor
 
-  @strategies [:priority, :load_balanced, :fastest, :latency_weighted]
+  @strategies [:priority, :load_balanced, :fastest, :balanced_fast]
   @wallet "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
   @usdc "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
   @balance_of "0x70a08231" <> String.pad_leading(String.trim_leading(@wallet, "0x"), 64, "0")

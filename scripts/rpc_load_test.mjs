@@ -127,7 +127,7 @@ function printHelpAndExit() {
       `                             (used with --chains)\n` +
       `  --chains <list>           Comma-separated chain names (e.g., "ethereum,base")\n` +
       `                             If specified, tests all chains in parallel\n` +
-      `  -s, --strategy <name>     Routing strategy: load-balanced, fastest, latency-weighted\n` +
+      `  -s, --strategy <name>     Routing strategy: load-balanced, fastest, balanced-fast\n` +
       `                             (default: load-balanced, used with --chains)\n` +
       `  -p, --profile <name>      Profile name (e.g., "default", "testnet")\n` +
       `                             If not specified, uses legacy routes (default profile)\n` +
@@ -885,7 +885,7 @@ async function run() {
         const afterRpc = pathParts.slice(rpcIndex + 1);
         
         // Determine if there's a strategy (check if first part is a valid strategy)
-        const validStrategies = ["load-balanced", "fastest", "latency-weighted"];
+        const validStrategies = ["load-balanced", "fastest", "balanced-fast", "latency-weighted"];
         let strategy = null;
         let chain = null;
         

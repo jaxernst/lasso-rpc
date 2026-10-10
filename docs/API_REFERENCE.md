@@ -27,7 +27,7 @@ curl -X POST http://localhost:4000/rpc/ethereum \
 ```
 POST /rpc/fastest/:chain
 POST /rpc/load-balanced/:chain
-POST /rpc/latency-weighted/:chain
+POST /rpc/balanced-fast/:chain
 POST /rpc/round-robin/:chain
 ```
 
@@ -48,7 +48,7 @@ All routes above are available under a profile namespace:
 POST /rpc/profile/:profile/:chain
 POST /rpc/profile/:profile/fastest/:chain
 POST /rpc/profile/:profile/load-balanced/:chain
-POST /rpc/profile/:profile/latency-weighted/:chain
+POST /rpc/profile/:profile/balanced-fast/:chain
 POST /rpc/profile/:profile/provider/:provider_id/:chain
 ```
 

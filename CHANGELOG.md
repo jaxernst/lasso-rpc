@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The `latency-weighted` strategy is now `balanced-fast`, positioned between `load-balanced` and `fastest`. `latency-weighted` stays a permanent alias in HTTP and WebSocket URLs and the `strategy` query parameter, and routes identically. `lasso_meta.strategy` and request logs report `balanced_fast`, and the dashboard shows Balanced Fast. The module is `Lasso.RPC.Strategies.BalancedFast`, and its exponent is set with `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); `LW_BETA` is no longer read.
+
 ### Fixed
 
 - A request that ends unsuccessfully after every upstream it reached rejected the method returns that upstream's `-32601` with its message and data instead of `-32000`, unless a later candidate failed before dispatch, in which case the availability error is returned. A `-32601` mixed with another outcome, such as a provider failure, quota exhaustion, or timeout, no longer becomes the answer because it happened to come last; the caller receives the other outcome's error or the availability error. Retry behavior is unchanged: replay-safe reads continue to another upstream within their attempt budget, and unknown methods and `eth_sendRawTransaction` keep their single dispatch.
+- `balanced-fast` no longer fails a request when a provider's mean successful latency reads 0. Weighting treats a zero mean as unmeasured, as qualification already does.
 - Concurrent first observations of a request series share one `lasso_rpc_requests_total` row instead of splitting into duplicate samples. Route totals are documented as exact while their routing scope stays published.
 - Exporter failures stay inside the exporter: a raising `MetricsScope` hook drops the observation and is counted, route-total reads keep their previous values, and telemetry handlers stay attached. Route totals count successes and errors separately, so neither moves backwards under concurrency, and are limited to 2,048 series per node.
 

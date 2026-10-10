@@ -1,6 +1,6 @@
 defmodule Lasso.RPC.Strategies.LoadBalanced do
   @moduledoc """
-  Load-balanced selection using random shuffle with health-aware tiering.
+  Load-balanced selection shuffles physical instances, then their transports.
 
   Replay-safe reads try distinct physical instances before alternate transports
   within each availability tier. The cursor bounds sibling deferral and preserves
@@ -28,8 +28,25 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
 
   @impl true
   def rank_channels(channels, method, _ctx, _profile, _chain) do
-    channels |> Enum.shuffle() |> order_fallbacks(method)
+    channels |> shuffle_channels() |> order_fallbacks(method)
   end
+
+  @doc "Randomizes physical instances before their sibling channel transports."
+  @spec shuffle_channels([Channel.t()]) :: [Channel.t()]
+  def shuffle_channels(channels), do: shuffle_instances(channels, &instance_key/1)
+
+  @doc "Shuffles route groups by the supplied physical-instance identity, then their siblings."
+  @spec shuffle_instances([route], (route -> term())) :: [route] when route: term()
+  def shuffle_instances(routes, instance_key) do
+    routes
+    |> Enum.group_by(instance_key)
+    |> Map.values()
+    |> Enum.shuffle()
+    |> Enum.flat_map(&Enum.shuffle/1)
+  end
+
+  defp instance_key(channel),
+    do: channel.instance_id || {channel.profile, channel.chain_id, channel.provider_id}
 
   @doc "Orders replay-safe fallbacks by physical instance without changing unsafe-method order."
   @spec order_fallbacks([Channel.t()], String.t(), MapSet.t() | nil) :: [Channel.t()]
@@ -46,7 +63,7 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
 
     {first, alternates, _seen} =
       Enum.reduce(channels, {[], [], seen}, fn channel, {first, alternates, seen} ->
-        key = channel.instance_id || {channel.profile, channel.chain_id, channel.provider_id}
+        key = instance_key(channel)
 
         if MapSet.member?(seen, key) do
           {first, [channel | alternates], seen}

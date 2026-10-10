@@ -100,6 +100,7 @@ defmodule Lasso.MixProject do
       {:opentelemetry, "~> 1.7"},
       {:opentelemetry_exporter, "~> 1.11"},
       {:mox, "~> 1.0", only: :test},
+      {:meck, "~> 0.9", only: [:dev, :test]},
       {:lazy_html, "~> 0.1", only: :test},
       {:cors_plug, "~> 3.0"},
       {:libcluster, "~> 3.3"},

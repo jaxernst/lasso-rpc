@@ -8,7 +8,7 @@ defmodule Lasso.RPC.RequestOptions do
 
   alias Lasso.Config.MethodConstraints
 
-  @type strategy :: :fastest | :priority | :load_balanced | :latency_weighted
+  @type strategy :: :fastest | :priority | :load_balanced | :balanced_fast
   @type transport :: :http | :ws | :both | nil
   @type request_origin :: :client | :system
 
@@ -65,13 +65,13 @@ defmodule Lasso.RPC.RequestOptions do
   end
 
   defp validate_strategy(strategy)
-       when strategy in [:fastest, :priority, :load_balanced, :latency_weighted],
+       when strategy in [:fastest, :priority, :load_balanced, :balanced_fast],
        do: :ok
 
   defp validate_strategy(strategy),
     do:
       {:error,
-       "Invalid strategy: #{inspect(strategy)}. Must be one of: :fastest, :priority, :load_balanced, :latency_weighted"}
+       "Invalid strategy: #{inspect(strategy)}. Must be one of: :fastest, :priority, :load_balanced, :balanced_fast"}
 
   defp validate_transport(%__MODULE__{transport: transport}, method) do
     required = MethodConstraints.required_transport_for(method)

@@ -63,6 +63,116 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     end
   end
 
+  test "registry overrides to LoadBalanced preserve physical-provider retry diversity" do
+    {chain, _snapshot, _plan} =
+      fixture([
+        {"bad-a", true, [:http, :ws]},
+        {"bad-b", true, [:http, :ws]},
+        {"capable", true, [:http]}
+      ])
+
+    previous = Application.fetch_env(:lasso, :strategy_registry)
+    Application.put_env(:lasso, :strategy_registry, %{fastest: LoadBalanced})
+
+    on_exit(fn ->
+      case previous do
+        {:ok, registry} -> Application.put_env(:lasso, :strategy_registry, registry)
+        :error -> Application.delete_env(:lasso, :strategy_registry)
+      end
+    end)
+
+    :ok = :meck.new(LoadBalanced, [:passthrough, :no_link])
+    on_exit(fn -> :meck.unload(LoadBalanced) end)
+
+    :meck.expect(LoadBalanced, :rank_channels, fn channels,
+                                                  method,
+                                                  ctx,
+                                                  profile,
+                                                  selected_chain ->
+      # Seed the real callback at its boundary, after pipeline preparation.
+      # Local calls inside the callback are deliberately not mocked.
+      seed =
+        Enum.find(1..1_000, fn seed ->
+          :rand.seed(:exsss, {seed, seed + 1, seed + 2})
+
+          order =
+            channels
+            |> Enum.group_by(& &1.instance_id)
+            |> Map.values()
+            |> Enum.shuffle()
+            |> Enum.flat_map(&Enum.shuffle/1)
+
+          List.last(order).provider_id == "capable"
+        end)
+
+      assert seed
+      :rand.seed(:exsss, {seed, seed + 1, seed + 2})
+      :meck.passthrough([channels, method, ctx, profile, selected_chain])
+    end)
+
+    assert {:ok, _, context} =
+             RequestPipeline.execute_via_channels(chain, "eth_getBalance", [], %RequestOptions{
+               profile: "public",
+               strategy: :fastest,
+               transport: :both,
+               timeout_ms: 2_000
+             })
+
+    assert context.executed_channel.provider_id == "capable"
+    assert context.execution_envelope.dispatch_count == 3
+    [first, second, {"capable", :http}] = dispatched(3)
+    assert MapSet.new([elem(first, 0), elem(second, 0)]) == MapSet.new(["bad-a", "bad-b"])
+  end
+
+  test "dual-transport and HTTP-only instances receive equal first dispatch shares" do
+    {chain, _snapshot, plan} = fixture([{"dual", true, [:http, :ws]}, {"single", true, [:http]}])
+
+    for provider <- plan.providers, transport <- provider.transports do
+      key = {"public", chain, provider.id, transport}
+      [{^key, channel}] = :ets.lookup(:transport_channel_cache, key)
+
+      :ets.insert(
+        :transport_channel_cache,
+        {key, %{channel | raw_channel: Map.put(channel.raw_channel, :succeed?, true)}}
+      )
+    end
+
+    :rand.seed(:exsss, {1878, 264, 4663})
+
+    counts =
+      for _ <- 1..1200, reduce: %{} do
+        counts ->
+          assert {:ok, _, context} = execute(chain, [], :both)
+          assert context.execution_envelope.dispatch_count == 1
+          [{provider, _}] = dispatched(1)
+          assert context.executed_channel.provider_id == provider
+          Map.update(counts, provider, 1, &(&1 + 1))
+      end
+
+    assert counts["dual"] in 504..696
+    assert counts["single"] in 504..696
+
+    for method <- ["eth_getBalance", "eth_sendRawTransaction"] do
+      :rand.seed(:exsss, {1878, 264, 4663})
+
+      counts =
+        for _ <- 1..1200, reduce: %{} do
+          counts ->
+            [first | rest] =
+              Selection.select_channels("public", chain, method,
+                strategy: :load_balanced,
+                transport: :both
+              )
+
+            assert length(rest) == 2
+            Map.update(counts, first.provider_id, 1, &(&1 + 1))
+        end
+
+      assert counts["dual"] in 504..696
+      assert counts["single"] in 504..696
+    end
+  end
+
   test "distinct archive providers get a first pass before sibling transports consume the budget" do
     {chain, snapshot, plan} =
       fixture([
@@ -180,10 +290,9 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
           "eth_getFilterChanges",
           "unknown_method"
         ] do
-      :rand.seed(:exsss, {2, 3, 4})
-      expected = Enum.shuffle(input)
-      :rand.seed(:exsss, {2, 3, 4})
-      assert LoadBalanced.rank_channels(input, method, nil, "public", 1) == expected
+      ranked = LoadBalanced.rank_channels(input, method, nil, "public", 1)
+      assert MapSet.new(ranked) == MapSet.new(input)
+      assert LoadBalanced.order_fallbacks(ranked, method) == ranked
       assert ExecutionEnvelope.new("safety", method, 2_000).dispatch_limit == 1
     end
   end
@@ -232,7 +341,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
   end
 
   test "unavailable sibling transport cannot use the capable provider's first pass" do
-    {chain, snapshot, plan} =
+    {chain, _snapshot, plan} =
       fixture([
         {"bad-a", true, [:http, :ws]},
         {"bad-b", true, [:http, :ws]},
@@ -243,13 +352,43 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     :ets.insert(:lasso_instance_state, {{:ws_status, id}, %{status: :disconnected}})
     params = ["0x0000000000000000000000000000000000000001", "0x1"]
 
-    {seed, _} =
-      find_order(snapshot, plan, params, :both, fn order ->
-        hd(order) == {"capable", :ws} and Enum.find_index(order, &(&1 == {"capable", :http})) >= 3
-      end)
+    order = [
+      {"bad-a", :http},
+      {"bad-a", :ws},
+      {"bad-b", :http},
+      {"bad-b", :ws},
+      {"capable", :ws},
+      {"capable", :http}
+    ]
 
-    :rand.seed(:exsss, {seed, seed + 1, seed + 2})
+    instances = MapSet.new(plan.providers, & &1.instance_id)
+    observer = self()
+    :ok = :meck.new(LoadBalanced, [:passthrough, :no_link])
+    on_exit(fn -> :meck.unload(LoadBalanced) end)
+
+    :meck.expect(LoadBalanced, :shuffle_instances, fn routes, instance_key ->
+      fixture_route? = fn
+        {%{instance_id: instance}, _} -> MapSet.member?(instances, instance)
+        _ -> false
+      end
+
+      if Enum.any?(routes, fixture_route?) do
+        indexed =
+          Map.new(routes, fn {provider, transport} = route ->
+            {{provider.id, transport}, route}
+          end)
+
+        assert length(routes) == 6
+        assert MapSet.new(Map.keys(indexed)) == MapSet.new(order)
+        send(observer, :fallback_order_pinned)
+        Enum.map(order, &Map.fetch!(indexed, &1))
+      else
+        :meck.passthrough([routes, instance_key])
+      end
+    end)
+
     assert {:ok, _, ctx} = execute(chain, params, :both)
+    assert_receive :fallback_order_pinned
     assert ctx.executed_channel.provider_id == "capable"
     assert ctx.executed_channel.transport == :http
     assert ctx.execution_envelope.dispatch_count <= 3
@@ -376,7 +515,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
 
     {seed, _} =
       find_order(snapshot, plan, [], :both, fn order ->
-        order == [{"bad-a", :http}, {"bad-b", :http}, {"bad-a", :ws}, {"capable", :http}]
+        order == [{"bad-a", :http}, {"bad-a", :ws}, {"bad-b", :http}, {"capable", :http}]
       end)
 
     expected = [{"bad-a", :http}, {"bad-b", :http}, {"capable", :http}, {"bad-a", :ws}]
@@ -474,7 +613,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
 
     {seed, _} =
       find_order(snapshot, plan, [], :both, fn order ->
-        order == [{"bad-a", :ws}, {"capable", :http}, {"bad-a", :http}]
+        order == [{"bad-a", :ws}, {"bad-a", :http}, {"capable", :http}]
       end)
 
     :rand.seed(:exsss, {seed, seed + 1, seed + 2})

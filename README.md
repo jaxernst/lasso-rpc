@@ -237,7 +237,9 @@ Profiles separate routing configuration; they are not access controls. Profile
 | Provider override | `/rpc/provider/:provider_id/:chain` | `/ws/rpc/provider/:provider_id/:chain` |
 | Profile | `/rpc/profile/:profile/:chain` | `/ws/rpc/profile/:profile/:chain` |
 
-Strategies are `load-balanced` (the default), `fastest`, and `latency-weighted`.
+Strategies are `load-balanced` (the default), `fastest`, and `balanced-fast`,
+which spreads load while favoring the quickest providers; `latency-weighted` is
+an alias.
 Profile routes accept strategies and provider overrides too; see the
 [API reference](docs/API_REFERENCE.md).
 

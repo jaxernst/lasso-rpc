@@ -132,7 +132,7 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
     assert {:ok, http_snapshot} = Snapshot.lookup({minority_id, :http})
     assert true = Snapshot.put(%{http_snapshot | state: :open, epoch: http_snapshot.epoch + 1})
 
-    for strategy <- [:priority, :load_balanced, :fastest, :latency_weighted] do
+    for strategy <- [:priority, :load_balanced, :fastest, :balanced_fast] do
       restricted =
         Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
           strategy: strategy,
@@ -153,7 +153,7 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
                  epoch: http_snapshot.epoch + 2
              })
 
-    for strategy <- [:priority, :load_balanced, :fastest, :latency_weighted] do
+    for strategy <- [:priority, :load_balanced, :fastest, :balanced_fast] do
       restricted =
         Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
           strategy: strategy,
@@ -178,7 +178,7 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
       assert {:ok, %{provider_id: ^minority}, _} = CandidateCursor.next(restricted)
     end
 
-    for strategy <- [:priority, :load_balanced, :fastest, :latency_weighted] do
+    for strategy <- [:priority, :load_balanced, :fastest, :balanced_fast] do
       restricted =
         Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
           strategy: strategy,
@@ -225,7 +225,7 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
       assert :ok = Registry.put_height(chain, instance_id, 100, :ws, %{hash: hash})
     end
 
-    for strategy <- [:priority, :load_balanced, :fastest, :latency_weighted] do
+    for strategy <- [:priority, :load_balanced, :fastest, :balanced_fast] do
       cursor =
         Selection.select_channel_candidates(profile, chain, "eth_getBalance",
           strategy: strategy,

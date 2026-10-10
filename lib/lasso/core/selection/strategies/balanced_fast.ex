@@ -1,6 +1,7 @@
-defmodule Lasso.RPC.Strategies.LatencyWeighted do
+defmodule Lasso.RPC.Strategies.BalancedFast do
   @moduledoc """
-  Produces a weighted random permutation of reliability-qualified upstreams.
+  Produces a weighted random permutation of reliability-qualified upstreams, spreading load
+  while favoring the quickest providers.
 
   Weights are dimensionless latency ratios. Sampling uses exponential-race keys, which produces a
   correct weighted permutation without a weight floor or hidden success-rate multiplier.
@@ -32,7 +33,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
       [] ->
         RoutingEvidence.emit_availability_degradation(
           profile,
-          :latency_weighted,
+          :balanced_fast,
           chain_id,
           ctx.workload_key,
           length(channels)
@@ -49,10 +50,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
   defp weighted_available(channels, summaries) do
     {measured, unmeasured} =
-      Enum.split_with(channels, fn channel ->
-        summary = RoutingEvidence.summary_for_channel(summaries, channel)
-        summary && summary.state != :stale && is_number(summary.successful_mean_latency_ms)
-      end)
+      Enum.split_with(channels, &measured?(RoutingEvidence.summary_for_channel(summaries, &1)))
 
     weighted =
       case measured do
@@ -61,7 +59,7 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
         _ ->
           latencies = Enum.map(measured, &mean_latency(&1, summaries))
-          beta = Application.get_env(:lasso, :lw_beta, @default_beta)
+          beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
 
           measured
           |> Enum.zip(relative_weights(latencies, beta))
@@ -70,6 +68,13 @@ defmodule Lasso.RPC.Strategies.LatencyWeighted do
 
     weighted ++ Enum.shuffle(unmeasured)
   end
+
+  # As in qualification, a zero mean is not a usable latency measurement.
+  defp measured?(%{state: state, successful_mean_latency_ms: mean})
+       when state != :stale and is_number(mean),
+       do: mean > 0
+
+  defp measured?(_summary), do: false
 
   defp mean_latency(channel, summaries),
     do: RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms
