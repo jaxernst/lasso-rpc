@@ -46,14 +46,9 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
 
       assert_http_serving(control_chain, owners)
 
-      other =
-        if unquote(outcome) == :unsupported,
-          do: unsupported("other"),
-          else: watched(failing(unquote(outcome)), "other")
-
       setup_providers([
         %{id: "unsupported", behavior: unsupported("unsupported")},
-        %{id: "other", behavior: other}
+        %{id: "other", behavior: http_other(unquote(outcome))}
       ])
 
       assert %{"id" => 1, "error" => error} = http_read(chain)
@@ -188,6 +183,25 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
   end
 
   describe "mixed outcomes" do
+    test "a rejection at the dispatch budget does not hide an earlier provider failure", %{
+      chain: chain
+    } do
+      setup_providers([
+        %{id: "failed", priority: 1, behavior: watched(failing(:provider_failure), "failed")},
+        %{id: "unsupported-2", priority: 2, behavior: unsupported("unsupported-2")},
+        %{id: "unsupported-3", priority: 3, behavior: unsupported("unsupported-3")},
+        %{id: "healthy", priority: 4, behavior: healthy("healthy")}
+      ])
+
+      assert {:error, %JError{category: :provider_error} = error, ctx} = read(chain)
+      refute error.code == @unsupported_code
+      assert ctx.execution_envelope.dispatch_count == 3
+      assert upstream_calls("failed", @read_method) == 1
+      assert upstream_calls("unsupported-2", @read_method) == 1
+      assert upstream_calls("unsupported-3", @read_method) == 1
+      assert upstream_calls("healthy", @read_method) == 0
+    end
+
     for kind <- [:provider_failure, :quota_exhaustion, :attempt_timeout] do
       test "unsupported then #{kind} is not reported as method-not-found", %{chain: chain} do
         assert_mixed_not_method_not_found(chain, unquote(kind), :unsupported_first)
@@ -252,6 +266,9 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
       provider_id
     )
   end
+
+  defp http_other(:unsupported), do: unsupported("other")
+  defp http_other(outcome), do: watched(failing(outcome), "other")
 
   defp healthy(provider_id),
     do: watched({:conditional, fn _, _, _ -> {:ok, "0x1"} end}, provider_id)

@@ -580,8 +580,9 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # The caller learns the method is unsupported only when every upstream the request reached
   # said so and the context still holds the latest rejection whole. That rejection then replaces
-  # Lasso's generic exhaustion error. A rejection mixed with any other outcome, or one a later
-  # pre-dispatch failure reduced to a diagnostic summary, never becomes the answer.
+  # Lasso's generic exhaustion error. A rejection mixed with any other outcome never becomes
+  # the answer. A later pre-dispatch failure also prevents promotion: the terminal attempt
+  # must still be the response that supplied the rejection.
   defp method_not_found_terminal(%JError{category: :provider_error} = generic, ctx) do
     if rejection_is_answer?(ctx), do: ctx.last_attempt_error, else: generic
   end
