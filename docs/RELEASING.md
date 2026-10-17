@@ -16,7 +16,10 @@ pass installation checks. A green build alone is not distribution verification.
    and any focused regressions needed for the change. Container publication reuses
    successful CI for the exact release commit; it does not repeat the full suite.
 5. Merge the release PR and require the merged commit's CI to pass before tagging.
-6. Create an annotated version tag and publish the GitHub source release with its
+6. Run the candidate checks below on that exact commit, before creating a tag.
+   Both the controlled distribution and bundled public quickstart must pass;
+   retain their JSON reports with the release evidence.
+7. Create an annotated version tag and publish the GitHub source release with its
    finalized changelog and compatibility notes. Keep previous tags unchanged.
 
 ```sh
@@ -25,6 +28,60 @@ git push jaxernst refs/tags/vX.Y.Z
 gh release create vX.Y.Z --repo jaxernst/lasso-rpc --verify-tag \
   --title 'Lasso RPC vX.Y.Z' --notes-file release-notes.md
 ```
+
+## Check the candidate before tagging
+
+Use a clean checkout of the exact release commit. The check host needs Docker
+with Compose and host networking, Bash 5 or newer (for the proxy checks),
+Python 3, Node.js 22 or newer, and outbound HTTPS access to the bundled public
+providers. Build locally; these checks push no images or tags:
+
+```sh
+revision="$(git rev-parse HEAD)"
+version="$(awk -F '"' '/^[[:space:]]*version:/ {print $2; exit}' mix.exs)"
+docker build --tag lasso-rpc:release-check \
+  --label "org.opencontainers.image.version=v$version" \
+  --label "org.opencontainers.image.revision=$revision" .
+python3 scripts/distribution/verify.py \
+  --image lasso-rpc:release-check --compose deployment/compose.release.yml \
+  --version "$version" --revision "$revision" --report distribution-candidate.json
+python3 scripts/distribution/quickstart.py \
+  --image lasso-rpc:release-check --compose deployment/compose.release.yml \
+  --version "$version" --report quickstart-candidate.json
+```
+
+The `Check release candidate` workflow runs the same sequence when dispatched
+with a full candidate SHA. If hosted execution is unavailable, run the commands
+on an available check host and retain the reports; this does not waive the
+source CI requirement. Repeat the checks if the release source or recipe changes.
+
+The quickstart uses a fresh directory, generated secrets, a free localhost port,
+and a disposable data volume. It preserves the recipe and bundled profiles;
+only the candidate image and local port are selected through the recipe's
+supported variables. It checks versioned health and `eth_blockNumber` through
+the README's `fastest` route on every advertised chain, including all six
+mainnets and testnets promised by the README. It makes one request per chain;
+Lasso owns provider selection and failover. One unavailable provider does not
+fail a chain that Lasso can still serve. Failure to boot or serve any chain
+fails the check. A public-provider or network outage requires diagnosis, not a
+skip or a passing report. This live check is separate from deterministic CI.
+
+## Check the published downloads
+
+After container promotion has attached the download recipe, the publication
+workflow runs the same probe with no image override and retains its report.
+The release is not fully verified until that report passes. For local execution:
+
+```sh
+python3 scripts/distribution/quickstart.py \
+  --compose https://github.com/jaxernst/lasso-rpc/releases/download/vX.Y.Z/compose.yml \
+  --version X.Y.Z --report quickstart-published.json
+```
+
+Retain this report alongside the native distribution evidence. It records the
+resolved download URL, recipe hash, installed image ID, health and per-chain
+responses. A failure after publication requires investigation before announcing
+the release; it does not rewrite an immutable image version.
 
 A release containing `publish-container.yml` starts container publication when
 published. To publish an existing source release, or retry explicitly:
@@ -36,7 +93,7 @@ gh run list --repo jaxernst/lasso-rpc --workflow publish-container.yml
 
 ## Container publication contract
 
-The workflow has five stages:
+The workflow has six stages:
 
 1. **Resolve source:** require a stable published release, a matching application
    version, and successful main-branch CI at the exact tagged commit.
@@ -53,6 +110,9 @@ The workflow has five stages:
    existing version with a different digest is rejected. `latest` moves only when
    the selected version is GitHub's current latest release. Attach `compose.yml`,
    the release manifest, and verification reports to the source release.
+6. **Quickstart:** download the published Compose URL, boot its default image with
+   the bundled public profiles, and require health and upstream-backed block
+   numbers on every bundled chain. Attach the live-provider report to the release.
 
 The acceptance suite requires Docker Compose, Python 3, and Node.js 22 or newer
 for its built-in WebSocket client. These are verification-tool dependencies;

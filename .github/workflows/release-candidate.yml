@@ -1,0 +1,55 @@
+name: Check release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full candidate commit SHA to check before tagging
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.revision }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build the exact candidate locally without publication
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$REVISION"
+          version="$(awk -F '"' '/^[[:space:]]*version:/ {print $2; exit}' mix.exs)"
+          test -n "$version"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          docker build --tag lasso-rpc:release-check \
+            --label "org.opencontainers.image.version=v$version" \
+            --label "org.opencontainers.image.revision=$REVISION" .
+      - name: Check controlled distribution and bundled public quickstart before tagging
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          python3 scripts/distribution/verify.py \
+            --image lasso-rpc:release-check --compose deployment/compose.release.yml \
+            --version "$VERSION" --revision "$REVISION" \
+            --report "$RUNNER_TEMP/distribution-candidate.json"
+          python3 scripts/distribution/quickstart.py \
+            --image lasso-rpc:release-check --compose deployment/compose.release.yml \
+            --version "$VERSION" --report "$RUNNER_TEMP/quickstart-candidate.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: release-candidate-checks
+          path: |
+            ${{ runner.temp }}/distribution-candidate.json*
+            ${{ runner.temp }}/quickstart-candidate.json
+          if-no-files-found: error
