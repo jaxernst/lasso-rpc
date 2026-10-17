@@ -1,0 +1,172 @@
+---
+name: Chainstack
+slug: chainstack
+---
+# Chainstack Global Node profile template
+#
+# Copy this file into your profiles directory (config/profiles/ or
+# LASSO_PROFILES_DIR) and set CHAINSTACK_MULTICHAIN_TOKEN. One Chainstack
+# multichain auth token (prefix mt_) authorizes every node attached to the
+# multichain endpoint, so all chains below share the same credential. Attach a
+# Global Node for each chain you keep; a chain whose node is not attached
+# answers 401 and Lasso treats it as an auth failure.
+#
+# Endpoint format: https://<protocol>-<network>.core.chainstack.com/<token>
+#                  wss://<protocol>-<network>.core.chainstack.com/<token>
+# Docs: https://docs.chainstack.com/docs/multichain-api
+#
+# Provider capabilities:
+# - max_block_range: 100 matches the Developer plan eth_getLogs cap. Growth and
+#   higher plans allow 10000; raise it to match your plan.
+# - Filter methods (eth_newFilter, eth_getFilterChanges, ...): Global Nodes
+#   load balance across backends and filters are backend-local, so a follow-up
+#   call can return "filter not found". They route to other providers in the
+#   profile; eth_getLogs stays supported.
+# - archival: false unless the attached node runs in Archive mode.
+# - -32612 is returned for tracers Chainstack disables (custom JavaScript
+#   tracers and non-default native tracers); requests fail over.
+
+chains:
+  ethereum:
+    chain_id: 1
+    name: "Ethereum Mainnet"
+    block_time_ms: 12000
+
+    monitoring:
+      probe_interval_ms: 12000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 1
+      archival_threshold: 128
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 35000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#627EEA"
+      size: xl
+
+    providers:
+      - id: "ethereum_chainstack"
+        name: "Chainstack Ethereum"
+        priority: 1
+        url: "https://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        ws_url: "wss://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        archival: false
+        subscribe_new_heads: true
+        capabilities:
+          unsupported_methods:
+            [
+              eth_newFilter,
+              eth_newBlockFilter,
+              eth_newPendingTransactionFilter,
+              eth_getFilterChanges,
+              eth_getFilterLogs,
+              eth_uninstallFilter,
+            ]
+          limits:
+            max_block_range: 100
+          error_rules:
+            - code: -32612
+              category: capability_violation
+
+  base:
+    chain_id: 8453
+    name: "Base Mainnet"
+    block_time_ms: 2000
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 5
+      archival_threshold: 750
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 20000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#0052FF"
+      size: lg
+
+    providers:
+      - id: "base_chainstack"
+        name: "Chainstack Base"
+        priority: 1
+        url: "https://base-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        ws_url: "wss://base-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        archival: false
+        subscribe_new_heads: true
+        capabilities:
+          unsupported_methods:
+            [
+              eth_newFilter,
+              eth_newBlockFilter,
+              eth_newPendingTransactionFilter,
+              eth_getFilterChanges,
+              eth_getFilterLogs,
+              eth_uninstallFilter,
+            ]
+          limits:
+            max_block_range: 100
+          error_rules:
+            - code: -32612
+              category: capability_violation
+
+  arbitrum:
+    chain_id: 42161
+    name: "Arbitrum One"
+    block_time_ms: 250
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 15
+
+    selection:
+      max_lag_blocks: 10
+      archival_threshold: 6000
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 15000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#28A0F0"
+      size: lg
+
+    providers:
+      - id: "arbitrum_chainstack"
+        name: "Chainstack Arbitrum"
+        priority: 1
+        url: "https://arbitrum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        ws_url: "wss://arbitrum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        archival: false
+        subscribe_new_heads: true
+        capabilities:
+          unsupported_methods:
+            [
+              eth_newFilter,
+              eth_newBlockFilter,
+              eth_newPendingTransactionFilter,
+              eth_getFilterChanges,
+              eth_getFilterLogs,
+              eth_uninstallFilter,
+            ]
+          limits:
+            max_block_range: 100
+          error_rules:
+            - code: -32612
+              category: capability_violation

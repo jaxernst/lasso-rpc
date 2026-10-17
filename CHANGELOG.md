@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `config/examples/chainstack.yml` profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum. One `CHAINSTACK_MULTICHAIN_TOKEN` multichain auth token authorizes every chain. The template caps `eth_getLogs` at the Developer plan range, routes stateful filter methods elsewhere because Global Node filters are backend-local, and fails over Chainstack's disabled-tracer error. See [Chainstack configuration](docs/CONFIGURATION.md#chainstack).
+
 ## [0.6.0] - 2026-10-16
 
 ### Added
