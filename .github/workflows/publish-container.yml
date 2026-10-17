@@ -212,3 +212,32 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/distribution/release.py promote --tag "$RELEASE_TAG" --directory "$RUNNER_TEMP/distribution"
+
+  quickstart:
+    needs: [prepare, promote]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Follow the published quickstart download
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 scripts/distribution/quickstart.py \
+            --compose "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/compose.yml" \
+            --version "$VERSION" --report "$RUNNER_TEMP/quickstart-published.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: quickstart-published
+          path: ${{ runner.temp }}/quickstart-published.json
+          if-no-files-found: error
+      - name: Attach quickstart evidence to the release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber "$RUNNER_TEMP/quickstart-published.json"
