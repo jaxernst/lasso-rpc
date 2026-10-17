@@ -66,6 +66,13 @@ jobs:
       - name: Run tests
         run: mix test
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run shared Core harness
+        run: scripts/verify-harness
+
       - name: Verify container publication guards
         run: python3 -m unittest discover -s scripts/distribution -p "test_*.py"
 
