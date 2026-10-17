@@ -355,6 +355,31 @@ chains:
         priority: 10
 ```
 
+### Chainstack
+
+[`config/examples/chainstack.yml`](../config/examples/chainstack.yml) is a profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum. It uses one [multichain auth token](https://docs.chainstack.com/docs/multichain-api) for every chain, so a single credential covers the whole profile:
+
+1. In the Chainstack console, create a multichain endpoint and attach a Global Node for each chain you keep. Nodes that are not attached answer `401`.
+2. Set `CHAINSTACK_MULTICHAIN_TOKEN` to the endpoint's `mt_` token.
+3. Copy the template into your profiles directory, or merge its provider entries into an existing profile, and reload.
+
+```yaml
+- id: "ethereum_chainstack"
+  url: "https://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+  ws_url: "wss://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+```
+
+Other chains use the same token with their `<protocol>-<network>` host, for example `polygon-mainnet` or `ethereum-sepolia`. Adjust these template defaults to your Chainstack plan and nodes:
+
+| Setting | Template value | When to change |
+|---------|----------------|----------------|
+| `limits.max_block_range` | `100` (Developer plan `eth_getLogs` cap) | Set `10000` on Growth and higher plans |
+| `archival` | `false` | Set `true` when the attached node runs in Archive mode |
+| `unsupported_methods` | Stateful filter methods | Keep: Global Nodes load balance across backends and filters are backend-local; `eth_getLogs` stays supported |
+| `error_rules` | `-32612` → `capability_violation` | Keep: Chainstack returns it for disabled tracers, so requests fail over |
+
+For a Dedicated Node, use the node's own HTTPS and WSS URLs from its connection details; the multichain token works in the same URL position when the node is attached.
+
 ## Multiple Profiles
 
 Create separate profiles for different environments or use cases:
