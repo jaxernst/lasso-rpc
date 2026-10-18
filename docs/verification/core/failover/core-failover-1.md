@@ -1,15 +1,8 @@
-# Failover
-
-## Sub-features
+# core-failover-1
 
 - `core-failover-1` A replay-safe read recovers from an upstream HTTP 503 through the next provider, preserving its JSON-RPC ID and result, with one send per attempted provider.
-- `core-failover-2` Unknown methods and signed transactions receive at most one upstream dispatch. **unguarded**.
-- `core-failover-3` Replay-safe method rejection may continue within the original attempt and deadline bounds. **unguarded**.
-- `core-failover-4` Open circuits are excluded and recovery admits suitable providers again. **unguarded**.
 
-## How to get to it (user POV)
-
-Use the configured profile’s RPC URL with a real HTTP or WebSocket client.
+[Area and shared preconditions](README.md).
 
 ## Driving it with the harness
 
@@ -39,12 +32,3 @@ scripts/verify-harness harness/test/core_routing_test.exs
 
 In the companion repository its runner is `scripts/verify test harness/test/core_routing_test.exs`.
 The scenario file is byte-identical; only tenant provisioning and credentials differ.
-
-## Gotchas
-
-- Core does not replay signed transactions after dispatch. Clients reconcile hashes.
-- A missing response can mean a transaction was accepted.
-- No-send evidence ends at a correlated closing marker and fleet drain.
-
-Source baseline: Core `0538eecf8e422635560350ca5a2c1bd531678a30`; retirement
-completion is introduced with this map. Inspected source paths: lib/lasso/core/request/execution_envelope.ex; lib/lasso/core/request/execution_projector.ex; lib/lasso/core/request/request_pipeline.ex.

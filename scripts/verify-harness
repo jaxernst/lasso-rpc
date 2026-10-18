@@ -7,5 +7,6 @@ mkdir -p "$scratch/profiles"
 cp test/support/profiles/*.yml "$scratch/profiles/"
 export LASSO_PROFILES_DIR="$scratch/profiles" LASSO_TEST_HARNESS=1 MIX_ENV=test
 export PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')"
+node --test scripts/feature-map.test.mjs
 mix test "$@"
 node scripts/feature-map.mjs

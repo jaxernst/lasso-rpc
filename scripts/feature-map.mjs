@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { readFeatureMap } from "./feature-map-inventory.mjs";
 
 function files(root, accept) {
   if (!existsSync(root)) return [];
@@ -12,28 +13,12 @@ function files(root, accept) {
   });
 }
 
-const errors = [];
-const promises = new Map();
+const { entries: promises, errors } = readFeatureMap();
 const guards = new Set();
 const cite = (id, location) => {
   if (!promises.has(id)) errors.push(`${location}: unknown feature ID ${id}`);
   guards.add(id);
 };
-
-for (const path of files("docs/verification", p => /\/(cloud|core)\/[^/]+\.md$/.test(p) && !p.endsWith("/README.md"))) {
-  const source = readFileSync(path, "utf8");
-  const list = source.split(/^## Sub-features\s*$/m)[1]?.split(/^## /m)[0] ?? "";
-  const entries = [...list.matchAll(/^- `([a-z][a-z0-9-]*-\d+)` (.+)$/gm)];
-  if (!entries.length) errors.push(`${path}: no sub-features`);
-  for (const line of list.split("\n").filter(line => line.startsWith("- "))) {
-    if (!/^- `[a-z][a-z0-9-]*-\d+` .+/.test(line)) errors.push(`${path}: malformed sub-feature: ${line}`);
-  }
-  for (const [, id, promise] of entries) {
-    if (promises.has(id)) errors.push(`${path}: duplicate feature ID ${id}`);
-    promises.set(id, { path, unguarded: /\bunguarded\b/.test(promise) });
-  }
-}
-if (!promises.size) errors.push("docs/verification: no feature map found");
 
 // Harness contract tests exercise the fixtures/adapters, not product promises.
 // Keep this exemption confined to the documented support-test subtree.
