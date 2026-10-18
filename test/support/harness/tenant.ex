@@ -2,7 +2,6 @@ defmodule Lasso.Test.Harness.Tenant do
   @moduledoc "File-backed adapter for an owned harness profile."
   import ExUnit.Assertions
   alias Lasso.Test.Harness.{Rpc, Settle}
-  def isolate!, do: :ok
 
   def open!(providers) do
     slug = "harness-#{System.unique_integer([:positive])}"

@@ -5,12 +5,6 @@ defmodule Lasso.Test.Harness.CoreRoutingTest do
   @moduletag :harness
   @moduletag feature: ["core-routing-1", "core-failover-1"]
 
-  setup do
-    # Adapter owns database isolation in Cloud; Core's implementation is a no-op.
-    Tenant.isolate!()
-    :ok
-  end
-
   test "priority failover preserves JSON-RPC and sends once to each real upstream" do
     fleet = Enum.map(["primary", "alternate"], &Fleet.start!(self(), &1))
     tenant = Tenant.open!(fleet)
