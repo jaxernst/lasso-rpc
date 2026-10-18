@@ -31,7 +31,9 @@ curl -sS -i -H 'content-type: application/json' --data @read.json "$RPC/priority
 ## Gotchas
 
 - Each node reads its own files. A reload receipt says nothing about peers.
-- A failed reload retains the live snapshot; it cannot repair invalid files on disk.
+- A file validation failure leaves the active configuration unchanged; reload
+  cannot repair invalid files on disk. A runtime reconciliation failure after
+  publication reports a reload error while the new configuration is already active.
 - Retirement requires quiesced callers. Completion emits profile, node, operation,
   generation and outcome only after successful reload and confirmed profile absence.
 
