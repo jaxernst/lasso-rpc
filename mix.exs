@@ -9,6 +9,8 @@ defmodule Lasso.MixProject do
       start_permanent: Mix.env() == :prod,
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: elixirc_paths(Mix.env()),
+      test_paths:
+        if(System.get_env("LASSO_TEST_HARNESS") == "1", do: ["harness/test"], else: ["test"]),
       releases: releases(),
       aliases: aliases(),
       deps: deps(),
