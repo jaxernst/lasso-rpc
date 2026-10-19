@@ -122,3 +122,13 @@ python3 -m unittest discover -s scripts/distribution -p 'test_*.py'
 
 See the workflow for the complete container health-check invocation. Passing
 `mix test` alone does not establish that the full CI workflow passed.
+
+## Verification promises
+
+The [verification map](verification/README.md) keeps each promise in
+`docs/verification/core/<area>/<feature-id>.md`. Its filename matches the
+literal ID declared in the file; the area's README holds shared preconditions.
+Tests cite the promises they assert through surfaces with literal ExUnit feature
+tags. Update the individual promise files when coverage changes. The checker
+rejects missing guards, stale `unguarded` markers and files in the former flat
+area layout. Run `node scripts/feature-map.mjs` to check catalogue and tag drift.

@@ -4,10 +4,10 @@ The map describes the standalone runtime at source revision
 `0538eecf8e422635560350ca5a2c1bd531678a30`, plus the retirement completion
 introduced alongside these entries. It makes no release inclusion claim.
 
-- [Routing](routing.md)
-- [Failover](failover.md)
-- [Configuration publication](config.md)
-- [WebSocket lifecycle](websocket.md)
+- [Routing](routing/README.md)
+- [Failover](failover/README.md)
+- [Configuration publication](config/README.md)
+- [WebSocket lifecycle](websocket/README.md)
 
 ## Baseline and proof
 
