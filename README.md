@@ -27,9 +27,8 @@ try it in one command. Add any EVM chain and your own providers in YAML.
 [How it works](#how-it-works) · [Migration guide](docs/MIGRATION.md) ·
 [Documentation](#documentation) · [Support](SUPPORT.md)
 
-## Managed Lasso 
 
-[lasso.sh](https://lasso.sh) · [Setup with your agent](https://lasso.sh/llms.txt)
+Or get instant access to free curated RPC or hosted BYOK RPC profiles at [lasso.sh](https://lasso.sh)
 
 ## Why Lasso
 
