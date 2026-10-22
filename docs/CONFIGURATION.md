@@ -355,6 +355,36 @@ chains:
         priority: 10
 ```
 
+### Provider templates
+
+`config/examples/` holds provider-specific profiles. Each keeps the provider at `priority: 1` with keyless public fallbacks at lower priority, copied from `config/profiles/public.yml` with their capabilities and error rules, so rate limits, outages, range limits, and archive reads still have somewhere to fail over. The default `load_balanced` strategy uses `priority` only as a tiebreaker, so keep the provider primary with the priority strategy. A template copied as its own profile is addressed by its slug: route through `/rpc/profile/<slug>/priority/:chain`, or through `/rpc/profile/<slug>/:chain` after setting the node-wide default `config :lasso, :provider_selection_strategy, :priority`. Unscoped routes such as `/rpc/priority/:chain` use the `public` profile, so they apply only when you merge the template's providers into `public.yml`. See [Priority routing](ROUTING.md#priority).
+
+#### Chainstack
+
+[`config/examples/chainstack.yml`](../config/examples/chainstack.yml) is a profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum, with dRPC, PublicNode, Base Official, and thirdweb fallbacks. It uses one [multichain auth token](https://docs.chainstack.com/docs/multichain-api) for every chain, so a single credential covers the whole profile:
+
+1. In the Chainstack console, create a multichain endpoint and attach a Global Node for each chain you keep. Nodes that are not attached answer `401`.
+2. Set `CHAINSTACK_MULTICHAIN_TOKEN` to the endpoint's `mt_` token.
+3. Copy the template into your profiles directory, or merge its provider entries into an existing profile, and reload.
+4. Send requests to `/rpc/profile/chainstack/priority/:chain`. For merged entries, use `/rpc/profile/<slug>/priority/:chain` with the receiving profile's slug, or `/rpc/priority/:chain` for `public`.
+
+```yaml
+- id: "ethereum_chainstack"
+  priority: 1
+  url: "https://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+  ws_url: "wss://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+```
+
+Other chains use the same token with their `<protocol>-<network>` host, for example `polygon-mainnet` or `ethereum-sepolia`, and need their own fallback providers. Adjust these Chainstack defaults to your plan and nodes:
+
+| Setting | Template value | When to change |
+|---------|----------------|----------------|
+| `limits.max_block_range` | `100` (Developer plan `eth_getLogs` cap) | Set `10000` on Growth and higher plans |
+| `archival` | `false` | Set `true` when the attached node runs in Archive mode |
+| `error_rules` | `-32612` → `capability_violation` | Keep: Chainstack returns it for disabled tracers, so the request fails over to another provider when one supports it |
+
+For a Dedicated Node, use the node's own HTTPS and WSS URLs from its connection details; the multichain token works in the same URL position when the node is attached.
+
 ## Multiple Profiles
 
 Create separate profiles for different environments or use cases:

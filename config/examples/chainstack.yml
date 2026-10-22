@@ -1,0 +1,246 @@
+---
+name: Chainstack
+slug: chainstack
+---
+# Chainstack Global Node profile template
+#
+# Copy this file into your profiles directory (config/profiles/ or
+# LASSO_PROFILES_DIR) and set CHAINSTACK_MULTICHAIN_TOKEN. One Chainstack
+# multichain auth token (prefix mt_) authorizes every node attached to the
+# multichain endpoint, so all chains below share the same credential. Attach a
+# Global Node for each chain you keep; a chain whose node is not attached
+# answers 401 and Lasso treats it as an auth failure.
+#
+# Endpoint format: https://<protocol>-<network>.core.chainstack.com/<token>
+#                  wss://<protocol>-<network>.core.chainstack.com/<token>
+# Docs: https://docs.chainstack.com/docs/multichain-api
+#
+# Other Chainstack chains use the same <protocol>-<network> host pattern and
+# token (for example polygon-mainnet or ethereum-sepolia). Give each added
+# chain its own fallback providers.
+#
+# Routing: Chainstack is priority 1 on every chain, with keyless public
+# fallbacks at lower priority for rate limits, outages, eth_getLogs ranges
+# above the Chainstack cap, and archive reads. The default load-balanced
+# strategy uses priority only as a tiebreaker, so keep Chainstack primary with
+# the priority strategy. As its own profile, route through
+# /rpc/profile/chainstack/priority/:chain, or through
+# /rpc/profile/chainstack/:chain with the node-wide
+# `config :lasso, :provider_selection_strategy, :priority`.
+# Merged into another profile, use /rpc/profile/<slug>/priority/:chain for that
+# profile. Unscoped routes such as /rpc/priority/:chain use the public profile.
+#
+# Chainstack capabilities:
+# - max_block_range: 100 matches the Developer plan eth_getLogs cap. Growth and
+#   higher plans allow 10000; raise it to match your plan.
+# - archival: false unless the attached node runs in Archive mode.
+# - -32612 is returned for tracers Chainstack disables (custom JavaScript
+#   tracers and non-default native tracers); the request fails over to another
+#   provider when one supports it.
+#
+# Fallback entries are copied from config/profiles/public.yml with their
+# capabilities and error rules.
+
+chains:
+  ethereum:
+    chain_id: 1
+    name: "Ethereum Mainnet"
+    block_time_ms: 12000
+
+    monitoring:
+      probe_interval_ms: 12000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 1
+      archival_threshold: 128
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 35000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#627EEA"
+      size: xl
+
+    providers:
+      - id: "ethereum_chainstack"
+        name: "Chainstack Ethereum"
+        priority: 1
+        url: "https://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        ws_url: "wss://ethereum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        archival: false
+        subscribe_new_heads: true
+        capabilities:
+          limits:
+            max_block_range: 100
+          error_rules:
+            - code: -32612
+              category: capability_violation
+
+      - id: "ethereum_drpc"
+        name: "dRPC Ethereum"
+        priority: 2
+        url: "https://eth.drpc.org"
+        ws_url: "wss://eth.drpc.org"
+        archival: true
+        subscribe_new_heads: true
+        capabilities:
+          limits:
+            max_block_range: 10000
+          error_rules:
+            - code: 30
+              message_contains: "timeout on the free tier"
+              category: rate_limit
+            - code: 30
+              category: rate_limit
+            - code: 23
+              message_contains: "unsupported subscription"
+              category: server_error
+            - code: 35
+              category: capability_violation
+
+      - id: "ethereum_publicnode"
+        name: "PublicNode Ethereum"
+        priority: 3
+        url: "https://ethereum-rpc.publicnode.com"
+        ws_url: "wss://ethereum-rpc.publicnode.com"
+        subscribe_new_heads: true
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, eip4844, filters]
+          limits:
+            max_block_age: 1000
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
+          error_rules:
+            - code: -32701
+              category: capability_violation
+            - message_contains: "pruned"
+              category: requires_archival
+
+  base:
+    chain_id: 8453
+    name: "Base Mainnet"
+    block_time_ms: 2000
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 5
+      archival_threshold: 750
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 20000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#0052FF"
+      size: lg
+
+    providers:
+      - id: "base_chainstack"
+        name: "Chainstack Base"
+        priority: 1
+        url: "https://base-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        ws_url: "wss://base-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        archival: false
+        subscribe_new_heads: true
+        capabilities:
+          limits:
+            max_block_range: 100
+          error_rules:
+            - code: -32612
+              category: capability_violation
+
+      - id: "base_drpc"
+        name: "dRPC Base"
+        priority: 2
+        url: "https://base.drpc.org"
+        ws_url: "wss://base.drpc.org"
+        subscribe_new_heads: false
+        archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 10000
+
+      - id: "base_official"
+        name: "Base Official"
+        priority: 3
+        url: "https://mainnet.base.org"
+        archival: true
+        capabilities:
+          unsupported_methods: ["eth_protocolVersion"]
+
+  arbitrum:
+    chain_id: 42161
+    name: "Arbitrum One"
+    block_time_ms: 250
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 15
+
+    selection:
+      max_lag_blocks: 10
+      archival_threshold: 6000
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 15000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#28A0F0"
+      size: lg
+
+    providers:
+      - id: "arbitrum_chainstack"
+        name: "Chainstack Arbitrum"
+        priority: 1
+        url: "https://arbitrum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        ws_url: "wss://arbitrum-mainnet.core.chainstack.com/${CHAINSTACK_MULTICHAIN_TOKEN}"
+        archival: false
+        subscribe_new_heads: true
+        capabilities:
+          limits:
+            max_block_range: 100
+          error_rules:
+            - code: -32612
+              category: capability_violation
+
+      - id: "arbitrum_drpc"
+        name: "dRPC Arbitrum"
+        priority: 2
+        url: "https://arbitrum.drpc.org"
+        ws_url: "wss://arbitrum.drpc.org"
+        # Serves headers at full depth but refuses historical state (HTTP 400 code 27).
+        archival: false
+        subscribe_new_heads: false
+        capabilities:
+          limits:
+            max_block_range: 10000
+
+      - id: "arbitrum_thirdweb"
+        name: "thirdweb Arbitrum"
+        priority: 3
+        url: "https://arbitrum.rpc.thirdweb.com"
+        archival: true
+        subscribe_new_heads: false
