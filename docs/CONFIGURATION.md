@@ -357,7 +357,7 @@ chains:
 
 ### Provider templates
 
-`config/examples/` holds provider-specific profiles. Each keeps the provider at `priority: 1` with keyless public fallbacks at lower priority, copied from `config/profiles/public.yml` with their capabilities and error rules, so rate limits, outages, range limits, and archive reads still have somewhere to fail over. The default `load_balanced` strategy uses `priority` only as a tiebreaker; to keep the provider primary, route through `/rpc/priority/:chain` (or `/rpc/profile/:profile/priority/:chain`) or set `config :lasso, :provider_selection_strategy, :priority`. See [Priority routing](ROUTING.md#priority).
+`config/examples/` holds provider-specific profiles. Each keeps the provider at `priority: 1` with keyless public fallbacks at lower priority, copied from `config/profiles/public.yml` with their capabilities and error rules, so rate limits, outages, range limits, and archive reads still have somewhere to fail over. The default `load_balanced` strategy uses `priority` only as a tiebreaker, so keep the provider primary with the priority strategy. A template copied as its own profile is addressed by its slug: route through `/rpc/profile/<slug>/priority/:chain`, or through `/rpc/profile/<slug>/:chain` after setting the node-wide default `config :lasso, :provider_selection_strategy, :priority`. Unscoped routes such as `/rpc/priority/:chain` use the `public` profile, so they apply only when you merge the template's providers into `public.yml`. See [Priority routing](ROUTING.md#priority).
 
 #### Chainstack
 
@@ -366,6 +366,7 @@ chains:
 1. In the Chainstack console, create a multichain endpoint and attach a Global Node for each chain you keep. Nodes that are not attached answer `401`.
 2. Set `CHAINSTACK_MULTICHAIN_TOKEN` to the endpoint's `mt_` token.
 3. Copy the template into your profiles directory, or merge its provider entries into an existing profile, and reload.
+4. Send requests to `/rpc/profile/chainstack/priority/:chain`. For merged entries, use `/rpc/profile/<slug>/priority/:chain` with the receiving profile's slug, or `/rpc/priority/:chain` for `public`.
 
 ```yaml
 - id: "ethereum_chainstack"
