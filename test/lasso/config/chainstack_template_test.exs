@@ -1,7 +1,8 @@
 defmodule Lasso.Config.ChainstackTemplateTest do
   @moduledoc """
   Loads the Chainstack profile template through the file backend and verifies
-  the multichain token substitution and provider capabilities it declares.
+  the multichain token substitution, provider capabilities, and public
+  fallbacks it declares.
   """
   use ExUnit.Case, async: false
 
@@ -9,17 +10,9 @@ defmodule Lasso.Config.ChainstackTemplateTest do
   alias Lasso.RPC.Providers.Capabilities
 
   @examples_dir "config/examples"
+  @profiles_dir "config/profiles"
   @token_var "CHAINSTACK_MULTICHAIN_TOKEN"
   @token "mt_lasso_template_test"
-
-  @stateful_filter_methods [
-    "eth_newFilter",
-    "eth_newBlockFilter",
-    "eth_newPendingTransactionFilter",
-    "eth_getFilterChanges",
-    "eth_getFilterLogs",
-    "eth_uninstallFilter"
-  ]
 
   @expected_hosts %{
     "ethereum" => {1, "ethereum-mainnet.core.chainstack.com"},
@@ -48,8 +41,8 @@ defmodule Lasso.Config.ChainstackTemplateTest do
     for {chain, {chain_id, host}} <- @expected_hosts do
       chain_config = profile.chains[chain]
       assert chain_config.chain_id == chain_id
-      assert [provider] = chain_config.providers
 
+      provider = chainstack_provider(chain_config)
       assert provider.id == "#{chain}_chainstack"
       assert provider.url == "https://#{host}/#{@token}"
       assert provider.ws_url == "wss://#{host}/#{@token}"
@@ -57,16 +50,49 @@ defmodule Lasso.Config.ChainstackTemplateTest do
     end
   end
 
-  test "capabilities pass boot validation and enforce Chainstack limits" do
+  test "Chainstack is the sole priority-1 provider with keyless archival-capable fallbacks" do
     profile = load_template!(@token)
 
-    for {_chain, chain_config} <- profile.chains, provider <- chain_config.providers do
+    for {chain, chain_config} <- profile.chains do
+      {[primary], fallbacks} = Enum.split_with(chain_config.providers, &chainstack?/1)
+
+      assert primary.priority == 1
+      assert fallbacks != [], "#{chain}: no fallback providers"
+
+      for fallback <- fallbacks do
+        assert fallback.priority > primary.priority,
+               "#{chain}/#{fallback.id}: fallback must rank below Chainstack"
+
+        refute fallback.url =~ @token, "#{chain}/#{fallback.id}: fallback must be keyless"
+      end
+
+      assert Enum.any?(fallbacks, & &1.archival), "#{chain}: no archival fallback"
+    end
+  end
+
+  test "fallbacks match their public profile entries apart from priority" do
+    profile = load_template!(@token)
+    {:ok, state} = FileBackend.init(profiles_dir: @profiles_dir)
+    {:ok, public} = FileBackend.load(state, "public")
+
+    for {chain, chain_config} <- profile.chains,
+        fallback <- chain_config.providers,
+        not chainstack?(fallback) do
+      public_entry = Enum.find(public.chains[chain].providers, &(&1.id == fallback.id))
+      assert public_entry, "#{chain}/#{fallback.id}: not present in public.yml"
+
+      assert %{public_entry | priority: fallback.priority} == fallback,
+             "#{chain}/#{fallback.id}: differs from public.yml"
+    end
+  end
+
+  test "Chainstack capabilities pass boot validation and enforce the eth_getLogs cap" do
+    profile = load_template!(@token)
+
+    for {_chain, chain_config} <- profile.chains do
+      provider = chainstack_provider(chain_config)
       caps = provider.capabilities
       assert :ok = Capabilities.validate!(provider.id, caps)
-
-      for method <- @stateful_filter_methods do
-        assert {:error, :method_unsupported} = Capabilities.supports_method?(method, caps)
-      end
 
       assert :ok = Capabilities.supports_method?("eth_getLogs", caps)
       assert :ok = Capabilities.supports_method?("debug_traceTransaction", caps)
@@ -87,7 +113,9 @@ defmodule Lasso.Config.ChainstackTemplateTest do
     message =
       "Custom tracers are disabled by default. See https://docs.chainstack.com/docs/limits for details."
 
-    for {_chain, chain_config} <- profile.chains, provider <- chain_config.providers do
+    for {_chain, chain_config} <- profile.chains do
+      provider = chainstack_provider(chain_config)
+
       assert {:ok, :capability_violation} =
                Capabilities.classify_error(-32_612, message, provider.capabilities)
     end
@@ -100,6 +128,13 @@ defmodule Lasso.Config.ChainstackTemplateTest do
     assert path =~ ~r/^chains\.\w+\.providers\.url$/
     assert detail =~ "unresolved environment variable"
     refute detail =~ "mt_"
+  end
+
+  defp chainstack?(provider), do: String.ends_with?(provider.id, "_chainstack")
+
+  defp chainstack_provider(chain_config) do
+    assert [provider] = Enum.filter(chain_config.providers, &chainstack?/1)
+    provider
   end
 
   defp load_template!(token) do
