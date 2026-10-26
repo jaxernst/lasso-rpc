@@ -16,7 +16,16 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     @moduledoc false
 
     @enforce_keys [:kind, :id]
-    defstruct [:kind, :id, :error_code, :error_message, :error_data, :id_span]
+    defstruct [
+      :kind,
+      :id,
+      :error_code,
+      :error_message,
+      :error_data,
+      :id_span,
+      :result_offset,
+      result_shape: :other
+    ]
 
     @type t :: %__MODULE__{
             kind: :result | :error,
@@ -24,7 +33,9 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
             error_code: integer() | nil,
             error_message: binary() | nil,
             error_data: term(),
-            id_span: {non_neg_integer(), non_neg_integer()} | nil
+            id_span: {non_neg_integer(), non_neg_integer()} | nil,
+            result_shape: :null | :empty_array | :other,
+            result_offset: non_neg_integer() | nil
           }
   end
 
@@ -44,10 +55,10 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   @spec parse_unary(binary()) :: parsed()
   def parse_unary(raw_bytes) when is_binary(raw_bytes) do
     case response_mode(raw_bytes) do
-      {:found, mode, id_span} ->
+      {:found, mode, id_span, result_offset} ->
         raw_bytes
         |> decode_response(mode)
-        |> attach_known_id_span(id_span)
+        |> attach_known_id_span(id_span, result_offset)
 
       :unknown ->
         raw_bytes
@@ -98,10 +109,10 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
 
   defp attach_id_span(parsed, _raw_bytes), do: parsed
 
-  defp attach_known_id_span({:ok, %Validated{} = validated}, id_span),
-    do: {:ok, %{validated | id_span: id_span}}
+  defp attach_known_id_span({:ok, %Validated{} = validated}, id_span, result_offset),
+    do: {:ok, %{validated | id_span: id_span, result_offset: result_offset}}
 
-  defp attach_known_id_span(parsed, _id_span), do: parsed
+  defp attach_known_id_span(parsed, _id_span, _result_offset), do: parsed
 
   @spec parse_ws_frame(binary()) ::
           {:transport, Validated.t()}
@@ -143,7 +154,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
       )
       when is_binary(raw_bytes) do
     case restore_id(validated, raw_bytes, client_id) do
-      {:ok, restored_bytes} -> build_response(validated, client_id, restored_bytes)
+      {:ok, restored_bytes} -> build_response(validated, client_id, raw_bytes, restored_bytes)
       {:error, _reason} -> {:invalid, :invalid_envelope}
     end
   end
@@ -180,7 +191,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
-  @doc false
+  @doc "Extracts bounded structural request and response identifiers from raw JSON-RPC bytes."
   @spec extract_transport_ids(binary()) :: {:ok, [String.t()]} | {:error, :unattributable}
   def extract_transport_ids(raw_bytes) when is_binary(raw_bytes) do
     case parse_unary(raw_bytes) do
@@ -198,7 +209,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
-  @doc false
+  @doc "Returns the validated correlation and exact top-level identifier span."
   @spec correlation(binary()) ::
           {:transport_id, String.t()} | :legacy | {:unattributable, atom()}
   def correlation(raw_bytes) when is_binary(raw_bytes) do
@@ -251,6 +262,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
       id: :missing,
       id_count: 0,
       result_count: 0,
+      result_shape: :other,
       error: :missing,
       error_count: 0,
       method_count: 0
@@ -317,7 +329,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   defp array_start({:root, _fields}, _mode), do: {:array, 0, nil}
 
   defp array_start(old_accumulator, :discard),
-    do: {:array, accumulator_depth(old_accumulator) + 1, nil}
+    do: {:array, accumulator_depth(old_accumulator) + 1, :empty}
 
   defp array_start(old_accumulator, :retain_error),
     do: {:retained_array, accumulator_depth(old_accumulator) + 1, []}
@@ -325,14 +337,16 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   defp array_push(value, {:retained_array, depth, values}),
     do: {:retained_array, depth, [value | values]}
 
+  defp array_push(_value, {:array, depth, :empty}), do: {:array, depth, :nonempty}
+
   defp array_push(_value, accumulator), do: accumulator
 
   defp array_finish({:array, 0, _fields}, {:root, _old_fields}) do
     {{:container, :array}, {:root, :top_level_array}}
   end
 
-  defp array_finish({:array, _depth, _fields}, old_accumulator) do
-    {{:container, :array}, old_accumulator}
+  defp array_finish({:array, _depth, shape}, old_accumulator) do
+    {{:container, :array, shape}, old_accumulator}
   end
 
   defp array_finish({:retained_array, _depth, values}, old_accumulator) do
@@ -352,8 +366,8 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     %{fields | id: normalize_id(value), id_count: fields.id_count + 1}
   end
 
-  defp capture_response_field(fields, "result", _value) do
-    %{fields | result_count: fields.result_count + 1}
+  defp capture_response_field(fields, "result", value) do
+    %{fields | result_count: fields.result_count + 1, result_shape: result_shape(value)}
   end
 
   defp capture_response_field(fields, "error", value) do
@@ -365,6 +379,10 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
   end
 
   defp capture_response_field(fields, _key, _value), do: fields
+
+  defp result_shape(nil), do: :null
+  defp result_shape({:container, :array, :empty}), do: :empty_array
+  defp result_shape(_value), do: :other
 
   defp capture_error_field(fields, "code", value) do
     %{fields | code: normalize_error_code(value), code_count: fields.code_count + 1}
@@ -412,7 +430,7 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
         {:invalid, :unexpected_notification, candidate_id}
 
       fields.result_count == 1 and fields.error_count == 0 ->
-        {:ok, %Validated{kind: :result, id: fields.id}}
+        {:ok, %Validated{kind: :result, id: fields.id, result_shape: fields.result_shape}}
 
       fields.result_count == 0 and fields.error_count == 1 ->
         validate_error(fields.error, fields.id)
@@ -525,8 +543,8 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
         value_start = skip_whitespace(raw_bytes, colon_index + 1)
 
         case key do
-          "error" -> {:found, :retain_error, id_span}
-          "result" -> {:found, :discard, id_span}
+          "error" -> {:found, :retain_error, id_span, nil}
+          "result" -> {:found, :discard, id_span, value_start}
           "id" -> continue_response_mode(raw_bytes, value_start, value_start)
           _other -> continue_response_mode(raw_bytes, value_start, id_span)
         end
@@ -798,8 +816,20 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
-  defp build_response(%Validated{kind: :result}, client_id, restored_bytes) do
-    {:ok, %Response.Success{id: client_id, jsonrpc: "2.0", raw_bytes: restored_bytes}}
+  defp build_response(
+         %Validated{kind: :result} = validated,
+         client_id,
+         raw_bytes,
+         restored_bytes
+       ) do
+    {:ok,
+     %Response.Success{
+       id: client_id,
+       jsonrpc: "2.0",
+       raw_bytes: restored_bytes,
+       result_shape: validated.result_shape,
+       result_offset: restored_result_offset(validated, raw_bytes, restored_bytes)
+     }}
   end
 
   defp build_response(
@@ -810,11 +840,28 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
            error_data: data
          },
          _client_id,
+         _raw_bytes,
          restored_bytes
        ) do
     {:error,
-     JError.new(code, message, data: data, source: :jsonrpc, raw_response: restored_bytes)}
+     JError.new(
+       code,
+       message,
+       data: data,
+       source: :jsonrpc,
+       raw_response: restored_bytes
+     )}
   end
+
+  defp restored_result_offset(
+         %Validated{result_offset: offset, id_span: {id_start, _}},
+         raw,
+         restored
+       )
+       when is_integer(offset) and id_start < offset,
+       do: offset + byte_size(restored) - byte_size(raw)
+
+  defp restored_result_offset(%Validated{result_offset: offset}, _raw, _restored), do: offset
 
   defp only_json_whitespace?(<<>>), do: true
 

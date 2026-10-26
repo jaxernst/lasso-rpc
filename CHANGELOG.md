@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Learned method refusal, historical depth and log-span routing are enabled by default. Repeated matching evidence defers an unsuitable upstream behind alternatives while keeping it available as a last resort. Hints expire and withdraw on newer successful evidence. Each effect has an independent environment kill switch; knowledge is local to the node and relearned after restart. Opt-in request metadata and local diagnostics expose bounded explanations.
+
 - `config/examples/chainstack.yml` profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum. One `CHAINSTACK_MULTICHAIN_TOKEN` multichain auth token authorizes every chain. Chainstack is `priority: 1` with keyless public fallbacks on each chain; route through `/rpc/profile/chainstack/priority/:chain` to keep it primary. The template caps `eth_getLogs` at the Developer plan range and classifies Chainstack's disabled-tracer error so the request fails over to another provider when one supports it. See [provider templates](docs/CONFIGURATION.md#provider-templates).
 
 ## [0.6.0] - 2026-10-16

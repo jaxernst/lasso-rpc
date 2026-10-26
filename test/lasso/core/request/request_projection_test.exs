@@ -79,9 +79,10 @@ defmodule Lasso.RPC.RequestProjectionTest do
 
     assert {:ok, native_payload} = RequestProjection.encode(event)
 
-    assert {:lasso_request_projection, 2, compact_fact, _method, _provider_id, _instance_id,
-            _transport, _origin, _failovers, _emitted_at_ms,
-            nil} =
+    assert {:lasso_request_projection, 5, compact_fact, _method, _provider_id, _instance_id,
+            _transport, nil, nil, nil, nil, 0, nil, nil, nil, _origin, _failovers, _emitted_at_ms,
+            :unavailable,
+            :none} =
              :erlang.binary_to_term(native_payload, [:safe])
 
     assert elem(compact_fact, 0) == :compact_success_v1
@@ -249,9 +250,9 @@ defmodule Lasso.RPC.RequestProjectionTest do
 
     assert {:ok, payload} = RequestProjection.encode(event)
 
-    assert {:lasso_request_projection, 2, %RequestTerminal.UpstreamResponse{}, _, _, _, _, _, _,
-            _,
-            nil} =
+    assert {:lasso_request_projection, 5, %RequestTerminal.UpstreamResponse{}, _, _, _, _, nil,
+            nil, nil, nil, 0, nil, nil, nil, _, _, _, :unavailable,
+            :none} =
              :erlang.binary_to_term(payload, [:safe])
 
     assert {:ok, ^event} = RequestProjection.decode(payload)
@@ -261,8 +262,9 @@ defmodule Lasso.RPC.RequestProjectionTest do
     event = request_projection()
     assert {:ok, payload} = RequestProjection.encode(event)
 
-    {:lasso_request_projection, 2, compact_fact, method, provider_id, instance_id, transport,
-     origin, failovers, emitted_at_ms, nil} = :erlang.binary_to_term(payload, [:safe])
+    {:lasso_request_projection, 5, compact_fact, method, provider_id, instance_id, transport, nil,
+     nil, nil, nil, 0, nil, nil, nil, origin, failovers, emitted_at_ms, :unavailable,
+     :none} = :erlang.binary_to_term(payload, [:safe])
 
     payload =
       :erlang.term_to_binary(

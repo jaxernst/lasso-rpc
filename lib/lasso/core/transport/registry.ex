@@ -191,6 +191,34 @@ defmodule Lasso.RPC.TransportRegistry do
     )
   end
 
+  @doc "Looks up a compatible published channel without starting or waiting for an open."
+  @spec get_cached_channel_from_plan(RoutingPlan.t(), map(), transport(), binary()) ::
+          {:ok, Channel.t()} | {:error, :channel_uncached}
+  def get_cached_channel_from_plan(%RoutingPlan{} = plan, candidate, transport, method)
+      when candidate.route_generation == plan.generation do
+    cached_channel(plan.profile, plan.chain_id, candidate.id, transport,
+      method: method,
+      provider_config: candidate.config,
+      instance_id: candidate.instance_id,
+      route_generation: plan.generation
+    )
+  end
+
+  defp cached_channel(profile, chain_id, provider_id, transport, opts) do
+    cache_key = {profile, chain_id, provider_id, transport}
+
+    case :ets.lookup(@channel_cache_table, cache_key) do
+      [{^cache_key, channel}] ->
+        if route_identity_matches?(channel, opts) and
+             reusable_after_pending_cleanup?(profile, chain_id, provider_id, channel),
+           do: {:ok, bind_route_context(channel, opts)},
+           else: {:error, :channel_uncached}
+
+      [] ->
+        {:error, :channel_uncached}
+    end
+  end
+
   defp get_canonical_channel(profile, chain_id, provider_id, transport, opts) do
     cache_key = {profile, chain_id, provider_id, transport}
 
@@ -647,6 +675,9 @@ defmodule Lasso.RPC.TransportRegistry do
               transport_module,
               instance_id: instance_id,
               route_generation: route_generation,
+              learning_subject:
+                learning_subject_for(state.profile, state.chain_id, transport, provider_config),
+              template_provider_config: template_provider_config(provider_config),
               provider_capabilities: Map.get(provider_config, :capabilities)
             )
 
@@ -788,11 +819,55 @@ defmodule Lasso.RPC.TransportRegistry do
           channel.provider_capabilities
       end
 
+    learning_subject =
+      case Keyword.get(opts, :provider_config) do
+        config when is_map(config) ->
+          learning_subject_for(channel.profile, channel.chain_id, channel.transport, config)
+
+        _other ->
+          channel.learning_subject
+      end
+
+    template_provider_config =
+      case Keyword.get(opts, :provider_config) do
+        config when is_map(config) -> template_provider_config(config)
+        _other -> channel.template_provider_config
+      end
+
     %{
       channel
       | route_generation: generation,
+        learning_subject: learning_subject,
+        template_provider_config: template_provider_config,
         provider_capabilities: provider_capabilities
     }
+  end
+
+  defp template_provider_config(config) do
+    keys = [
+      :name,
+      :id,
+      :url,
+      :http_url,
+      :ws_url,
+      :api_key,
+      :headers,
+      :auth_headers,
+      :identity_config
+    ]
+
+    Map.take(config, keys ++ Enum.map(keys, &Atom.to_string/1))
+  end
+
+  @doc "Returns the configured learning identity for a route without opening its channel."
+  @spec learning_subject_for(binary(), pos_integer(), :http | :ws, map()) ::
+          Lasso.RPC.Learning.Subject.t() | nil
+  def learning_subject_for(profile, chain_id, transport, config) do
+    scope = if sharing_mode(config) == :isolated, do: {:profile, profile}, else: :curated
+
+    Lasso.RPC.Learning.Subject.new(chain_id, transport, config, scope)
+  rescue
+    _ -> nil
   end
 
   defp route_identity_matches?(%Channel{} = channel, opts) do

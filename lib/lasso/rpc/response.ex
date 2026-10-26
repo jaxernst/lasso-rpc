@@ -30,30 +30,105 @@ defmodule Lasso.RPC.Response.Success do
   """
 
   @enforce_keys [:id, :jsonrpc, :raw_bytes]
-  defstruct [:id, :jsonrpc, :raw_bytes, :capacity_lease]
+  defstruct [:id, :jsonrpc, :raw_bytes, :result_offset, :capacity_lease, :result_shape]
 
   alias Lasso.Core.Transport.UpstreamAdmission
 
-  @type id :: integer() | String.t() | nil
+  @type id :: number() | String.t() | nil
 
   @type t :: %__MODULE__{
           id: id(),
           jsonrpc: String.t(),
           raw_bytes: binary(),
-          capacity_lease: UpstreamAdmission.Lease.t() | nil
+          result_offset: non_neg_integer() | nil,
+          result_shape: :null | :empty_array | :other | nil,
+          capacity_lease: Lasso.Core.Transport.UpstreamAdmission.Lease.t() | nil
         }
 
   @doc """
   Create a Success response from a parsed envelope.
   """
   @spec from_envelope(map()) :: t()
-  def from_envelope(%{id: id, jsonrpc: jsonrpc, raw_bytes: raw_bytes}) do
+  def from_envelope(%{id: id, jsonrpc: jsonrpc, raw_bytes: raw_bytes} = envelope) do
     %__MODULE__{
       id: id,
       jsonrpc: jsonrpc,
-      raw_bytes: raw_bytes
+      raw_bytes: raw_bytes,
+      result_shape: Map.get(envelope, :result_shape),
+      result_offset: Map.get(envelope, :result_offset)
     }
   end
+
+  @doc "Checks a bounded result prefix for non-empty historical data without decoding the body."
+  @spec verifiable_nonempty?(t()) :: boolean()
+  def verifiable_nonempty?(response), do: result_kind(response) != :unknown
+
+  @spec verifiable_nonempty?(t(), binary()) :: boolean()
+  def verifiable_nonempty?(response, method) do
+    kind = result_kind(response)
+
+    case method do
+      method when method in ["eth_getBalance", "eth_getCode", "eth_getStorageAt", "eth_call"] ->
+        kind == :nonzero_hex
+
+      method when method in ["eth_getLogs", "eth_getBlockReceipts"] ->
+        kind == :nonempty_array
+
+      method when method in ["eth_getBlockByNumber", "eth_getProof"] ->
+        kind == :nonempty_object
+
+      "debug_" <> _ ->
+        kind in [:nonempty_array, :nonempty_object]
+
+      "trace_" <> _ ->
+        kind in [:nonempty_array, :nonempty_object]
+
+      _ ->
+        false
+    end
+  end
+
+  @doc "Whether response validation established a JSON null result."
+  @spec null_result?(t()) :: boolean()
+  def null_result?(%__MODULE__{result_shape: :null}), do: true
+  def null_result?(_response), do: false
+
+  @doc "Whether response validation established an empty JSON array result."
+  @spec empty_array_result?(t()) :: boolean()
+  def empty_array_result?(%__MODULE__{result_shape: :empty_array}), do: true
+  def empty_array_result?(_response), do: false
+
+  defp result_kind(%__MODULE__{raw_bytes: bytes, result_offset: offset})
+       when is_binary(bytes) and is_integer(offset) and offset >= 0 and
+              offset < byte_size(bytes) do
+    prefix = binary_part(bytes, offset, min(byte_size(bytes) - offset, 128))
+
+    case skip_ascii_ws(prefix) do
+      "[" <> rest -> if(nonempty_container?(rest, "]"), do: :nonempty_array, else: :unknown)
+      "{" <> rest -> if(nonempty_container?(rest, "}"), do: :nonempty_object, else: :unknown)
+      "\"0x" <> hex -> if(nonzero_hex?(hex), do: :nonzero_hex, else: :unknown)
+      _ -> :unknown
+    end
+  end
+
+  defp result_kind(_), do: :unknown
+
+  defp nonempty_container?(rest, closing) do
+    remainder = skip_ascii_ws(rest)
+    remainder != "" and not String.starts_with?(remainder, closing)
+  end
+
+  defp nonzero_hex?(hex) do
+    digits = hex |> String.split("\"", parts: 2) |> hd()
+
+    digits != "" and String.match?(digits, ~r/\A[0-9a-fA-F]+\z/) and
+      String.match?(digits, ~r/[1-9a-fA-F]/)
+  end
+
+  defp skip_ascii_ws(<<char, rest::binary>>) when char in [9, 10, 13, 32],
+    do: skip_ascii_ws(rest)
+
+  defp skip_ascii_ws(rest), do: rest
 
   @doc """
   Decode the result field from raw bytes.
@@ -89,8 +164,12 @@ defmodule Lasso.RPC.Response.Success do
   @spec response_size(t()) :: non_neg_integer()
   def response_size(%__MODULE__{raw_bytes: raw_bytes}), do: byte_size(raw_bytes)
 
+  @doc "Releases retained upstream response capacity after the caller consumes the response."
   @spec release_capacity(t(), atom()) :: :ok
-  def release_capacity(%__MODULE__{capacity_lease: %UpstreamAdmission.Lease{} = lease}, reason)
+  def release_capacity(
+        %__MODULE__{capacity_lease: %UpstreamAdmission.Lease{} = lease},
+        reason
+      )
       when is_atom(reason),
       do: UpstreamAdmission.release(lease, reason)
 
@@ -124,7 +203,7 @@ defmodule Lasso.RPC.Response.Error do
   @enforce_keys [:id, :jsonrpc, :error]
   defstruct [:id, :jsonrpc, :error, :raw_bytes]
 
-  @type id :: integer() | String.t() | nil
+  @type id :: number() | String.t() | nil
 
   @type t :: %__MODULE__{
           id: id(),
@@ -261,7 +340,7 @@ defmodule Lasso.RPC.Response.Batch do
   @enforce_keys [:items, :request_ids]
   defstruct [:items, :request_ids, :total_byte_size]
 
-  @type id :: integer() | String.t() | nil
+  @type id :: number() | String.t() | nil
   @type item :: Success.t() | Error.t()
   @type t :: %__MODULE__{
           items: [item()],
@@ -420,7 +499,7 @@ defmodule Lasso.RPC.Response do
   alias __MODULE__.{Success, Error, Notification, Batch}
 
   @type t :: Success.t() | Error.t() | Notification.t() | Batch.t()
-  @type id :: integer() | String.t() | nil
+  @type id :: number() | String.t() | nil
   @type parse_result :: {:ok, t()} | {:error, term()}
 
   @doc """

@@ -34,28 +34,55 @@ defmodule Lasso.JSONRPC.MethodParamsValidator do
   defp validate_block_selector(selector) when not is_map(selector), do: :ok
 
   defp validate_block_selector(selector) do
-    has_block_number? = Map.has_key?(selector, "blockNumber")
-    has_block_hash? = Map.has_key?(selector, "blockHash")
-    block_number = Map.get(selector, "blockNumber")
-    block_hash = Map.get(selector, "blockHash")
-    canonical = Map.get(selector, "requireCanonical", :absent)
+    case eip1898_selector(selector) do
+      {kind, _value} when kind in [:number, :hash] ->
+        :ok
 
-    cond do
-      has_block_number? and has_block_hash? ->
+      :ambiguous ->
         invalid("blockNumber and blockHash are mutually exclusive")
 
-      has_block_number? and is_binary(block_number) and Regex.match?(@quantity, block_number) and
-          canonical == :absent ->
-        :ok
-
-      has_block_hash? and is_binary(block_hash) and Regex.match?(@hash32, block_hash) and
-          (canonical == :absent or is_boolean(canonical)) ->
-        :ok
-
-      true ->
+      :invalid ->
         invalid("invalid EIP-1898 block selector")
     end
   end
+
+  @doc "Methods whose block parameter accepts an EIP-1898 selector object."
+  @spec eip1898_methods() :: [String.t()]
+  def eip1898_methods, do: Map.keys(@eip1898_positions)
+
+  @doc """
+  Classifies an EIP-1898 selector object under the rules ingress validation
+  enforces: `blockNumber` is a quantity without `requireCanonical`, and
+  `blockHash` is 32-byte data with an optional boolean `requireCanonical`.
+  """
+  @spec eip1898_selector(map()) ::
+          {:number, String.t()} | {:hash, String.t()} | :ambiguous | :invalid
+  def eip1898_selector(selector) when is_map(selector) do
+    canonical = Map.get(selector, "requireCanonical", :absent)
+
+    case selector do
+      %{"blockNumber" => _, "blockHash" => _} ->
+        :ambiguous
+
+      %{"blockNumber" => number} when is_binary(number) and canonical == :absent ->
+        if quantity?(number), do: {:number, number}, else: :invalid
+
+      %{"blockHash" => hash}
+      when is_binary(hash) and (canonical == :absent or is_boolean(canonical)) ->
+        if hash32?(hash), do: {:hash, hash}, else: :invalid
+
+      _ ->
+        :invalid
+    end
+  end
+
+  @doc "Whether a value is a canonical JSON-RPC quantity: hex without leading zeros."
+  @spec quantity?(term()) :: boolean()
+  def quantity?(value), do: is_binary(value) and Regex.match?(@quantity, value)
+
+  @doc "Whether a value is 32-byte hex data."
+  @spec hash32?(term()) :: boolean()
+  def hash32?(value), do: is_binary(value) and Regex.match?(@hash32, value)
 
   defp validate_eip234("eth_getLogs", [filter]) when is_map(filter) do
     case Map.fetch(filter, "blockHash") do
@@ -67,7 +94,7 @@ defmodule Lasso.JSONRPC.MethodParamsValidator do
           Map.has_key?(filter, "fromBlock") or Map.has_key?(filter, "toBlock") ->
             invalid("blockHash is mutually exclusive with fromBlock and toBlock")
 
-          is_binary(block_hash) and Regex.match?(@hash32, block_hash) ->
+          hash32?(block_hash) ->
             :ok
 
           true ->

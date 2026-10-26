@@ -237,3 +237,12 @@ Subscription recovery p95 is a stat with three states: a measured duration,
 `No completed repairs`, or `Telemetry unavailable`. The display-only `-1`
 sentinel identifies an observed chain without repair durations; it is never
 presented as a latency. An idle histogram follows the same rule.
+
+### Learned routing counters
+
+- `lasso_provider_knowledge_applied_deferrals_total{kind}` counts deferrals that moved a route later in a materialized batch. Deferred routes in later lazy batches are not counted. This measures order changes, not avoided failures.
+- `lasso_provider_knowledge_retractions_total{kind,reason="contradicted"}` counts a published hint withdrawn after an accepted success contradicted its boundary. Expiry and witness eviction do not count.
+
+Both are node-local since startup, with three fixed kinds: `method_refusal`,
+`historical_depth` and `span_limit`. They add six series, with no provider, profile,
+endpoint, request or customer labels. Restarts reset the counters and learned state.

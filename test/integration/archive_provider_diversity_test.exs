@@ -405,7 +405,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     assert {:ok, _, cursor} = CandidateCursor.next(cursor)
     assert {:ok, _, cursor} = CandidateCursor.next(cursor)
     assert length(cursor.descriptors) == 96
-    assert :queue.len(cursor.supported_deferred[1]) == 2
+    assert :queue.len(cursor.supported_deferred[{1, :ordinary}]) == 2
     assert {:ok, _, cursor} = CandidateCursor.next(cursor)
     assert :done = CandidateCursor.next(cursor)
   end
@@ -435,7 +435,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     cursor = %{cursor | descriptors: [{a, :http}, {a, :ws}, {b, :http}]}
     assert {:ok, %{provider_id: "bad-a"}, cursor} = CandidateCursor.next(cursor)
     assert {:ok, %{provider_id: "capable"}, cursor} = CandidateCursor.next(cursor)
-    assert :queue.len(cursor.supported_deferred[1]) == 1
+    assert :queue.len(cursor.supported_deferred[{1, :ordinary}]) == 1
     excluded = CandidateCursor.exclude_provider(cursor, "bad-a")
     assert :done = CandidateCursor.next(excluded)
     Catalog.build_from_config()

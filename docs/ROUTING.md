@@ -21,6 +21,36 @@ Candidate Pool → Strategy Ranking → Health Tiering → Execution
 
 The pipeline ensures that healthy providers receive preference while recovering providers are gradually reintroduced. Open-circuit providers are excluded entirely.
 
+## Learned provider limits
+
+Method refusal, historical depth and `eth_getLogs` span learning are enabled by
+default. Repeated matching outcomes move an unsuitable connection behind other
+eligible connections in the same availability tier. A learned limit never removes
+the final candidate, overrides operator capability declarations, increases the
+request deadline or grants another transaction dispatch.
+
+Evidence belongs to the configured endpoint, credentials, transport and sharing
+scope. Method refusal is method-specific. Historical hints are method- and
+resource-specific and need a qualified request age plus fresh failure witnesses;
+head lag, empty results and zero values do not establish missing history. Span
+learning uses numeric block ranges and explicit block-span failures; result-volume
+limits and mixed or ambiguous wording do not establish a span boundary.
+
+Hints expire and newer successful evidence can withdraw them. Unknown or missing
+knowledge keeps ordinary routing available. Feedback is delivered on a bounded
+background lane; overload can discard observations without delaying RPC. Learned
+state lives in local memory and is rebuilt from traffic after restart. Core does
+not restore database checkpoints or start cross-node knowledge-image exchange.
+
+Use `include_meta=body` or `include_meta=headers` for the bounded
+`learning_decision` explanation. It includes the effect kind, support and ordering
+scope, while excluding request bodies and internal route mappings. On the node,
+`Lasso.Diagnostics.provider_knowledge(profile, chain_id, provider_id)` returns
+current hints per transport. A deferral records an order change, not proof that a
+failure was prevented.
+
+See [configuration](CONFIGURATION.md#learned-routing) for per-kind kill switches.
+
 ## Routing Strategies
 
 Strategies control the initial ordering of providers. Select via URL path segment: `/rpc/:strategy/:chain`.

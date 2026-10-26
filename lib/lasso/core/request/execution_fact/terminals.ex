@@ -332,8 +332,8 @@ defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
         normalized.execution_safety == identity.execution_safety and
         normalized.routing_intent == identity.routing_intent and
         normalized.workload_key == identity.workload_key and
-        normalized.candidate_admission_count == identity.candidate_admission_count and
-        normalized.dispatch_count == identity.dispatch_count
+        normalized.candidate_admission_count >= identity.candidate_admission_count and
+        normalized.dispatch_count >= identity.dispatch_count
 
     unless coherent?, do: raise(ArgumentError, "request terminal and attempt identity disagree")
     struct!(__MODULE__, Map.put(normalized, :attempt, attempt))
@@ -359,8 +359,9 @@ defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
     dispatch_count = ExecutionFact.dispatch_count!(dispatch_count)
     observed_at = ExecutionFact.optional_bounded!(observed_at, :observed_at)
 
-    unless candidate_admission_count == identity.candidate_admission_count and
-             dispatch_count == identity.dispatch_count,
+    unless candidate_admission_count >= identity.candidate_admission_count and
+             dispatch_count >= identity.dispatch_count and
+             dispatch_count <= candidate_admission_count,
            do: raise(ArgumentError, "request terminal and attempt identity disagree")
 
     %__MODULE__{

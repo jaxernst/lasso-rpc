@@ -463,3 +463,25 @@ Circuit settings take effect when provider instances start; restart Lasso after 
 ```elixir
 config :lasso, :provider_selection_strategy, :load_balanced
 ```
+
+## Learned routing
+
+Three provider-knowledge effects are enabled by default:
+
+| Environment variable | Default | Accepted values |
+| --- | --- | --- |
+| `LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE` | `on` | `off`, `on` |
+| `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE` | `on` | `off`, `on` |
+| `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE` | `on` | `off`, `on` |
+
+Set a variable to `off` and restart to keep that effect from reordering routes.
+Invalid values fail startup. Disabling an effect does not erase its observations;
+inspection remains available. Application configuration uses
+`:provider_knowledge_effect_modes`, a map with `:method_refusal`,
+`:historical_depth` and `:span_limit` keys. Runtime environment values populate
+that map at boot. No profile schema or database migration is required.
+
+Quota-exhaustion and response-latency effects remain off. Claim auditing also
+remains off. The three settled effects accept no `shadow` mode. Knowledge uses
+node-local memory, no durable knowledge store, and no background model service.
+See [routing](ROUTING.md#learned-provider-limits) for evidence and safety rules.

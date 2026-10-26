@@ -22,6 +22,7 @@ defmodule Lasso.RPC.Selection.Exploration do
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RoutingEvidence.Workload
   alias Lasso.RPC.Selection
+  alias Lasso.RPC.Selection.CandidateCursor
 
   @table :lasso_instance_state
   @minimum_remaining_ms 500
@@ -41,8 +42,10 @@ defmodule Lasso.RPC.Selection.Exploration do
           deadline_us: integer()
         }
 
-  @spec select(Channel.t() | nil, map()) :: {:ok, Channel.t(), token()} | :skip
-  def select(%Channel{} = fallback, ctx) do
+  @spec select(Channel.t() | nil, map(), keyword()) :: {:ok, Channel.t(), token()} | :skip
+  def select(fallback, ctx, selection_opts \\ [])
+
+  def select(%Channel{} = fallback, ctx, selection_opts) do
     if enabled?() do
       cond do
         not eligible_request?(ctx) ->
@@ -52,7 +55,7 @@ defmodule Lasso.RPC.Selection.Exploration do
           skip(fallback, ctx, :not_sampled)
 
         true ->
-          case select_candidate(fallback, ctx) do
+          case select_candidate(fallback, ctx, selection_opts) do
             :skip -> skip(fallback, ctx, :no_candidate_or_capacity)
             selected -> selected
           end
@@ -62,7 +65,7 @@ defmodule Lasso.RPC.Selection.Exploration do
     end
   end
 
-  def select(nil, _ctx), do: :skip
+  def select(nil, _ctx, _selection_opts), do: :skip
 
   defp enabled?,
     do: Application.get_env(:lasso, :routing_exploration, []) |> Keyword.get(:enabled, false)
@@ -105,7 +108,7 @@ defmodule Lasso.RPC.Selection.Exploration do
     is_integer(every) and every > 0 and :rand.uniform(every) == 1
   end
 
-  defp select_candidate(fallback, ctx) do
+  defp select_candidate(fallback, ctx, selection_opts) do
     workload = Workload.for_request(:client, ctx.method)
 
     scope =
@@ -119,18 +122,25 @@ defmodule Lasso.RPC.Selection.Exploration do
       now_us = System.monotonic_time(:microsecond)
       lookup_deadline_us = now_us + budget_ms(ctx.execution_envelope.deadline_us, now_us) * 1_000
 
-      Selection.select_channels(fallback.profile, fallback.chain_id, ctx.method,
-        strategy: :load_balanced,
-        transport: ctx.opts.transport || :both,
-        include_half_open: false,
-        exclude: [fallback.provider_id],
-        params: ctx.params,
-        request_origin: :client,
-        deadline_us: lookup_deadline_us,
-        limit: 10
-      )
-      |> Enum.find_value(:skip, fn channel ->
-        if channel.instance_id != fallback.instance_id and
+      opts =
+        Keyword.merge(
+          [
+            strategy: :load_balanced,
+            transport: ctx.opts.transport || :both,
+            include_half_open: false,
+            exclude: [fallback.provider_id],
+            params: ctx.params,
+            request_origin: :client,
+            deadline_us: lookup_deadline_us,
+            limit: 10
+          ],
+          selection_opts
+        )
+
+      Selection.select_channel_candidates(fallback.profile, fallback.chain_id, ctx.method, opts)
+      |> Stream.unfold(&next_candidate/1)
+      |> Enum.find_value(:skip, fn {channel, deferred?} ->
+        if not deferred? and channel.instance_id != fallback.instance_id and
              not qualified?(scope, channel, workload) and eligible_channel?(scope, channel, ctx) do
           case reserve(channel, workload, ctx.execution_envelope.deadline_us) do
             {:ok, token} ->
@@ -149,6 +159,23 @@ defmodule Lasso.RPC.Selection.Exploration do
       :skip
     end
   end
+
+  # Exploration may try only the ordinary bucket. The original request cursor
+  # still owns every deferred route for ordinary fallback, including the last.
+  defp next_candidate(%CandidateCursor{} = cursor) do
+    case CandidateCursor.next_with_evidence(cursor) do
+      {:ok, channel, remaining} ->
+        deferred? =
+          MapSet.member?(remaining.deferred_routes, {channel.instance_id, channel.transport})
+
+        {{channel, deferred?}, remaining}
+
+      {_terminal, _remaining} ->
+        nil
+    end
+  end
+
+  defp next_candidate(_unavailable), do: nil
 
   defp qualified?(scope, channel, workload) do
     row = AttemptProjection.route_record(scope, channel.instance_id, channel.transport)

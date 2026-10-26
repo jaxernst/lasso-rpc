@@ -10,6 +10,7 @@ defmodule Lasso.RPC.Channel do
   - A transport type (:http or :ws)
   - A provider ID
   - The underlying transport-specific channel
+  - An opaque learning subject for this configured connection
   - Cached capabilities
   - Health status
   """
@@ -23,6 +24,8 @@ defmodule Lasso.RPC.Channel do
           transport: :http | :ws,
           raw_channel: term(),
           transport_module: module(),
+          learning_subject: Lasso.RPC.Learning.Subject.t() | nil,
+          template_provider_config: map() | nil,
           capabilities: map() | nil,
           provider_capabilities: map() | nil | :unbound
         }
@@ -38,6 +41,8 @@ defmodule Lasso.RPC.Channel do
     :transport,
     :raw_channel,
     :transport_module,
+    :learning_subject,
+    :template_provider_config,
     :capabilities,
     provider_capabilities: :unbound
   ]
@@ -63,6 +68,8 @@ defmodule Lasso.RPC.Channel do
       transport: transport,
       raw_channel: raw_channel,
       transport_module: transport_module,
+      learning_subject: Keyword.get(opts, :learning_subject),
+      template_provider_config: Keyword.get(opts, :template_provider_config),
       capabilities: nil,
       provider_capabilities: Keyword.get(opts, :provider_capabilities, :unbound)
     }
@@ -116,6 +123,24 @@ defmodule Lasso.RPC.Channel do
 
   def request(%__MODULE__{} = channel, rpc_request, timeout) do
     channel.transport_module.request(channel.raw_channel, rpc_request, timeout)
+  end
+
+  @doc "Passes request-local options to transports that support prepared request metadata."
+  @spec request(
+          t(),
+          Lasso.RPC.PreparedRequest.t(),
+          timeout(),
+          keyword()
+        ) ::
+          {:ok, term(), non_neg_integer()}
+          | {:error, term(), non_neg_integer()}
+  def request(%__MODULE__{transport_module: transport_module} = channel, prepared, timeout, opts) do
+    if Code.ensure_loaded?(transport_module) and
+         function_exported?(transport_module, :request_prepared, 4) do
+      transport_module.request_prepared(channel.raw_channel, prepared, timeout, opts)
+    else
+      request(channel, prepared, timeout)
+    end
   end
 
   @doc """

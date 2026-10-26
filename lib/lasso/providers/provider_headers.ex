@@ -19,8 +19,14 @@ defmodule Lasso.Providers.ProviderHeaders do
       {"accept", "application/json"}
     ]
 
+    merge(defaults, identity_headers(provider))
+  end
+
+  @doc "Canonical configured headers defining the upstream learning identity."
+  @spec identity_headers(map()) :: [{String.t(), String.t()}]
+  def identity_headers(provider) when is_map(provider) do
     api_key_headers =
-      case Map.get(provider, :api_key) || Map.get(provider, "api_key") do
+      case fetch(provider, :api_key) do
         api_key when is_binary(api_key) and byte_size(api_key) > 0 ->
           [{"authorization", "Bearer #{api_key}"}]
 
@@ -28,10 +34,10 @@ defmodule Lasso.Providers.ProviderHeaders do
           []
       end
 
-    defaults
-    |> merge(api_key_headers)
-    |> merge(normalize(Map.get(provider, :headers) || Map.get(provider, "headers")))
-    |> merge(normalize(Map.get(provider, :auth_headers) || Map.get(provider, "auth_headers")))
+    api_key_headers
+    |> merge(normalize(fetch(provider, :headers)))
+    |> merge(normalize(fetch(provider, :auth_headers)))
+    |> Enum.sort()
   end
 
   @doc "Validates credential and configured HTTP/WebSocket headers before publication."

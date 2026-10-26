@@ -38,4 +38,33 @@ defmodule Lasso.Diagnostics do
   @doc "Returns queue occupancy and dropped credential observations on this node."
   @spec credential_health_stats() :: map()
   def credential_health_stats, do: CredentialHealth.stats()
+  @doc "Local, body-free learned hints for a configured upstream, grouped by transport."
+  @spec provider_knowledge(String.t(), pos_integer(), String.t()) ::
+          {:ok, map()} | {:error, atom()}
+  def provider_knowledge(profile, chain_id, provider_id) do
+    alias Lasso.Providers.Catalog
+    alias Lasso.RPC.{ProviderKnowledge, TransportRegistry}
+
+    with {:ok, plan} <- Catalog.get_routing_plan(Catalog.snapshot(), profile, chain_id),
+         provider when not is_nil(provider) <- Enum.find(plan.providers, &(&1.id == provider_id)) do
+      hints =
+        for transport <- provider.transports,
+            subject when not is_nil(subject) <- [
+              TransportRegistry.learning_subject_for(
+                profile,
+                chain_id,
+                transport,
+                provider.config
+              )
+            ],
+            into: %{} do
+          {transport,
+           ProviderKnowledge.explain_subject(subject.id, %{profile: profile, chain_id: chain_id})}
+        end
+
+      {:ok, hints}
+    else
+      _ -> {:error, :provider_not_found}
+    end
+  end
 end
