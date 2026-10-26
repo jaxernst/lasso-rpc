@@ -34,7 +34,8 @@ defmodule Lasso.RPC.ExecutionEnvelope do
           dispatch_count: 0..3,
           candidate_admission_limit: 16,
           candidate_admission_count: 0..16,
-          dispatched_channels: term()
+          dispatched_channels: term(),
+          extra_send: :available | :spent
         }
 
   @enforce_keys [
@@ -51,7 +52,8 @@ defmodule Lasso.RPC.ExecutionEnvelope do
                 dispatch_count: 0,
                 candidate_admission_limit: @max_candidate_admissions,
                 candidate_admission_count: 0,
-                dispatched_channels: MapSet.new()
+                dispatched_channels: MapSet.new(),
+                extra_send: :available
               ]
 
   @spec new(String.t(), String.t(), non_neg_integer(), keyword()) :: t()
@@ -124,6 +126,32 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   def cap_deadline(%__MODULE__{} = envelope, deadline_us) when is_integer(deadline_us) do
     %{envelope | deadline_us: min(envelope.deadline_us, deadline_us)}
   end
+
+  @doc """
+  Spends the request's one exploratory extra send, shared by the interventions
+  that replace an answer already received: the claim audit's peer and the
+  numeric-null recovery's alternate. Fallback phases never renew it, and the
+  send still reserves within the deadline and dispatch limit.
+  """
+  @spec spend_extra_send(t()) :: {:ok, t()} | {:error, :extra_send_spent}
+  def spend_extra_send(%__MODULE__{extra_send: :available} = envelope),
+    do: {:ok, %{envelope | extra_send: :spent}}
+
+  def spend_extra_send(%__MODULE__{}), do: {:error, :extra_send_spent}
+
+  @doc "Allocates a bounded dispatch budget for the next routing fallback profile."
+  @spec enter_fallback_phase(t()) :: t()
+  def enter_fallback_phase(%__MODULE__{execution_safety: :replay_safe} = envelope) do
+    limit =
+      min(
+        envelope.dispatch_count + @max_replay_safe_dispatches,
+        @max_candidate_admissions
+      )
+
+    %{envelope | dispatch_limit: limit}
+  end
+
+  def enter_fallback_phase(%__MODULE__{} = envelope), do: envelope
 
   @spec admit_candidate(t(), integer()) ::
           {:ok, t()} | {:error, :candidate_budget_exhausted | :deadline_exhausted}

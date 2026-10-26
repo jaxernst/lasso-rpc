@@ -46,6 +46,11 @@ defmodule Lasso.Application do
     CircuitBreakerStorage.create_tables!()
     Lasso.RPC.HeadPolicy.create_table!()
     Lasso.RPC.HeadRecovery.create_table!()
+    Lasso.RPC.ProviderKnowledge.ReadModel.create_tables!(Lasso.RPC.ProviderKnowledge.learners())
+    Lasso.RPC.ProviderKnowledge.State.create_table!()
+    Lasso.RPC.ProviderKnowledge.AppliedEffects.create_table!()
+    Lasso.RPC.ProviderKnowledge.ShadowAgreement.create_table!()
+    Lasso.RPC.ProviderKnowledge.TemplateClassification.create_table!()
     Lasso.BlockPublication.Gate.create_table!()
 
     :ets.new(:block_sync_registry, [
@@ -125,7 +130,13 @@ defmodule Lasso.Application do
          name: Lasso.ExecutionProjectionDispatcher,
          lanes:
            Lasso.RPC.AttemptProjection.lane_configs() ++
-             [head_observations: Lasso.BlockSync.ClientObservation.lane_options()]},
+             [
+               head_observations: Lasso.BlockSync.ClientObservation.lane_options(),
+               learned_feedback: Lasso.RPC.ProviderKnowledge.lane_options(),
+               provider_messages: Lasso.RPC.ProviderKnowledge.TemplateObservation.lane_options(),
+               provider_outcomes:
+                 Lasso.RPC.ProviderKnowledge.TemplateOutcomeObservation.lane_options()
+             ]},
 
         # Start centralized VM metrics collector for dashboard
         Lasso.VMMetricsCollector,

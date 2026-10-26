@@ -5,13 +5,27 @@ defmodule Lasso.JSONRPC.BlockSelector do
   @second ~w(eth_call eth_createAccessList eth_estimateGas eth_getBalance eth_getCode eth_getTransactionCount eth_simulateV1 eth_feeHistory eth_getStorageValues)
   @third ~w(eth_getProof eth_getStorageAt)
 
+  # Block-hash-only methods. Only request facts read this table: extract/2 and
+  # the archival permission built on it keep their number-or-tag positions.
+  @hash_first ~w(debug_traceBlockByHash debug_getModifiedAccountsByHash eth_getBlockByHash eth_getBlockTransactionCountByHash eth_getTransactionByBlockHashAndIndex eth_getUncleByBlockHashAndIndex eth_getUncleCountByBlockHash)
+
+  @doc "The zero-based parameter position of the method's block selector."
+  @spec position(String.t()) :: 0..2 | nil
+  def position(method) when method in @first, do: 0
+  def position(method) when method in @second, do: 1
+  def position(method) when method in @third, do: 2
+  def position(_method), do: nil
+
+  @doc "The zero-based position of the block hash in a block-hash-only method."
+  @spec hash_position(String.t()) :: 0 | nil
+  def hash_position(method) when method in @hash_first, do: 0
+  def hash_position(_method), do: nil
+
   @spec extract(String.t(), term()) :: term()
   def extract(method, params) when is_list(params) do
-    case method do
-      method when method in @first -> Enum.at(params, 0)
-      method when method in @second -> Enum.at(params, 1)
-      method when method in @third -> Enum.at(params, 2)
-      _ -> nil
+    case position(method) do
+      nil -> nil
+      position -> Enum.at(params, position)
     end
   end
 

@@ -111,11 +111,11 @@ defmodule Lasso.RPC.ExecutionFactTest do
     response = AttemptTerminal.Response.new(identity(), :success, 20)
 
     assert_raise ArgumentError, ~r/identity disagree/, fn ->
-      RequestTerminal.UpstreamResponse.new_runtime(response, 50_000, 3, 1, nil)
+      RequestTerminal.UpstreamResponse.new_runtime(response, 50_000, 1, 1, nil)
     end
 
     assert_raise ArgumentError, ~r/identity disagree/, fn ->
-      RequestTerminal.UpstreamResponse.new_runtime(response, 50_000, 2, 2, nil)
+      RequestTerminal.UpstreamResponse.new_runtime(response, 50_000, 2, 0, nil)
     end
 
     assert_raise ArgumentError, ~r/elapsed_us must be non-negative/, fn ->

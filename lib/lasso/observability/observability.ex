@@ -16,6 +16,8 @@ defmodule Lasso.RPC.Observability do
       profile_id: ctx.opts && ctx.opts.profile,
       service_profile_id: ctx.opts && ctx.opts.profile,
       head_policy: Lasso.RPC.HeadPolicy.metadata(ctx),
+      learning_decision:
+        Lasso.RPC.RequestProjection.learning_metadata(ctx.learning_decision, ctx.executed_channel),
       strategy: to_string(ctx.strategy),
       chain_id: ctx.chain_id,
       transport: to_string(ctx.transport),

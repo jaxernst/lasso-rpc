@@ -165,7 +165,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "result set too large",
     "result limit exceeded",
     "too many results",
-    "too many logs"
+    "too many logs",
+    "response too large",
+    "response size exceeded"
   ]
 
   # Parameter validation errors that providers return (often under -32000 instead of -32602).
@@ -229,10 +231,13 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "header not found",
     "block not found",
     "unknown block number",
-    "block is out of range"
+    "block is out of range",
+    "unsupported block number",
+    "block range extends beyond current head block"
   ]
 
   @capability_violation_patterns [
+    {:ranges_over, :block_span},
     "unsupported subscription",
     "free tier",
     # Address/query limits
@@ -254,9 +259,9 @@ defmodule Lasso.Core.Support.ErrorClassification do
     {"exceeds maximum block range", :block_span},
     "invalid block range",
     {"max is 1k blocks", :block_span},
+    {"eth_getlogs requests with up to", :block_span},
     "range is too large",
     "blocks are not supported",
-    # DRPC
     "ranges over",
     # 1RPC
     "is limited to",
@@ -302,7 +307,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "state not available"
   ]
 
-  # Only these existing capability rules identify a block-span dimension. Generic
+  # Only these capability rules identify a block-span dimension. Generic
   # range/plan language carries no dimension; a matched rule is still a claim.
   @block_span_patterns for {pattern, :block_span} <- @capability_violation_patterns,
                            do: pattern
@@ -310,7 +315,7 @@ defmodule Lasso.Core.Support.ErrorClassification do
   # Affirmative plan restrictions may override Invalid Request. A tier name or
   # upgrade phrase alone is insufficient: either can appear in a quoted input.
   @plan_restriction_patterns [
-    "under the free tier plan, you can make eth_getlogs requests with up to",
+    "you can make eth_getlogs requests with up to",
     "free tier max block range is",
     "free tier maximum block range is",
     "free tier only allows",
@@ -741,21 +746,37 @@ defmodule Lasso.Core.Support.ErrorClassification do
     end
   end
 
+  # Generic plan wording ("free tier") often accompanies an explicit dimension, so
+  # the claim comes from every matching rule rather than the first one.
   defp capability_claim(message) do
-    case Enum.find(@capability_violation_patterns, &capability_pattern_matches?(message, &1)) do
-      {_pattern, claim} -> {:capability_violation, claim}
-      pattern when is_binary(pattern) -> {:capability_violation, :unknown}
-      nil -> {nil, :unknown}
+    case Enum.filter(@capability_violation_patterns, &capability_pattern_matches?(message, &1)) do
+      [] -> {nil, :unknown}
+      matches -> {:capability_violation, dimension_claim(matches)}
     end
   end
 
-  defp capability_pattern_matches?(message, {pattern, _claim}),
-    do: String.contains?(message, pattern)
+  defp dimension_claim(matches) do
+    case matches |> Enum.flat_map(&pattern_claim/1) |> Enum.uniq() do
+      [claim] -> claim
+      _none_or_conflicting -> :unknown
+    end
+  end
 
-  defp capability_pattern_matches?(message, pattern), do: String.contains?(message, pattern)
+  defp pattern_claim({_pattern, claim}), do: [claim]
+  defp pattern_claim(_pattern), do: []
+
+  defp capability_pattern_matches?(message, {pattern, _claim}),
+    do: pattern_matches?(message, pattern)
+
+  defp capability_pattern_matches?(message, pattern), do: pattern_matches?(message, pattern)
+
+  defp pattern_matches?(message, :ranges_over),
+    do: Regex.match?(~r/\branges over [0-9]+ blocks are not supported\b/, message)
+
+  defp pattern_matches?(message, pattern), do: String.contains?(message, pattern)
 
   defp contains_any?(message, patterns) do
-    Enum.any?(patterns, &String.contains?(message, &1))
+    Enum.any?(patterns, &pattern_matches?(message, &1))
   end
 
   defp definitive_rate_limit_message?(message) do

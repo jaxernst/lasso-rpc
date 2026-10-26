@@ -43,6 +43,34 @@ if File.exists?(".env") and Code.ensure_loaded?(Dotenvy) do
   Logger.info("Loaded #{map_size(vars)} environment variables from .env")
 end
 
+provider_knowledge_effect_modes =
+  Map.new(
+    [
+      method_refusal: "LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE",
+      span_limit: "LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE",
+      historical_depth: "LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE"
+    ],
+    fn {kind, name} ->
+      mode =
+        case System.get_env(name, "on") do
+          "on" -> :on
+          "off" -> :off
+          _ -> raise "#{name} must be off or on"
+        end
+
+      {kind, mode}
+    end
+  )
+
+config :lasso,
+       :provider_knowledge_effect_modes,
+       Map.merge(provider_knowledge_effect_modes, %{
+         quota_exhaustion: :off,
+         response_latency: :off
+       })
+
+config :lasso, :claim_audit_mode, :off
+
 otel_enabled =
   case System.get_env("LASSO_OTEL_ENABLED", "false") do
     value when value in ["true", "1"] -> true

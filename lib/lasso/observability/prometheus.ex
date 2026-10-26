@@ -75,6 +75,23 @@ defmodule Lasso.Observability.Prometheus do
 
   # Optional observer work must never take the exporter down: a failure keeps the
   # committed totals and is counted for the scrape.
+  defp learning_samples do
+    alias Lasso.RPC.ProviderKnowledge.{AppliedEffects, ReadModel}
+
+    PrometheusRuntime.family(
+      "lasso_provider_knowledge_retractions_total",
+      :counter,
+      "Learned hints withdrawn after accepted contradictory successes since node start",
+      Enum.map(ReadModel.retractions(), &{&1.count, [kind: &1.kind, reason: &1.reason]})
+    ) ++
+      PrometheusRuntime.family(
+        "lasso_provider_knowledge_applied_deferrals_total",
+        :counter,
+        "Learned deferrals that changed materialized candidate order since node start",
+        Enum.map(AppliedEffects.totals(), &{&1.count, [kind: &1.kind]})
+      )
+  end
+
   defp advance_route_totals(route_totals) do
     case Catalog.snapshot() do
       %{request_aggregates: sets} when is_map(sets) -> RouteTotals.advance(route_totals, sets)
@@ -179,6 +196,7 @@ defmodule Lasso.Observability.Prometheus do
        route_total_lines() ++
        PrometheusMetrics.scrape() ++
        PrometheusRuntime.scrape() ++
+       learning_samples() ++
        PrometheusRuntime.readiness_samples(Enum.take(chain_scan, @max_routes)) ++
        PrometheusRuntime.family(
          "lasso_observer_route_scan_truncated",

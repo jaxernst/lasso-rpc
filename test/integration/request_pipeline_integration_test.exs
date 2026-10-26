@@ -239,7 +239,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
       assert error.message == message
     end
 
-    test "returns one actionable error without retrying another provider", %{chain: chain} do
+    test "tries another upstream before returning an upstream range limit", %{chain: chain} do
       setup_providers([
         %{
           id: "range_limited",
@@ -256,7 +256,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
 
       filter = %{"fromBlock" => "0x1000000", "toBlock" => "0x10007d0"}
 
-      assert {:error, error, ctx} =
+      assert {:ok, _response, ctx} =
                RequestPipeline.execute_via_channels(
                  chain,
                  "eth_getLogs",
@@ -264,12 +264,10 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
                  %RequestOptions{profile: "public", strategy: :priority, timeout_ms: 5_000}
                )
 
-      assert error.code == -32_005
-      assert error.category == :log_range_limit
-      assert error.data == %{reason: :log_range_too_large, action: :reduce_block_range}
-      assert ctx.retries == 0
-      assert length(ctx.attempted_channels) == 1
-      assert ctx.error.category == :log_range_limit
+      assert ctx.executed_channel.provider_id == "fallback"
+      assert ctx.retries == 1
+      assert length(ctx.attempted_channels) == 2
+      assert ctx.execution_envelope.dispatch_count == 2
     end
 
     test "still falls back for a provider-specific archival limit", %{chain: chain} do

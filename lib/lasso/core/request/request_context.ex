@@ -13,6 +13,7 @@ defmodule Lasso.RPC.RequestContext do
   alias Lasso.JSONRPC.Error, as: JError
 
   alias Lasso.RPC.{
+    AttemptTerminal,
     BoundedIdentifier,
     Channel,
     ExecutionEnvelope,
@@ -22,13 +23,14 @@ defmodule Lasso.RPC.RequestContext do
   }
 
   @type channel_identity :: %{
-          profile: String.t(),
+          profile: binary(),
           provider_id: binary(),
           instance_id: binary() | nil,
           transport: :http | :ws,
           route_generation: non_neg_integer()
         }
   @type channel_attempt :: %{
+          optional(:exhaustion_category) => atom(),
           channel: channel_identity(),
           outcome: :success | :error,
           category: atom() | nil,
@@ -38,9 +40,10 @@ defmodule Lasso.RPC.RequestContext do
   @type t :: %__MODULE__{
           # Request identification
           request_id: String.t(),
+          account_id: String.t() | nil,
           chain_id: pos_integer(),
           method: String.t(),
-          params: list(),
+          params: list() | map(),
           transport: :http | :ws,
           strategy: atom(),
           path: String.t() | nil,
@@ -48,19 +51,45 @@ defmodule Lasso.RPC.RequestContext do
           user_agent: String.t() | nil,
 
           # Routing
+          requested_profile: String.t() | nil,
+          service_profile: String.t() | nil,
+          effective_profile: String.t() | nil,
+          routing_profile: String.t() | nil,
+          fallback_depth: non_neg_integer(),
+          fallback_reason: atom() | nil,
+          visited_profiles: %{optional(String.t()) => true},
+          attempted_instance_transports: %{
+            optional({String.t(), :http | :ws}) => true
+          },
+          phase_attempt_count: non_neg_integer(),
           candidate_providers: [String.t()],
           selected_provider: %{id: String.t(), protocol: :http | :ws} | nil,
           selection_reason: String.t() | nil,
           selection_latency_ms: float() | nil,
           retries: non_neg_integer(),
           circuit_breaker_state: :open | :half_open | :closed | nil,
+          routing_capacity: :customer_owned | :lasso_public_shared | nil,
+          shared_capacity_denials: non_neg_integer(),
           # Track repeated error categories to detect universal failures
           repeated_error_categories: %{atom() => non_neg_integer()},
 
           # Channel execution tracking (for observability without polluting return types)
           executed_channel: channel_identity() | nil,
           attempted_channels: [channel_attempt()],
+          # Full error retained for a terminal upstream answer.
           last_attempt_error: JError.t() | nil,
+          # An upstream's eth_getLogs range or result limit. Other upstreams may
+          # accept the range, so it is returned only once none of them did.
+          log_range_error: JError.t() | nil,
+          claim_audit: Lasso.Core.Support.ClaimAudit.State.t() | nil,
+          template_attempts: [map()],
+          shadow_predictions: map(),
+          learning_decision: map() | nil,
+          block_facts: Lasso.RPC.RequestAnalysis.block_facts(),
+          request_facts: Lasso.RPC.RequestFacts.t() | nil,
+          null_recovery: Lasso.RPC.NullRecovery.State.t() | nil,
+          missing_block: %{original?: boolean(), missing: map() | nil},
+          attempt_observation: map() | nil,
 
           # Timing
           # Plug-level start time for true E2E measurement (from RequestTimingPlug)
@@ -93,9 +122,9 @@ defmodule Lasso.RPC.RequestContext do
           head_policy: map() | nil,
           timeout_ms: timeout() | nil,
           execution_envelope: ExecutionEnvelope.t() | nil,
-          exploration_token: map() | nil,
           opts: RequestOptions.t() | nil,
           terminal_attempt_fact: struct() | nil,
+          terminal_attempt_channel: channel_identity() | nil,
           terminal_attempt_projection: struct() | nil,
           public_response_attempt: struct() | nil,
           request_dispatch_certainty: :not_dispatched | :indeterminate | :dispatched,
@@ -107,6 +136,8 @@ defmodule Lasso.RPC.RequestContext do
         }
 
   defstruct request_id: nil,
+            exploration_token: nil,
+            account_id: nil,
             chain_id: nil,
             method: nil,
             params: [],
@@ -115,16 +146,37 @@ defmodule Lasso.RPC.RequestContext do
             path: nil,
             client_ip: nil,
             user_agent: nil,
+            requested_profile: nil,
+            service_profile: nil,
+            effective_profile: nil,
+            routing_profile: nil,
+            fallback_depth: 0,
+            fallback_reason: nil,
+            visited_profiles: %{},
+            attempted_instance_transports: %{},
+            phase_attempt_count: 0,
             candidate_providers: [],
             selected_provider: nil,
             selection_reason: nil,
             selection_latency_ms: nil,
             retries: 0,
             circuit_breaker_state: nil,
+            routing_capacity: nil,
+            shared_capacity_denials: 0,
             repeated_error_categories: %{},
             executed_channel: nil,
             attempted_channels: [],
             last_attempt_error: nil,
+            log_range_error: nil,
+            claim_audit: nil,
+            template_attempts: [],
+            shadow_predictions: %{},
+            learning_decision: nil,
+            request_facts: nil,
+            block_facts: nil,
+            null_recovery: nil,
+            missing_block: %{original?: false, missing: nil},
+            attempt_observation: nil,
             plug_start_time: nil,
             start_time: nil,
             request_start_ms: nil,
@@ -144,9 +196,9 @@ defmodule Lasso.RPC.RequestContext do
             head_policy: nil,
             timeout_ms: nil,
             execution_envelope: nil,
-            exploration_token: nil,
             opts: nil,
             terminal_attempt_fact: nil,
+            terminal_attempt_channel: nil,
             terminal_attempt_projection: nil,
             public_response_attempt: nil,
             request_dispatch_certainty: :not_dispatched,
@@ -159,22 +211,25 @@ defmodule Lasso.RPC.RequestContext do
   If :request_id is provided in opts, it will be used (typically from Phoenix's Plug.RequestId).
   Otherwise, a new request_id will be generated.
   """
-  @spec new(pos_integer(), String.t(), list(), keyword() | RequestOptions.t()) :: t()
+  @spec new(pos_integer(), String.t(), list() | map(), keyword() | RequestOptions.t()) :: t()
   def new(chain_id, method, params, opts \\ [])
 
   def new(chain_id, method, params, opts) when is_list(opts) do
-    request_id = bounded_request_id(Keyword.get(opts, :request_id))
+    request_id =
+      bounded_request_id(Keyword.get(opts, :request_id) || Logger.metadata()[:request_id])
 
     plug_start = Keyword.get(opts, :plug_start_time)
     start_time = plug_start || System.monotonic_time(:microsecond)
 
     %__MODULE__{
       request_id: request_id,
+      account_id: Keyword.get(opts, :account_id),
       chain_id: chain_id,
       method: method,
       params: params,
       transport: Keyword.get(opts, :transport, :http),
       strategy: Keyword.get(opts, :strategy),
+      requested_profile: Keyword.get(opts, :requested_profile),
       path: Keyword.get(opts, :path),
       client_ip: Keyword.get(opts, :client_ip),
       user_agent: Keyword.get(opts, :user_agent),
@@ -188,23 +243,41 @@ defmodule Lasso.RPC.RequestContext do
 
     %__MODULE__{
       request_id: bounded_request_id(opts.request_id),
+      account_id: opts.account_id,
       chain_id: chain_id,
       method: method,
       params: params,
       transport: opts.transport || :http,
       strategy: opts.strategy,
+      requested_profile: opts.requested_profile,
       plug_start_time: plug_start,
       start_time: plug_start || System.monotonic_time(:microsecond)
     }
   end
 
-  @doc false
+  @doc "Moves request execution into a bounded fallback profile phase."
+  @spec enter_fallback(t(), String.t(), atom()) :: t()
+  def enter_fallback(%__MODULE__{} = ctx, profile, reason) when is_binary(profile) do
+    %{
+      ctx
+      | routing_profile: profile,
+        effective_profile: profile,
+        fallback_depth: ctx.fallback_depth + 1,
+        fallback_reason: reason,
+        visited_profiles: Map.put(ctx.visited_profiles, profile, true),
+        phase_attempt_count: 0,
+        bypass_param_limits: false,
+        execution_envelope: ExecutionEnvelope.enter_fallback_phase(ctx.execution_envelope)
+    }
+  end
+
+  @doc "Stores the prepared request while keeping it eligible for explicit release at closure."
   @spec set_prepared_request(t(), PreparedRequest.t()) :: t()
   def set_prepared_request(%__MODULE__{} = ctx, %PreparedRequest{} = prepared_request) do
     %{ctx | prepared_request: prepared_request}
   end
 
-  @doc false
+  @doc "Normalizes the request identifier to the bounded execution identity contract."
   @spec bound_request_id(t()) :: t()
   def bound_request_id(%__MODULE__{} = ctx),
     do: %{ctx | request_id: bounded_request_id(ctx.request_id)}
@@ -223,7 +296,7 @@ defmodule Lasso.RPC.RequestContext do
     set_execution_params(ctx, rpc_request, timeout_ms, opts, nil)
   end
 
-  @doc false
+  @doc "Installs the immutable inputs and deadline used by request-owned execution."
   @spec set_execution_params(t(), map(), integer(), RequestOptions.t(), integer() | nil) :: t()
   def set_execution_params(
         %__MODULE__{} = ctx,
@@ -252,6 +325,9 @@ defmodule Lasso.RPC.RequestContext do
   end
 
   defp put_execution_params(ctx, rpc_request, timeout_ms, opts, deadline_us) do
+    requested_profile = opts.requested_profile || opts.profile
+    routing_profile = ctx.routing_profile || opts.profile
+
     envelope =
       case ctx.execution_envelope do
         %ExecutionEnvelope{} = envelope ->
@@ -269,6 +345,11 @@ defmodule Lasso.RPC.RequestContext do
       | rpc_request: rpc_request,
         timeout_ms: timeout_ms,
         opts: opts,
+        requested_profile: ctx.requested_profile || requested_profile,
+        service_profile: opts.profile,
+        effective_profile: ctx.effective_profile || routing_profile,
+        routing_profile: routing_profile,
+        visited_profiles: Map.put(ctx.visited_profiles, routing_profile, true),
         execution_envelope: envelope
     }
   end
@@ -441,6 +522,12 @@ defmodule Lasso.RPC.RequestContext do
     %{ctx | retries: ctx.retries + 1}
   end
 
+  @doc "Records one candidate rejected by the shared upstream capacity boundary."
+  @spec record_shared_capacity_denial(t()) :: t()
+  def record_shared_capacity_denial(%__MODULE__{} = ctx) do
+    %{ctx | shared_capacity_denials: ctx.shared_capacity_denials + 1}
+  end
+
   @doc """
   Track an error category to detect repeated failures across providers.
 
@@ -479,26 +566,75 @@ defmodule Lasso.RPC.RequestContext do
   end
 
   @doc """
+  The last attempt that was actually sent to a provider, or nil. Attempts that failed
+  before dispatch are not recorded, so this names who the request last reached, which
+  can differ from `selected_provider` when a later choice was never sent.
+  """
+  @spec last_dispatched_attempt(t()) :: channel_attempt() | nil
+  def last_dispatched_attempt(%__MODULE__{attempted_channels: attempts}), do: List.last(attempts)
+
+  @doc "Keeps the terminal fact and its channel together across later selection phases."
+  @spec record_terminal_attempt(t(), Channel.t(), struct()) :: t()
+  def record_terminal_attempt(%__MODULE__{} = ctx, %Channel{} = channel, fact) do
+    %{ctx | terminal_attempt_fact: fact, terminal_attempt_channel: channel_identity(channel)}
+  end
+
+  @doc """
+  Names the latest upstream response and its profile as the public answer, leaving the request's own
+  counters untouched. A response whose dispatch count disagrees with the request cannot be a
+  request terminal, so the context is then unchanged.
+  """
+  @spec adopt_terminal_response(t()) :: t()
+  def adopt_terminal_response(
+        %__MODULE__{
+          terminal_attempt_fact: %AttemptTerminal.Response{identity: identity} = fact,
+          terminal_attempt_channel: %{provider_id: provider_id, transport: transport} = channel,
+          execution_envelope: envelope
+        } = ctx
+      ) do
+    if identity.candidate_admission_count <= envelope.candidate_admission_count and
+         identity.dispatch_count == envelope.dispatch_count do
+      %{
+        ctx
+        | public_response_attempt: fact,
+          executed_channel: channel,
+          routing_profile: identity.profile,
+          effective_profile: identity.profile,
+          selected_provider: %{id: provider_id, protocol: transport}
+      }
+    else
+      ctx
+    end
+  end
+
+  @doc """
   Records a failed channel attempt for observability/debugging.
   Appends to the attempted_channels list to maintain audit trail.
   """
-  @spec record_channel_attempt(t(), Channel.t(), term()) :: t()
-  def record_channel_attempt(%__MODULE__{} = ctx, %Channel{} = channel, error) do
+  @spec record_channel_attempt(t(), Channel.t(), term(), atom() | nil) :: t()
+  def record_channel_attempt(
+        %__MODULE__{} = ctx,
+        %Channel{} = channel,
+        error,
+        exhaustion_category \\ nil
+      ) do
     {category, code} = normalized_error(error)
 
     attempt = %{
       channel: channel_identity(channel),
       outcome: :error,
       category: category,
-      code: code
+      code: code,
+      exhaustion_category: exhaustion_category || exhaustion_category(ctx.method, error, category)
     }
 
-    %{
-      ctx
-      | attempted_channels: ctx.attempted_channels ++ [attempt],
-        last_attempt_error:
-          JError.from(error, provider_id: channel.provider_id, transport: channel.transport)
-    }
+    ctx
+    |> mark_channel_attempted(channel)
+    |> Map.update!(:attempted_channels, &(&1 ++ [attempt]))
+    |> Map.put(
+      :last_attempt_error,
+      JError.from(error, provider_id: channel.provider_id, transport: channel.transport)
+    )
   end
 
   @doc """
@@ -514,7 +650,36 @@ defmodule Lasso.RPC.RequestContext do
       code: nil
     }
 
-    %{ctx | attempted_channels: ctx.attempted_channels ++ [attempt]}
+    ctx
+    |> mark_channel_attempted(channel)
+    |> Map.update!(:attempted_channels, &(&1 ++ [attempt]))
+  end
+
+  @doc "Records a physical instance and transport in the bounded request history."
+  @spec mark_channel_attempted(t(), Channel.t()) :: t()
+  def mark_channel_attempted(%__MODULE__{} = ctx, %Channel{} = channel) do
+    attempted =
+      case channel.instance_id do
+        instance_id when is_binary(instance_id) ->
+          Map.put(ctx.attempted_instance_transports, {instance_id, channel.transport}, true)
+
+        _other ->
+          ctx.attempted_instance_transports
+      end
+
+    %{
+      ctx
+      | attempted_instance_transports: attempted,
+        phase_attempt_count: ctx.phase_attempt_count + 1
+    }
+  end
+
+  @doc "Reports whether a physical instance and transport were already attempted."
+  @spec attempted_instance?(t(), String.t() | nil, :http | :ws) :: boolean()
+  def attempted_instance?(%__MODULE__{}, nil, _transport), do: false
+
+  def attempted_instance?(%__MODULE__{} = ctx, instance_id, transport) do
+    Map.has_key?(ctx.attempted_instance_transports, {instance_id, transport})
   end
 
   # Private helpers
@@ -579,6 +744,16 @@ defmodule Lasso.RPC.RequestContext do
   end
 
   defp normalize_selected_provider(_other), do: nil
+
+  defp exhaustion_category(
+         "eth_getLogs",
+         %JError{resolution: %{constraint_claim: claim}},
+         _category
+       )
+       when claim in [:block_span, :result_volume],
+       do: :log_range_limit
+
+  defp exhaustion_category(_method, _error, category), do: category
 
   defp normalized_error(%{category: category, code: code}) when is_integer(code),
     do: {bounded_category(category), code}

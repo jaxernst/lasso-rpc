@@ -1,10 +1,12 @@
 defmodule Lasso.Core.Support.LogRangeLimit do
   @moduledoc """
-  Converts deterministic `eth_getLogs` range and result limits into one client action.
+  Converts `eth_getLogs` range and result limits into one client action.
 
-  Provider wording and local response envelopes vary. A known limit is terminal:
-  trying another upstream with the same query spends the request deadline without
-  changing the caller's next action, which is to reduce the block range.
+  Provider wording and local response envelopes vary. An upstream's own limit
+  differs between upstreams, so the pipeline tries the remaining candidates first
+  and returns this error, whose action is to reduce the block range, only when
+  none of them served the request. Lasso's local response cap applies to every
+  upstream alike, so it is returned at once.
   """
 
   alias Lasso.Core.Support.ErrorClassification
@@ -62,6 +64,11 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   end
 
   def translate(_method, _reason, _opts), do: :not_range_limit
+
+  @doc "Whether a translated limit belongs to the upstream rather than to Lasso's response cap."
+  @spec upstream_limit?(term(), keyword()) :: boolean()
+  def upstream_limit?(reason, opts \\ []),
+    do: not local_response_too_large?(JError.from(reason, opts))
 
   defp local_response_too_large?(%JError{category: :local_capacity_rejection, data: data})
        when is_map(data) do

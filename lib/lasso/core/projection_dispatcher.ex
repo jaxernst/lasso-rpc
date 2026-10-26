@@ -14,6 +14,8 @@ defmodule Lasso.Core.ProjectionDispatcher do
   @sink_classes [
     :head_observations,
     :learned_feedback,
+    :provider_messages,
+    :provider_outcomes,
     :diagnostics,
     :analytics,
     :ui,
@@ -27,6 +29,8 @@ defmodule Lasso.Core.ProjectionDispatcher do
   @type sink_class ::
           :head_observations
           | :learned_feedback
+          | :provider_messages
+          | :provider_outcomes
           | :diagnostics
           | :analytics
           | :ui
@@ -93,11 +97,11 @@ defmodule Lasso.Core.ProjectionDispatcher do
     end
   end
 
-  @doc false
+  @doc "Returns the fixed lane metadata registered for a sink class."
   @spec lane(GenServer.server(), sink_class()) :: {:ok, pid()} | {:error, :unknown_sink_class}
   def lane(dispatcher, sink_class), do: GenServer.call(dispatcher, {:lane, sink_class})
 
-  @doc false
+  @doc "Returns bounded delivery counters for a registered projection lane."
   @spec stats(GenServer.server(), sink_class()) :: map() | {:error, :unknown_sink_class}
   def stats(dispatcher, sink_class) do
     with {:ok, lane} <- lane(dispatcher, sink_class) do
