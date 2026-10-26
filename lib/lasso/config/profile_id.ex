@@ -12,6 +12,10 @@ defmodule Lasso.Config.ProfileId do
   @spec for_system(String.t()) :: t()
   def for_system(slug) when is_binary(slug), do: slug
 
+  @doc "Standalone file-backed profiles have no user namespace."
+  @spec user?(String.t()) :: false
+  def user?(_profile_id), do: false
+
   @spec system?(String.t()) :: boolean()
   def system?(slug) when is_binary(slug) do
     canonical = Lasso.Config.ProfileValidator.resolve_alias(slug)

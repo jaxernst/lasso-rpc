@@ -1,6 +1,7 @@
 defmodule Lasso.RPC.ProviderKnowledge.Effects do
   @moduledoc "Bounded candidate deferral at the descriptor ordering seam."
 
+  alias Lasso.Config.ProfileId
   alias Lasso.RPC.BoundedIdentifier
   alias Lasso.RPC.ProviderKnowledge
   alias Lasso.RPC.ProviderKnowledge.Decision
@@ -10,6 +11,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   @kinds [:method_refusal, :span_limit, :historical_depth]
   @max_head_evidence 2
+  @custom_class "u_*"
 
   @type mode :: :off | :shadow | :on
   @type shadow_mode :: :off | :shadow
@@ -56,12 +58,22 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   defp valid(value, allowed), do: if(value in allowed, do: value, else: :off)
 
-  @doc "Configured per-profile override for one effect, or nil."
+  @doc """
+  The configured mode for one kind and profile: the profile's own entry, then
+  the `u_*` entry for any Custom profile, otherwise nil.
+  """
   @spec profile_override(atom(), String.t() | nil) :: atom() | nil
   def profile_override(kind, profile) do
-    Application.get_env(:lasso, :provider_knowledge_profile_modes, %{})
-    |> get_in([profile, kind])
+    overrides = Application.get_env(:lasso, :provider_knowledge_profile_modes, %{})
+
+    case overrides |> Map.get(profile, %{}) |> Map.get(kind) do
+      nil -> if custom_profile?(profile), do: get_in(overrides, [@custom_class, kind])
+      mode -> mode
+    end
   end
+
+  defp custom_profile?(profile),
+    do: is_binary(profile) and profile != @custom_class and ProfileId.user?(profile)
 
   @doc "Bounded routing cohort, independent of a provider's sharing scope."
   @spec cohort(binary()) :: :public | :premium | :custom | :other
@@ -70,7 +82,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
       "public" -> :public
       "public-safe" -> :public
       "premium" -> :premium
-      _profile -> :other
+      profile -> if(ProfileId.user?(profile), do: :custom, else: :other)
     end
   end
 
@@ -392,17 +404,11 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
            transport,
            provider.config
          ) do
-      %{id: subject} ->
-        scope = %{
-          subject: subject,
-          profile: plan.profile,
-          chain_id: plan.chain_id,
-          method: method,
-          partition: context.partition
-        }
+      %{id: _id} = subject ->
+        scope = effect_scope(provider, subject, plan, method, context)
 
         case ProviderKnowledge.historical_depth(scope, resource) do
-          {:ok, hint} ->
+          {:ok, %{source: source} = hint} when source in [:local, :imported] ->
             if HistoricalDepth.unavailable?(
                  hint,
                  age,
@@ -499,18 +505,12 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
            transport,
            provider.config
          ) do
-      %{id: subject} ->
-        scope = %{
-          subject: subject,
-          profile: plan.profile,
-          chain_id: plan.chain_id,
-          method: method,
-          partition: context.partition
-        }
+      %{id: _id} = subject ->
+        scope = effect_scope(provider, subject, plan, method, context)
 
         cond do
           :method_refusal in kinds and mode(:method_refusal, plan.profile) == :on and
-              ProviderKnowledge.method_refused?(scope, method) ->
+              learned_method_refusal?(scope, method) ->
             deferral(descriptor, :method_refusal, BoundedIdentifier.encode(method))
 
           :span_limit in kinds and mode(:span_limit, plan.profile) == :on and
@@ -530,9 +530,31 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     end
   end
 
+  defp effect_scope(provider, subject, plan, method, context) do
+    ProviderKnowledge.capability_scope(
+      %{
+        learning_subject: subject,
+        profile: plan.profile,
+        chain_id: plan.chain_id,
+        historical_resource: Map.get(context, :historical_resource)
+      },
+      Map.get(provider.config, :capabilities),
+      method
+    )
+    |> Map.merge(%{method: method, partition: context.partition, allow_learned?: true})
+  end
+
+  defp learned_method_refusal?(scope, method) do
+    case ProviderKnowledge.method_refusal(scope, method) do
+      {:ok, %{source: source, value: true}} when source in [:local, :imported] -> true
+      _ -> false
+    end
+  end
+
   defp span_limited?(scope, "eth_getLogs", %{span: span}) when is_integer(span) do
     case ProviderKnowledge.span_limit(scope, :logs) do
-      {:ok, %{value: smallest_failure}} when is_integer(smallest_failure) ->
+      {:ok, %{source: source, value: smallest_failure}}
+      when source in [:local, :imported] and is_integer(smallest_failure) ->
         span >= smallest_failure
 
       _ ->
@@ -548,7 +570,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
        )
        when not is_nil(resource) do
     case ProviderKnowledge.historical_depth(scope, resource) do
-      {:ok, hint} ->
+      {:ok, %{source: source} = hint} when source in [:local, :imported] ->
         HistoricalDepth.unavailable?(
           hint,
           age,

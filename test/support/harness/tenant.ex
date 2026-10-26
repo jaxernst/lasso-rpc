@@ -66,6 +66,34 @@ defmodule Lasso.Test.Harness.Tenant do
     end
   end
 
+  @doc "Publishes explicit capability declarations for an owned upstream."
+  def declare_capabilities!(tenant, fleet, capabilities) do
+    [metadata, document] = tenant.file |> File.read!() |> String.split("\n---\n", parts: 2)
+
+    config =
+      document
+      |> Jason.decode!()
+      |> update_in(["chains", "anvil", "providers"], fn providers ->
+        Enum.map(providers, fn provider ->
+          if provider["id"] == fleet.name,
+            do: Map.put(provider, "capabilities", capabilities),
+            else: provider
+        end)
+      end)
+
+    File.write!(tenant.file, metadata <> "\n---\n" <> Jason.encode!(config))
+    assert :ok = Lasso.Diagnostics.reload_profiles()
+    tenant
+  end
+
+  @doc "Serving owners whose identities must survive an injected fault in this adapter."
+  def serving_owners do
+    Map.new(
+      [LassoWeb.Endpoint, Lasso.Providers.Catalog.Owner, Lasso.Config.ConfigStore],
+      &{&1, Process.whereis(&1)}
+    )
+  end
+
   def credentials(t), do: %{rpc_url: t.rpc_url}
 
   def close!(t) do

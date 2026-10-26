@@ -182,9 +182,12 @@ defmodule Lasso.RPC.ProviderKnowledge do
 
   def retained_method_refusals(_scope), do: []
 
+  @spec method_refusal(map(), binary()) :: {:ok, map()} | :unknown
+  def method_refusal(scope, method), do: read_hint(scope, :method_refusal, method)
+
   @spec method_refused?(map(), binary()) :: boolean()
   def method_refused?(scope, method) do
-    case read_hint(scope, :method_refusal, method) do
+    case method_refusal(scope, method) do
       {:ok, %{value: true}} -> true
       _ -> false
     end
@@ -230,12 +233,18 @@ defmodule Lasso.RPC.ProviderKnowledge do
 
   def response_latency(_scope), do: :unknown
 
-  @doc "Adapts captured operator and probe capability facts to the knowledge read interface."
+  @doc """
+  Adapts captured operator and probe capability facts to the knowledge read interface.
+
+  The captured `:historical_resource` selects the depth dimension; parameter
+  validation defaults to the shared `:state` dimension.
+  """
   @spec capability_scope(map(), map() | nil, binary()) :: map()
   def capability_scope(channel, capabilities, method) do
     capabilities = if is_map(capabilities), do: capabilities, else: %{}
     observed = CapabilityObservation.active(capabilities)
     category = MethodRegistry.method_category(method)
+    resource = Map.get(channel, :historical_resource, :state)
     declared_limits = capability_limits(capabilities)
     observed_limits = capability_limits(observed)
     probe_limits = Map.drop(observed_limits, Map.keys(declared_limits))
@@ -255,8 +264,9 @@ defmodule Lasso.RPC.ProviderKnowledge do
       chain_id: Map.get(channel, :chain_id),
       partition: :client,
       allow_learned?: false,
-      declared: capability_hints(capabilities, declared_limits, method, category, age_methods),
-      probe: capability_hints(observed, probe_limits, method, category, age_methods)
+      declared:
+        capability_hints(capabilities, declared_limits, method, category, age_methods, resource),
+      probe: capability_hints(observed, probe_limits, method, category, age_methods, resource)
     }
   end
 
@@ -398,7 +408,7 @@ defmodule Lasso.RPC.ProviderKnowledge do
     end
   end
 
-  defp capability_hints(capabilities, limits, method, category, age_methods) do
+  defp capability_hints(capabilities, limits, method, category, age_methods, resource) do
     methods = Map.get(capabilities, :unsupported_methods, [])
     categories = Map.get(capabilities, :unsupported_categories, [])
 
@@ -408,7 +418,7 @@ defmodule Lasso.RPC.ProviderKnowledge do
       span_limit: limit_hint(limits, :max_block_range, :logs),
       historical_depth:
         if(method in age_methods,
-          do: limit_hint(limits, :max_block_age, :state),
+          do: limit_hint(limits, :max_block_age, resource),
           else: %{}
         )
     }

@@ -1597,19 +1597,21 @@ defmodule Lasso.RPC.RequestPipeline do
          ctx,
          channel
        ) do
-    provider_config = channel.template_provider_config
+    if TemplateObservation.enabled?(channel.profile) do
+      provider_config = channel.template_provider_config
 
-    case {result, provider_config} do
-      {{:error, %JError{message: message}}, config}
-      when is_binary(message) and is_map(config) ->
-        masked_template(message, ctx.params, provider_config)
+      case {result, provider_config} do
+        {{:error, %JError{message: message}}, config}
+        when is_binary(message) and is_map(config) ->
+          masked_template(message, ctx.params, provider_config)
 
-      {{:error, %JError{message: message}, _elapsed}, config}
-      when is_binary(message) and is_map(config) ->
-        masked_template(message, ctx.params, provider_config)
+        {{:error, %JError{message: message}, _elapsed}, config}
+        when is_binary(message) and is_map(config) ->
+          masked_template(message, ctx.params, provider_config)
 
-      _ ->
-        nil
+        _ ->
+          nil
+      end
     end
   end
 
