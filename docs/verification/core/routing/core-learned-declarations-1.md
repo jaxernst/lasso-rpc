@@ -6,8 +6,8 @@
 
 ## Driving it with the harness
 
-Run `harness/test/learned_declarations_test.exs` through the repository harness runner. Two owned HTTP upstreams establish learned failures on the first route. A 700-block request uses the backup after learning a 500-block boundary; publishing a 10,000-block declaration restores primary routing. A declared method restriction excludes the primary. Retained hints are observed through the profile knowledge API or operator Diagnostics, with requests and provider sends observed through real RPC and the owned fleet ledger. Health remains 200 and serving owners survive.
+In standalone Core, run `scripts/verify-harness harness/test/learned_declarations_test.exs`. Two owned HTTP upstreams establish learned failures on the first route. A 700-block request uses the backup after learning a 500-block boundary; publishing a 10,000-block declaration restores primary routing. A declared method restriction excludes the primary. Retained hints are inspected through the supported `Lasso.Diagnostics.provider_knowledge/3` surface, with requests and provider sends observed through real RPC and the owned fleet ledger. Health remains 200 and serving owners survive.
 
-Publication uses the profile API's `limits.logs_span` / `limits.methods_blocked` fields or their native file-profile equivalents. Malformed raw capabilities are rejected at the profile API schema or file-profile validation boundary; the previous live configuration keeps serving through its healthy higher-priority provider.
+Set `capabilities.limits.max_block_range` or the `capabilities.unsupported_methods` list in the owned profile YAML, then publish the replacement with `Lasso.Diagnostics.reload_profiles/0`. Malformed capability lists are rejected by file-profile validation; the previous live configuration keeps serving through its healthy higher-priority provider.
 
-The profile API exposes archival permission but no numeric historical-depth declaration. Standalone file profiles expose `max_block_age` and `block_age_methods`; their depth-declaration journey uses that supported surface separately.
+Historical-depth declarations use `capabilities.limits.max_block_age` and `capabilities.limits.block_age_methods` in the separate file-profile depth journey.
