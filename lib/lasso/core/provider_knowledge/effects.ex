@@ -91,7 +91,15 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   def cached_winner_eligible?(descriptor, plan, method, context) do
     active_constraint? =
       Enum.any?(@kinds, &(mode(&1, plan.profile) == :on)) and
-        is_map(learned_deferral(descriptor, plan, method, context))
+        is_map(
+          learned_deferral(
+            descriptor,
+            effect_scope(descriptor, plan, method, context),
+            plan,
+            method,
+            context
+          )
+        )
 
     not active_constraint?
   end
@@ -116,12 +124,24 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     historical_mode = mode(:historical_depth, plan.profile)
     head = Map.get(context, :head_suitability)
 
+    scopes =
+      if Enum.any?(@kinds, &(mode(&1, plan.profile) == :on)),
+        do: Enum.map(descriptors, &effect_scope(&1, plan, method, context)),
+        else: Enum.map(descriptors, fn _descriptor -> nil end)
+
     predictions =
       if historical_mode == :off,
         do: Enum.map(descriptors, fn _descriptor -> nil end),
-        else: Enum.map(descriptors, &historical_prediction(&1, plan, method, context))
+        else: Enum.zip_with(descriptors, scopes, &historical_prediction(&1, &2, context))
 
-    learned = learned_deferrals(descriptors, predictions, historical_mode, plan, method, context)
+    learned =
+      learned_deferrals(
+        Enum.zip([descriptors, scopes, predictions]),
+        historical_mode,
+        plan,
+        method,
+        context
+      )
 
     {classes, verdicts} =
       if head do
@@ -190,17 +210,20 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   def head_bucket_decision(_descriptor, _plan, _context), do: nil
 
-  defp learned_deferrals(descriptors, predictions, historical_mode, plan, method, context) do
+  defp learned_deferrals(entries, historical_mode, plan, method, context) do
     if Enum.any?(@kinds, &(mode(&1, plan.profile) == :on)) do
-      Enum.zip_with(descriptors, predictions, fn descriptor, hint ->
+      Enum.map(entries, fn {descriptor, scope, hint} ->
         if historical_mode == :on and is_map(hint) do
           deferral(descriptor, :historical_depth, context.historical_resource)
         else
-          learned_deferral(descriptor, plan, method, context, [:method_refusal, :span_limit])
+          learned_deferral(descriptor, scope, plan, method, context, [
+            :method_refusal,
+            :span_limit
+          ])
         end
       end)
     else
-      Enum.map(descriptors, fn _ -> nil end)
+      Enum.map(entries, fn _ -> nil end)
     end
   end
 
@@ -391,44 +414,24 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   defp historical_prediction(
          descriptor,
-         plan,
-         method,
+         scope,
          %{historical_resource: resource, historical_age: age} = context
        )
-       when not is_nil(resource) do
-    {provider, transport} = route(descriptor)
-
-    case TransportRegistry.learning_subject_for(
-           plan.profile,
-           plan.chain_id,
-           transport,
-           provider.config
-         ) do
-      %{id: _id} = subject ->
-        scope = effect_scope(provider, subject, plan, method, context)
-
-        case ProviderKnowledge.historical_depth(scope, resource) do
-          {:ok, %{source: source} = hint} when source in [:local, :imported] ->
-            if HistoricalDepth.unavailable?(
-                 hint,
-                 age,
-                 Map.get(context, :historical_height)
-               ) do
-              hint
-              |> Map.take([
-                :source,
-                :coordinate,
-                :value,
-                :epoch,
-                :observed_at_ms,
-                :expires_at_ms,
-                :support
-              ])
-              |> Map.put(:route, {provider.instance_id, transport})
-            end
-
-          _ ->
-            nil
+       when is_map(scope) and not is_nil(resource) do
+    case ProviderKnowledge.historical_depth(scope, resource) do
+      {:ok, %{source: source} = hint} when source in [:local, :imported] ->
+        if HistoricalDepth.unavailable?(hint, age, Map.get(context, :historical_height)) do
+          hint
+          |> Map.take([
+            :source,
+            :coordinate,
+            :value,
+            :epoch,
+            :observed_at_ms,
+            :expires_at_ms,
+            :support
+          ])
+          |> Map.put(:route, Decision.route(descriptor))
         end
 
       _ ->
@@ -436,7 +439,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     end
   end
 
-  defp historical_prediction(_descriptor, _plan, _method, _context), do: nil
+  defp historical_prediction(_descriptor, _scope, _context), do: nil
 
   @doc "Returns bounded quota predictions without changing route order."
   @spec shadow_proposals(list(), term(), binary(), map()) :: [map()]
@@ -496,7 +499,30 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   def shadow_proposals(_descriptors, _plan, _method, _context), do: []
 
-  defp learned_deferral(descriptor, plan, method, context, kinds \\ @kinds) do
+  defp learned_deferral(descriptor, scope, plan, method, context, kinds \\ @kinds)
+
+  defp learned_deferral(_descriptor, nil, _plan, _method, _context, _kinds), do: nil
+
+  defp learned_deferral(descriptor, scope, plan, method, context, kinds) do
+    cond do
+      :method_refusal in kinds and mode(:method_refusal, plan.profile) == :on and
+          learned_method_refusal?(scope, method) ->
+        deferral(descriptor, :method_refusal, BoundedIdentifier.encode(method))
+
+      :span_limit in kinds and mode(:span_limit, plan.profile) == :on and
+          span_limited?(scope, method, context) ->
+        deferral(descriptor, :span_limit, :logs)
+
+      :historical_depth in kinds and mode(:historical_depth, plan.profile) == :on and
+          historical_depth_limited?(scope, context) ->
+        deferral(descriptor, :historical_depth, context.historical_resource)
+
+      true ->
+        nil
+    end
+  end
+
+  defp effect_scope(descriptor, plan, method, context) do
     {provider, transport} = route(descriptor)
 
     case TransportRegistry.learning_subject_for(
@@ -506,42 +532,21 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
            provider.config
          ) do
       %{id: _id} = subject ->
-        scope = effect_scope(provider, subject, plan, method, context)
-
-        cond do
-          :method_refusal in kinds and mode(:method_refusal, plan.profile) == :on and
-              learned_method_refusal?(scope, method) ->
-            deferral(descriptor, :method_refusal, BoundedIdentifier.encode(method))
-
-          :span_limit in kinds and mode(:span_limit, plan.profile) == :on and
-              span_limited?(scope, method, context) ->
-            deferral(descriptor, :span_limit, :logs)
-
-          :historical_depth in kinds and mode(:historical_depth, plan.profile) == :on and
-              historical_depth_limited?(scope, context) ->
-            deferral(descriptor, :historical_depth, context.historical_resource)
-
-          true ->
-            nil
-        end
+        ProviderKnowledge.capability_scope(
+          %{
+            learning_subject: subject,
+            profile: plan.profile,
+            chain_id: plan.chain_id,
+            historical_resource: Map.get(context, :historical_resource)
+          },
+          Map.get(provider.config, :capabilities),
+          method
+        )
+        |> Map.merge(%{method: method, partition: context.partition, allow_learned?: true})
 
       _ ->
         nil
     end
-  end
-
-  defp effect_scope(provider, subject, plan, method, context) do
-    ProviderKnowledge.capability_scope(
-      %{
-        learning_subject: subject,
-        profile: plan.profile,
-        chain_id: plan.chain_id,
-        historical_resource: Map.get(context, :historical_resource)
-      },
-      Map.get(provider.config, :capabilities),
-      method
-    )
-    |> Map.merge(%{method: method, partition: context.partition, allow_learned?: true})
   end
 
   defp learned_method_refusal?(scope, method) do

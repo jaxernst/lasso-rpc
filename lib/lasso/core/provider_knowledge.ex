@@ -252,7 +252,8 @@ defmodule Lasso.RPC.ProviderKnowledge do
     age_methods =
       observed_limits
       |> Map.merge(declared_limits)
-      |> Map.get(:block_age_methods, [])
+      |> Map.get(:block_age_methods)
+      |> Kernel.||([])
 
     %{
       subject:
@@ -409,8 +410,8 @@ defmodule Lasso.RPC.ProviderKnowledge do
   end
 
   defp capability_hints(capabilities, limits, method, category, age_methods, resource) do
-    methods = Map.get(capabilities, :unsupported_methods, [])
-    categories = Map.get(capabilities, :unsupported_categories, [])
+    methods = Map.get(capabilities, :unsupported_methods) || []
+    categories = Map.get(capabilities, :unsupported_categories) || []
 
     %{
       method_refusal:

@@ -4,7 +4,8 @@ defmodule Lasso.RPC.Providers.Capabilities do
 
   Provider capabilities are declared as plain maps (from YAML config)
   and evaluated at runtime for method filtering, parameter validation,
-  and error classification.
+  and error classification. Capability list fields must contain lists; use an
+  empty list for no declarations.
 
   When `capabilities` is nil on a provider, defaults to permissive behavior:
   only `:local_only` methods are blocked, no custom error rules, no limits.
@@ -71,9 +72,9 @@ defmodule Lasso.RPC.Providers.Capabilities do
   def supports_method?(method, category, capabilities)
       when is_binary(method) and is_atom(category) and is_map(capabilities) do
     unsupported_categories =
-      Map.get(capabilities, :unsupported_categories, @default_unsupported_categories)
+      Map.get(capabilities, :unsupported_categories, @default_unsupported_categories) || []
 
-    unsupported_methods = Map.get(capabilities, :unsupported_methods, [])
+    unsupported_methods = Map.get(capabilities, :unsupported_methods) || []
 
     cond do
       method in unsupported_methods ->
@@ -98,7 +99,7 @@ defmodule Lasso.RPC.Providers.Capabilities do
   def validate_params(_method, _params, nil, _ctx), do: :ok
 
   def validate_params(method, params, capabilities, ctx) when is_map(capabilities) do
-    limits = Map.get(capabilities, :limits, %{})
+    limits = Map.get(capabilities, :limits) || %{}
     validate_limits(method, validation_params(params), limits, ctx)
   end
 
@@ -124,12 +125,18 @@ defmodule Lasso.RPC.Providers.Capabilities do
   end
 
   @doc """
-  Validates capabilities schema at boot time. Raises on invalid config.
+  Validates capability declarations before publication. Raises on invalid config.
   """
   @spec validate!(String.t(), map() | nil) :: :ok
   def validate!(_provider_id, nil), do: :ok
 
   def validate!(provider_id, capabilities) when is_map(capabilities) do
+    validate_method_list!(
+      provider_id,
+      "unsupported_methods",
+      Map.get(capabilities, :unsupported_methods, [])
+    )
+
     validate_unsupported_categories!(provider_id, capabilities)
     validate_error_rules!(provider_id, capabilities)
     validate_limits!(provider_id, capabilities)
@@ -160,7 +167,7 @@ defmodule Lasso.RPC.Providers.Capabilities do
 
   defp maybe_validate_block_age(method, params, limits, ctx) do
     max_age = Map.get(limits, :max_block_age)
-    age_methods = Map.get(limits, :block_age_methods, [])
+    age_methods = Map.get(limits, :block_age_methods) || []
 
     if max_age && method in age_methods do
       AdapterHelpers.validate_block_age(method, params, ctx, max_age)
@@ -234,6 +241,11 @@ defmodule Lasso.RPC.Providers.Capabilities do
 
   defp validate_unsupported_categories!(provider_id, capabilities) do
     categories = Map.get(capabilities, :unsupported_categories, [])
+
+    unless is_list(categories) do
+      raise "Provider #{inspect(provider_id)}: unsupported_categories must be a list."
+    end
+
     valid_categories = Map.keys(MethodRegistry.categories())
 
     Enum.each(categories, fn cat ->
@@ -364,23 +376,16 @@ defmodule Lasso.RPC.Providers.Capabilities do
       end
     end
 
-    case Map.get(limits, :block_age_methods) do
-      nil ->
-        :ok
+    validate_method_list!(
+      provider_id,
+      "limits.block_age_methods",
+      Map.get(limits, :block_age_methods, [])
+    )
+  end
 
-      methods when is_list(methods) ->
-        unless Enum.all?(methods, &is_binary/1) do
-          raise """
-          Provider "#{provider_id}": limits.block_age_methods must be a list of strings, \
-          got: #{inspect(methods)}
-          """
-        end
-
-      other ->
-        raise """
-        Provider "#{provider_id}": limits.block_age_methods must be a list of strings, \
-        got: #{inspect(other)}
-        """
+  defp validate_method_list!(provider_id, field, methods) do
+    unless is_list(methods) and Enum.all?(methods, &is_binary/1) do
+      raise "Provider #{inspect(provider_id)}: #{field} must be a list of strings."
     end
   end
 end

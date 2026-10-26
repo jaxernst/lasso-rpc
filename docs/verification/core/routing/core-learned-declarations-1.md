@@ -1,11 +1,13 @@
 # core-learned-declarations-1
 
-- `core-learned-declarations-1` Republished operator declarations outrank retained learned span, depth and method hints without changing the connection identity. Learned constraints never become hard eligibility policy.
+- `core-learned-declarations-1` Published operator span and method declarations outrank retained learning. Invalid capability lists cannot replace a live profile or prevent healthy routing.
 
 [Area and shared preconditions](README.md).
 
 ## Driving it with the harness
 
-Run `harness/test/learned_declarations_test.exs` through the repository harness runner. Two controlled HTTP upstreams establish learned failures on the first route. An ordinary request uses the backup; after publishing a higher span or depth declaration, it uses the primary. A declared method restriction continues to exclude the primary. The learning subject and retained local hint survive publication, health stays 200, and serving owners survive.
+Run `harness/test/learned_declarations_test.exs` through the repository harness runner. Two owned HTTP upstreams establish learned failures on the first route. A 700-block request uses the backup after learning a 500-block boundary; publishing a 10,000-block declaration restores primary routing. A declared method restriction excludes the primary. Retained hints are observed through the profile knowledge API or operator Diagnostics, with requests and provider sends observed through real RPC and the owned fleet ledger. Health remains 200 and serving owners survive.
 
-The span journey requests 700 blocks after learning from span failures with a stated 500-block limit, then declares a 10,000-block limit. Requests and provider sends are observed through real RPC and the owned fleet ledger. Per-kind environment kill switches retain their baseline behavior.
+Publication uses the profile API's `limits.logs_span` / `limits.methods_blocked` fields or their native file-profile equivalents. Malformed raw capabilities are rejected at the profile API schema or file-profile validation boundary; the previous live configuration keeps serving through its healthy higher-priority provider.
+
+The profile API exposes archival permission but no numeric historical-depth declaration. Standalone file profiles expose `max_block_age` and `block_age_methods`; their depth-declaration journey uses that supported surface separately.

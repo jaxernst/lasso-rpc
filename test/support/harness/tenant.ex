@@ -7,26 +7,7 @@ defmodule Lasso.Test.Harness.Tenant do
     slug = "harness-#{System.unique_integer([:positive])}"
     file = Path.join(System.fetch_env!("LASSO_PROFILES_DIR"), slug <> ".yml")
 
-    config = %{
-      "chains" => %{
-        "anvil" => %{
-          "chain_id" => 31_337,
-          "head_policy" => "off",
-          "providers" =>
-            Enum.with_index(providers, 1)
-            |> Enum.map(fn {f, priority} ->
-              %{
-                "id" => f.name,
-                "name" => f.name,
-                "url" => f.url,
-                "priority" => priority,
-                "subscribe_new_heads" => false,
-                "background_observations" => false
-              }
-            end)
-        }
-      }
-    }
+    config = configuration(providers, [])
 
     File.write!(
       file,
@@ -66,25 +47,95 @@ defmodule Lasso.Test.Harness.Tenant do
     end
   end
 
-  @doc "Publishes explicit capability declarations for an owned upstream."
-  def declare_capabilities!(tenant, fleet, capabilities) do
-    [metadata, document] = tenant.file |> File.read!() |> String.split("\n---\n", parts: 2)
-
-    config =
-      document
-      |> Jason.decode!()
-      |> update_in(["chains", "anvil", "providers"], fn providers ->
-        Enum.map(providers, fn provider ->
-          if provider["id"] == fleet.name,
-            do: Map.put(provider, "capabilities", capabilities),
-            else: provider
-        end)
-      end)
-
-    File.write!(tenant.file, metadata <> "\n---\n" <> Jason.encode!(config))
+  @doc "Publishes an owned file-profile replacement and joins its reload."
+  def replace!(tenant, providers, opts \\ []) do
+    write_replacement!(tenant, providers, opts)
     assert :ok = Lasso.Diagnostics.reload_profiles()
     tenant
   end
+
+  @doc "Rejects an invalid owned file replacement while its live configuration keeps serving."
+  def reject_replace!(tenant, providers, opts) do
+    write_replacement!(tenant, providers, opts)
+    assert {:error, _reason} = Lasso.Diagnostics.reload_profiles()
+    tenant
+  end
+
+  @doc "Returns the owned provider's operator knowledge report in the shared report shape."
+  def knowledge!(tenant, fleet) do
+    {:ok, hints} = Lasso.Diagnostics.provider_knowledge(tenant.profile, 31_337, fleet.name)
+
+    for hint <- Map.get(hints, :http, []) do
+      %{
+        "kind" => to_string(hint.kind),
+        "source" => if(hint.source == :local, do: "learned", else: to_string(hint.source)),
+        "value" => Map.get(hint, :value),
+        "transport" => "http"
+      }
+    end
+  end
+
+  defp write_replacement!(tenant, providers, opts) do
+    [metadata, _document] = tenant.file |> File.read!() |> String.split("\n---\n", parts: 2)
+
+    File.write!(
+      tenant.file,
+      metadata <> "\n---\n" <> Jason.encode!(configuration(providers, opts))
+    )
+  end
+
+  defp configuration(providers, opts) do
+    overrides = Keyword.get(opts, :providers, %{})
+
+    %{
+      "chains" => %{
+        "anvil" => %{
+          "chain_id" => 31_337,
+          "head_policy" => "off",
+          "providers" =>
+            Enum.with_index(providers, 1)
+            |> Enum.map(fn {fleet, priority} ->
+              fields = Map.get(overrides, fleet.name, %{})
+              limits = Map.get(fields, "limits", %{})
+
+              capabilities =
+                Map.get(fields, "capabilities", %{})
+                |> declare_span(limits["logs_span"])
+                |> declare_methods(limits["methods_blocked"])
+
+              %{
+                "priority" => priority,
+                "subscribe_new_heads" => false,
+                "background_observations" => false
+              }
+              |> Map.merge(Map.drop(fields, ["heads", "limits", "capabilities"]))
+              |> Map.merge(%{
+                "id" => fleet.name,
+                "name" => fleet.name,
+                "url" => fleet.url,
+                "capabilities" => capabilities
+              })
+            end)
+        }
+      }
+    }
+  end
+
+  defp declare_span(capabilities, nil), do: capabilities
+
+  defp declare_span(capabilities, span),
+    do:
+      Map.update(
+        capabilities,
+        "limits",
+        %{"max_block_range" => span},
+        &Map.put(&1, "max_block_range", span)
+      )
+
+  defp declare_methods(capabilities, nil), do: capabilities
+
+  defp declare_methods(capabilities, methods),
+    do: Map.put(capabilities, "unsupported_methods", methods)
 
   @doc "Serving owners whose identities must survive an injected fault in this adapter."
   def serving_owners do
