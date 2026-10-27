@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-DD
+
 ### Added
 
-- Learned method refusal, historical depth and log-span routing are enabled by default. Repeated matching evidence defers an unsuitable upstream behind alternatives while keeping it available as a last resort. Hints expire and withdraw on newer successful evidence. Each effect has an independent environment kill switch; knowledge is local to the node and relearned after restart. Opt-in request metadata and local diagnostics expose bounded explanations.
+- Learned provider limits are on by default. When an upstream repeatedly refuses a method, lacks the history a request needs, or rejects an `eth_getLogs` range, Lasso learns that from live traffic and defers the upstream behind alternatives for matching requests. The upstream stays available as a last resort, and a learned limit expires or is withdrawn when the upstream later serves what it refused. Operator-declared capabilities always take precedence over learned limits. Turn each kind off independently with `LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE`, `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE` or `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE` set to `off`. Learned state is local to each node and relearned after a restart. Opt-in request metadata, local diagnostics and `/metrics` series show deferrals that changed the order and limits withdrawn by a later success. See [routing](docs/ROUTING.md) and [configuration](docs/CONFIGURATION.md).
 
 - `config/examples/chainstack.yml` profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum. One `CHAINSTACK_MULTICHAIN_TOKEN` multichain auth token authorizes every chain. Chainstack is `priority: 1` with keyless public fallbacks on each chain; route through `/rpc/profile/chainstack/priority/:chain` to keep it primary. The template caps `eth_getLogs` at the Developer plan range and classifies Chainstack's disabled-tracer error so the request fails over to another provider when one supports it. See [provider templates](docs/CONFIGURATION.md#provider-templates).
+
+### Compatibility
+
+- Routing order can now change on its own: an upstream with a learned limit is tried after alternatives for matching requests. Set the three `LASSO_PROVIDER_KNOWLEDGE_*_MODE` variables to `off` to keep v0.6.0 ordering.
+- Capability list fields must be lists. A profile that leaves `unsupported_methods`, `unsupported_categories` or `limits.block_age_methods` empty (YAML `null`) now fails validation instead of loading; write `[]` for no declarations. Reload keeps the previous configuration when validation fails.
+- No profile, publication-journal or benchmark-history migration.
 
 ## [0.6.0] - 2026-10-16
 
@@ -409,7 +417,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.4.5...v0.5.0

@@ -1,6 +1,6 @@
 # RPC Core method support
 
-This page describes the self-hosted **v0.6.0** runtime. Lasso Cloud has a separate
+This page describes the self-hosted **v0.7.0** runtime. Lasso Cloud has a separate
 [compatibility contract](https://docs.lasso.sh/cloud/json-rpc-compatibility).
 Do not infer parity from a shared method name or product version.
 
