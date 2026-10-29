@@ -5,7 +5,7 @@
 ### One smart RPC endpoint for all your nodes and providers.
 
 [![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
-[![Release](https://img.shields.io/badge/release-v0.6.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.6.0)
+[![Release](https://img.shields.io/badge/release-v0.7.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.7.0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](LICENSE.md)
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](#documentation)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
@@ -84,7 +84,7 @@ You need Docker with the Compose plugin, curl, and OpenSSL. Start in an empty di
 
 ```bash
 mkdir lasso && cd lasso
-curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.6.0/compose.yml --output compose.yml
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.7.0/compose.yml --output compose.yml
 (umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
 docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
