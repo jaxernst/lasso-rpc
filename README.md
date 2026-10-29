@@ -1,4 +1,5 @@
-<img src="priv/static/images/lasso-logo-readme.png" alt="Lasso RPC" height="60">
+<img width="1600" height="600" alt="image" src="https://github.com/user-attachments/assets/9b06623b-fed8-47b9-8a7f-726e1b525b7c" />
+
 
 ### One smart RPC endpoint for all your nodes and providers.
 
