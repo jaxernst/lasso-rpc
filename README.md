@@ -1,5 +1,5 @@
 <h1 align="left">
-<img width="400" height="150" alt="image" src="https://github.com/user-attachments/assets/b6ad3157-1118-4d8b-878d-1b023303eefd" />
+<img width="1600" height="600" alt="image" src="https://github.com/user-attachments/assets/b6ad3157-1118-4d8b-878d-1b023303eefd" />
 </h1>
 
 ### One smart RPC endpoint for all your nodes and providers.
