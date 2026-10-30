@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The three `LASSO_PROVIDER_KNOWLEDGE_*_MODE` variables accept `on`/`off`, `true`/`false` and `1`/`0` in any case. Other values still fail startup.
+- Startup logs a warning when `LW_BETA` is set, naming `BALANCED_FAST_BETA` as its replacement. `LW_BETA` has not been read since v0.6.0.
+
+### Documentation
+
+- Complete the v0.7.0 compatibility notes: `eth_getLogs` range-limit failover and missing-block recovery are always on, and the YAML `null` validation note applies to profiles that never loaded on earlier releases.
+
 ## [0.7.0] - 2026-10-29
 
 ### Added
@@ -18,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 
 - Routing order can now change on its own: an upstream with a learned limit is tried after alternatives for matching requests. Set the three `LASSO_PROVIDER_KNOWLEDGE_*_MODE` variables to `off` to keep v0.6.0 ordering.
-- Capability list fields must be lists. A profile that leaves `unsupported_methods`, `unsupported_categories` or `limits.block_age_methods` empty (YAML `null`) now fails validation instead of loading; write `[]` for no declarations. Reload keeps the previous configuration when validation fails.
+- An upstream's `eth_getLogs` range or result-size error now fails over to the remaining providers instead of returning immediately. The client receives the range error only when no provider serves the request. Each such request can make up to two extra upstream calls. Declare `capabilities.limits.max_block_range` on providers with known limits so Lasso skips them for larger ranges before dispatch. The learned-limit switches do not disable this.
+- A `null` answer for a numeric block from `eth_getBlockByNumber`, `eth_getBlockReceipts` or `eth_getBlockTransactionCountByNumber`, or empty `eth_getLogs` from an upstream whose head is below `toBlock`, is retried once on another upstream with fresh evidence of that block. The client receives the alternate's answer, or the original if the alternate fails. The learned-limit switches do not disable this.
+- Capability list fields must be lists. File profiles have rejected YAML `null` for `unsupported_methods`, `unsupported_categories` and `limits.block_age_methods` since v0.3.4, so profiles that load on earlier releases are unaffected; write `[]` for no declarations.
 - No profile, publication-journal or benchmark-history migration.
 
 ## [0.6.0] - 2026-10-16

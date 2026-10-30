@@ -52,10 +52,10 @@ provider_knowledge_effect_modes =
     ],
     fn {kind, name} ->
       mode =
-        case System.get_env(name, "on") do
-          "on" -> :on
-          "off" -> :off
-          _ -> raise "#{name} must be off or on"
+        case name |> System.get_env("on") |> String.downcase() do
+          value when value in ["on", "true", "1"] -> :on
+          value when value in ["off", "false", "0"] -> :off
+          _ -> raise "#{name} must be on, off, true, false, 1, or 0"
         end
 
       {kind, mode}
@@ -179,6 +179,11 @@ config :lasso,
     positive_integer_env.("LASSO_UPSTREAM_INFLIGHT_RESPONSE_BYTE_LIMIT", 128 * 1_024 * 1_024),
   upstream_response_byte_limit:
     positive_integer_env.("LASSO_UPSTREAM_RESPONSE_BYTE_LIMIT", 16 * 1_024 * 1_024)
+
+if System.get_env("LW_BETA") do
+  require Logger
+  Logger.warning("LW_BETA is no longer read; set BALANCED_FAST_BETA instead")
+end
 
 if value = System.get_env("BALANCED_FAST_BETA") do
   case Float.parse(value) do

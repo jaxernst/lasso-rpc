@@ -253,7 +253,7 @@ transports within a tier. It does not guarantee exact shares, capacity-aware
 balancing, or independent operators. See [Routing](ROUTING.md#load-balanced-default)
 for the dispatch-budget and recovered-head-preference boundaries.
 
-For upgrades from v0.5.1, rename `LW_BETA` to `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); the old variable is no longer read. Existing `latency-weighted` URLs and `strategy` values remain permanent aliases.
+For upgrades from v0.5.1, rename `LW_BETA` to `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); the old variable is no longer read, and startup logs a warning when it is set. Existing `latency-weighted` URLs and `strategy` values remain permanent aliases.
 
 **Balanced Fast** — Weighted random ordering of qualified upstreams using scale-free latency ratios. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. Reliability qualification, capacity policy, and exploration remain separate concerns. `latency-weighted` is an alias.
 
@@ -470,12 +470,12 @@ Three provider-knowledge effects are enabled by default:
 
 | Environment variable | Default | Accepted values |
 | --- | --- | --- |
-| `LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE` | `on` | `off`, `on` |
-| `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE` | `on` | `off`, `on` |
-| `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE` | `on` | `off`, `on` |
+| `LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
+| `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
+| `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 
 Set a variable to `off` and restart to keep that effect from reordering routes.
-Invalid values fail startup. Disabling an effect does not erase its observations;
+Other values fail startup. Disabling an effect does not erase its observations;
 inspection remains available. Application configuration uses
 `:provider_knowledge_effect_modes`, a map with `:method_refusal`,
 `:historical_depth` and `:span_limit` keys. Runtime environment values populate
