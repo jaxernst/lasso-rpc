@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.7.1] - 2026-10-30
 
+### Security
+
+- Update Phoenix HTML to 4.4.0 and ssl_verify_fun to 1.1.8 to address attribute-injection (CVE-2026-117645) and TLS hostname-verification (CVE-2026-117666) advisories.
+
 ### Changed
 
 - The three `LASSO_PROVIDER_KNOWLEDGE_*_MODE` variables accept `on`/`off`, `true`/`false` and `1`/`0` in any case. Other values still fail startup.
