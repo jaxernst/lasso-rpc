@@ -68,3 +68,7 @@ config :lasso, Lasso.PubSub, adapter: Phoenix.PubSub.PG
 
 # Configure process registry for testing
 config :lasso, Lasso.Core.Support.ProcessRegistry, partitions: 1
+
+if System.get_env("LASSO_TEST_HARNESS") == "1" do
+  config :lasso, :method_timeouts, %{"eth_sendRawTransaction" => 500}
+end

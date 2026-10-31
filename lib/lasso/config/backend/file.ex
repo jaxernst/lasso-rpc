@@ -281,6 +281,7 @@ defmodule Lasso.Config.Backend.File do
       block_time_ms: chain_data["block_time_ms"],
       head_policy: Map.get(chain_data, "head_policy", "off"),
       providers: parse_providers(chain_data["providers"] || []),
+      transactions: ChainConfig.Transactions.parse(chain_data["transactions"]),
       selection: parse_selection(chain_data["selection"]),
       monitoring: parse_monitoring(chain_data["monitoring"]),
       websocket: parse_websocket(chain_data["websocket"], chain_data),

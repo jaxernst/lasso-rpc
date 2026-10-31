@@ -150,12 +150,13 @@ defmodule Lasso.RPC.RequestOptions.Builder do
     else
       header(conn, "x-lasso-provider") ||
         conn.params["provider_override"] ||
-        conn.params["provider_id"]
+        conn.params["provider_id"] || conn.params["provider"]
     end
   end
 
   defp resolve_provider_from_map(params, overrides) do
-    overrides[:provider_override] || params["provider_override"] || params["provider_id"]
+    overrides[:provider_override] || params["provider_override"] || params["provider_id"] ||
+      params["provider"]
   end
 
   # Transport resolution

@@ -22,6 +22,8 @@ defmodule Lasso.Config.ConfigValidator do
 
     with :ok <- validate_basic_structure(chain_config),
          :ok <- validate_chain_id(chain_config.chain_id),
+         :ok <-
+           ChainConfig.Transactions.validate(chain_config.transactions, chain_config.providers),
          :ok <- ObservationConfig.validate_monitoring(chain_config.monitoring),
          :ok <- validate_providers(chain_config.providers, skip_connectivity),
          :ok <- validate_provider_priorities(chain_config.providers) do

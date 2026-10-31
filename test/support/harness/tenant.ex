@@ -3,11 +3,11 @@ defmodule Lasso.Test.Harness.Tenant do
   import ExUnit.Assertions
   alias Lasso.Test.Harness.{Rpc, Settle}
 
-  def open!(providers) do
+  def open!(providers, opts \\ []) do
     slug = "harness-#{System.unique_integer([:positive])}"
     file = Path.join(System.fetch_env!("LASSO_PROFILES_DIR"), slug <> ".yml")
 
-    config = configuration(providers, [])
+    config = configuration(providers, opts)
 
     File.write!(
       file,
@@ -87,7 +87,7 @@ defmodule Lasso.Test.Harness.Tenant do
   defp configuration(providers, opts) do
     overrides = Keyword.get(opts, :providers, %{})
 
-    %{
+    config = %{
       "chains" => %{
         "anvil" => %{
           "chain_id" => 31_337,
@@ -119,6 +119,8 @@ defmodule Lasso.Test.Harness.Tenant do
         }
       }
     }
+
+    update_in(config, ["chains", "anvil"], &Map.merge(&1, Keyword.get(opts, :chain, %{})))
   end
 
   defp declare_span(capabilities, nil), do: capabilities

@@ -11,7 +11,7 @@ defmodule Lasso.RPC.RoutingPlan do
     :archival_threshold,
     :head_scope
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [transactions: nil]
 
   @type provider :: %{
           required(:id) => String.t(),
@@ -34,6 +34,28 @@ defmodule Lasso.RPC.RoutingPlan do
           provider_priorities: %{String.t() => non_neg_integer()},
           max_lag_blocks: non_neg_integer() | nil,
           archival_threshold: non_neg_integer(),
-          head_scope: Lasso.Observations.HeadScope.t()
+          head_scope: Lasso.Observations.HeadScope.t(),
+          transactions: Lasso.Config.ChainConfig.Transactions.t() | nil
         }
+  @spec for_request(t(), atom() | {atom(), atom()}) :: t()
+  def for_request(%__MODULE__{transactions: nil} = plan, _request), do: plan
+
+  def for_request(plan, {class, phase}) do
+    send? = class == :raw_transaction_broadcast
+    relays? = send? and phase == :relays
+
+    providers =
+      Enum.filter(plan.providers, fn provider ->
+        provider.id in plan.transactions.relays == relays?
+      end)
+
+    %{
+      plan
+      | providers: providers,
+        provider_priorities: Map.take(plan.provider_priorities, Enum.map(providers, & &1.id)),
+        max_lag_blocks: if(send?, do: nil, else: plan.max_lag_blocks)
+    }
+  end
+
+  def for_request(plan, class), do: for_request(plan, {class, :relays})
 end

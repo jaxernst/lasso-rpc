@@ -102,3 +102,11 @@ Profile tester settings do not create API quotas or upstream quota isolation.
 The authoritative implementation is `TransportPolicy`, `ExecutionEnvelope`,
 `Capabilities`, `RPCController`, and `RPCSocket.ItemOwner` at the selected release.
 See [API reference](API_REFERENCE.md) for routes and metadata.
+
+## Transaction send policies
+
+A chain `transactions` block applies to the `raw_transaction_broadcast` execution class, currently `eth_sendRawTransaction`. Reads and subscriptions exclude relay providers. Invalid send/read pins return `-32602` before dispatch (`pin_outside_relays` or `relay_send_only`).
+
+Relays can reject read methods and report stale heads; sends therefore have no head-lag gate. A null send result remains null and does not imply hash acceptance. Transaction hash confirmation stays within the captured terminal send phase, including when a relay rejects that lookup.
+
+When no send dispatch occurs under a policy, exhaustion returns `-32000` with `reason: relays_unavailable`, `error_type: relay_unavailable`, retry guidance and policy metadata. After dispatched sends fail and hash confirmation finds nothing, the last upstream error is retained with `send_policy` added and `phase` naming its phase. No synthetic exhaustion reason replaces that upstream error.

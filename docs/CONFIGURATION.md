@@ -485,3 +485,11 @@ Quota-exhaustion and response-latency effects remain off. Claim auditing also
 remains off. The three settled effects accept no `shadow` mode. Knowledge uses
 node-local memory, no durable knowledge store, and no background model service.
 See [routing](ROUTING.md#learned-provider-limits) for evidence and safety rules.
+
+## Transaction relay policy
+
+A chain may declare `transactions: {relays: [provider_id], public_fallback: false}`. Every relay ID must exist on that chain, the list must be nonempty and unique, relay declarations must support sends, and at least one non-relay provider must remain for reads. Omit the block to retain ordinary routing. The stock public profile leaves it unset.
+
+Relays serve `eth_sendRawTransaction`; all other methods, subscriptions and block recovery use the other providers. Send selection ignores head lag, since a relay can report a stale head. `public_fallback: true` enables a second phase over the same profile's non-relay providers after relay exhaustion. Both phases share the original deadline and dispatch budget. It never merges the pools for strategy ranking or selects another profile. A send pin must name a relay even when public fallback is enabled; read pins must name a non-relay.
+
+See [the private-send example](../config/examples/private-sends.yml). Relay operators and their downstream builders remain trusted recipients. Hash acceptance does not prove inclusion; align wallet rebroadcast settings with the chosen boundary.

@@ -20,6 +20,10 @@ defmodule Lasso.Test.Harness.Fleet do
     do: GenServer.call(f.pid, {:script, method, calls, fallback})
 
   def release(f, token, action), do: GenServer.call(f.pid, {:release, token, action})
+
+  def notify(%{connection: pid, action: {:answer, subscription}}, result),
+    do: send(pid, {:fixture_notification, subscription, result})
+
   def drain(f), do: GenServer.call(f.pid, :drain)
 
   def request(fleet, transport, request),
@@ -92,6 +96,7 @@ defmodule Lasso.Test.Harness.Fleet do
 
     action = if action == :default, do: default(method), else: action
     report = %{fleet: s.name, transport: transport, request: request, action: action}
+    report = if transport == :ws, do: Map.put(report, :connection, pid), else: report
     send(s.owner, {:fleet, self(), report})
 
     s = %{
@@ -171,6 +176,17 @@ defmodule Lasso.Test.Harness.Fleet do
     end
 
     def websocket_handle(_, fleet), do: {:ok, fleet}
+
+    def websocket_info({:fixture_notification, subscription, result}, fleet),
+      do:
+        {:reply,
+         {:text,
+          Jason.encode!(%{
+            jsonrpc: "2.0",
+            method: "eth_subscription",
+            params: %{subscription: subscription, result: result}
+          })}, fleet}
+
     def websocket_info(_, fleet), do: {:ok, fleet}
 
     defp released({:hold, token}) do

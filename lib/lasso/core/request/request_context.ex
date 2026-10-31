@@ -19,7 +19,8 @@ defmodule Lasso.RPC.RequestContext do
     ExecutionEnvelope,
     PreparedRequest,
     RequestOptions,
-    Response
+    Response,
+    Selection
   }
 
   @type channel_identity :: %{
@@ -135,7 +136,26 @@ defmodule Lasso.RPC.RequestContext do
           bypass_param_limits: boolean()
         }
 
+  @spec transaction_policy(t()) :: map() | nil
+  def transaction_policy(
+        %{execution_envelope: %{execution_safety: :raw_transaction_broadcast}} = ctx
+      ),
+      do: Selection.policy(ctx.routing_capture)
+
+  def transaction_policy(_ctx), do: nil
+
+  @spec send_policy_metadata(t()) :: map() | nil
+  def send_policy_metadata(
+        %{execution_envelope: %{execution_safety: :raw_transaction_broadcast}} = ctx
+      ),
+      do: Selection.policy_metadata(ctx.routing_capture, ctx.send_phase)
+
+  def send_policy_metadata(_ctx), do: nil
+
+  @derive {Inspect, except: [:routing_capture]}
   defstruct request_id: nil,
+            routing_capture: nil,
+            send_phase: :relays,
             exploration_token: nil,
             account_id: nil,
             chain_id: nil,

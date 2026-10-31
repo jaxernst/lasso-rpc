@@ -76,6 +76,7 @@ defmodule Lasso.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:ex_keccak, "~> 0.7"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dotenvy, "~> 0.8.0"},

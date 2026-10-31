@@ -412,3 +412,11 @@ All origins are allowed (`*`). Allowed headers:
 - `X-Lasso-Include-Meta`
 
 Preflight responses are cached for 24 hours.
+
+## Relay policy errors and metadata
+
+Opt-in `lasso_meta` on send responses includes `send_policy: {relays: [provider_id], public_fallback: false, phase: "relays"}`. The second send phase uses `phase: "public"`. Error data carries the same policy object; selected-provider metadata identifies the dispatched relay.
+
+Zero-dispatch exhaustion returns JSON-RPC `-32000` with `reason: "relays_unavailable"`, `error_type: "relay_unavailable"`, `retryable: true`, and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest relay circuit recovery on the requested transport.
+
+If sends were dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_relays` and `relay_send_only` respectively.

@@ -17,6 +17,7 @@ defmodule Lasso.Config.ChainConfig do
           head_policy: String.t(),
           providers: [__MODULE__.Provider.t()],
           selection: __MODULE__.Selection.t() | nil,
+          transactions: __MODULE__.Transactions.t() | nil,
           monitoring: __MODULE__.Monitoring.t(),
           websocket: __MODULE__.Websocket.t(),
           topology: __MODULE__.Topology.t() | nil
@@ -29,6 +30,7 @@ defmodule Lasso.Config.ChainConfig do
     :block_time_ms,
     :providers,
     :selection,
+    :transactions,
     :monitoring,
     :websocket,
     :topology,
