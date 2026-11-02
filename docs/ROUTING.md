@@ -313,3 +313,11 @@ POST /rpc/provider/:provider_id/:chain
 The provider ID must match a provider configured in the profile. Health checks and circuit breakers still apply—if the provider is open-circuit, the request will fail.
 
 This is useful for debugging, testing specific provider behavior, or implementing custom provider selection logic outside of Lasso.
+
+## Transaction relay routing
+
+The optional chain `transactions` policy projects one captured routing plan by request class. `raw_transaction_broadcast` (currently `eth_sendRawTransaction`) selects relays with head-lag filtering disabled. Reads, subscriptions and recovery exclude relays. Filters, method fail-open, cursors, exploration, pins and retries consume that projected list. A retained subscription moves to an eligible read provider after a policy update; a configured replacement that is still connecting retains continuity until it is available.
+
+The default is fail-closed. An explicit `public_fallback: true` enters a second within-profile phase after relay exhaustion using the same request budget and deadline. It is never a strategy-ranked union. The unset policy preserves ordinary routing.
+
+After a policy send fails, transaction hash confirmation selects inside its terminal send phase and borrows the selected channel, so a public read cannot escape a fail-closed boundary. Null relay replies stay null; a response hash is not proof of inclusion.

@@ -420,19 +420,19 @@ defmodule Lasso.Providers.CandidateListing do
     if capable == [], do: candidates, else: capable
   end
 
-  @doc """
-  Returns the minimum recovery time across all open circuits for a (profile, chain_id) pair.
-  """
-  @spec get_min_recovery_time(String.t(), pos_integer(), keyword()) ::
-          {:ok, non_neg_integer() | nil} | {:error, term()}
-  def get_min_recovery_time(profile, chain_id, opts \\ [])
-      when is_integer(chain_id) and chain_id > 0 do
+  @doc "Returns the soonest open-circuit recovery among the supplied routing view."
+  @spec get_min_recovery_time([map()], keyword()) :: {:ok, non_neg_integer() | nil}
+  def get_min_recovery_time(providers, opts \\ [])
+
+  def get_min_recovery_time(profile, chain_id) when is_binary(profile) and is_integer(chain_id),
+    do: get_min_recovery_time(profile, chain_id, [])
+
+  def get_min_recovery_time(providers, opts) when is_list(providers) do
     transport_filter = Keyword.get(opts, :transport, :both)
-    profile_providers = Catalog.get_profile_providers(profile, chain_id)
     now_ms = System.monotonic_time(:millisecond)
 
     times =
-      Enum.flat_map(profile_providers, fn pp ->
+      Enum.flat_map(providers, fn pp ->
         transports =
           case transport_filter do
             :http -> [:http]
@@ -456,6 +456,15 @@ defmodule Lasso.Providers.CandidateListing do
       [] -> {:ok, nil}
       ts -> {:ok, Enum.min(ts)}
     end
+  end
+
+  @spec get_min_recovery_time(String.t(), pos_integer(), keyword()) ::
+          {:ok, non_neg_integer() | nil}
+  def get_min_recovery_time(profile, chain_id, opts) do
+    profile
+    |> Lasso.RPC.Selection.capture(chain_id)
+    |> Lasso.RPC.Selection.providers(:replay_safe)
+    |> get_min_recovery_time(opts)
   end
 
   defp build_candidate(provider, learned_scope, plan, protocol, workload_key, mode) do

@@ -27,7 +27,9 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
   alias Lasso.Core.Support.{ClaimAudit, CredentialHealth, LogRangeLimit}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.{CandidateListing, Catalog, ChainIdentity}
+  alias Lasso.Providers.{CandidateListing, ChainIdentity}
+
+  alias Lasso.RPC.TransactionHash
 
   alias Lasso.RPC.{
     AttemptIdentity,
@@ -192,7 +194,195 @@ defmodule Lasso.RPC.RequestPipeline do
       end
 
     result
+    |> confirm_raw_transaction(execution_scope, caller_guard)
     |> finalize_request_terminal()
+  end
+
+  # A single lookup is shared by every terminal sendRaw rejection. Pinning the
+  # selected transport prevents read failover from turning it into peer checks.
+  defp confirm_raw_transaction(
+         {:error, _, %{routing_capture: {:unavailable, _}}} = result,
+         _scope,
+         _guard
+       ),
+       do: result
+
+  defp confirm_raw_transaction(
+         {:error, _error, %{routing_capture: {:ok, _, %{transactions: nil}}}} = result,
+         _scope,
+         _guard
+       ),
+       do: result
+
+  defp confirm_raw_transaction(
+         {:error, error, %{method: "eth_sendRawTransaction"} = ctx},
+         scope,
+         guard
+       ) do
+    hash = TransactionHash.from_params(ctx.params)
+    channel = transaction_lookup_channel(ctx, hash)
+    remaining = ExecutionEnvelope.remaining_ms(ctx.execution_envelope)
+
+    found? =
+      if hash && channel && remaining > 0 && ExecutionScope.caller_alive?(guard) do
+        opts = %{
+          ctx.opts
+          | profile: channel.profile,
+            captured_channel: channel,
+            provider_override: nil,
+            transport: channel.transport,
+            request_origin: :system,
+            timeout_ms: remaining,
+            request_context: nil,
+            plug_start_time: nil
+        }
+
+        case execute_owned(scope, ctx.chain_id, "eth_getTransactionByHash", [hash], opts) do
+          {:ok, %Success{} = response, _lookup_ctx} ->
+            found =
+              case Jason.decode(response.raw_bytes) do
+                {:ok, %{"result" => %{"hash" => returned_hash}}} when is_binary(returned_hash) ->
+                  String.downcase(returned_hash) == hash
+
+                _ ->
+                  false
+              end
+
+            Success.release_capacity(response, :transaction_lookup)
+            found
+
+          {:error, lookup_error, _lookup_ctx} ->
+            Capacity.release(lookup_error, :transaction_lookup)
+            false
+
+          _ ->
+            false
+        end
+      else
+        false
+      end
+
+    :telemetry.execute([:lasso, :rpc, :transaction_lookup], %{count: 1}, %{
+      chain_id: ctx.chain_id,
+      profile: ctx.routing_profile,
+      result: if(found?, do: :found, else: :not_found)
+    })
+
+    if found? do
+      Capacity.release(error, :transaction_found)
+
+      response = %Success{
+        id: ctx.opts.jsonrpc_id,
+        jsonrpc: "2.0",
+        raw_bytes: Jason.encode!(%{jsonrpc: "2.0", id: ctx.opts.jsonrpc_id, result: hash})
+      }
+
+      ctx = ctx |> RequestContext.record_success(response) |> Map.put(:error, nil)
+      {:ok, response, %{ctx | terminal_reason: :transaction_found, public_response_attempt: nil}}
+    else
+      {:error, transaction_error_hint(error, ctx), ctx}
+    end
+  end
+
+  defp confirm_raw_transaction(result, _scope, _guard), do: result
+
+  defp transaction_lookup_channel(
+         %{terminal_attempt_fact: %AttemptTerminal.Response{}} = ctx,
+         _hash
+       ) do
+    case request_projection_route(ctx) do
+      channel when is_map(channel) ->
+        get_provider_channels(
+          channel.profile,
+          ctx.chain_id,
+          channel.provider_id,
+          channel.transport,
+          ctx.execution_envelope.deadline_us,
+          {ctx.execution_envelope.execution_safety, ctx.send_phase},
+          ctx.routing_capture
+        )
+        |> List.first()
+
+      _ ->
+        nil
+    end
+  end
+
+  defp transaction_lookup_channel(ctx, hash) do
+    Selection.select_channels(ctx.routing_profile, ctx.chain_id, "eth_getTransactionByHash",
+      captured_selection: ctx.routing_capture,
+      execution_safety: ctx.execution_envelope.execution_safety,
+      send_phase: ctx.send_phase,
+      strategy: ctx.opts.strategy,
+      transport: ctx.opts.transport || :both,
+      limit: 1,
+      request_origin: :system,
+      params: [hash],
+      deadline_us: ctx.execution_envelope.deadline_us
+    )
+    |> List.first()
+  end
+
+  defp transaction_error_hint(error, ctx) do
+    relay_unavailable? =
+      not is_nil(RequestContext.transaction_policy(ctx)) and
+        ctx.execution_envelope.dispatch_count == 0 and
+        error.category == :provider_error
+
+    error =
+      if relay_unavailable? do
+        %{
+          error
+          | retriable?: true,
+            data:
+              Map.merge(TransactionHash.error_data(error.data), %{reason: :relays_unavailable})
+        }
+      else
+        error
+      end
+
+    retryable? = error.retriable? == true
+
+    next_action =
+      if retryable? do
+        "It is safe to resend the same signed transaction."
+      else
+        "Check this transaction's hash for a receipt before signing a new one, then address the cause in the error message before retrying."
+      end
+
+    data =
+      TransactionHash.error_data(error.data)
+      |> Map.drop(["retryable", "next_action", "code", "error_type", "request_id"])
+
+    data =
+      Map.merge(data, %{
+        code: "provider_error",
+        error_type:
+          if(relay_unavailable?, do: "relay_unavailable", else: "transaction_rejection"),
+        request_id: ctx.request_id,
+        retryable: retryable?,
+        next_action: next_action
+      })
+
+    data =
+      if RequestContext.transaction_policy(ctx),
+        do: Map.put(data, :send_policy, RequestContext.send_policy_metadata(ctx)),
+        else: data
+
+    # Rebuild both HTTP and WS documents so raw passthrough cannot drop hints.
+    message = if relay_unavailable?, do: relay_unavailable_message(ctx, data), else: error.message
+    %{error | raw_response: nil, data: data, retriable?: retryable?, message: message}
+  end
+
+  defp relay_unavailable_message(ctx, data) do
+    retry_ms = data[:retry_after_ms] || data["retry_after_ms"]
+    retry = if retry_ms, do: " Retry after #{div(retry_ms + 999, 1000)}s.", else: ""
+
+    fallback =
+      if RequestContext.transaction_policy(ctx).public_fallback, do: "enabled", else: "disabled"
+
+    "No transaction relay available on chain #{ctx.chain_id}: all #{length(RequestContext.transaction_policy(ctx).relays)} configured relays are unavailable and public fallback is #{fallback}." <>
+      retry
   end
 
   defp execute_admitted_request(ctx, opts, caller_guard) do
@@ -229,6 +419,8 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp execute_open_request(ctx, rpc_request, chain_id, opts, caller_guard) do
+    ctx = capture_routing(ctx)
+
     case request_open(ctx, caller_guard) do
       :ok ->
         case prepare_request(ctx, rpc_request) do
@@ -237,7 +429,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
             case request_open(ctx, caller_guard) do
               :ok ->
-                case validate_provider_override(chain_id, opts) do
+                case validate_provider_override(chain_id, opts, ctx) do
                   :ok ->
                     execute_admitted_request(ctx, opts, caller_guard)
 
@@ -264,6 +456,63 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
+  defp capture_routing(%{routing_capture: nil} = ctx) do
+    capture = Selection.capture(ctx.routing_profile, ctx.chain_id)
+    envelope = ctx.execution_envelope
+
+    envelope =
+      if Selection.policy(capture) && envelope.execution_safety == :raw_transaction_broadcast,
+        do: %{envelope | dispatch_limit: 3},
+        else: envelope
+
+    %{ctx | routing_capture: capture, execution_envelope: envelope}
+  end
+
+  defp capture_routing(ctx), do: ctx
+
+  defp pin_error_message(ctx, provider_id, chain_id, profile) do
+    case pin_error_data(ctx, provider_id, chain_id, profile) do
+      %{reason: "pin_outside_relays"} ->
+        "Provider '#{provider_id}' is not a transaction relay on chain #{chain_id}"
+
+      %{reason: "relay_send_only"} ->
+        "Provider '#{provider_id}' serves transaction sends only on chain #{chain_id}"
+
+      _ ->
+        "Provider '#{provider_id}' not found"
+    end
+  end
+
+  defp pin_error_data(ctx, provider_id, chain_id, profile) do
+    data = %{provider_id: provider_id, chain_id: chain_id, profile: profile}
+
+    case ctx.routing_capture do
+      {:ok, _snapshot, %{transactions: policy, providers: providers}} when not is_nil(policy) ->
+        if Enum.any?(providers, &(&1.id == provider_id)) do
+          if ctx.execution_envelope.execution_safety == :raw_transaction_broadcast do
+            Map.merge(data, %{
+              reason: "pin_outside_relays",
+              send_policy: RequestContext.send_policy_metadata(ctx)
+            })
+          else
+            Map.put(data, :reason, "relay_send_only")
+          end
+        else
+          data
+        end
+
+      _ ->
+        data
+    end
+  end
+
+  defp routing_selection_options(ctx),
+    do: [
+      execution_safety: ctx.execution_envelope.execution_safety,
+      send_phase: ctx.send_phase,
+      captured_selection: ctx.routing_capture
+    ]
+
   defp product_policy_error do
     JError.new(-32_601, "Method not supported by proxy",
       category: :method_not_found,
@@ -272,30 +521,44 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
-  @spec validate_provider_override(chain_id(), RequestOptions.t()) :: :ok | {:error, JError.t()}
-  defp validate_provider_override(_chain_id, %RequestOptions{
-         captured_channel: channel,
-         request_origin: :system
-       })
+  @spec validate_provider_override(chain_id(), RequestOptions.t(), RequestContext.t()) ::
+          :ok | {:error, JError.t()}
+  defp validate_provider_override(
+         _chain_id,
+         %RequestOptions{
+           captured_channel: channel,
+           request_origin: :system
+         },
+         _ctx
+       )
        when not is_nil(channel),
        do: :ok
 
-  defp validate_provider_override(_chain_id, %RequestOptions{provider_override: nil}), do: :ok
+  defp validate_provider_override(_chain_id, %RequestOptions{provider_override: nil}, _ctx),
+    do: :ok
 
-  defp validate_provider_override(chain_id, %RequestOptions{
-         provider_override: provider_id,
-         profile: profile
-       }) do
-    case active_catalog_provider(profile, chain_id, provider_id) do
+  defp validate_provider_override(
+         chain_id,
+         %RequestOptions{
+           provider_override: provider_id,
+           profile: profile
+         },
+         ctx
+       ) do
+    case Selection.provider(
+           ctx.routing_capture,
+           provider_id,
+           ctx.execution_envelope.execution_safety
+         ) do
       {:ok, _snapshot, _provider, _instance} ->
         :ok
 
       {:error, _} ->
         {:error,
-         JError.new(-32_602, "Provider '#{provider_id}' not found",
+         JError.new(-32_602, pin_error_message(ctx, provider_id, chain_id, profile),
            category: :invalid_params,
            retriable?: false,
-           data: %{provider_id: provider_id, chain_id: chain_id, profile: profile}
+           data: pin_error_data(ctx, provider_id, chain_id, profile)
          )}
     end
   end
@@ -350,10 +613,11 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp maybe_explore(selected, remaining, ctx) do
     selection_opts =
-      case remaining do
-        %CandidateCursor{effect_context: %{head_suitability: head}} -> [head_suitability: head]
-        _other -> []
-      end
+      routing_selection_options(ctx) ++
+        case remaining do
+          %CandidateCursor{effect_context: %{head_suitability: head}} -> [head_suitability: head]
+          _other -> []
+        end
 
     case Exploration.select(selected, ctx, selection_opts) do
       {:ok, exploratory, token} ->
@@ -436,7 +700,8 @@ defmodule Lasso.RPC.RequestPipeline do
         profile,
         chain_id,
         method,
-        captured_block_options(ctx) ++
+        routing_selection_options(ctx) ++
+          captured_block_options(ctx) ++
           HeadPolicy.selection_options(ctx) ++
           [
             strategy: opts.strategy,
@@ -460,7 +725,15 @@ defmodule Lasso.RPC.RequestPipeline do
       deadline_us = ctx.execution_envelope.deadline_us
 
       primary_channels =
-        get_provider_channels(profile, chain_id, provider_id, opts.transport, deadline_us)
+        get_provider_channels(
+          profile,
+          chain_id,
+          provider_id,
+          opts.transport,
+          deadline_us,
+          ctx.execution_envelope.execution_safety,
+          ctx.routing_capture
+        )
 
       if opts.failover_on_override do
         failover_channels =
@@ -468,7 +741,8 @@ defmodule Lasso.RPC.RequestPipeline do
             profile,
             chain_id,
             method,
-            captured_block_options(ctx) ++
+            routing_selection_options(ctx) ++
+              captured_block_options(ctx) ++
               [
                 strategy: opts.strategy,
                 transport: :both,
@@ -1034,6 +1308,7 @@ defmodule Lasso.RPC.RequestPipeline do
         )
       end)
 
+    outcome = policy_send_outcome(outcome, ctx)
     {decision, ctx} = qualify_response(outcome, ctx)
 
     qualification =
@@ -1299,6 +1574,27 @@ defmodule Lasso.RPC.RequestPipeline do
     }
   end
 
+  # Identical signed bytes can be resent within the declared send boundary.
+  defp policy_send_outcome(
+         %{projection: %{recommended_action: :finish_unsafe_indeterminate}} = outcome,
+         ctx
+       ) do
+    if RequestContext.transaction_policy(ctx) do
+      %{
+        outcome
+        | projection: %{
+            outcome.projection
+            | fallback_eligible: true,
+              recommended_action: :try_next_candidate
+          }
+      }
+    else
+      outcome
+    end
+  end
+
+  defp policy_send_outcome(outcome, _ctx), do: outcome
+
   defp qualify_response(
          %{fact: %AttemptTerminal.Response{kind: :success}, result: {:ok, result, _io_ms}},
          ctx
@@ -1553,6 +1849,16 @@ defmodule Lasso.RPC.RequestPipeline do
           ctx.execution_envelope.dispatch_count >= ctx.execution_envelope.dispatch_limit ->
         ctx = record_owner_failure(ctx, channel, outcome.fact, reason, exhaustion_category)
         handle_dispatch_rejection([], ctx, :dispatch_budget_exhausted, caller_guard)
+
+      fallback_profile_available?(ctx) ->
+        ctx = record_owner_failure(ctx, channel, outcome.fact, reason, exhaustion_category)
+
+        advance_or_exhaust(
+          ctx,
+          extract_error_category(reason),
+          JError.from(reason, provider_id: channel.provider_id, transport: channel.transport),
+          caller_guard
+        )
 
       match?(%AttemptTerminal.PredispatchFailure{}, outcome.fact) ->
         attempt_channels([], ctx, [], caller_guard)
@@ -2021,7 +2327,8 @@ defmodule Lasso.RPC.RequestPipeline do
 
     retry_after_ms =
       if reason == :no_eligible_providers,
-        do: calculate_min_recovery_time(profile, ctx.chain_id, ctx.opts && ctx.opts.transport)
+        do:
+          calculate_min_recovery_time(profile, ctx.chain_id, ctx.opts && ctx.opts.transport, ctx)
 
     {message, data} = build_exhaustion_error_message(ctx.method, retry_after_ms, ctx.chain_id)
 
@@ -2064,8 +2371,54 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
+  defp advance_or_exhaust(
+         %{opts: %{provider_override: provider_id, captured_channel: captured}} = ctx,
+         _reason,
+         terminal_error,
+         _caller_guard
+       )
+       when is_binary(provider_id) or not is_nil(captured),
+       do: finalize_profile_exhaustion(ctx, terminal_error)
+
+  defp advance_or_exhaust(
+         %{
+           routing_capture: {:ok, _, %{transactions: policy}},
+           execution_envelope: %{execution_safety: :raw_transaction_broadcast}
+         } = ctx,
+         _reason,
+         error,
+         guard
+       )
+       when not is_nil(policy) do
+    if policy.public_fallback and ctx.send_phase == :relays and
+         ExecutionEnvelope.remaining_ms(ctx.execution_envelope) > 0 and
+         ctx.execution_envelope.dispatch_count < ctx.execution_envelope.dispatch_limit do
+      ctx = %{ctx | send_phase: :public}
+      execute_pipeline(build_channel_source(ctx.opts), ctx, guard)
+    else
+      finalize_profile_exhaustion(ctx, error)
+    end
+  end
+
   defp advance_or_exhaust(ctx, _reason, terminal_error, _caller_guard),
     do: finalize_profile_exhaustion(ctx, terminal_error)
+
+  defp fallback_profile_available?(%{
+         opts: %{provider_override: provider_id, captured_channel: captured}
+       })
+       when is_binary(provider_id) or not is_nil(captured),
+       do: false
+
+  defp fallback_profile_available?(
+         %{
+           routing_capture: {:ok, _, %{transactions: policy}},
+           execution_envelope: %{execution_safety: :raw_transaction_broadcast}
+         } = ctx
+       )
+       when not is_nil(policy),
+       do:
+         policy.public_fallback and ctx.send_phase == :relays and
+           ctx.execution_envelope.dispatch_count < ctx.execution_envelope.dispatch_limit
 
   defp fallback_profile_available?(_ctx), do: false
 
@@ -2588,11 +2941,28 @@ defmodule Lasso.RPC.RequestPipeline do
     finalize_error(error, %{ctx | terminal_reason: :invalid_request})
   end
 
-  @spec get_provider_channels(String.t(), chain_id(), String.t(), atom() | nil, integer()) :: [
-          Channel.t()
-        ]
-  defp get_provider_channels(profile, chain_id, provider_id, transport_override, deadline_us) do
-    case active_catalog_provider(profile, chain_id, provider_id) do
+  @spec get_provider_channels(
+          String.t(),
+          chain_id(),
+          String.t(),
+          atom() | nil,
+          integer(),
+          atom() | {atom(), atom()},
+          term()
+        ) ::
+          [
+            Channel.t()
+          ]
+  defp get_provider_channels(
+         profile,
+         chain_id,
+         provider_id,
+         transport_override,
+         deadline_us,
+         class,
+         captured
+       ) do
+    case Selection.provider(captured, provider_id, class) do
       {:ok, snapshot, provider, instance} ->
         transports = if transport_override, do: [transport_override], else: [:http, :ws]
 
@@ -2626,17 +2996,6 @@ defmodule Lasso.RPC.RequestPipeline do
     :exit, _ -> nil
   end
 
-  defp active_catalog_provider(profile, chain_id, provider_id) do
-    with %{} = snapshot <- Catalog.snapshot(),
-         {:ok, plan} <- Catalog.get_routing_plan(snapshot, profile, chain_id),
-         provider when not is_nil(provider) <-
-           Enum.find(plan.providers, &(&1.id == provider_id)) do
-      {:ok, snapshot, provider, provider.config}
-    else
-      _unavailable -> {:error, :not_found}
-    end
-  end
-
   @spec build_exhaustion_error_message(method(), non_neg_integer() | nil, chain_id()) ::
           {String.t(), map()}
   defp build_exhaustion_error_message(method, nil, _chain_id) do
@@ -2657,13 +3016,19 @@ defmodule Lasso.RPC.RequestPipeline do
     {"No available channels for method: #{method}. All circuit breakers are open.", %{}}
   end
 
-  @spec calculate_min_recovery_time(String.t(), chain_id(), atom() | nil) ::
+  @spec calculate_min_recovery_time(String.t(), chain_id(), atom() | nil, RequestContext.t()) ::
           non_neg_integer() | nil
-  defp calculate_min_recovery_time(profile, chain_id, transport_filter) do
+  defp calculate_min_recovery_time(_profile, _chain_id, transport_filter, ctx) do
     transport = transport_filter || :both
 
     {:ok, min_time} =
-      CandidateListing.get_min_recovery_time(profile, chain_id, transport: transport)
+      CandidateListing.get_min_recovery_time(
+        Selection.providers(
+          ctx.routing_capture,
+          {ctx.execution_envelope.execution_safety, ctx.send_phase}
+        ),
+        transport: transport
+      )
 
     min_time
   end

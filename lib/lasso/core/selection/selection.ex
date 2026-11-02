@@ -24,6 +24,7 @@ defmodule Lasso.RPC.Selection do
   alias Lasso.RPC.{
     AttemptProjection,
     Channel,
+    ExecutionEnvelope,
     RequestAnalysis,
     RoutingEvidence,
     RoutingPlan,
@@ -77,7 +78,7 @@ defmodule Lasso.RPC.Selection do
   # Private implementation
 
   defp select_provider_from_plan(profile, chain_id, method, params, selection_opts) do
-    case capture_selection_snapshot(profile, chain_id) do
+    case capture_selection_snapshot(profile, chain_id, method, Map.to_list(selection_opts)) do
       {:ok, snapshot, plan} ->
         do_select_provider(snapshot, plan, method, params, selection_opts)
 
@@ -175,7 +176,7 @@ defmodule Lasso.RPC.Selection do
   @spec select_channels(String.t(), pos_integer(), String.t(), keyword()) :: [Channel.t()]
   def select_channels(profile, chain_id, method, opts \\ [])
       when is_binary(profile) and is_integer(chain_id) and chain_id > 0 and is_binary(method) do
-    case capture_selection_snapshot(profile, chain_id) do
+    case capture_selection_snapshot(profile, chain_id, method, opts) do
       {:ok, snapshot, plan} -> select_channels_from_plan(snapshot, plan, method, opts)
       {:unavailable, _} -> []
     end
@@ -191,7 +192,7 @@ defmodule Lasso.RPC.Selection do
 
     case {strategy, strategy_mod} do
       {strategy, _module} when strategy in [:priority, :load_balanced] ->
-        case capture_selection_snapshot(profile, chain_id) do
+        case capture_selection_snapshot(profile, chain_id, method, opts) do
           {:ok, snapshot, plan} -> CandidateCursor.new(snapshot, plan, method, opts)
           {:unavailable, _} = failure -> failure
         end
@@ -220,6 +221,7 @@ defmodule Lasso.RPC.Selection do
     do: select_channels_from_plan(Catalog.snapshot(), plan, method, opts)
 
   defp select_channels_from_plan(snapshot, %RoutingPlan{} = plan, method, opts) do
+    plan = RoutingPlan.for_request(plan, request_view(method, opts))
     strategy = Keyword.get(opts, :strategy, :load_balanced)
     limit = Keyword.get(opts, :limit, 1000)
 
@@ -275,7 +277,7 @@ defmodule Lasso.RPC.Selection do
          strategy_mod,
          ranking_mode
        ) do
-    case capture_selection_snapshot(profile, chain_id) do
+    case capture_selection_snapshot(profile, chain_id, method, opts) do
       {:ok, snapshot, plan} ->
         strategy = Keyword.fetch!(opts, :strategy)
 
@@ -1172,7 +1174,8 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp capture_selection_snapshot(profile, chain_id) do
+  @spec capture(String.t(), pos_integer()) :: tuple()
+  def capture(profile, chain_id) do
     snapshot = Catalog.snapshot()
 
     case snapshot do
@@ -1187,6 +1190,68 @@ defmodule Lasso.RPC.Selection do
         selection_unavailable(snapshot, :unavailable)
     end
   end
+
+  @doc "Resolves every consumer against the same captured request-class view."
+  @spec resolve(tuple(), atom() | {atom(), atom()}) :: tuple()
+  def resolve({:ok, snapshot, plan}, request),
+    do: {:ok, snapshot, RoutingPlan.for_request(plan, request)}
+
+  def resolve({:unavailable, _} = unavailable, _request), do: unavailable
+
+  @spec policy(tuple() | nil) :: map() | nil
+  def policy({:ok, _, plan}), do: plan.transactions
+  def policy(_), do: nil
+
+  @spec policy_metadata(tuple() | nil, atom()) :: map() | nil
+  def policy_metadata(capture, phase) do
+    case capture do
+      {:ok, _, %{transactions: policy, providers: providers}} when not is_nil(policy) ->
+        missing = policy.relays -- Enum.map(providers, & &1.id)
+
+        metadata = %{
+          relays: policy.relays,
+          public_fallback: policy.public_fallback,
+          phase: Atom.to_string(phase)
+        }
+
+        if missing == [],
+          do: metadata,
+          else: Map.merge(metadata, %{degraded: true, unavailable_relays: missing})
+
+      _ ->
+        nil
+    end
+  end
+
+  @spec providers(tuple(), atom() | {atom(), atom()}) :: [map()]
+  def providers(capture, request) do
+    case resolve(capture, request) do
+      {:ok, _, plan} -> plan.providers
+      _ -> []
+    end
+  end
+
+  @spec provider(tuple(), String.t(), atom() | {atom(), atom()}) :: tuple()
+  def provider(capture, provider_id, request) do
+    with {:ok, snapshot, plan} <- resolve(capture, request),
+         provider when not is_nil(provider) <- Enum.find(plan.providers, &(&1.id == provider_id)) do
+      {:ok, snapshot, provider, provider.config}
+    else
+      _ -> {:error, :not_found}
+    end
+  end
+
+  defp request_view(method, opts),
+    do:
+      {Keyword.get(opts, :execution_safety, ExecutionEnvelope.classify(method)),
+       Keyword.get(opts, :send_phase, :relays)}
+
+  defp capture_selection_snapshot(profile, chain_id, method, opts),
+    do:
+      resolve(
+        Keyword.get(opts, :captured_selection) || capture(profile, chain_id),
+        request_view(method, opts)
+      )
 
   defp selection_unavailable(snapshot, reason) do
     {:unavailable,

@@ -11,6 +11,7 @@ defmodule Lasso.RPC.Observability do
   """
   def build_client_metadata(%RequestContext{} = ctx) do
     metadata = %{
+      send_policy: RequestContext.send_policy_metadata(ctx),
       version: "1.0",
       request_id: ctx.request_id,
       profile_id: ctx.opts && ctx.opts.profile,

@@ -14,7 +14,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.{ContinuityPolicy, GapFiller}
   alias Lasso.Events.Subscription
-  alias Lasso.Providers.Catalog
 
   alias Lasso.RPC.Selection
 
@@ -138,7 +137,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       backfill_requester:
         Keyword.get(opts, :backfill_requester, &Lasso.RPC.RequestPipeline.execute_owned/5),
       backfill_provider_selector:
-        Keyword.get(opts, :backfill_provider_selector, &pick_best_http_provider/3),
+        Keyword.get(
+          opts,
+          :backfill_provider_selector,
+          &pick_failover_http_provider/4
+        ),
       live_backfill_provider_selector:
         Keyword.get(
           opts,
@@ -1987,16 +1990,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp ws_provider_count(profile, chain_id) do
-    profile
-    |> Catalog.get_profile_providers(chain_id)
-    |> Enum.count(fn %{instance_id: instance_id} -> ws_instance?(instance_id) end)
-  end
-
-  defp ws_instance?(instance_id) do
-    case Catalog.get_instance(instance_id) do
-      {:ok, %{ws_url: ws_url}} when is_binary(ws_url) -> true
-      _ -> false
-    end
+    Selection.providers(Selection.capture(profile, chain_id), :replay_safe)
+    |> Enum.count(&(:ws in &1.transports))
   end
 
   defp select_backfill_provider(selector, profile, chain_id, preferred, excluded) do
@@ -2006,8 +2001,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  # Disconnected failover retains Core's independent HTTP fallback. A live
-  # reorg uses the source provider's own HTTP endpoint to certify its branch.
+  defp pick_failover_http_provider(profile, chain_id, preferred, excluded) do
+    case Selection.policy(Selection.capture(profile, chain_id)) do
+      nil -> pick_best_http_provider(profile, chain_id, Enum.uniq([preferred | excluded]))
+      _policy -> pick_backfill_http_provider(profile, chain_id, preferred, excluded)
+    end
+  end
+
+  # Unset policies retain independent HTTP fallback. Policy continuity and live
+  # reorgs certify the replacement or source through its own eligible endpoint.
   defp pick_best_http_provider(profile, chain_id, excluded) do
     case Selection.select_provider(
            profile,
@@ -2028,9 +2030,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           {:ok, String.t()} | {:error, :no_http_provider}
   def pick_backfill_http_provider(profile, chain_id, preferred, excluded) do
     with false <- preferred in excluded,
-         instance_id when is_binary(instance_id) <-
-           Catalog.lookup_instance_id(profile, chain_id, preferred),
-         {:ok, %{url: url}} when is_binary(url) <- Catalog.get_instance(instance_id) do
+         {:ok, _, _provider, %{url: url}} when is_binary(url) <-
+           Selection.provider(Selection.capture(profile, chain_id), preferred, :replay_safe) do
       {:ok, preferred}
     else
       _ -> {:error, :no_http_provider}

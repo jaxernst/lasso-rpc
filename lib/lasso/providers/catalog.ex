@@ -529,6 +529,7 @@ defmodule Lasso.Providers.Catalog do
       chain_id: chain_id,
       generation: generation,
       providers: providers,
+      transactions: chain_config.transactions,
       provider_priorities: Map.new(providers, &{&1.id, &1.priority}),
       max_lag_blocks: max_lag_blocks,
       head_scope: head_scope,

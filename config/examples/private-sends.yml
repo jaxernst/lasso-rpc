@@ -1,0 +1,29 @@
+# Example only: copy into config/profiles and choose a profile slug.
+# Relay operators and their downstream builders remain trusted recipients.
+# Flashbots fast shares with registered builders and searcher TEEs; MEV Blocker
+# fast includes auction searchers and does not promise revert protection.
+# Hash acceptance does not prove inclusion. Keep wallet rebroadcast policies aligned.
+# These URLs serve Ethereum mainnet; rediscover testnet support before use.
+---
+name: Private sends
+slug: private-sends
+---
+chains:
+  ethereum:
+    chain_id: 1
+    transactions:
+      relays: [flashbots_fast, mevblocker_fast]
+      public_fallback: false
+    providers:
+      - id: flashbots_fast
+        name: Flashbots Protect fast
+        url: https://rpc.flashbots.net/fast
+        priority: 1
+      - id: mevblocker_fast
+        name: MEV Blocker fast
+        url: https://rpc.mevblocker.io/fast
+        priority: 2
+      - id: publicnode
+        name: PublicNode reads
+        url: https://ethereum-rpc.publicnode.com
+        priority: 3

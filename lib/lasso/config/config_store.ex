@@ -1654,6 +1654,7 @@ defmodule Lasso.Config.ConfigStore do
 
       true ->
         with :ok <- validate_chain_aliases(chains, MapSet.new(ids)),
+             :ok <- validate_profile_transactions(chains),
              :ok <- validate_profile_provider_placeholders(chains) do
           validate_profile_provider_headers(chains)
         end
@@ -1661,6 +1662,15 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   defp validate_profile_spec(_), do: {:error, :invalid_profile_spec}
+
+  defp validate_profile_transactions(chains) do
+    Enum.reduce_while(chains, :ok, fn {_, chain}, :ok ->
+      case ChainConfig.Transactions.validate(chain.transactions, chain.providers) do
+        :ok -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
 
   defp validate_profile_provider_placeholders(chains) do
     Enum.reduce_while(chains, :ok, fn {chain_name, chain}, :ok ->
@@ -2236,6 +2246,10 @@ defmodule Lasso.Config.ConfigStore do
         |> normalize_url_aliases(),
       providers: Enum.map(providers_attrs, &normalize_provider_config/1),
       websocket: normalize_websocket_config(websocket_attrs),
+      transactions:
+        ChainConfig.Transactions.parse(
+          Map.get(attrs, :transactions, Map.get(attrs, "transactions"))
+        ),
       selection: normalize_selection_config(selection_attrs),
       monitoring: normalize_monitoring_config(monitoring_attrs)
     }

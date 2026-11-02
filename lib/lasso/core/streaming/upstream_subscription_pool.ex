@@ -19,7 +19,6 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.{Provider, Subscription}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.Catalog
 
   alias Lasso.RPC.{
     Channel,
@@ -104,6 +103,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   @impl true
   def init({profile, chain_id}) do
     Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.provider_event(profile, chain_id))
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.config_profile_updated(profile))
     InstanceEventBus.subscribe(Lasso.Topics.ws_connection(profile, chain_id))
     InstanceEventBus.subscribe(Lasso.Topics.instance_sub_manager_restarted(chain_id))
 
@@ -380,8 +380,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   defp validate_provider_constraint(_state, _subscription_key, nil), do: :ok
 
   defp validate_provider_constraint(state, subscription_key, provider_id) do
-    case ConfigStore.get_provider(state.profile, state.chain_id, provider_id) do
-      {:ok, provider} ->
+    case Selection.provider(
+           Selection.capture(state.profile, state.chain_id),
+           provider_id,
+           :replay_safe
+         ) do
+      {:ok, _, _, provider} ->
         validate_constrained_provider(state, subscription_key, provider)
 
       {:error, _reason} ->
@@ -414,9 +418,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   end
 
   defp new_heads_capable?(state, provider_id) do
-    state.profile
-    |> Catalog.get_profile_providers(state.chain_id)
-    |> Enum.any?(&(&1.provider_id == provider_id and &1.subscribe_new_heads == true))
+    Selection.providers(Selection.capture(state.profile, state.chain_id), :replay_safe)
+    |> Enum.any?(&(&1.id == provider_id and &1.subscribe_new_heads == true))
   end
 
   defp invalid_provider_error(state, provider_id, message) do
@@ -443,7 +446,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
       entry ->
         new_instance_id =
-          Catalog.lookup_instance_id(state.profile, state.chain_id, new_provider_id)
+          read_instance_id(state.profile, state.chain_id, new_provider_id)
 
         if is_nil(new_instance_id) do
           Logger.error("Cannot resolve instance_id for provider #{new_provider_id}")
@@ -660,7 +663,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   end
 
   defp valid_establishment_target?(state, provider_id, instance_id) do
-    Catalog.lookup_instance_id(state.profile, state.chain_id, provider_id) == instance_id and
+    read_instance_id(state.profile, state.chain_id, provider_id) == instance_id and
       is_pid(GenServer.whereis(InstanceSubscriptionManager.via(instance_id)))
   end
 
@@ -709,7 +712,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   end
 
   defp resolve_instance_id(state, provider_id) do
-    case Catalog.lookup_instance_id(state.profile, state.chain_id, provider_id) do
+    case read_instance_id(state.profile, state.chain_id, provider_id) do
       nil ->
         Logger.error("Cannot resolve instance_id for provider #{provider_id}")
         {:error, :no_instance}
@@ -1208,6 +1211,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   end
 
   def handle_info({:ws_connected, provider_id, _connection_id}, state) do
+    state = reconcile_read_membership(state)
+
     new_state =
       Enum.reduce(state.keys, state, fn {pool_key, entry}, acc ->
         should_wake? =
@@ -1353,6 +1358,9 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     {:noreply, ensure_coordinator_monitored(state, key)}
   end
 
+  def handle_info({:profile_config_updated, profile}, %{profile: profile} = state),
+    do: {:noreply, reconcile_read_membership(state)}
+
   def handle_info(_, state), do: {:noreply, state}
 
   defp invalidate_establishing_attempts(state, instance_id) do
@@ -1479,6 +1487,33 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     end
   end
 
+  defp read_instance_id(profile, chain_id, provider_id) do
+    case Selection.provider(Selection.capture(profile, chain_id), provider_id, :replay_safe) do
+      {:ok, _, provider, _} -> provider.instance_id
+      _ -> nil
+    end
+  end
+
+  defp reconcile_read_membership(state) do
+    capture = Selection.capture(state.profile, state.chain_id)
+    members = Selection.providers(capture, :replay_safe)
+
+    Enum.reduce(state.keys, state, fn {key, entry}, acc ->
+      if entry.status == :active and
+           not Enum.any?(
+             members,
+             &(&1.id == entry.primary_provider_id and &1.instance_id == entry.instance_id)
+           ) do
+        case pick_next_provider(acc, key, entry.primary_provider_id) do
+          nil -> acc
+          replacement -> dispatch_failover(acc, key, entry.primary_provider_id, replacement)
+        end
+      else
+        acc
+      end
+    end)
+  end
+
   defp pick_next_provider(state, pool_key, failed_provider_id) do
     entry = state.keys[pool_key]
     failed_instance_id = entry.instance_id
@@ -1495,7 +1530,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
       )
       |> Enum.find(fn %Channel{provider_id: provider_id} ->
         candidate_instance_id =
-          Catalog.lookup_instance_id(state.profile, state.chain_id, provider_id)
+          read_instance_id(state.profile, state.chain_id, provider_id)
 
         not is_nil(candidate_instance_id) and candidate_instance_id != failed_instance_id
       end)

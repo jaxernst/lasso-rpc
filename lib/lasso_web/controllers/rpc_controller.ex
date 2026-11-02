@@ -643,6 +643,7 @@ defmodule LassoWeb.RPCController do
       case conn.params do
         %{"provider_override" => pid} when is_binary(pid) -> pid
         %{"provider_id" => pid} when is_binary(pid) -> pid
+        %{"provider" => pid} when is_binary(pid) -> pid
         _ -> nil
       end
 
