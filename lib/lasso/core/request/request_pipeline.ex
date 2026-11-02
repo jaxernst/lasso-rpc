@@ -199,11 +199,24 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp confirm_raw_transaction(
-         {:error, error,
-          %{method: "eth_sendRawTransaction", execution_envelope: %{dispatch_count: 0}} = ctx},
+         {:error, %JError{category: :invalid_params} = error,
+          %{method: "eth_sendRawTransaction"} = ctx},
          _scope,
          _guard
        ),
+       do: {:error, transaction_error_hint(error, ctx), ctx}
+
+  defp confirm_raw_transaction(
+         {:error, error,
+          %{
+            method: "eth_sendRawTransaction",
+            routing_capture: {:ok, _, %{transactions: policy}},
+            execution_envelope: %{dispatch_count: 0}
+          } = ctx},
+         _scope,
+         _guard
+       )
+       when not is_nil(policy),
        do: {:error, transaction_error_hint(error, ctx), ctx}
 
   # A single lookup is shared by every terminal sendRaw rejection. Pinning the

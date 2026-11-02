@@ -16,6 +16,28 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "an unset policy preserves zero-dispatch confirmation behavior" do
+    journey(fn tenant, [public, relay] = fleets ->
+      overrides = %{relay.name => %{"ws_url" => relay.ws_url, "heads" => "passive"}}
+      Tenant.replace!(tenant, fleets, providers: overrides)
+      Fleet.script(relay, @lookup, [], {:answer, %{"hash" => hash()}})
+      lookup = %{rpc_url: tenant.rpc_url <> "?provider=" <> relay.name <> "&transport=ws"}
+
+      Settle.await("unset WebSocket lookup ready", fn ->
+        if Rpc.call(lookup, @lookup, [hash()]).body["result"] == %{"hash" => hash()},
+          do: {:ok, :ready},
+          else: :pending
+      end)
+
+      before = cursors(fleets)
+      pinned_send = %{rpc_url: tenant.rpc_url <> "?provider=" <> public.name <> "&transport=ws"}
+      response = Rpc.call(pinned_send, @send, [@raw])
+      assert response.body["error"]["code"] == -32000
+      assert ledger(fleets, before, @lookup) == []
+      assert ledger(fleets, before, @send) == []
+    end)
+  end
+
   test "stored chain policy bounds dispatch, pins, reads, recovery and public fallback" do
     journey(fn tenant, [public, relay] = fleets ->
       # An unset chain retains priority routing to the public provider.
