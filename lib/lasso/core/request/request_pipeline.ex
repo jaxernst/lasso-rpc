@@ -1329,6 +1329,11 @@ defmodule Lasso.RPC.RequestPipeline do
         )
       end)
 
+    ctx =
+      if policy_dispatched_error(ctx) && not authoritative_not_dispatched?(outcome.fact),
+        do: retire_last_error(ctx, :retry_dispatched),
+        else: ctx
+
     outcome = policy_send_outcome(outcome, ctx)
     {decision, ctx} = qualify_response(outcome, ctx)
 
@@ -2501,6 +2506,17 @@ defmodule Lasso.RPC.RequestPipeline do
        do: Enum.any?(attempts, &(&1.category != :method_not_found))
 
   defp mixed_method_not_found?(_ctx, _reason), do: false
+
+  defp retire_last_error(
+         %{
+           routing_capture: {:ok, _, %{transactions: policy}},
+           execution_envelope: %{execution_safety: :raw_transaction_broadcast},
+           last_attempt_error: %JError{}
+         } = ctx,
+         :retry_started
+       )
+       when not is_nil(policy),
+       do: ctx
 
   defp retire_last_error(%{last_attempt_error: %JError{} = error} = ctx, reason) do
     retired =

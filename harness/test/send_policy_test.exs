@@ -16,6 +16,66 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "public pre-dispatch capacity rejection preserves the relay's complete error" do
+    journey(fn tenant, [public, relay] = fleets ->
+      overrides = Map.new(fleets, &{&1.name, %{"ws_url" => &1.ws_url}})
+
+      Tenant.replace!(tenant, fleets,
+        providers: overrides,
+        chain: policy(relay, true)
+      )
+
+      tokens = Enum.map(1..192, fn _ -> make_ref() end)
+      Fleet.script(public, "vendor_hold", Enum.map(tokens, &{:hold, &1}))
+
+      url =
+        tenant.rpc_url
+        |> String.replace("http://", "ws://")
+        |> String.replace("/rpc/", "/ws/rpc/")
+
+      wires = Enum.map(1..12, fn _ -> Rpc.wire!(url) end)
+
+      for {token, id} <- Enum.with_index(tokens, 1) do
+        Rpc.send!(Enum.at(wires, rem(id, length(wires))), "vendor_hold", [], id)
+        public_pid = public.pid
+        assert_receive {:fleet, ^public_pid, %{action: {:hold, ^token}}}
+      end
+
+      try do
+        Settle.await("public upstream capacity occupied", fn ->
+          if length(ledger([public], [0], "vendor_hold")) == length(tokens),
+            do: {:ok, :occupied},
+            else: :pending
+        end)
+
+        Fleet.script(
+          relay,
+          @send,
+          [],
+          {:error, -32005, "relay quota", %{retry_after_ms: 1234, provider_detail: "retain-me"}}
+        )
+
+        before = cursors(fleets)
+
+        response =
+          Rpc.call(%{rpc_url: tenant.rpc_url <> "?transport=http&include_meta=body"}, @send, [
+            @raw
+          ])
+
+        assert response.body["error"]["code"] == -32005
+        assert response.body["error"]["message"] == "relay quota"
+        assert response.body["error"]["data"]["retry_after_ms"] == 1234
+        assert response.body["error"]["data"]["provider_detail"] == "retain-me"
+        assert response.body["error"]["data"]["send_policy"] == metadata(relay, true, "public")
+        assert names(ledger(fleets, before, @send)) == [relay.name]
+      after
+        for token <- tokens, do: Fleet.release(public, token, {:answer, "released"})
+
+        Enum.each(wires, &Rpc.close!/1)
+      end
+    end)
+  end
+
   test "a dispatched invalid-params rejection still confirms a known transaction" do
     journey(fn tenant, [_public, relay] = fleets ->
       Tenant.replace!(tenant, fleets, chain: policy(relay))
