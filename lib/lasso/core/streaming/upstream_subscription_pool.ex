@@ -1361,6 +1361,9 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   def handle_info({:profile_config_updated, profile}, %{profile: profile} = state),
     do: {:noreply, reconcile_read_membership(state)}
 
+  def handle_info(:reconcile_read_membership, state),
+    do: {:noreply, reconcile_read_membership(Map.put(state, :membership_timer, nil))}
+
   def handle_info(_, state), do: {:noreply, state}
 
   defp invalidate_establishing_attempts(state, instance_id) do
@@ -1505,13 +1508,28 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
              &(&1.id == entry.primary_provider_id and &1.instance_id == entry.instance_id)
            ) do
         case pick_next_provider(acc, key, entry.primary_provider_id) do
-          nil -> acc
-          replacement -> dispatch_failover(acc, key, entry.primary_provider_id, replacement)
+          nil ->
+            schedule_membership_reconciliation(acc)
+
+          replacement ->
+            dispatch_failover(acc, key, entry.primary_provider_id, replacement)
         end
       else
         acc
       end
     end)
+  end
+
+  defp schedule_membership_reconciliation(state) do
+    if Map.get(state, :membership_timer) do
+      state
+    else
+      Map.put(
+        state,
+        :membership_timer,
+        Process.send_after(self(), :reconcile_read_membership, 1_000)
+      )
+    end
   end
 
   defp pick_next_provider(state, pool_key, failed_provider_id) do

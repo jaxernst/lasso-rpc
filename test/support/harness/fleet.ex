@@ -202,6 +202,9 @@ defmodule Lasso.Test.Harness.Fleet do
 
     defp response({:answer, value}, r), do: json(200, %{}, r, %{result: value})
 
+    defp response({:error, code, message, data}, r),
+      do: json(200, %{}, r, %{error: %{code: code, message: message, data: data}})
+
     defp response({:error, code, message}, r),
       do: json(200, %{}, r, %{error: %{code: code, message: message}})
 

@@ -289,7 +289,7 @@ Each item is validated and routed independently with bounded concurrency and its
 
 ### Unsupported Methods
 
-`eth_sendRawTransaction` is routable with one upstream dispatch under one deadline. A lost response can mean the transaction was accepted; clients reconcile its hash. `eth_sendTransaction`, `eth_accounts`, `eth_sign`, `eth_signTransaction`, and `personal_sign` are globally disallowed. Provider capability policy can impose additional restrictions. Subscription methods are rejected over HTTP with a WebSocket URL hint. See [Method support](RPC_STANDARDS.md) for the released Core contract.
+`eth_sendRawTransaction` without a transaction policy receives one upstream dispatch. Under a policy, at most three sequential identical-byte sends share one deadline, with terminal hash confirmation inside the relay set. Public sends require explicit public fallback. A lost response can mean the transaction was accepted; clients reconcile its hash. `eth_sendTransaction`, `eth_accounts`, `eth_sign`, `eth_signTransaction`, and `personal_sign` are globally disallowed. Provider capability policy can impose additional restrictions. Subscription methods are rejected over HTTP with a WebSocket URL hint. See [Method support](RPC_STANDARDS.md) for the released Core contract.
 
 ---
 

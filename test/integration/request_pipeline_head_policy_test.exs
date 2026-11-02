@@ -18,6 +18,27 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     :ok
   end
 
+  test "scoped readiness excludes a healthy send-only relay", %{chain: chain} do
+    setup_providers([%{id: "relay", priority: 1, behavior: :healthy}])
+
+    {:ok, config} = ConfigStore.get_chain("public", chain)
+    :ok = ConfigStore.unregister_chain_runtime("public", chain)
+
+    assert :ok =
+             ConfigStore.register_chain_runtime(
+               "public",
+               chain,
+               Map.merge(Map.from_struct(config), %{
+                 transactions: %{relays: ["relay"], public_fallback: false}
+               })
+             )
+
+    Catalog.build_from_config()
+
+    assert %{status: "not_ready", eligible_upstreams: 0} =
+             Lasso.Providers.Readiness.check_chain("public", chain)
+  end
+
   test "head acquisitions advance, repeat, and preserve ordinary JSON-RPC IDs", %{chain: chain} do
     setup_providers([%{id: "head", priority: 1, behavior: :healthy}])
     serve("head", header(100))

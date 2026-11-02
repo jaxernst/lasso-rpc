@@ -221,6 +221,14 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   defp dispatch_limit(_safety), do: 1
 
   defp attempt_timeout_ms(
+         %__MODULE__{execution_safety: :raw_transaction_broadcast, dispatch_limit: limit},
+         remaining_ms,
+         _fallback_available?
+       )
+       when limit > 1,
+       do: max(@minimum_attempt_ms, div(remaining_ms * 60, 100))
+
+  defp attempt_timeout_ms(
          %__MODULE__{execution_safety: :replay_safe, dispatch_count: 1},
          remaining_ms,
          true

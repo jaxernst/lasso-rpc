@@ -19,7 +19,7 @@ or full compliance with every Ethereum specification.
 
 A replay-safe read that receives `-32601` from one upstream continues to another
 within its bounded attempts, and the rejected attempt consumes one of them.
-Unknown methods and `eth_sendRawTransaction` keep their single dispatch, so that
+Unknown methods and `eth_sendRawTransaction` without a transaction policy keep their single dispatch, so that
 upstream's `-32601` is the answer. When a request ends unsuccessfully and every
 upstream it reached rejected the method, Lasso returns that rejection with the
 upstream's message and data instead of `-32000`. The request retains only the
@@ -33,8 +33,11 @@ provider lacks a method beyond the request that observed it.
 
 ## Signed transaction submission
 
-`eth_sendRawTransaction` receives one upstream dispatch. Lasso does not retry or
-fan out after dispatch. A lost response may mean the upstream accepted the
+`eth_sendRawTransaction` without a transaction policy receives one upstream dispatch
+and is not retried after dispatch. With a policy, sends receive at most three
+sequential, identical-byte dispatches within the original deadline. Sends stay
+inside the configured relay set unless public fallback is enabled. Terminal
+failures can trigger hash confirmation inside that relay set. A lost response may mean the upstream accepted the
 transaction. Clients remain responsible for signing, nonce management,
 replacement, transaction-hash reconciliation, receipts, and finality.
 

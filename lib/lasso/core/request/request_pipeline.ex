@@ -198,6 +198,14 @@ defmodule Lasso.RPC.RequestPipeline do
     |> finalize_request_terminal()
   end
 
+  defp confirm_raw_transaction(
+         {:error, error,
+          %{method: "eth_sendRawTransaction", execution_envelope: %{dispatch_count: 0}} = ctx},
+         _scope,
+         _guard
+       ),
+       do: {:error, transaction_error_hint(error, ctx), ctx}
+
   # A single lookup is shared by every terminal sendRaw rejection. Pinning the
   # selected transport prevents read failover from turning it into peer checks.
   defp confirm_raw_transaction(
@@ -2429,12 +2437,22 @@ defmodule Lasso.RPC.RequestPipeline do
       if ctx.execution_envelope.dispatch_count >= ctx.execution_envelope.dispatch_limit and
            ctx.execution_envelope.execution_safety == :replay_safe,
          do: elem(exhaustion_error(ctx), 1),
-         else: ctx.log_range_error || terminal_error
+         else: ctx.log_range_error || policy_dispatched_error(ctx) || terminal_error
 
     {terminal_error, ctx} = method_not_found_terminal(terminal_error, ctx)
 
     finalize_error(terminal_error, ctx)
   end
+
+  defp policy_dispatched_error(%{
+         routing_capture: {:ok, _, %{transactions: policy}},
+         execution_envelope: %{execution_safety: :raw_transaction_broadcast},
+         last_attempt_error: %JError{} = error
+       })
+       when not is_nil(policy),
+       do: error
+
+  defp policy_dispatched_error(_ctx), do: nil
 
   # The caller learns the method is unsupported only when every upstream the request reached
   # said so and the context still holds the latest rejection whole. That rejection is then

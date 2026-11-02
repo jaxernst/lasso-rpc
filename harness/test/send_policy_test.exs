@@ -9,6 +9,13 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
   @raw "0x02f86c0180843b9aca0082520894111111111111111111111111111111111180c0"
   @balance ["0x0000000000000000000000000000000000000001", "latest"]
 
+  setup do
+    previous = Application.get_env(:lasso, :method_timeouts, %{})
+    Application.put_env(:lasso, :method_timeouts, Map.put(previous, @send, 1_000))
+    on_exit(fn -> Application.put_env(:lasso, :method_timeouts, previous) end)
+    :ok
+  end
+
   test "stored chain policy bounds dispatch, pins, reads, recovery and public fallback" do
     journey(fn tenant, [public, relay] = fleets ->
       # An unset chain retains priority routing to the public provider.
@@ -35,6 +42,8 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       assert Rpc.call(tenant, "eth_getBalance", @balance).body["result"] == "0x10"
       assert ledger(fleets, before, "eth_getBalance") |> names() == [public.name]
 
+      Fleet.script(relay, @lookup, [], {:answer, %{"hash" => hash()}})
+
       for {fleet, method, params, reason} <- [
             {public, @send, [@raw], "pin_outside_relays"},
             {relay, "eth_getBalance", @balance, "relay_send_only"}
@@ -44,7 +53,10 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
         assert response.body["error"]["code"] == -32_602
         assert response.body["error"]["data"]["reason"] == reason
         assert ledger(fleets, before, method) == []
+        assert ledger(fleets, before, @lookup) == []
       end
+
+      Fleet.script(relay, @lookup, [], {:answer, nil})
 
       # Titan's mined-byte response remains null; it never triggers public dispatch.
       Fleet.script(relay, "eth_getBalance", [], {:error, -32_601, "method not found"})
@@ -145,6 +157,51 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     end)
   end
 
+  test "an unresponsive relay leaves deadline for public fallback" do
+    journey(fn tenant, [public, relay] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(relay, true))
+      token = make_ref()
+      Fleet.script(relay, @send, [], {:hold, token})
+      before = cursors(fleets)
+      response = submit(tenant, fleets)
+      assert response.body["result"] == hash()
+
+      assert names(ledger(fleets, before, @send)) |> Enum.sort() ==
+               Enum.sort([public.name, relay.name])
+
+      Fleet.release(relay, token, {:answer, hash()})
+    end)
+  end
+
+  test "empty public selection preserves the relay rejection and read readiness" do
+    journey(fn tenant, [public, relay] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(relay, true))
+      instance = Lasso.Providers.Catalog.lookup_instance_id(tenant.profile, 31337, public.name)
+      breaker = {instance, :http}
+      Lasso.Core.Support.CircuitBreaker.open(breaker)
+
+      Settle.await("public circuit open", fn ->
+        if Lasso.Core.Support.CircuitBreaker.get_state(breaker).state == :open,
+          do: {:ok, :open},
+          else: :pending
+      end)
+
+      try do
+        Fleet.script(relay, @send, [], {:error, -32005, "relay quota", %{retry_after_ms: 1234}})
+        response = submit(tenant, fleets)
+        assert response.body["error"]["code"] == -32005
+        assert response.body["error"]["message"] == "relay quota"
+        assert response.body["error"]["data"]["retry_after_ms"] == 1234
+        assert response.body["error"]["data"]["send_policy"] == metadata(relay, true, "public")
+
+        assert %{status: "not_ready", eligible_upstreams: 0} =
+                 Lasso.Providers.Readiness.check_chain(tenant.profile, 31337)
+      after
+        Lasso.Core.Support.CircuitBreaker.close(breaker)
+      end
+    end)
+  end
+
   test "a retained subscription moves to the read view after a policy update" do
     fleets = Enum.map(["ws-relay", "ws-read"], &Fleet.start!(self(), &1))
     [relay, read] = fleets
@@ -186,8 +243,24 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       Fleet.notify(original, head(1000))
       assert_head(wire, subscription, 1000)
       completed = Settle.listen([:lasso, :subs, :failover, :completed])
+      instance = Lasso.Providers.Catalog.lookup_instance_id(tenant.profile, 31337, read.name)
+      breaker = {instance, :ws}
+      Lasso.Core.Support.CircuitBreaker.open(breaker)
+
+      Settle.await("read circuit open", fn ->
+        if Lasso.Core.Support.CircuitBreaker.get_state(breaker).state == :open,
+          do: {:ok, :open},
+          else: :pending
+      end)
+
       Tenant.replace!(tenant, fleets, providers: overrides, chain: policy(relay))
-      Rpc.send!(backup, "eth_subscribe", ["newHeads"], 3)
+
+      Settle.await("membership reconciliation pending", fn ->
+        pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via(tenant.profile, 31337)
+        if Map.get(:sys.get_state(pool), :membership_timer), do: {:ok, :pending}, else: :pending
+      end)
+
+      Lasso.Core.Support.CircuitBreaker.close(breaker)
 
       replacement =
         Settle.await("replacement read subscription", fn ->
