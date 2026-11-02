@@ -16,6 +16,18 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "a dispatched invalid-params rejection still confirms a known transaction" do
+    journey(fn tenant, [_public, relay] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(relay))
+      Fleet.script(relay, @send, [], {:error, -32602, "invalid transaction"})
+      Fleet.script(relay, @lookup, [], {:answer, %{"hash" => hash()}})
+      before = cursors(fleets)
+      assert submit(tenant, fleets).body["result"] == hash()
+      assert names(ledger(fleets, before, @send)) == [relay.name]
+      assert names(ledger(fleets, before, @lookup)) == [relay.name]
+    end)
+  end
+
   test "an unset policy preserves zero-dispatch confirmation behavior" do
     journey(fn tenant, [public, relay] = fleets ->
       overrides = %{relay.name => %{"ws_url" => relay.ws_url, "heads" => "passive"}}

@@ -200,7 +200,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp confirm_raw_transaction(
          {:error, %JError{category: :invalid_params} = error,
-          %{method: "eth_sendRawTransaction"} = ctx},
+          %{method: "eth_sendRawTransaction", execution_envelope: %{dispatch_count: 0}} = ctx},
          _scope,
          _guard
        ),
