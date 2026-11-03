@@ -415,8 +415,21 @@ Preflight responses are cached for 24 hours.
 
 ## Relay policy errors and metadata
 
-Opt-in `lasso_meta` on send responses includes `send_policy: {relays: [provider_id], public_fallback: false, phase: "relays"}`. The second send phase uses `phase: "public"`. Error data carries the same policy object; selected-provider metadata identifies the dispatched relay.
+Opt-in `lasso_meta` on send responses includes `send_policy: {providers: [provider_id], fallback: "none", phase: "providers"}`. The second send phase uses `phase: "fallback"`. Error data carries the same policy object; selected-provider metadata identifies the dispatched relay.
 
-Zero-dispatch exhaustion returns JSON-RPC `-32000` with `reason: "relays_unavailable"`, `error_type: "relay_unavailable"`, `retryable: true`, and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest relay circuit recovery on the requested transport.
+Zero-dispatch exhaustion returns JSON-RPC `-32000` with `reason: "transaction_providers_unavailable"`, `error_type: "transaction_provider_unavailable"`, `retryable: true`, and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest relay circuit recovery on the requested transport.
 
-If sends were dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_relays` and `relay_send_only` respectively.
+If sends were dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_transaction_providers` and `transaction_provider_send_only` respectively.
+
+Signed transaction sends do not establish read affinity. During the pending window
+following a private send, reads from the ordinary provider pool may return null
+for the transaction or receipt, or a stale pending nonce, until inclusion. Manage
+nonces client-side; Lasso does not maintain a private pending overlay.
+
+Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
+Methods requiring a sender signature header are not supported through Lasso yet.
+Configured provider headers are separate from per-request sender signatures.
+Relay-native send methods stay inside the transaction provider set, but routing
+them there does not remove an upstream signature-header requirement. Only
+`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
+return their upstream result without a hash lookup.

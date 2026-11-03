@@ -108,8 +108,27 @@ See [API reference](API_REFERENCE.md) for routes and metadata.
 
 ## Transaction send policies
 
-A chain `transactions` block applies to the `raw_transaction_broadcast` execution class, currently `eth_sendRawTransaction`. Reads and subscriptions exclude relay providers. Invalid send/read pins return `-32602` before dispatch (`pin_outside_relays` or `relay_send_only`).
+A chain `transactions` block applies to the `raw_transaction_broadcast` execution class, `eth_sendRawTransaction` and the relay-native send family. Reads and subscriptions exclude relay providers. Invalid send/read pins return `-32602` before dispatch (`pin_outside_transaction_providers` or `transaction_provider_send_only`).
 
 Relays can reject read methods and report stale heads; sends therefore have no head-lag gate. A null send result remains null and does not imply hash acceptance. Transaction hash confirmation stays within the captured terminal send phase, including when a relay rejects that lookup.
 
-When no send dispatch occurs under a policy, exhaustion returns `-32000` with `reason: relays_unavailable`, `error_type: relay_unavailable`, retry guidance and policy metadata. After dispatched sends fail and hash confirmation finds nothing, the last upstream error is retained with `send_policy` added and `phase` naming its phase. No synthetic exhaustion reason replaces that upstream error.
+When no send dispatch occurs under a policy, exhaustion returns `-32000` with `reason: transaction_providers_unavailable`, `error_type: transaction_provider_unavailable`, retry guidance and policy metadata. After dispatched sends fail and hash confirmation finds nothing, the last upstream error is retained with `send_policy` added and `phase` naming its phase. No synthetic exhaustion reason replaces that upstream error.
+
+Signed transaction sends do not establish read affinity. During the pending window
+following a private send, reads from the ordinary provider pool may return null
+for the transaction or receipt, or a stale pending nonce, until inclusion. Manage
+nonces client-side; Lasso does not maintain a private pending overlay.
+
+Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
+Methods requiring a sender signature header are not supported through Lasso yet.
+Configured provider headers are separate from per-request sender signatures.
+Relay-native send methods stay inside the transaction provider set, but routing
+them there does not remove an upstream signature-header requirement. Only
+`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
+return their upstream result without a hash lookup.
+
+The transaction send class includes `eth_sendRawTransaction`,
+`eth_sendPrivateRawTransaction`, `eth_sendPrivateTransaction`,
+`eth_cancelPrivateTransaction`, `eth_sendBundle` and `mev_sendBundle`.
+Transaction providers are selected one at a time; fallback and any resend remain
+sequential within the original request budget.

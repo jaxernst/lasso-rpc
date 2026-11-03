@@ -1206,17 +1206,17 @@ defmodule Lasso.RPC.Selection do
   def policy_metadata(capture, phase) do
     case capture do
       {:ok, _, %{transactions: policy, providers: providers}} when not is_nil(policy) ->
-        missing = policy.relays -- Enum.map(providers, & &1.id)
+        missing = policy.providers -- Enum.map(providers, & &1.id)
 
         metadata = %{
-          relays: policy.relays,
-          public_fallback: policy.public_fallback,
+          providers: policy.providers,
+          fallback: policy.fallback,
           phase: Atom.to_string(phase)
         }
 
         if missing == [],
           do: metadata,
-          else: Map.merge(metadata, %{degraded: true, unavailable_relays: missing})
+          else: Map.merge(metadata, %{degraded: true, unavailable_providers: missing})
 
       _ ->
         nil
@@ -1244,7 +1244,7 @@ defmodule Lasso.RPC.Selection do
   defp request_view(method, opts),
     do:
       {Keyword.get(opts, :execution_safety, ExecutionEnvelope.classify(method)),
-       Keyword.get(opts, :send_phase, :relays)}
+       Keyword.get(opts, :send_phase, :providers)}
 
   defp capture_selection_snapshot(profile, chain_id, method, opts),
     do:

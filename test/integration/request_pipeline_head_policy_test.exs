@@ -29,7 +29,7 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
                "public",
                chain,
                Map.merge(Map.from_struct(config), %{
-                 transactions: %{relays: ["relay"], public_fallback: false}
+                 transactions: %{providers: ["relay"], fallback: "none"}
                })
              )
 

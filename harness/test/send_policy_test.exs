@@ -16,6 +16,44 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "relay-native sends stay with transaction providers and preserve upstream results" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider))
+
+      for {method, params} <- [
+            {"eth_sendPrivateRawTransaction", [@raw]},
+            {"eth_sendPrivateTransaction", [%{"tx" => @raw}]},
+            {"eth_cancelPrivateTransaction", [%{"txHash" => hash()}]},
+            {"eth_sendBundle", [%{"txs" => [@raw], "blockNumber" => "0x1"}]},
+            {"mev_sendBundle", [%{"version" => "v0.1", "body" => [%{"tx" => @raw}]}]}
+          ] do
+        result = %{"accepted" => method}
+        Fleet.script(provider, method, [], {:answer, result})
+        before = cursors(fleets)
+        response = Rpc.call(%{rpc_url: tenant.rpc_url <> "?include_meta=body"}, method, params)
+        assert response.body["result"] == result
+
+        assert response.body["lasso_meta"]["send_policy"] ==
+                 metadata(provider, false, "providers")
+
+        assert names(ledger(fleets, before, method)) == [provider.name]
+        assert ledger(fleets, before, @lookup) == []
+
+        Fleet.script(provider, method, [], {:error, -32602, "native rejection"})
+        before = cursors(fleets)
+        response = Rpc.call(tenant, method, params)
+        assert response.body["error"]["code"] == -32602
+        assert response.body["error"]["message"] == "native rejection"
+        assert names(ledger(fleets, before, method)) == [provider.name]
+        assert ledger(fleets, before, @lookup) == []
+      end
+
+      before = cursors(fleets)
+      assert Rpc.call(tenant, "eth_getBalance", @balance).body["result"] == "0x10"
+      assert names(ledger(fleets, before, "eth_getBalance")) == [public.name]
+    end)
+  end
+
   test "public pre-dispatch capacity rejection preserves the relay's complete error" do
     journey(fn tenant, [public, relay] = fleets ->
       overrides = Map.new(fleets, &{&1.name, %{"ws_url" => &1.ws_url}})
@@ -66,7 +104,7 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
         assert response.body["error"]["message"] == "relay quota"
         assert response.body["error"]["data"]["retry_after_ms"] == 1234
         assert response.body["error"]["data"]["provider_detail"] == "retain-me"
-        assert response.body["error"]["data"]["send_policy"] == metadata(relay, true, "public")
+        assert response.body["error"]["data"]["send_policy"] == metadata(relay, true, "fallback")
         assert names(ledger(fleets, before, @send)) == [relay.name]
       after
         for token <- tokens, do: Fleet.release(public, token, {:answer, "released"})
@@ -129,7 +167,7 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       accepted = submit(tenant, fleets)
       assert accepted.body["result"] == hash()
       assert accepted.body["lasso_meta"]["selected_provider"]["id"] == relay.name
-      assert accepted.body["lasso_meta"]["send_policy"] == metadata(relay, false, "relays")
+      assert accepted.body["lasso_meta"]["send_policy"] == metadata(relay, false, "providers")
       assert ledger(fleets, before, @send) |> names() == [relay.name]
 
       before = cursors(fleets)
@@ -139,8 +177,8 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       Fleet.script(relay, @lookup, [], {:answer, %{"hash" => hash()}})
 
       for {fleet, method, params, reason} <- [
-            {public, @send, [@raw], "pin_outside_relays"},
-            {relay, "eth_getBalance", @balance, "relay_send_only"}
+            {public, @send, [@raw], "pin_outside_transaction_providers"},
+            {relay, "eth_getBalance", @balance, "transaction_provider_send_only"}
           ] do
         before = cursors(fleets)
         response = Rpc.call(pinned(tenant, fleet), method, params)
@@ -160,14 +198,14 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       before = cursors(fleets)
       response = submit(tenant, fleets)
       assert response.body["result"] == nil
-      assert response.body["lasso_meta"]["send_policy"] == metadata(relay, false, "relays")
+      assert response.body["lasso_meta"]["send_policy"] == metadata(relay, false, "providers")
       assert ledger(fleets, before, @send) |> names() == [relay.name]
       refute public.name in names(ledger(fleets, before, @lookup))
 
       Fleet.script(relay, @send, [], unavailable())
       before = cursors(fleets)
       response = submit(tenant, fleets)
-      assert response.body["error"]["data"]["send_policy"] == metadata(relay, false, "relays")
+      assert response.body["error"]["data"]["send_policy"] == metadata(relay, false, "providers")
       assert ledger(fleets, before, @send) |> names() == [relay.name]
       refute public.name in names(ledger(fleets, before, @lookup))
 
@@ -193,7 +231,7 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       assert :ok = Fleet.release(relay, token, unavailable())
       response = Task.await(task, 5_000)
       assert response.body["result"] == hash(), inspect(response.body)
-      assert response.body["lasso_meta"]["send_policy"] == metadata(relay, true, "public")
+      assert response.body["lasso_meta"]["send_policy"] == metadata(relay, true, "fallback")
 
       assert Enum.sort(names(ledger(fleets, before, @send))) ==
                Enum.sort([public.name, relay.name])
@@ -207,24 +245,35 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
           before = cursors(fleets)
           response = submit(tenant, fleets)
 
-          if get_in(response.body, ["error", "data", "reason"]) == "relays_unavailable",
-            do: {:halt, {response, before}},
-            else: {:cont, nil}
+          if get_in(response.body, ["error", "data", "reason"]) ==
+               "transaction_providers_unavailable",
+             do: {:halt, {response, before}},
+             else: {:cont, nil}
         end)
 
       assert {closed_response, closed_cursor} = closed
       assert closed_response.body["error"]["code"] == -32_000
       assert closed_response.body["error"]["data"]["retry_after_ms"] > 0
-      assert closed_response.body["error"]["data"]["error_type"] == "relay_unavailable"
+
+      assert closed_response.body["error"]["data"]["error_type"] ==
+               "transaction_provider_unavailable"
+
       assert ledger(fleets, closed_cursor, @send) == []
       refute public.name in names(ledger(fleets, closed_cursor, @lookup))
 
+      before = cursors(fleets)
+      native = Rpc.call(tenant, "eth_sendPrivateRawTransaction", [@raw])
+      assert native.body["error"]["data"]["reason"] == "transaction_providers_unavailable"
+      assert native.body["error"]["data"]["error_type"] == "transaction_provider_unavailable"
+      assert ledger(fleets, before, "eth_sendPrivateRawTransaction") == []
+      assert ledger(fleets, before, @lookup) == []
+
       for block <- [
-            %{"relays" => []},
-            %{"relays" => ["missing"]},
-            %{"relays" => [relay.name, relay.name]},
-            %{"relays" => [relay.name, public.name]},
-            %{"relays" => [relay.name], "public_fallback" => "yes"}
+            %{"providers" => []},
+            %{"providers" => ["missing"]},
+            %{"providers" => [relay.name, relay.name]},
+            %{"providers" => [relay.name, public.name]},
+            %{"providers" => [relay.name], "fallback" => "yes"}
           ] do
         Tenant.reject_replace!(tenant, fleets, chain: %{"transactions" => block})
       end
@@ -244,7 +293,7 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
                       %{request: %{"method" => @send}, action: {:hold, ^token}}}
 
       response = Task.await(task, 5_000)
-      assert response.body["error"]["data"]["send_policy"] == metadata(relay, false, "relays")
+      assert response.body["error"]["data"]["send_policy"] == metadata(relay, false, "providers")
       assert ledger(fleets, before, @send) |> names() == [relay.name]
       refute public.name in names(ledger(fleets, before, @lookup))
       Fleet.release(relay, token, {:answer, hash()})
@@ -286,7 +335,7 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
         assert response.body["error"]["code"] == -32005
         assert response.body["error"]["message"] == "relay quota"
         assert response.body["error"]["data"]["retry_after_ms"] == 1234
-        assert response.body["error"]["data"]["send_policy"] == metadata(relay, true, "public")
+        assert response.body["error"]["data"]["send_policy"] == metadata(relay, true, "fallback")
 
         assert %{status: "not_ready", eligible_upstreams: 0} =
                  Lasso.Providers.Readiness.check_chain(tenant.profile, 31337)
@@ -446,11 +495,18 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
   defp policy(relay, fallback \\ false),
     do: %{
       "selection" => %{"max_lag_blocks" => 1},
-      "transactions" => %{"relays" => [relay.name], "public_fallback" => fallback}
+      "transactions" => %{
+        "providers" => [relay.name],
+        "fallback" => if(fallback, do: "read_providers", else: "none")
+      }
     }
 
   defp metadata(relay, fallback, phase),
-    do: %{"relays" => [relay.name], "public_fallback" => fallback, "phase" => phase}
+    do: %{
+      "providers" => [relay.name],
+      "fallback" => if(fallback, do: "read_providers", else: "none"),
+      "phase" => phase
+    }
 
   defp unavailable, do: {:status, 503, [], "Service Unavailable"}
   defp cursors(fleets), do: Enum.map(fleets, &length(Fleet.drain(&1)))

@@ -155,7 +155,7 @@ defmodule Lasso.RPC.RequestContext do
   @derive {Inspect, except: [:routing_capture]}
   defstruct request_id: nil,
             routing_capture: nil,
-            send_phase: :relays,
+            send_phase: :providers,
             exploration_token: nil,
             account_id: nil,
             chain_id: nil,
