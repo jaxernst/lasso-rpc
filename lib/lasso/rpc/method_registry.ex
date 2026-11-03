@@ -13,6 +13,12 @@ defmodule Lasso.RPC.MethodRegistry do
     eth_sendPrivateTransaction eth_cancelPrivateTransaction eth_sendBundle
     mev_sendBundle eth_cancelBundle eth_callBundle mev_simBundle trace_rawTransaction)
 
+  # A probe cannot submit a real transaction, so a rejection says nothing about
+  # support for one; discovery reports these instead of dispatching them.
+  # Simulations stay probeable because their probe submits nothing.
+  @unverifiable_methods (@send_methods -- ~w(eth_callBundle mev_simBundle trace_rawTransaction)) ++
+                          ["eth_sendTransaction"]
+
   @standard_methods %{
     # Common application reads
     core: [
@@ -187,10 +193,11 @@ defmodule Lasso.RPC.MethodRegistry do
   @doc "Methods whose payload or service state requires transaction routing."
   @spec send_methods() :: [String.t()]
   def send_methods, do: @send_methods
+  @doc "Whether a method's support can be established by probing."
   @spec unverifiable?(String.t()) :: boolean()
-  def unverifiable?(method), do: method in @send_methods
+  def unverifiable?(method), do: method in @unverifiable_methods
   @spec unverifiable_methods() :: [String.t()]
-  def unverifiable_methods, do: @send_methods
+  def unverifiable_methods, do: @unverifiable_methods
 
   @doc "Classify effects independently of provider support."
   @spec classify(String.t(), term()) ::
