@@ -195,6 +195,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     result
     |> confirm_raw_transaction(execution_scope, caller_guard)
+    |> decorate_send_error()
     |> finalize_request_terminal()
   end
 
@@ -319,6 +320,19 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp confirm_raw_transaction(result, _scope, _guard), do: result
 
+  defp decorate_send_error({:error, %JError{} = error, ctx} = result) do
+    case RequestContext.send_policy_metadata(ctx) do
+      nil ->
+        result
+
+      policy ->
+        data = Map.put(TransactionHash.error_data(error.data), :send_policy, policy)
+        {:error, %{error | data: data, raw_response: nil}, ctx}
+    end
+  end
+
+  defp decorate_send_error(result), do: result
+
   defp transaction_lookup_channel(
          %{terminal_attempt_fact: %AttemptTerminal.Response{}} = ctx,
          _hash
@@ -401,11 +415,6 @@ defmodule Lasso.RPC.RequestPipeline do
         retryable: retryable?,
         next_action: next_action
       })
-
-    data =
-      if RequestContext.transaction_policy(ctx),
-        do: Map.put(data, :send_policy, RequestContext.send_policy_metadata(ctx)),
-        else: data
 
     # Rebuild both HTTP and WS documents so raw passthrough cannot drop hints.
     message =

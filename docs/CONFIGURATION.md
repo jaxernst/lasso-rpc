@@ -494,10 +494,10 @@ Relays serve `eth_sendRawTransaction`; all other methods, subscriptions and bloc
 
 See [the private-send example](../config/examples/private-sends.yml). Relay operators and their downstream builders remain trusted recipients. Hash acceptance does not prove inclusion; align wallet rebroadcast settings with the chosen boundary.
 
-Signed transaction sends do not establish read affinity. During the pending window
-following a private send, reads from the ordinary provider pool may return null
-for the transaction or receipt, or a stale pending nonce, until inclusion. Manage
-nonces client-side; Lasso does not maintain a private pending overlay.
+Private sends establish no read affinity. While a transaction remains private,
+ordinary providers return null for its transaction and receipt, and their pending
+nonce excludes that transaction until inclusion. Clients manage their own nonces;
+Lasso maintains no private pending overlay.
 
 Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
 Methods requiring a sender signature header are not supported through Lasso yet.

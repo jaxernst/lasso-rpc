@@ -114,10 +114,10 @@ Relays can reject read methods and report stale heads; sends therefore have no h
 
 When no send dispatch occurs under a policy, exhaustion returns `-32000` with `reason: transaction_providers_unavailable`, `error_type: transaction_provider_unavailable`, retry guidance and policy metadata. After dispatched sends fail and hash confirmation finds nothing, the last upstream error is retained with `send_policy` added and `phase` naming its phase. No synthetic exhaustion reason replaces that upstream error.
 
-Signed transaction sends do not establish read affinity. During the pending window
-following a private send, reads from the ordinary provider pool may return null
-for the transaction or receipt, or a stale pending nonce, until inclusion. Manage
-nonces client-side; Lasso does not maintain a private pending overlay.
+Private sends establish no read affinity. While a transaction remains private,
+ordinary providers return null for its transaction and receipt, and their pending
+nonce excludes that transaction until inclusion. Clients manage their own nonces;
+Lasso maintains no private pending overlay.
 
 Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
 Methods requiring a sender signature header are not supported through Lasso yet.

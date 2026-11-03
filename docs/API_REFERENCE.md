@@ -419,12 +419,12 @@ Opt-in `lasso_meta` on send responses includes `send_policy: {providers: [provid
 
 Zero-dispatch exhaustion returns JSON-RPC `-32000` with `reason: "transaction_providers_unavailable"`, `error_type: "transaction_provider_unavailable"`, `retryable: true`, and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest relay circuit recovery on the requested transport.
 
-If sends were dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_transaction_providers` and `transaction_provider_send_only` respectively.
+If `eth_sendRawTransaction` was dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Every send-class error includes that policy object. Dispatched native-send errors preserve the upstream code, message and data with terminal-phase policy metadata added, without hash confirmation or transaction-specific retry guidance. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_transaction_providers` and `transaction_provider_send_only` respectively.
 
-Signed transaction sends do not establish read affinity. During the pending window
-following a private send, reads from the ordinary provider pool may return null
-for the transaction or receipt, or a stale pending nonce, until inclusion. Manage
-nonces client-side; Lasso does not maintain a private pending overlay.
+Private sends establish no read affinity. While a transaction remains private,
+ordinary providers return null for its transaction and receipt, and their pending
+nonce excludes that transaction until inclusion. Clients manage their own nonces;
+Lasso maintains no private pending overlay.
 
 Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
 Methods requiring a sender signature header are not supported through Lasso yet.

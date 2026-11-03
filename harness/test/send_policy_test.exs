@@ -16,6 +16,57 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "plain-text native-send throttling preserves shared read routes" do
+    journey(fn tenant, [_public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider))
+
+      reader =
+        Tenant.open!(fleets, providers: Map.new(fleets, &{&1.name, %{"heads" => "passive"}}))
+
+      method = "eth_sendPrivateRawTransaction"
+      Fleet.script(provider, method, [], {:status, 429, [], "Too Many Requests"})
+
+      try do
+        for _ <- 1..6 do
+          before = cursors(fleets)
+          response = Rpc.call(tenant, method, [@raw])
+          assert response.body["error"]["code"] == -32005
+
+          assert response.body["error"]["data"]["send_policy"] ==
+                   metadata(provider, false, "providers")
+
+          assert names(ledger(fleets, before, method)) == [provider.name]
+          assert ledger(fleets, before, @lookup) == []
+
+          assert Rpc.call(pinned(reader, provider), "eth_getBalance", @balance).body["result"] ==
+                   "0x10"
+        end
+      after
+        Tenant.close!(reader)
+      end
+    end)
+  end
+
+  test "native-send fallback errors include the terminal policy phase without hash confirmation" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider, true))
+      method = "eth_sendBundle"
+      params = [%{"txs" => [@raw], "blockNumber" => "0x1"}]
+      Fleet.script(provider, method, [], {:error, -32005, "transaction provider quota"})
+      Fleet.script(public, method, [], {:error, -32602, "fallback native rejection"})
+      before = cursors(fleets)
+      response = Rpc.call(tenant, method, params)
+      assert response.body["error"]["code"] == -32602
+      assert response.body["error"]["message"] == "fallback native rejection"
+      assert response.body["error"]["data"]["send_policy"] == metadata(provider, true, "fallback")
+
+      assert Enum.sort(names(ledger(fleets, before, method))) ==
+               Enum.sort([provider.name, public.name])
+
+      assert ledger(fleets, before, @lookup) == []
+    end)
+  end
+
   test "relay-native sends stay with transaction providers and preserve upstream results" do
     journey(fn tenant, [public, provider] = fleets ->
       Tenant.replace!(tenant, fleets, chain: policy(provider))
@@ -48,6 +99,10 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
         response = Rpc.call(tenant, method, params)
         assert response.body["error"]["code"] == -32602
         assert response.body["error"]["message"] == "native rejection"
+
+        assert response.body["error"]["data"]["send_policy"] ==
+                 metadata(provider, false, "providers")
+
         assert names(ledger(fleets, before, method)) == [provider.name]
         assert ledger(fleets, before, @lookup) == []
       end
