@@ -71,6 +71,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 excluded_fallback: nil,
+                dispatched?: false,
                 diversity_seen: nil,
                 diversity_ordered_tiers: MapSet.new(),
                 supported?: false,
@@ -274,7 +275,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   def pending?(%__MODULE__{} = cursor) do
     cursor.preferred != [] or cursor.descriptors != [] or cursor.deferred_ranking != nil or
       deferred_pending?(cursor.supported_deferred) or
-      deferred_pending?(cursor.unsupported_deferred)
+      deferred_pending?(cursor.unsupported_deferred) or
+      (not cursor.dispatched? and not is_nil(cursor.excluded_fallback))
   end
 
   @doc "Explains static exclusions from the captured selection plan without probing providers."
@@ -363,7 +365,11 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   def exclude_provider(%__MODULE__{} = cursor, provider_id) when is_binary(provider_id) do
     %{
       cursor
-      | preferred: Enum.reject(cursor.preferred, &(&1.provider_id == provider_id)),
+      | excluded_fallback:
+          if(cursor.excluded_fallback && cursor.excluded_fallback.provider_id != provider_id,
+            do: cursor.excluded_fallback
+          ),
+        preferred: Enum.reject(cursor.preferred, &(&1.provider_id == provider_id)),
         descriptors:
           Enum.reject(cursor.descriptors, &(descriptor_provider_id(&1) == provider_id)),
         supported_deferred: reject_queued_provider(cursor.supported_deferred, provider_id),
@@ -583,9 +589,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
-  defp pop_deferred(%{returned: 0, excluded_fallback: channel} = cursor, _field, [])
+  defp pop_deferred(%{dispatched?: false, excluded_fallback: channel} = cursor, _field, [])
        when not is_nil(channel),
-       do: {:ok, channel, %{cursor | returned: 1, excluded_fallback: nil}}
+       do: {:ok, channel, %{cursor | returned: cursor.returned + 1, excluded_fallback: nil}}
 
   defp pop_deferred(cursor, _field, []), do: {:done, cursor}
 
@@ -617,12 +623,17 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     if refused? do
       scan(%{
         cursor
-        | excluded_fallback: cursor.excluded_fallback || if(cursor.returned == 0, do: channel)
+        | excluded_fallback: cursor.excluded_fallback || channel
       })
     else
       return_allowed(channel, cursor)
     end
   end
+
+  @doc "Records a dispatch so learned recovery cannot add another send."
+  @spec attempted_provider(t(), Channel.t()) :: t()
+  def attempted_provider(cursor, _channel),
+    do: %{cursor | dispatched?: true, excluded_fallback: nil}
 
   defp return_allowed(channel, cursor) do
     if current?(cursor) do

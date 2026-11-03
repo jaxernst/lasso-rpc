@@ -1690,6 +1690,12 @@ defmodule Lasso.RPC.RequestPipeline do
   defp qualify_response(_outcome, ctx), do: {{:continue, nil}, ctx}
 
   defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision) do
+    rest_channels =
+      if match?(%CandidateCursor{}, rest_channels) and
+           fact_certainty(outcome.fact) != :not_dispatched,
+         do: CandidateCursor.attempted_provider(rest_channels, channel),
+         else: rest_channels
+
     head =
       if MissingBlock.candidate?(ctx, outcome),
         do: MissingBlock.capture(ctx, channel, rest_channels)
@@ -1726,7 +1732,7 @@ defmodule Lasso.RPC.RequestPipeline do
         provider_id: channel.provider_id,
         data:
           case owner_error(outcome) do
-            {%JError{message: message}, _} -> %{upstream_message: message}
+            {%JError{} = upstream, _} -> %{upstream_message: JError.summary(upstream).message}
             _ -> nil
           end,
         category: :indeterminate_dispatch,

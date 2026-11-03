@@ -216,7 +216,7 @@ defmodule Lasso.RPC.MethodRegistry do
       method_category(method) not in [:unknown, :filters, :local_only] ->
         {:replay_safe, :registry}
 
-      method_category(method) == :unknown and signed_bytes?(params, 0) ->
+      method_category(method) == :unknown and signed_bytes?([params]) ->
         {:raw_transaction_broadcast, :signed_bytes}
 
       true ->
@@ -224,9 +224,23 @@ defmodule Lasso.RPC.MethodRegistry do
     end
   end
 
-  defp signed_bytes?(_, depth) when depth > 3, do: false
+  # Tail-recursive work list visits every decoded value once, regardless of
+  # parameter nesting. The request body limit already bounds the input.
+  defp signed_bytes?([]), do: false
+  defp signed_bytes?([[] | pending]), do: signed_bytes?(pending)
 
-  defp signed_bytes?(value, _) when is_binary(value) do
+  defp signed_bytes?([[value | rest] | pending]),
+    do: signed_bytes?([value, rest | pending])
+
+  defp signed_bytes?([value | pending]) when is_map(value),
+    do: signed_bytes?([Map.values(value) | pending])
+
+  defp signed_bytes?([value | pending]) when is_binary(value),
+    do: signed_envelope?(value) or signed_bytes?(pending)
+
+  defp signed_bytes?([_ | pending]), do: signed_bytes?(pending)
+
+  defp signed_envelope?(value) do
     hex =
       case value do
         "0x" <> hex -> hex
@@ -234,19 +248,41 @@ defmodule Lasso.RPC.MethodRegistry do
       end
 
     case Base.decode16(hex, case: :mixed) do
-      {:ok, <<type, rest::binary>>} when type in 1..4 -> complete_list?(rest, :any)
+      {:ok, <<1, rest::binary>>} -> complete_list?(rest, 11)
+      {:ok, <<2, rest::binary>>} -> complete_list?(rest, 12)
+      {:ok, <<3, rest::binary>>} -> complete_list?(rest, 14) or blob_wrapper?(rest)
+      {:ok, <<4, rest::binary>>} -> complete_list?(rest, 13)
       {:ok, bytes} -> complete_list?(bytes, 9)
       :error -> false
     end
   end
 
-  defp signed_bytes?(values, depth) when is_list(values),
-    do: Enum.any?(values, &signed_bytes?(&1, depth + 1))
+  # Blob gossip carries the signed payload plus sidecar lists. PeerDAS adds
+  # wrapper version 1 before those lists (EIP-4844 and EIP-7594).
+  defp blob_wrapper?(bytes) do
+    with {:list, payload, <<>>} <- rlp_item(bytes),
+         {:list, transaction, sidecar} <- rlp_item(payload) do
+      count_items(transaction, 14, 0) and
+        (sidecar_lists?(sidecar, 3) or
+           case sidecar do
+             <<1, rest::binary>> -> sidecar_lists?(rest, 3)
+             _ -> false
+           end) and valid_lists?([{payload, 1}])
+    else
+      _ -> false
+    end
+  end
 
-  defp signed_bytes?(values, depth) when is_map(values),
-    do: Enum.any?(values, fn {_, value} -> signed_bytes?(value, depth + 1) end)
+  defp sidecar_lists?(<<>>, 0), do: true
 
-  defp signed_bytes?(_, _), do: false
+  defp sidecar_lists?(bytes, remaining) when remaining > 0 do
+    case rlp_item(bytes) do
+      {:list, _, rest} -> sidecar_lists?(rest, remaining - 1)
+      _ -> false
+    end
+  end
+
+  defp sidecar_lists?(_, _), do: false
 
   # Walk only the outer list's items, without allocating decoded nested terms.
   defp complete_list?(bytes, count) do
@@ -256,7 +292,6 @@ defmodule Lasso.RPC.MethodRegistry do
     end
   end
 
-  defp count_items(<<>>, :any, _), do: true
   defp count_items(<<>>, expected, actual), do: expected == actual
 
   defp count_items(bytes, expected, actual) do
