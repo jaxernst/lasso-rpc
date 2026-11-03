@@ -16,6 +16,48 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "signed envelope methods stay in the transaction set and ambiguous responses end indeterminate" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider, true))
+      params = ["0x02c9808080808080808080"]
+
+      for {failure, index} <-
+            Enum.with_index([
+              {:error, -32000, "ambiguous application failure"},
+              {:status, 200, [], "invalid json"},
+              {:disconnect, 1011}
+            ]) do
+        method = "vendor_submission_#{index}"
+        Fleet.script(public, method, [], {:answer, "unexpected"})
+        Fleet.script(provider, method, [], failure)
+        before = cursors(fleets)
+        response = Rpc.call(tenant, method, params)
+        assert response.body["error"]["code"] == -32000
+        assert response.body["error"]["message"] == "Upstream dispatch outcome is indeterminate"
+        assert names(ledger(fleets, before, method)) == [provider.name]
+        assert Rpc.call(tenant, "eth_getBalance", @balance).body["result"] == "0x10"
+      end
+    end)
+  end
+
+  test "signed envelope refusals retain the single dispatch limit under a policy" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider, true))
+
+      for {failure, code, method} <- [
+            {{:error, -32601, "method not found"}, -32601, "vendor_refusal"},
+            {{:status, 429, [], "Too Many Requests"}, -32005, "vendor_quota"}
+          ] do
+        Fleet.script(public, method, [], {:answer, "unexpected"})
+        Fleet.script(provider, method, [], failure)
+        before = cursors(fleets)
+        response = Rpc.call(tenant, method, ["0x02c9808080808080808080"])
+        assert response.body["error"]["code"] == code
+        assert names(ledger(fleets, before, method)) == [provider.name]
+      end
+    end)
+  end
+
   test "plain-text native-send throttling preserves shared read routes" do
     journey(fn tenant, [_public, provider] = fleets ->
       Tenant.replace!(tenant, fleets, chain: policy(provider))

@@ -334,3 +334,30 @@ Relay-native send methods stay inside the transaction provider set, but routing
 them there does not remove an upstream signature-header requirement. Only
 `eth_sendRawTransaction` receives post-error hash confirmation; other send methods
 return their upstream result without a hash lookup.
+
+## Method effects
+
+Registered reads are replay-safe and use the normal three-dispatch budget.
+Learned method refusals exclude an upstream for that method, including when all
+upstreams have refused it. An unlearned refusal consumes a read dispatch.
+Registered submissions use the transaction provider set. The engine default is
+one dispatch; a transaction policy grants registered submissions up to three.
+Unregistered methods carrying signed transaction envelopes also use that set
+and execute once. Invalid responses, ambiguous application errors and transport
+ambiguity return `-32000` with category `indeterminate_dispatch` for these sends.
+Other unregistered methods use one dispatch in the read provider set.
+Opt-in metadata exposes `execution_safety` and `classified_by` (`registry`,
+`signed_bytes`, `default`). Classification scans unregistered params once.
+
+The submission registry includes raw, synchronous, conditional and private
+transactions, bundle sends and cancellations, `eth_callBundle`, `mev_simBundle`
+and `trace_rawTransaction`. Simulations carrying signed bytes use the transaction
+set to preserve disclosure boundaries. Provider-local signing and filters are
+restricted before routing. Unknown methods stop on `-32601`; learned support
+steers later requests. Signed-envelope detection accepts typed transactions
+(types 1 through 4) and nine-item legacy RLP lists, including bare hex, within
+three parameter levels and eight RLP list levels. Metadata reports the four
+safety values `replay_safe`, `raw_transaction_broadcast`, `subscription`, `unknown`.
+
+Automatic selection excludes learned method refusals. Explicit provider pins
+retain direct dispatch, including to verify recovery of a refused method.

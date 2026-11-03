@@ -514,9 +514,10 @@ defmodule Lasso.RPC.RequestPipeline do
     envelope = ctx.execution_envelope
 
     envelope =
-      if Selection.policy(capture) && envelope.execution_safety == :raw_transaction_broadcast,
-        do: %{envelope | dispatch_limit: 3},
-        else: envelope
+      if Selection.policy(capture) && envelope.execution_safety == :raw_transaction_broadcast &&
+           envelope.classified_by == :registry,
+         do: %{envelope | dispatch_limit: 3},
+         else: envelope
 
     %{ctx | routing_capture: capture, execution_envelope: envelope}
   end
@@ -909,6 +910,33 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
+    if is_list(rest) and is_nil(ctx.opts.provider_override) and
+         learned_method_refused?(ctx, channel) do
+      Lasso.RPC.ProviderKnowledge.AppliedEffects.record_exclusion(channel.profile, %{
+        route: {channel.instance_id, channel.transport},
+        kind: :method_refusal,
+        dimension: Lasso.RPC.BoundedIdentifier.encode(ctx.method)
+      })
+
+      attempt_channels(rest, ctx, param_rejected, caller_guard)
+    else
+      admit_channel(channel, rest, ctx, param_rejected, caller_guard)
+    end
+  end
+
+  defp learned_method_refused?(ctx, channel) do
+    scope =
+      ProviderKnowledge.capability_scope(channel, channel.capabilities, ctx.method)
+      |> Map.merge(%{
+        partition: Workload.for_request(ctx.opts.request_origin, ctx.method),
+        allow_learned?: true
+      })
+
+    Lasso.RPC.ProviderKnowledge.Effects.mode(:method_refusal, channel.profile) == :on and
+      ProviderKnowledge.method_refused?(scope, ctx.method)
+  end
+
+  defp admit_channel(channel, rest, ctx, param_rejected, caller_guard) do
     case ExecutionEnvelope.admit_candidate(ctx.execution_envelope) do
       {:ok, envelope} ->
         ctx = %{ctx | execution_envelope: envelope}
@@ -1637,7 +1665,8 @@ defmodule Lasso.RPC.RequestPipeline do
          %{projection: %{recommended_action: :finish_unsafe_indeterminate}} = outcome,
          ctx
        ) do
-    if RequestContext.transaction_policy(ctx) do
+    if not is_nil(RequestContext.transaction_policy(ctx)) and
+         ctx.execution_envelope.classified_by == :registry do
       %{
         outcome
         | projection: %{
@@ -1670,6 +1699,54 @@ defmodule Lasso.RPC.RequestPipeline do
 
     ctx = MissingBlock.observe(ctx, channel, outcome, head)
     do_handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision, head)
+  end
+
+  # A send that may not run again ends indeterminate once its attempt may have
+  # reached the upstream: a sync send that timed out, or any ambiguous failure of
+  # a send classified only by its signed bytes.
+  defp do_handle_owner_outcome(
+         %{fact: fact} = outcome,
+         channel,
+         _rest,
+         ctx,
+         _guard,
+         _decision,
+         _head
+       )
+       when (ctx.execution_envelope.classified_by == :signed_bytes and
+               (is_struct(fact, AttemptTerminal.InvalidResponse) or
+                  (is_struct(fact, AttemptTerminal.Response) and
+                     fact.kind == :application_error and fact.error_category == :ambiguous) or
+                  ((is_struct(fact, AttemptTerminal.Deadline) or
+                      is_struct(fact, AttemptTerminal.TransportFailure)) and
+                     fact.dispatch_certainty != :not_dispatched))) or
+              (ctx.method == "eth_sendRawTransactionSync" and
+                 (is_struct(fact, AttemptTerminal.Deadline) or
+                    (is_struct(fact, AttemptTerminal.TransportFailure) and fact.reason == :timeout)) and
+                 fact.dispatch_certainty != :not_dispatched) do
+    error =
+      JError.new(-32_000, "Upstream dispatch outcome is indeterminate",
+        provider_id: channel.provider_id,
+        category: :indeterminate_dispatch,
+        retriable?: false,
+        breaker_penalty?: false
+      )
+
+    handle_owner_terminal(outcome, channel, ctx, error)
+  end
+
+  defp do_handle_owner_outcome(
+         %{fact: %AttemptTerminal.Response{kind: :application_error, error_code: -32_601}} =
+           outcome,
+         channel,
+         _rest,
+         %{execution_envelope: %{classified_by: source}} = ctx,
+         caller_guard,
+         _decision,
+         _head
+       )
+       when source == :default do
+    handle_owner_terminal(outcome, channel, ctx, nil, caller_guard)
   end
 
   defp do_handle_owner_outcome(

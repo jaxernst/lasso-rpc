@@ -14,11 +14,6 @@ defmodule Lasso.RPC.ExecutionFact do
   @execution_safeties [
     :replay_safe,
     :raw_transaction_broadcast,
-    :upstream_signed,
-    :filter_create,
-    :filter_affine_read,
-    :filter_affine_consume,
-    :filter_affine_uninstall,
     :subscription,
     :unknown
   ]

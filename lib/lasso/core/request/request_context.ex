@@ -355,6 +355,7 @@ defmodule Lasso.RPC.RequestContext do
 
         nil ->
           ExecutionEnvelope.new(ctx.request_id, ctx.method, timeout_ms,
+            params: ctx.params,
             started_at_us: ctx.start_time || System.monotonic_time(:microsecond),
             deadline_us: deadline_us
           )

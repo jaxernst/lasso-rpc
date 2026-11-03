@@ -549,6 +549,14 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     end
   end
 
+  @doc "Whether live method evidence excludes this route."
+  def method_refused?(descriptor, plan, method, context) do
+    scope = effect_scope(descriptor, plan, method, context)
+
+    scope != nil and mode(:method_refusal, plan.profile) == :on and
+      learned_method_refusal?(scope, method)
+  end
+
   defp learned_method_refusal?(scope, method) do
     case ProviderKnowledge.method_refusal(scope, method) do
       {:ok, %{source: source, value: true}} when source in [:local, :imported] -> true

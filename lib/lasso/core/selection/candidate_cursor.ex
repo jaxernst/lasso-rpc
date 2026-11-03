@@ -598,6 +598,25 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   end
 
   defp return(channel, cursor) do
+    provider = Enum.find(cursor.plan.providers, &(&1.instance_id == channel.instance_id))
+
+    refused? =
+      provider &&
+        Effects.method_refused?(
+          {provider, channel.transport},
+          cursor.plan,
+          cursor.method,
+          cursor.effect_context
+        )
+
+    if refused? do
+      scan(cursor)
+    else
+      return_allowed(channel, cursor)
+    end
+  end
+
+  defp return_allowed(channel, cursor) do
     if current?(cursor) do
       seen = cursor.diversity_seen && MapSet.put(cursor.diversity_seen, channel.instance_id)
       {:ok, channel, %{cursor | returned: cursor.returned + 1, diversity_seen: seen}}

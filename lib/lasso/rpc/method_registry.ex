@@ -8,6 +8,11 @@ defmodule Lasso.RPC.MethodRegistry do
   explicit capability evidence.
   """
 
+  @send_methods ~w(eth_sendRawTransaction eth_sendRawTransactionSync
+    eth_sendRawTransactionConditional eth_sendPrivateRawTransaction
+    eth_sendPrivateTransaction eth_cancelPrivateTransaction eth_sendBundle
+    mev_sendBundle eth_cancelBundle eth_callBundle mev_simBundle trace_rawTransaction)
+
   @standard_methods %{
     # Common application reads
     core: [
@@ -179,44 +184,137 @@ defmodule Lasso.RPC.MethodRegistry do
   @spec method_category(String.t()) :: atom()
   def method_category(method), do: Map.get(@method_categories, method, :unknown)
 
-  # Methods whose support cannot be established without a side effect on chain.
-  # A probe can only send a deliberately invalid payload, and the resulting
-  # rejection says nothing about whether the method works for a real
-  # transaction. Probing these produces a permanently inconclusive result, so
-  # they are reported as unverifiable instead of being dispatched.
-  @unverifiable_methods ~w(eth_sendRawTransaction eth_sendTransaction)
-
-  @doc """
-  Whether a method's support can be established by probing.
-
-  `false` means any probe result would be meaningless, not that the method is
-  unsupported.
-  """
+  @doc "Methods whose payload or service state requires transaction routing."
+  @spec send_methods() :: [String.t()]
+  def send_methods, do: @send_methods
   @spec unverifiable?(String.t()) :: boolean()
-  def unverifiable?(method) when is_binary(method), do: method in @unverifiable_methods
-
-  @doc "Methods that cannot be verified by probing."
+  def unverifiable?(method), do: method in @send_methods
   @spec unverifiable_methods() :: [String.t()]
-  def unverifiable_methods, do: @unverifiable_methods
+  def unverifiable_methods, do: @send_methods
 
-  @doc """
-  Returns default support assumption for unknown methods.
+  @spec classified_by(String.t(), atom()) :: :registry | :signed_bytes | :default
+  def classified_by(method, safety) do
+    case classify(method) do
+      {^safety, source} -> source
+      _ -> :default
+    end
+  end
 
-  Conservative assumptions:
-  - Standard methods (core, state, network): Assume supported
-  - Experimental/new methods (eip4844): Assume unsupported
-  - Archive methods (debug, trace): Assume unsupported
-  - Deprecated methods: Assume unsupported
-  """
-  @spec default_support_assumption(String.t()) :: boolean()
-  def default_support_assumption(method) do
-    case method_category(method) do
-      cat when cat in [:core, :state, :network, :eip1559, :mempool] -> true
-      cat when cat in [:extended_reads, :debug, :trace, :local_only, :txpool] -> false
-      # New, conservative
-      :eip4844 -> false
-      # Conservative for unknown
-      :unknown -> false
+  @doc "Classify effects independently of provider support."
+  @spec classify(String.t(), term()) ::
+          {Lasso.RPC.ExecutionEnvelope.execution_safety(), :registry | :signed_bytes | :default}
+  def classify(method, params \\ []) do
+    cond do
+      method in @send_methods ->
+        {:raw_transaction_broadcast, :registry}
+
+      method_category(method) == :subscriptions ->
+        {:subscription, :registry}
+
+      method == "eth_getLogs" ->
+        {:replay_safe, :registry}
+
+      method_category(method) not in [:unknown, :filters, :local_only] ->
+        {:replay_safe, :registry}
+
+      method_category(method) == :unknown and signed_bytes?(params, 0) ->
+        {:raw_transaction_broadcast, :signed_bytes}
+
+      true ->
+        {:unknown, :default}
+    end
+  end
+
+  defp signed_bytes?(_, depth) when depth > 3, do: false
+
+  defp signed_bytes?(value, _) when is_binary(value) do
+    hex =
+      case value do
+        "0x" <> hex -> hex
+        hex -> hex
+      end
+
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, <<type, rest::binary>>} when type in 1..4 -> complete_list?(rest, :any)
+      {:ok, bytes} -> complete_list?(bytes, 9)
+      :error -> false
+    end
+  end
+
+  defp signed_bytes?(values, depth) when is_list(values),
+    do: Enum.any?(values, &signed_bytes?(&1, depth + 1))
+
+  defp signed_bytes?(values, depth) when is_map(values),
+    do: Enum.any?(values, fn {_, value} -> signed_bytes?(value, depth + 1) end)
+
+  defp signed_bytes?(_, _), do: false
+
+  # Walk only the outer list's items, without allocating decoded nested terms.
+  defp complete_list?(bytes, count) do
+    case rlp_item(bytes) do
+      {:list, payload, <<>>} -> count_items(payload, count, 0)
+      _ -> false
+    end
+  end
+
+  defp count_items(<<>>, :any, _), do: true
+  defp count_items(<<>>, expected, actual), do: expected == actual
+
+  defp count_items(bytes, expected, actual) do
+    case rlp_item(bytes) do
+      {:list, payload, rest} ->
+        valid_lists?([{payload, 2}]) and count_items(rest, expected, actual + 1)
+
+      {:string, _, rest} ->
+        count_items(rest, expected, actual + 1)
+
+      _ ->
+        false
+    end
+  end
+
+  # Retain at most eight list levels, including the outer transaction list.
+  defp valid_lists?([]), do: true
+  defp valid_lists?([{_, depth} | _]) when depth > 8, do: false
+  defp valid_lists?([{<<>>, _} | rest]), do: valid_lists?(rest)
+
+  defp valid_lists?([{bytes, depth} | pending]) do
+    case rlp_item(bytes) do
+      {:list, payload, rest} -> valid_lists?([{payload, depth + 1}, {rest, depth} | pending])
+      {:string, _, rest} -> valid_lists?([{rest, depth} | pending])
+      _ -> false
+    end
+  end
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix < 128,
+    do: {:string, <<prefix>>, rest}
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix <= 183,
+    do: take_rlp(rest, prefix - 128, :string)
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix <= 191,
+    do: long_rlp(rest, prefix - 183, :string)
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix <= 247,
+    do: take_rlp(rest, prefix - 192, :list)
+
+  defp rlp_item(<<prefix, rest::binary>>), do: long_rlp(rest, prefix - 247, :list)
+  defp rlp_item(_), do: :error
+
+  defp long_rlp(bytes, length_bytes, kind) do
+    case bytes do
+      <<length::binary-size(length_bytes), rest::binary>> ->
+        take_rlp(rest, :binary.decode_unsigned(length), kind)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp take_rlp(bytes, size, kind) do
+    case bytes do
+      <<payload::binary-size(size), rest::binary>> -> {kind, payload, rest}
+      _ -> :error
     end
   end
 end
