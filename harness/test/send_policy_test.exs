@@ -16,6 +16,31 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "a sole refused upstream recovers automatically after it is fixed" do
+    provider = Fleet.start!(self(), "sole-method-recovery")
+    tenant = Tenant.open!([provider])
+    method = "vendor_recovered_method"
+
+    try do
+      Fleet.script(provider, method, [], {:error, -32601, "method not found"})
+      assert Rpc.call(tenant, method, []).body["error"]["code"] == -32601
+
+      Settle.await("sole method refusal learned", fn ->
+        if Enum.any?(Tenant.knowledge!(tenant, provider), &(&1["kind"] == "method_refusal")),
+          do: {:ok, :learned},
+          else: :pending
+      end)
+
+      Fleet.script(provider, method, [], {:answer, "recovered"})
+      before = cursors([provider])
+      assert Rpc.call(tenant, method, []).body["result"] == "recovered"
+      assert names(ledger([provider], before, method)) == [provider.name]
+    after
+      Tenant.close!(tenant)
+      Fleet.stop(provider)
+    end
+  end
+
   test "signed envelope methods stay in the transaction set and ambiguous responses end indeterminate" do
     journey(fn tenant, [public, provider] = fleets ->
       Tenant.replace!(tenant, fleets, chain: policy(provider, true))

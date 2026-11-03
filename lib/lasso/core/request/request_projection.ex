@@ -932,11 +932,7 @@ defmodule Lasso.RPC.RequestProjection do
         profile: Map.fetch!(fact, :profile),
         chain_id: Map.fetch!(fact, :chain_id),
         execution_safety: Map.fetch!(fact, :execution_safety),
-        classified_by:
-          Lasso.RPC.MethodRegistry.classified_by(
-            event.method,
-            Map.fetch!(fact, :execution_safety)
-          ),
+        classified_by: Map.get(fact, :classified_by, :default),
         method: event.method,
         provider_id: event.provider_id,
         instance_id: event.instance_id,
@@ -970,11 +966,7 @@ defmodule Lasso.RPC.RequestProjection do
         profile: Map.fetch!(fact, :profile),
         chain_id: Map.fetch!(fact, :chain_id),
         execution_safety: Map.fetch!(fact, :execution_safety),
-        classified_by:
-          Lasso.RPC.MethodRegistry.classified_by(
-            event.method,
-            Map.fetch!(fact, :execution_safety)
-          ),
+        classified_by: Map.get(fact, :classified_by, :default),
         method: event.method,
         strategy: Map.fetch!(fact, :routing_intent),
         provider_id: event.provider_id,

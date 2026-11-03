@@ -70,6 +70,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 deferred_routes: MapSet.new(),
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
+                excluded_fallback: nil,
                 diversity_seen: nil,
                 diversity_ordered_tiers: MapSet.new(),
                 supported?: false,
@@ -582,6 +583,10 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
+  defp pop_deferred(%{returned: 0, excluded_fallback: channel} = cursor, _field, [])
+       when not is_nil(channel),
+       do: {:ok, channel, %{cursor | returned: 1, excluded_fallback: nil}}
+
   defp pop_deferred(cursor, _field, []), do: {:done, cursor}
 
   defp pop_deferred(cursor, field, [key | rest]) do
@@ -610,7 +615,10 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         )
 
     if refused? do
-      scan(cursor)
+      scan(%{
+        cursor
+        | excluded_fallback: cursor.excluded_fallback || if(cursor.returned == 0, do: channel)
+      })
     else
       return_allowed(channel, cursor)
     end

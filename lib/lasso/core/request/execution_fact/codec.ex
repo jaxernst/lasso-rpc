@@ -237,6 +237,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       "circuit_scope" => Atom.to_string(identity.circuit_scope),
       "circuit_epoch" => identity.circuit_epoch,
       "execution_safety" => Atom.to_string(identity.execution_safety),
+      "classified_by" => Atom.to_string(Map.get(identity, :classified_by, :default)),
       "attempt_kind" => Atom.to_string(identity.attempt_kind),
       "routing_intent" => identity.routing_intent,
       "workload_key" => identity.workload_key,
@@ -262,6 +263,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
     |> request_scope()
     |> Map.merge(%{
       "execution_safety" => Atom.to_string(fact.execution_safety),
+      "classified_by" => Atom.to_string(Map.get(fact, :classified_by, :default)),
       "elapsed_us" => fact.elapsed_us,
       "candidate_admission_count" => fact.candidate_admission_count,
       "dispatch_count" => fact.dispatch_count,
@@ -408,6 +410,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       circuit_scope: circuit_scope(map["circuit_scope"]),
       circuit_epoch: map["circuit_epoch"],
       execution_safety: safety(map["execution_safety"]),
+      classified_by: classified_by(map["classified_by"]),
       attempt_kind: attempt_kind(map["attempt_kind"]),
       routing_intent: map["routing_intent"],
       workload_key: map["workload_key"],
@@ -427,6 +430,12 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       workload_key: map["workload_key"]
     ]
 
+  defp classified_by(nil), do: :default
+  defp classified_by("registry"), do: :registry
+  defp classified_by("signed_bytes"), do: :signed_bytes
+  defp classified_by("default"), do: :default
+  defp classified_by(_), do: raise(ArgumentError, "invalid classification source")
+
   defp attempt_kind(nil), do: :ordinary
   defp attempt_kind("ordinary"), do: :ordinary
   defp attempt_kind("exploration"), do: :exploration
@@ -437,6 +446,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
       request_attrs(map) ++
         [
           execution_safety: safety(map["execution_safety"]),
+          classified_by: classified_by(map["classified_by"]),
           elapsed_us: map["elapsed_us"],
           candidate_admission_count: map["candidate_admission_count"],
           dispatch_count: map["dispatch_count"],

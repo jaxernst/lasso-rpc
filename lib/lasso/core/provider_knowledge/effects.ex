@@ -549,6 +549,20 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     end
   end
 
+  @doc "Method refusal evidence shared by cursor and materialized-list admission."
+  def method_refusal(channel, method, partition) do
+    scope =
+      ProviderKnowledge.capability_scope(channel, channel.capabilities, method)
+      |> Map.merge(%{partition: partition, allow_learned?: true})
+
+    if mode(:method_refusal, channel.profile) == :on and learned_method_refusal?(scope, method),
+      do: %{
+        route: {channel.instance_id, channel.transport},
+        kind: :method_refusal,
+        dimension: BoundedIdentifier.encode(method)
+      }
+  end
+
   @doc "Whether live method evidence excludes this route."
   def method_refused?(descriptor, plan, method, context) do
     scope = effect_scope(descriptor, plan, method, context)

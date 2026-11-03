@@ -192,14 +192,6 @@ defmodule Lasso.RPC.MethodRegistry do
   @spec unverifiable_methods() :: [String.t()]
   def unverifiable_methods, do: @send_methods
 
-  @spec classified_by(String.t(), atom()) :: :registry | :signed_bytes | :default
-  def classified_by(method, safety) do
-    case classify(method) do
-      {^safety, source} -> source
-      _ -> :default
-    end
-  end
-
   @doc "Classify effects independently of provider support."
   @spec classify(String.t(), term()) ::
           {Lasso.RPC.ExecutionEnvelope.execution_safety(), :registry | :signed_bytes | :default}

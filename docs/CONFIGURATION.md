@@ -510,8 +510,7 @@ return their upstream result without a hash lookup.
 ## Method effects
 
 Registered reads are replay-safe and use the normal three-dispatch budget.
-Learned method refusals exclude an upstream for that method, including when all
-upstreams have refused it. An unlearned refusal consumes a read dispatch.
+Learned method refusals exclude an upstream for that method, retaining one last route when all upstreams have refused it. An unlearned refusal consumes a read dispatch.
 Registered submissions use the transaction provider set. The engine default is
 one dispatch; a transaction policy grants registered submissions up to three.
 Unregistered methods carrying signed transaction envelopes also use that set
@@ -531,5 +530,6 @@ steers later requests. Signed-envelope detection accepts typed transactions
 three parameter levels and eight RLP list levels. Metadata reports the four
 safety values `replay_safe`, `raw_transaction_broadcast`, `subscription`, `unknown`.
 
-Automatic selection excludes learned method refusals. Explicit provider pins
+Automatic selection skips learned method refusals when another candidate remains.
+The last route remains available for automatic recovery. Explicit provider pins
 retain direct dispatch, including to verify recovery of a refused method.

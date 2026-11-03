@@ -278,6 +278,12 @@ defmodule Lasso.RPC.RequestTerminal.Common do
         ExecutionFact.optional_bounded!(Keyword.get(attrs, :subject_token), :subject_token),
       chain_id: ExecutionFact.positive!(Keyword.fetch!(attrs, :chain_id), :chain_id),
       execution_safety: ExecutionFact.execution_safety!(Keyword.fetch!(attrs, :execution_safety)),
+      classified_by:
+        ExecutionFact.member!(Keyword.get(attrs, :classified_by, :default), :classified_by, [
+          :registry,
+          :signed_bytes,
+          :default
+        ]),
       routing_intent:
         ExecutionFact.bounded!(Keyword.fetch!(attrs, :routing_intent), :routing_intent),
       workload_key: ExecutionFact.bounded!(Keyword.fetch!(attrs, :workload_key), :workload_key),
@@ -316,7 +322,7 @@ defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
     :dispatch_count,
     :attempt
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), Response.t()) :: t()
@@ -370,6 +376,7 @@ defmodule Lasso.RPC.RequestTerminal.UpstreamResponse do
       subject_token: identity.subject_token,
       chain_id: identity.chain_id,
       execution_safety: identity.execution_safety,
+      classified_by: Map.get(identity, :classified_by, :default),
       routing_intent: identity.routing_intent,
       workload_key: identity.workload_key,
       elapsed_us: elapsed_us,
@@ -397,7 +404,7 @@ defmodule Lasso.RPC.RequestTerminal.LocalSuccess do
     :dispatch_count,
     :reason
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), :published_block) :: t()
@@ -435,7 +442,7 @@ defmodule Lasso.RPC.RequestTerminal.LocalFailure do
     :dispatch_count,
     :reason
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), atom()) :: t()
@@ -467,7 +474,7 @@ defmodule Lasso.RPC.RequestTerminal.Deadline do
     :dispatch_count,
     :dispatch_certainty
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), ExecutionFact.dispatch_certainty()) :: t()
@@ -504,7 +511,7 @@ defmodule Lasso.RPC.RequestTerminal.CallerAbandonment do
     :dispatch_count,
     :dispatch_certainty
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), ExecutionFact.dispatch_certainty()) :: t()
@@ -540,7 +547,7 @@ defmodule Lasso.RPC.RequestTerminal.UnsafeIndeterminateExhaustion do
     :candidate_admission_count,
     :dispatch_count
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword()) :: t()
@@ -580,7 +587,7 @@ defmodule Lasso.RPC.RequestTerminal.OrdinaryExhaustion do
     :dispatch_count,
     :reason
   ]
-  defstruct @enforce_keys ++ [:subject_token, :observed_at]
+  defstruct @enforce_keys ++ [:subject_token, :observed_at, classified_by: :default]
   @type t :: %__MODULE__{}
 
   @spec new(keyword(), atom()) :: t()

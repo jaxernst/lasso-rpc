@@ -910,7 +910,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
-    if is_list(rest) and is_nil(ctx.opts.provider_override) and
+    if is_list(rest) and rest != [] and is_nil(ctx.opts.provider_override) and
          learned_method_refused?(ctx, channel) do
       Lasso.RPC.ProviderKnowledge.AppliedEffects.record_exclusion(channel.profile, %{
         route: {channel.instance_id, channel.transport},
@@ -925,15 +925,11 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp learned_method_refused?(ctx, channel) do
-    scope =
-      ProviderKnowledge.capability_scope(channel, channel.capabilities, ctx.method)
-      |> Map.merge(%{
-        partition: Workload.for_request(ctx.opts.request_origin, ctx.method),
-        allow_learned?: true
-      })
-
-    Lasso.RPC.ProviderKnowledge.Effects.mode(:method_refusal, channel.profile) == :on and
-      ProviderKnowledge.method_refused?(scope, ctx.method)
+    Lasso.RPC.ProviderKnowledge.Effects.method_refusal(
+      channel,
+      ctx.method,
+      Workload.for_request(ctx.opts.request_origin, ctx.method)
+    ) != nil
   end
 
   defp admit_channel(channel, rest, ctx, param_rejected, caller_guard) do
@@ -1619,6 +1615,7 @@ defmodule Lasso.RPC.RequestPipeline do
       circuit_scope: :broad,
       circuit_epoch: receipt.epoch,
       execution_safety: envelope.execution_safety,
+      classified_by: envelope.classified_by,
       attempt_kind:
         if(Exploration.matches?(ctx.exploration_token, channel),
           do: :exploration,
@@ -1727,6 +1724,11 @@ defmodule Lasso.RPC.RequestPipeline do
     error =
       JError.new(-32_000, "Upstream dispatch outcome is indeterminate",
         provider_id: channel.provider_id,
+        data:
+          case owner_error(outcome) do
+            {%JError{message: message}, _} -> %{upstream_message: message}
+            _ -> nil
+          end,
         category: :indeterminate_dispatch,
         retriable?: false,
         breaker_penalty?: false
@@ -2967,6 +2969,7 @@ defmodule Lasso.RPC.RequestPipeline do
       subject_token: nil,
       chain_id: ctx.chain_id,
       execution_safety: envelope.execution_safety,
+      classified_by: envelope.classified_by,
       routing_intent: Atom.to_string(ctx.opts.strategy),
       workload_key: request_workload_key(ctx),
       elapsed_us: request_elapsed_us(envelope),
