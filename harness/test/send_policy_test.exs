@@ -21,10 +21,14 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       Tenant.replace!(tenant, fleets, chain: policy(provider))
 
       for {method, params} <- [
+            {"eth_sendRawTransactionConditional", [@raw, %{}]},
+            {"eth_sendRawTransactionSync", [@raw]},
             {"eth_sendPrivateRawTransaction", [@raw]},
             {"eth_sendPrivateTransaction", [%{"tx" => @raw}]},
             {"eth_cancelPrivateTransaction", [%{"txHash" => hash()}]},
             {"eth_sendBundle", [%{"txs" => [@raw], "blockNumber" => "0x1"}]},
+            {"eth_cancelBundle",
+             [%{"replacementUuid" => "00000000-0000-0000-0000-000000000001"}]},
             {"mev_sendBundle", [%{"version" => "v0.1", "body" => [%{"tx" => @raw}]}]}
           ] do
         result = %{"accepted" => method}

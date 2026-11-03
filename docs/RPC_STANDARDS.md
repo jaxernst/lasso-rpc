@@ -129,6 +129,8 @@ return their upstream result without a hash lookup.
 
 The transaction send class includes `eth_sendRawTransaction`,
 `eth_sendPrivateRawTransaction`, `eth_sendPrivateTransaction`,
-`eth_cancelPrivateTransaction`, `eth_sendBundle` and `mev_sendBundle`.
+`eth_cancelPrivateTransaction`, `eth_sendBundle`, `eth_cancelBundle`,
+`mev_sendBundle`, `eth_sendRawTransactionConditional` and
+`eth_sendRawTransactionSync`.
 Transaction providers are selected one at a time; fallback and any resend remain
 sequential within the original request budget.

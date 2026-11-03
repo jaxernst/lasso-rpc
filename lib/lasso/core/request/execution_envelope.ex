@@ -92,10 +92,13 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   def classify(method)
       when method in [
              "eth_sendRawTransaction",
+             "eth_sendRawTransactionConditional",
+             "eth_sendRawTransactionSync",
              "eth_sendPrivateRawTransaction",
              "eth_sendPrivateTransaction",
              "eth_cancelPrivateTransaction",
              "eth_sendBundle",
+             "eth_cancelBundle",
              "mev_sendBundle"
            ],
       do: :raw_transaction_broadcast
