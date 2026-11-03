@@ -30,7 +30,7 @@ provider implements them.
   ([learned provider limits](ROUTING.md#learned-provider-limits)). When the
   params carry a signed transaction, the method is a send instead: it runs once,
   on a transaction provider when the chain declares them, and an ambiguous
-  outcome returns `-32000` with category `indeterminate_dispatch`.
+  outcome returns the [indeterminate error](API_REFERENCE.md#transaction-send-errors-and-metadata).
 
 Responses with `include_meta` report the class and how it was chosen; see
 [observability metadata](API_REFERENCE.md#observability-metadata).
@@ -43,9 +43,10 @@ listed providers, one at a time, and the same bytes may be resent to another of
 them within the request deadline ([routing](ROUTING.md#transaction-providers)).
 A null send result stays null.
 
-After a failed `eth_sendRawTransaction`, Lasso looks up its hash on the same side
-before returning the error; other send methods return the upstream result without
-a lookup. A lost response may still mean the transaction was accepted. Clients
+Under a policy, after a failed `eth_sendRawTransaction` Lasso looks up its hash
+among the providers of the phase that sent it before returning the error. Without a
+policy, and for other send methods, the upstream result is returned without a
+lookup. A lost response may still mean the transaction was accepted. Clients
 own signing, nonces, replacement, receipts and finality. Errors and metadata are
 in the [API reference](API_REFERENCE.md#transaction-send-errors-and-metadata).
 
