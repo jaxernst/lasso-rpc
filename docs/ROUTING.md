@@ -316,8 +316,21 @@ This is useful for debugging, testing specific provider behavior, or implementin
 
 ## Transaction relay routing
 
-The optional chain `transactions` policy projects one captured routing plan by request class. `raw_transaction_broadcast` (currently `eth_sendRawTransaction`) selects relays with head-lag filtering disabled. Reads, subscriptions and recovery exclude relays. Filters, method fail-open, cursors, exploration, pins and retries consume that projected list. A retained subscription moves to an eligible read provider after a policy update; a configured replacement that is still connecting retains continuity until it is available.
+The optional chain `transactions` policy projects one captured routing plan by request class. `raw_transaction_broadcast` (`eth_sendRawTransaction` and the relay-native send family) selects relays with head-lag filtering disabled. Reads, subscriptions and recovery exclude relays. Filters, method fail-open, cursors, exploration, pins and retries consume that projected list. A retained subscription moves to an eligible read provider after a policy update; a configured replacement that is still connecting retains continuity until it is available.
 
-The default is fail-closed. An explicit `public_fallback: true` enters a second within-profile phase after relay exhaustion using the same request budget and deadline. It is never a strategy-ranked union. The unset policy preserves ordinary routing.
+The default is fail-closed. An explicit `fallback: read_providers` enters a second within-profile phase after relay exhaustion using the same request budget and deadline. It is never a strategy-ranked union. The unset policy preserves ordinary routing.
 
 After a policy send fails, transaction hash confirmation selects inside its terminal send phase and borrows the selected channel, so a public read cannot escape a fail-closed boundary. Null relay replies stay null; a response hash is not proof of inclusion.
+
+Private sends establish no read affinity. While a transaction remains private,
+ordinary providers return null for its transaction and receipt, and their pending
+nonce excludes that transaction until inclusion. Clients manage their own nonces;
+Lasso maintains no private pending overlay.
+
+Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
+Methods requiring a sender signature header are not supported through Lasso yet.
+Configured provider headers are separate from per-request sender signatures.
+Relay-native send methods stay inside the transaction provider set, but routing
+them there does not remove an upstream signature-header requirement. Only
+`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
+return their upstream result without a hash lookup.

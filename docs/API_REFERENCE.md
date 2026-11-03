@@ -289,7 +289,7 @@ Each item is validated and routed independently with bounded concurrency and its
 
 ### Unsupported Methods
 
-`eth_sendRawTransaction` is routable with one upstream dispatch under one deadline. A lost response can mean the transaction was accepted; clients reconcile its hash. `eth_sendTransaction`, `eth_accounts`, `eth_sign`, `eth_signTransaction`, and `personal_sign` are globally disallowed. Provider capability policy can impose additional restrictions. Subscription methods are rejected over HTTP with a WebSocket URL hint. See [Method support](RPC_STANDARDS.md) for the released Core contract.
+`eth_sendRawTransaction` without a transaction policy receives one upstream dispatch. Under a policy, at most three sequential identical-byte sends share one deadline, with terminal hash confirmation inside the relay set. Public sends require explicit public fallback. A lost response can mean the transaction was accepted; clients reconcile its hash. `eth_sendTransaction`, `eth_accounts`, `eth_sign`, `eth_signTransaction`, and `personal_sign` are globally disallowed. Provider capability policy can impose additional restrictions. Subscription methods are rejected over HTTP with a WebSocket URL hint. See [Method support](RPC_STANDARDS.md) for the released Core contract.
 
 ---
 
@@ -415,8 +415,21 @@ Preflight responses are cached for 24 hours.
 
 ## Relay policy errors and metadata
 
-Opt-in `lasso_meta` on send responses includes `send_policy: {relays: [provider_id], public_fallback: false, phase: "relays"}`. The second send phase uses `phase: "public"`. Error data carries the same policy object; selected-provider metadata identifies the dispatched relay.
+Opt-in `lasso_meta` on send responses includes `send_policy: {providers: [provider_id], fallback: "none", phase: "providers"}`. The second send phase uses `phase: "fallback"`. Error data carries the same policy object; selected-provider metadata identifies the dispatched relay.
 
-Zero-dispatch exhaustion returns JSON-RPC `-32000` with `reason: "relays_unavailable"`, `error_type: "relay_unavailable"`, `retryable: true`, and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest relay circuit recovery on the requested transport.
+Zero-dispatch exhaustion returns JSON-RPC `-32000` with `reason: "transaction_providers_unavailable"`, `error_type: "transaction_provider_unavailable"`, `retryable: true`, and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest relay circuit recovery on the requested transport.
 
-If sends were dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_relays` and `relay_send_only` respectively.
+If `eth_sendRawTransaction` was dispatched and hash confirmation finds no transaction, the final error is the last upstream error, augmented with `send_policy` and its phase. Every send-class error includes that policy object. Dispatched native-send errors preserve the upstream code, message and data with terminal-phase policy metadata added, without hash confirmation or transaction-specific retry guidance. Send pins outside the relay set and read pins to relays return `-32602`, with `pin_outside_transaction_providers` and `transaction_provider_send_only` respectively.
+
+Private sends establish no read affinity. While a transaction remains private,
+ordinary providers return null for its transaction and receipt, and their pending
+nonce excludes that transaction until inclusion. Clients manage their own nonces;
+Lasso maintains no private pending overlay.
+
+Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
+Methods requiring a sender signature header are not supported through Lasso yet.
+Configured provider headers are separate from per-request sender signatures.
+Relay-native send methods stay inside the transaction provider set, but routing
+them there does not remove an upstream signature-header requirement. Only
+`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
+return their upstream result without a hash lookup.

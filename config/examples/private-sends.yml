@@ -12,8 +12,8 @@ chains:
   ethereum:
     chain_id: 1
     transactions:
-      relays: [flashbots_fast, mevblocker_fast]
-      public_fallback: false
+      providers: [flashbots_fast, mevblocker_fast]
+      fallback: none
     providers:
       - id: flashbots_fast
         name: Flashbots Protect fast

@@ -1,9 +1,9 @@
 defmodule Lasso.Config.ChainConfig.Transactions do
   @moduledoc "Chain-level relay boundary for transaction broadcasts."
   @derive Jason.Encoder
-  defstruct relays: [], public_fallback: false
+  defstruct providers: [], fallback: "none"
 
-  @type t :: %__MODULE__{relays: [String.t()], public_fallback: boolean()}
+  @type t :: %__MODULE__{providers: [String.t()], fallback: String.t()}
 
   @spec parse(term()) :: t() | nil
   def parse(nil), do: nil
@@ -11,8 +11,8 @@ defmodule Lasso.Config.ChainConfig.Transactions do
 
   def parse(attrs) when is_map(attrs) do
     %__MODULE__{
-      relays: Map.get(attrs, :relays, Map.get(attrs, "relays", [])),
-      public_fallback: Map.get(attrs, :public_fallback, Map.get(attrs, "public_fallback", false))
+      providers: Map.get(attrs, :providers, Map.get(attrs, "providers", [])),
+      fallback: Map.get(attrs, :fallback, Map.get(attrs, "fallback", "none"))
     }
   end
 
@@ -21,15 +21,17 @@ defmodule Lasso.Config.ChainConfig.Transactions do
   @spec validate(term(), [map()]) :: :ok | {:error, :invalid_transactions}
   def validate(nil, _providers), do: :ok
 
-  def validate(%__MODULE__{relays: relays, public_fallback: fallback}, providers)
-      when is_list(relays) and relays != [] and is_boolean(fallback) do
+  def validate(%__MODULE__{providers: transaction_providers, fallback: fallback}, providers)
+      when is_list(transaction_providers) and transaction_providers != [] and
+             fallback in ["none", "read_providers"] do
     ids = Enum.map(providers, & &1.id)
 
     valid? =
-      Enum.all?(relays, &(is_binary(&1) and &1 in ids)) and
-        length(Enum.uniq(relays)) == length(relays) and Enum.any?(ids, &(&1 not in relays)) and
+      Enum.all?(transaction_providers, &(is_binary(&1) and &1 in ids)) and
+        length(Enum.uniq(transaction_providers)) == length(transaction_providers) and
+        Enum.any?(ids, &(&1 not in transaction_providers)) and
         Enum.all?(providers, fn provider ->
-          provider.id not in relays or send_capable?(provider.capabilities)
+          provider.id not in transaction_providers or send_capable?(provider.capabilities)
         end)
 
     if valid?, do: :ok, else: {:error, :invalid_transactions}

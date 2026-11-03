@@ -195,8 +195,42 @@ defmodule Lasso.RPC.RequestPipeline do
 
     result
     |> confirm_raw_transaction(execution_scope, caller_guard)
+    |> decorate_send_error()
     |> finalize_request_terminal()
   end
+
+  defp confirm_raw_transaction(
+         {:error, %JError{category: :provider_error} = error,
+          %{
+            execution_envelope: %{execution_safety: :raw_transaction_broadcast, dispatch_count: 0},
+            routing_capture: {:ok, _, %{transactions: policy}}
+          } = ctx},
+         _scope,
+         _guard
+       )
+       when not is_nil(policy),
+       do: {:error, transaction_error_hint(error, ctx), ctx}
+
+  defp confirm_raw_transaction(
+         {:error, %JError{category: :invalid_params} = error,
+          %{method: "eth_sendRawTransaction", execution_envelope: %{dispatch_count: 0}} = ctx},
+         _scope,
+         _guard
+       ),
+       do: {:error, transaction_error_hint(error, ctx), ctx}
+
+  defp confirm_raw_transaction(
+         {:error, error,
+          %{
+            method: "eth_sendRawTransaction",
+            routing_capture: {:ok, _, %{transactions: policy}},
+            execution_envelope: %{dispatch_count: 0}
+          } = ctx},
+         _scope,
+         _guard
+       )
+       when not is_nil(policy),
+       do: {:error, transaction_error_hint(error, ctx), ctx}
 
   # A single lookup is shared by every terminal sendRaw rejection. Pinning the
   # selected transport prevents read failover from turning it into peer checks.
@@ -286,6 +320,19 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp confirm_raw_transaction(result, _scope, _guard), do: result
 
+  defp decorate_send_error({:error, %JError{} = error, ctx} = result) do
+    case RequestContext.send_policy_metadata(ctx) do
+      nil ->
+        result
+
+      policy ->
+        data = Map.put(TransactionHash.error_data(error.data), :send_policy, policy)
+        {:error, %{error | data: data, raw_response: nil}, ctx}
+    end
+  end
+
+  defp decorate_send_error(result), do: result
+
   defp transaction_lookup_channel(
          %{terminal_attempt_fact: %AttemptTerminal.Response{}} = ctx,
          _hash
@@ -324,18 +371,20 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp transaction_error_hint(error, ctx) do
-    relay_unavailable? =
+    transaction_provider_unavailable? =
       not is_nil(RequestContext.transaction_policy(ctx)) and
         ctx.execution_envelope.dispatch_count == 0 and
         error.category == :provider_error
 
     error =
-      if relay_unavailable? do
+      if transaction_provider_unavailable? do
         %{
           error
           | retriable?: true,
             data:
-              Map.merge(TransactionHash.error_data(error.data), %{reason: :relays_unavailable})
+              Map.merge(TransactionHash.error_data(error.data), %{
+                reason: :transaction_providers_unavailable
+              })
         }
       else
         error
@@ -358,30 +407,34 @@ defmodule Lasso.RPC.RequestPipeline do
       Map.merge(data, %{
         code: "provider_error",
         error_type:
-          if(relay_unavailable?, do: "relay_unavailable", else: "transaction_rejection"),
+          if(transaction_provider_unavailable?,
+            do: "transaction_provider_unavailable",
+            else: "transaction_rejection"
+          ),
         request_id: ctx.request_id,
         retryable: retryable?,
         next_action: next_action
       })
 
-    data =
-      if RequestContext.transaction_policy(ctx),
-        do: Map.put(data, :send_policy, RequestContext.send_policy_metadata(ctx)),
-        else: data
-
     # Rebuild both HTTP and WS documents so raw passthrough cannot drop hints.
-    message = if relay_unavailable?, do: relay_unavailable_message(ctx, data), else: error.message
+    message =
+      if transaction_provider_unavailable?,
+        do: transaction_provider_unavailable_message(ctx, data),
+        else: error.message
+
     %{error | raw_response: nil, data: data, retriable?: retryable?, message: message}
   end
 
-  defp relay_unavailable_message(ctx, data) do
+  defp transaction_provider_unavailable_message(ctx, data) do
     retry_ms = data[:retry_after_ms] || data["retry_after_ms"]
     retry = if retry_ms, do: " Retry after #{div(retry_ms + 999, 1000)}s.", else: ""
 
     fallback =
-      if RequestContext.transaction_policy(ctx).public_fallback, do: "enabled", else: "disabled"
+      if RequestContext.transaction_policy(ctx).fallback == "read_providers",
+        do: "enabled",
+        else: "disabled"
 
-    "No transaction relay available on chain #{ctx.chain_id}: all #{length(RequestContext.transaction_policy(ctx).relays)} configured relays are unavailable and public fallback is #{fallback}." <>
+    "No transaction provider available on chain #{ctx.chain_id}: all #{length(RequestContext.transaction_policy(ctx).providers)} configured transaction providers are unavailable and read-provider fallback is #{fallback}." <>
       retry
   end
 
@@ -472,10 +525,10 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp pin_error_message(ctx, provider_id, chain_id, profile) do
     case pin_error_data(ctx, provider_id, chain_id, profile) do
-      %{reason: "pin_outside_relays"} ->
-        "Provider '#{provider_id}' is not a transaction relay on chain #{chain_id}"
+      %{reason: "pin_outside_transaction_providers"} ->
+        "Provider '#{provider_id}' is not a transaction provider on chain #{chain_id}"
 
-      %{reason: "relay_send_only"} ->
+      %{reason: "transaction_provider_send_only"} ->
         "Provider '#{provider_id}' serves transaction sends only on chain #{chain_id}"
 
       _ ->
@@ -491,11 +544,11 @@ defmodule Lasso.RPC.RequestPipeline do
         if Enum.any?(providers, &(&1.id == provider_id)) do
           if ctx.execution_envelope.execution_safety == :raw_transaction_broadcast do
             Map.merge(data, %{
-              reason: "pin_outside_relays",
+              reason: "pin_outside_transaction_providers",
               send_policy: RequestContext.send_policy_metadata(ctx)
             })
           else
-            Map.put(data, :reason, "relay_send_only")
+            Map.put(data, :reason, "transaction_provider_send_only")
           end
         else
           data
@@ -1307,6 +1360,11 @@ defmodule Lasso.RPC.RequestPipeline do
           caller_guard_options(caller_guard)
         )
       end)
+
+    ctx =
+      if policy_dispatched_error(ctx) && not authoritative_not_dispatched?(outcome.fact),
+        do: retire_last_error(ctx, :retry_dispatched),
+        else: ctx
 
     outcome = policy_send_outcome(outcome, ctx)
     {decision, ctx} = qualify_response(outcome, ctx)
@@ -2390,10 +2448,10 @@ defmodule Lasso.RPC.RequestPipeline do
          guard
        )
        when not is_nil(policy) do
-    if policy.public_fallback and ctx.send_phase == :relays and
+    if policy.fallback == "read_providers" and ctx.send_phase == :providers and
          ExecutionEnvelope.remaining_ms(ctx.execution_envelope) > 0 and
          ctx.execution_envelope.dispatch_count < ctx.execution_envelope.dispatch_limit do
-      ctx = %{ctx | send_phase: :public}
+      ctx = %{ctx | send_phase: :fallback}
       execute_pipeline(build_channel_source(ctx.opts), ctx, guard)
     else
       finalize_profile_exhaustion(ctx, error)
@@ -2417,7 +2475,7 @@ defmodule Lasso.RPC.RequestPipeline do
        )
        when not is_nil(policy),
        do:
-         policy.public_fallback and ctx.send_phase == :relays and
+         policy.fallback == "read_providers" and ctx.send_phase == :providers and
            ctx.execution_envelope.dispatch_count < ctx.execution_envelope.dispatch_limit
 
   defp fallback_profile_available?(_ctx), do: false
@@ -2429,12 +2487,22 @@ defmodule Lasso.RPC.RequestPipeline do
       if ctx.execution_envelope.dispatch_count >= ctx.execution_envelope.dispatch_limit and
            ctx.execution_envelope.execution_safety == :replay_safe,
          do: elem(exhaustion_error(ctx), 1),
-         else: ctx.log_range_error || terminal_error
+         else: ctx.log_range_error || policy_dispatched_error(ctx) || terminal_error
 
     {terminal_error, ctx} = method_not_found_terminal(terminal_error, ctx)
 
     finalize_error(terminal_error, ctx)
   end
+
+  defp policy_dispatched_error(%{
+         routing_capture: {:ok, _, %{transactions: policy}},
+         execution_envelope: %{execution_safety: :raw_transaction_broadcast},
+         last_attempt_error: %JError{} = error
+       })
+       when not is_nil(policy),
+       do: error
+
+  defp policy_dispatched_error(_ctx), do: nil
 
   # The caller learns the method is unsupported only when every upstream the request reached
   # said so and the context still holds the latest rejection whole. That rejection is then
@@ -2470,6 +2538,17 @@ defmodule Lasso.RPC.RequestPipeline do
        do: Enum.any?(attempts, &(&1.category != :method_not_found))
 
   defp mixed_method_not_found?(_ctx, _reason), do: false
+
+  defp retire_last_error(
+         %{
+           routing_capture: {:ok, _, %{transactions: policy}},
+           execution_envelope: %{execution_safety: :raw_transaction_broadcast},
+           last_attempt_error: %JError{}
+         } = ctx,
+         :retry_started
+       )
+       when not is_nil(policy),
+       do: ctx
 
   defp retire_last_error(%{last_attempt_error: %JError{} = error} = ctx, reason) do
     retired =

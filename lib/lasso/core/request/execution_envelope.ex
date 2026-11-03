@@ -89,7 +89,19 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   end
 
   @spec classify(String.t()) :: execution_safety()
-  def classify("eth_sendRawTransaction"), do: :raw_transaction_broadcast
+  def classify(method)
+      when method in [
+             "eth_sendRawTransaction",
+             "eth_sendRawTransactionConditional",
+             "eth_sendRawTransactionSync",
+             "eth_sendPrivateRawTransaction",
+             "eth_sendPrivateTransaction",
+             "eth_cancelPrivateTransaction",
+             "eth_sendBundle",
+             "eth_cancelBundle",
+             "mev_sendBundle"
+           ],
+      do: :raw_transaction_broadcast
 
   def classify(method)
       when method in [
@@ -219,6 +231,14 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   defp dispatch_limit(:replay_safe), do: @max_replay_safe_dispatches
   defp dispatch_limit(:raw_transaction_broadcast), do: 1
   defp dispatch_limit(_safety), do: 1
+
+  defp attempt_timeout_ms(
+         %__MODULE__{execution_safety: :raw_transaction_broadcast, dispatch_limit: limit},
+         remaining_ms,
+         _fallback_available?
+       )
+       when limit > 1,
+       do: max(@minimum_attempt_ms, div(remaining_ms * 60, 100))
 
   defp attempt_timeout_ms(
          %__MODULE__{execution_safety: :replay_safe, dispatch_count: 1},

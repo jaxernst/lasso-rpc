@@ -42,11 +42,11 @@ defmodule Lasso.RPC.RoutingPlan do
 
   def for_request(plan, {class, phase}) do
     send? = class == :raw_transaction_broadcast
-    relays? = send? and phase == :relays
+    transaction_providers? = send? and phase == :providers
 
     providers =
       Enum.filter(plan.providers, fn provider ->
-        provider.id in plan.transactions.relays == relays?
+        provider.id in plan.transactions.providers == transaction_providers?
       end)
 
     %{
@@ -57,5 +57,5 @@ defmodule Lasso.RPC.RoutingPlan do
     }
   end
 
-  def for_request(plan, class), do: for_request(plan, {class, :relays})
+  def for_request(plan, class), do: for_request(plan, {class, :providers})
 end

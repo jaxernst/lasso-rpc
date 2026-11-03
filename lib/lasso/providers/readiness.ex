@@ -10,7 +10,7 @@ defmodule Lasso.Providers.Readiness do
   """
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
-  alias Lasso.RPC.{ChainState, SelectionFilters}
+  alias Lasso.RPC.{ChainState, RoutingPlan, SelectionFilters}
 
   @doc "Reports whether this replica has loaded configuration, published its catalog, and joined a configured cluster."
   @spec check_node() :: map()
@@ -50,6 +50,7 @@ defmodule Lasso.Providers.Readiness do
       case Catalog.get_routing_plan(catalog, profile, chain_id) do
         {:ok, plan} ->
           plan
+          |> RoutingPlan.for_request(:replay_safe)
           |> CandidateListing.list_routing_candidates_from_plan(
             SelectionFilters.new(
               protocol: :http,
