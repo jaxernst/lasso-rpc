@@ -275,8 +275,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   def pending?(%__MODULE__{} = cursor) do
     cursor.preferred != [] or cursor.descriptors != [] or cursor.deferred_ranking != nil or
       deferred_pending?(cursor.supported_deferred) or
-      deferred_pending?(cursor.unsupported_deferred) or
-      (not cursor.dispatched? and not is_nil(cursor.excluded_fallback))
+      deferred_pending?(cursor.unsupported_deferred)
   end
 
   @doc "Explains static exclusions from the captured selection plan without probing providers."
