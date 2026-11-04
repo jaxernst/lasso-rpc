@@ -4,42 +4,56 @@ This page describes the self-hosted **v0.7.0** runtime. Lasso Cloud has a separa
 [compatibility contract](https://docs.lasso.sh/cloud/json-rpc-compatibility).
 Do not infer parity from a shared method name or product version.
 
-## Reads and execution safety
+## Execution classes
 
-Common Ethereum reads such as `eth_blockNumber`, `eth_getBalance`, `eth_call`,
-`eth_getTransactionReceipt`, and `eth_getLogs` are routable, subject to provider
-capability, transport availability, history, and request parameters. A routable
-method is not a guarantee that every provider supports it.
+Lasso decides how a request may run from what its method does, not from which
+provider serves it. The registry classifies methods; it does not certify that a
+provider implements them.
 
-Methods classified as replay-safe by the released `ExecutionEnvelope` can use
-bounded further attempts within the original deadline. Unknown methods receive
-one upstream dispatch. Provider error classification does not override execution
-safety. The registry classifies methods; it does not certify upstream semantics
-or full compliance with every Ethereum specification.
+- **Reads** (`replay_safe`), such as `eth_call`, `eth_getBalance` and
+  `eth_getLogs`, have no side effects. A failed or refused read can move to
+  another provider within the request deadline. When every provider it reached
+  answered `-32601`, the caller receives that upstream error; otherwise the
+  request's other failure is returned.
+- **Sends** (`raw_transaction_broadcast`) submit a signed transaction or act on a
+  submission: `eth_sendRawTransaction`, `eth_sendRawTransactionSync`,
+  `eth_sendRawTransactionConditional`, `eth_sendPrivateRawTransaction`,
+  `eth_sendPrivateTransaction`, `eth_cancelPrivateTransaction`,
+  `eth_sendBundle`, `eth_cancelBundle` and `mev_sendBundle`. Simulations of
+  signed transactions (`eth_callBundle`, `mev_simBundle`,
+  `trace_rawTransaction`) are sends too, so the bytes stay with the same
+  providers. See [transaction sends](#transaction-sends).
+- **Subscriptions** (`subscription`): see [WebSocket subscriptions](#websocket-subscriptions).
+- **Other methods** (`unknown`) run once on a read provider and are not retried;
+  a timeout is reported as indeterminate. A `-32601` is the answer, and Lasso
+  learns the refusal so later requests start elsewhere
+  ([learned provider limits](ROUTING.md#learned-provider-limits)). When the
+  params carry a signed transaction, the method is a send instead: it runs once,
+  on a transaction provider when the chain declares them, and an ambiguous
+  outcome returns the [indeterminate error](API_REFERENCE.md#transaction-send-errors-and-metadata).
 
-A replay-safe read that receives `-32601` from one upstream continues to another
-within its bounded attempts, and the rejected attempt consumes one of them.
-Unknown methods and `eth_sendRawTransaction` without a transaction policy keep their single dispatch, so that
-upstream's `-32601` is the answer. When a request ends unsuccessfully and every
-upstream it reached rejected the method, Lasso returns that rejection with the
-upstream's message and data instead of `-32000`. The request retains only the
-latest rejection whole, so when a later candidate fails before dispatch the
-caller receives the availability error instead. A later success or terminal
-upstream error is returned as before. When the request ends unsuccessfully after
-a rejection mixed with another outcome, the rejection is not the answer. The
-caller receives the other outcome's error or the availability error, in either
-order, depending on how the exhausted request ends. Lasso keeps no record that a
-provider lacks a method beyond the request that observed it.
+Responses with `include_meta` report the class and how it was chosen; see
+[observability metadata](API_REFERENCE.md#observability-metadata).
 
-## Signed transaction submission
+## Transaction sends
 
-`eth_sendRawTransaction` without a transaction policy receives one upstream dispatch
-and is not retried after dispatch. With a policy, sends receive at most three
-sequential, identical-byte dispatches within the original deadline. Sends stay
-inside the configured relay set unless public fallback is enabled. Terminal
-failures can trigger hash confirmation inside that relay set. A lost response may mean the upstream accepted the
-transaction. Clients remain responsible for signing, nonce management,
-replacement, transaction-hash reconciliation, receipts, and finality.
+Without a chain [`transactions`](CONFIGURATION.md#transaction-providers) block, a
+send runs once and is not retried after dispatch. With one, sends go only to the
+listed providers, one at a time, and the same bytes may be resent to another of
+them within the request deadline ([routing](ROUTING.md#transaction-providers)).
+A null send result stays null.
+
+Under a policy, after a failed `eth_sendRawTransaction` Lasso looks up its hash
+among the providers of the phase that sent it before returning the error. Without a
+policy, and for other send methods, the upstream result is returned without a
+lookup. A lost response may still mean the transaction was accepted. Clients
+own signing, nonces, replacement, receipts and finality. Errors and metadata are
+in the [API reference](API_REFERENCE.md#transaction-send-errors-and-metadata).
+
+While a transaction is private, ordinary providers return null for it and their
+pending nonce excludes it until inclusion, so manage nonces client-side. Lasso
+does not forward caller headers such as `X-Flashbots-Signature`; methods that
+need a sender signature header are not supported yet.
 
 ## Node-local methods
 
@@ -105,32 +119,3 @@ Profile tester settings do not create API quotas or upstream quota isolation.
 The authoritative implementation is `TransportPolicy`, `ExecutionEnvelope`,
 `Capabilities`, `RPCController`, and `RPCSocket.ItemOwner` at the selected release.
 See [API reference](API_REFERENCE.md) for routes and metadata.
-
-## Transaction send policies
-
-A chain `transactions` block applies to the `raw_transaction_broadcast` execution class, `eth_sendRawTransaction` and the relay-native send family. Reads and subscriptions exclude relay providers. Invalid send/read pins return `-32602` before dispatch (`pin_outside_transaction_providers` or `transaction_provider_send_only`).
-
-Relays can reject read methods and report stale heads; sends therefore have no head-lag gate. A null send result remains null and does not imply hash acceptance. Transaction hash confirmation stays within the captured terminal send phase, including when a relay rejects that lookup.
-
-When no send dispatch occurs under a policy, exhaustion returns `-32000` with `reason: transaction_providers_unavailable`, `error_type: transaction_provider_unavailable`, retry guidance and policy metadata. After dispatched sends fail and hash confirmation finds nothing, the last upstream error is retained with `send_policy` added and `phase` naming its phase. No synthetic exhaustion reason replaces that upstream error.
-
-Private sends establish no read affinity. While a transaction remains private,
-ordinary providers return null for its transaction and receipt, and their pending
-nonce excludes that transaction until inclusion. Clients manage their own nonces;
-Lasso maintains no private pending overlay.
-
-Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
-Methods requiring a sender signature header are not supported through Lasso yet.
-Configured provider headers are separate from per-request sender signatures.
-Relay-native send methods stay inside the transaction provider set, but routing
-them there does not remove an upstream signature-header requirement. Only
-`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
-return their upstream result without a hash lookup.
-
-The transaction send class includes `eth_sendRawTransaction`,
-`eth_sendPrivateRawTransaction`, `eth_sendPrivateTransaction`,
-`eth_cancelPrivateTransaction`, `eth_sendBundle`, `eth_cancelBundle`,
-`mev_sendBundle`, `eth_sendRawTransactionConditional` and
-`eth_sendRawTransactionSync`.
-Transaction providers are selected one at a time; fallback and any resend remain
-sequential within the original request budget.

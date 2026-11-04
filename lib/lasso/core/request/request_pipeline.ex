@@ -514,9 +514,10 @@ defmodule Lasso.RPC.RequestPipeline do
     envelope = ctx.execution_envelope
 
     envelope =
-      if Selection.policy(capture) && envelope.execution_safety == :raw_transaction_broadcast,
-        do: %{envelope | dispatch_limit: 3},
-        else: envelope
+      if Selection.policy(capture) && envelope.execution_safety == :raw_transaction_broadcast &&
+           envelope.classified_by == :registry,
+         do: %{envelope | dispatch_limit: 3},
+         else: envelope
 
     %{ctx | routing_capture: capture, execution_envelope: envelope}
   end
@@ -909,6 +910,29 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
+    if is_list(rest) and rest != [] and is_nil(ctx.opts.provider_override) and
+         learned_method_refused?(ctx, channel) do
+      Lasso.RPC.ProviderKnowledge.AppliedEffects.record_exclusion(channel.profile, %{
+        route: {channel.instance_id, channel.transport},
+        kind: :method_refusal,
+        dimension: Lasso.RPC.BoundedIdentifier.encode(ctx.method)
+      })
+
+      attempt_channels(rest, ctx, param_rejected, caller_guard)
+    else
+      admit_channel(channel, rest, ctx, param_rejected, caller_guard)
+    end
+  end
+
+  defp learned_method_refused?(ctx, channel) do
+    Lasso.RPC.ProviderKnowledge.Effects.method_refusal(
+      channel,
+      ctx.method,
+      Workload.for_request(ctx.opts.request_origin, ctx.method)
+    ) != nil
+  end
+
+  defp admit_channel(channel, rest, ctx, param_rejected, caller_guard) do
     case ExecutionEnvelope.admit_candidate(ctx.execution_envelope) do
       {:ok, envelope} ->
         ctx = %{ctx | execution_envelope: envelope}
@@ -1591,6 +1615,7 @@ defmodule Lasso.RPC.RequestPipeline do
       circuit_scope: :broad,
       circuit_epoch: receipt.epoch,
       execution_safety: envelope.execution_safety,
+      classified_by: envelope.classified_by,
       attempt_kind:
         if(Exploration.matches?(ctx.exploration_token, channel),
           do: :exploration,
@@ -1637,7 +1662,8 @@ defmodule Lasso.RPC.RequestPipeline do
          %{projection: %{recommended_action: :finish_unsafe_indeterminate}} = outcome,
          ctx
        ) do
-    if RequestContext.transaction_policy(ctx) do
+    if not is_nil(RequestContext.transaction_policy(ctx)) and
+         ctx.execution_envelope.classified_by == :registry do
       %{
         outcome
         | projection: %{
@@ -1664,12 +1690,71 @@ defmodule Lasso.RPC.RequestPipeline do
   defp qualify_response(_outcome, ctx), do: {{:continue, nil}, ctx}
 
   defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision) do
+    rest_channels =
+      if match?(%CandidateCursor{}, rest_channels) and
+           fact_certainty(outcome.fact) != :not_dispatched,
+         do: CandidateCursor.attempted_provider(rest_channels, channel),
+         else: rest_channels
+
     head =
       if MissingBlock.candidate?(ctx, outcome),
         do: MissingBlock.capture(ctx, channel, rest_channels)
 
     ctx = MissingBlock.observe(ctx, channel, outcome, head)
     do_handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision, head)
+  end
+
+  # A send that may not run again ends indeterminate once its attempt may have
+  # reached the upstream: a sync send that timed out, or any ambiguous failure of
+  # a send classified only by its signed bytes.
+  defp do_handle_owner_outcome(
+         %{fact: fact} = outcome,
+         channel,
+         _rest,
+         ctx,
+         _guard,
+         _decision,
+         _head
+       )
+       when (ctx.execution_envelope.classified_by == :signed_bytes and
+               (is_struct(fact, AttemptTerminal.InvalidResponse) or
+                  (is_struct(fact, AttemptTerminal.Response) and
+                     fact.kind == :application_error and fact.error_category == :ambiguous) or
+                  ((is_struct(fact, AttemptTerminal.Deadline) or
+                      is_struct(fact, AttemptTerminal.TransportFailure)) and
+                     fact.dispatch_certainty != :not_dispatched))) or
+              (ctx.method == "eth_sendRawTransactionSync" and
+                 (is_struct(fact, AttemptTerminal.Deadline) or
+                    (is_struct(fact, AttemptTerminal.TransportFailure) and fact.reason == :timeout)) and
+                 fact.dispatch_certainty != :not_dispatched) do
+    error =
+      JError.new(-32_000, "Upstream dispatch outcome is indeterminate",
+        provider_id: channel.provider_id,
+        data:
+          case owner_error(outcome) do
+            {%JError{} = upstream, _} -> %{upstream_message: JError.summary(upstream).message}
+            _ -> nil
+          end,
+        category: :indeterminate_dispatch,
+        retriable?: false,
+        breaker_penalty?: false
+      )
+
+    handle_owner_terminal(outcome, channel, ctx, error)
+  end
+
+  defp do_handle_owner_outcome(
+         %{fact: %AttemptTerminal.Response{kind: :application_error, error_code: -32_601}} =
+           outcome,
+         channel,
+         _rest,
+         %{execution_envelope: %{classified_by: source}} = ctx,
+         caller_guard,
+         _decision,
+         _head
+       )
+       when source == :default do
+    handle_owner_terminal(outcome, channel, ctx, nil, caller_guard)
   end
 
   defp do_handle_owner_outcome(
@@ -2890,6 +2975,7 @@ defmodule Lasso.RPC.RequestPipeline do
       subject_token: nil,
       chain_id: ctx.chain_id,
       execution_safety: envelope.execution_safety,
+      classified_by: envelope.classified_by,
       routing_intent: Atom.to_string(ctx.opts.strategy),
       workload_key: request_workload_key(ctx),
       elapsed_us: request_elapsed_us(envelope),

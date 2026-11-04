@@ -16,6 +16,223 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     :ok
   end
 
+  test "a learned final route recovers after an earlier selection is rejected before dispatch" do
+    primary = Fleet.start!(self(), "parameter-limited")
+    backup = Fleet.start!(self(), "refused-recovery")
+    fleets = [primary, backup]
+
+    tenant =
+      Tenant.open!(fleets, providers: %{primary.name => %{"limits" => %{"logs_span" => 1}}})
+
+    method = "eth_getLogs"
+    params = [%{"fromBlock" => "0x1", "toBlock" => "0x5"}]
+
+    try do
+      Fleet.script(backup, method, [], {:error, -32601, "method not found"})
+      pinned = %{rpc_url: tenant.rpc_url <> "?provider=" <> backup.name}
+
+      for _ <- 1..4 do
+        assert Rpc.call(pinned, method, [%{"fromBlock" => "latest", "toBlock" => "latest"}]).body[
+                 "error"
+               ]["code"] == -32601
+
+        Settle.await("refusal feedback applied", fn ->
+          case Lasso.Core.ProjectionDispatcher.stats(
+                 Lasso.ExecutionProjectionDispatcher,
+                 :learned_feedback
+               ) do
+            %{retained_items: 0} -> {:ok, :drained}
+            stats -> stats
+          end
+        end)
+      end
+
+      Settle.await("backup refusal learned", fn ->
+        if Enum.any?(Tenant.knowledge!(tenant, backup), &(&1["kind"] == "method_refusal")),
+          do: {:ok, :learned},
+          else: :pending
+      end)
+
+      Fleet.script(backup, method, [], {:answer, []})
+
+      {response, sends} =
+        Settle.closed(fn -> Rpc.call(tenant, method, params) end, fleets, %{
+          method: method,
+          params: params
+        })
+
+      assert response.body["result"] == []
+      assert [%{fleet: name}] = sends
+      assert name == backup.name
+    after
+      Tenant.close!(tenant)
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  test "a sole refused upstream recovers automatically after it is fixed" do
+    provider = Fleet.start!(self(), "sole-method-recovery")
+    tenant = Tenant.open!([provider])
+    method = "vendor_recovered_method"
+
+    try do
+      Fleet.script(provider, method, [], {:error, -32601, "method not found"})
+      assert Rpc.call(tenant, method, []).body["error"]["code"] == -32601
+
+      Settle.await("sole method refusal learned", fn ->
+        if Enum.any?(Tenant.knowledge!(tenant, provider), &(&1["kind"] == "method_refusal")),
+          do: {:ok, :learned},
+          else: :pending
+      end)
+
+      Fleet.script(provider, method, [], {:answer, "recovered"})
+      before = cursors([provider])
+      assert Rpc.call(tenant, method, []).body["result"] == "recovered"
+      assert names(ledger([provider], before, method)) == [provider.name]
+    after
+      Tenant.close!(tenant)
+      Fleet.stop(provider)
+    end
+  end
+
+  test "all signed envelope types are found in nested params without accepting wrong arities" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider))
+
+      for {method, params, expected} <- [
+            {"vendor_legacy",
+             ["0xdf800182520894111111111111111111111111111111111111111180801b0101"],
+             provider.name},
+            {"vendor_type_1",
+             ["0x01e10180018252089411111111111111111111111111111111111111118080c0800101"],
+             provider.name},
+            {"vendor_type_2",
+             ["0x02e2018001028252089411111111111111111111111111111111111111118080c0800101"],
+             provider.name},
+            {"vendor_type_3",
+             [
+               "0x03f845018001028252089411111111111111111111111111111111111111118080c001e1a00122222222222222222222222222222222222222222222222222222222222222800101"
+             ], provider.name},
+            {"vendor_type_4",
+             [
+               "0x04f83e018001028252089411111111111111111111111111111111111111118080c0dbda0194111111111111111111111111111111111111111180800101800101"
+             ], provider.name},
+            {"vendor_type_5",
+             [
+               "0x03f84af845018001028252089411111111111111111111111111111111111111118080c001e1a00122222222222222222222222222222222222222222222222222222222222222800101c0c0c0"
+             ], provider.name},
+            {"vendor_type_6",
+             [
+               "0x03f84bf845018001028252089411111111111111111111111111111111111111118080c001e1a0012222222222222222222222222222222222222222222222222222222222222280010101c0c0c0"
+             ], provider.name},
+            {"vendor_deep_send",
+             [
+               %{
+                 "body" => [
+                   %{
+                     "tx" =>
+                       "0x02e2018001028252089411111111111111111111111111111111111111118080c0800101"
+                   }
+                 ]
+               }
+             ], provider.name},
+            {"vendor_empty_typed", ["0x02c0"], public.name},
+            {"vendor_wrong_arity_1",
+             ["0x01e00180018252089411111111111111111111111111111111111111118080c08001"],
+             public.name},
+            {"vendor_wrong_arity_2",
+             ["0x02e1018001028252089411111111111111111111111111111111111111118080c08001"],
+             public.name},
+            {"vendor_wrong_arity_3",
+             [
+               "0x03f844018001028252089411111111111111111111111111111111111111118080c001e1a001222222222222222222222222222222222222222222222222222222222222228001"
+             ], public.name},
+            {"vendor_wrong_arity_4",
+             [
+               "0x04f83d018001028252089411111111111111111111111111111111111111118080c0dbda01941111111111111111111111111111111111111111808001018001"
+             ], public.name},
+            {"vendor_wrong_legacy",
+             ["0xde800182520894111111111111111111111111111111111111111180801b01"], public.name},
+            {"vendor_wrong_blob_wrapper",
+             [
+               "0x03f849f844018001028252089411111111111111111111111111111111111111118080c001e1a001222222222222222222222222222222222222222222222222222222222222228001c0c0c0"
+             ], public.name},
+            {"vendor_deep_rlp",
+             [
+               "0x02eb018001028252089411111111111111111111111111111111111111118080c9c8c7c6c5c4c3c2c1c0800101"
+             ], public.name}
+          ] do
+        Fleet.script(public, method, [], {:answer, "read"})
+        Fleet.script(provider, method, [], {:answer, "send"})
+        before = cursors(fleets)
+        response = Rpc.call(%{rpc_url: tenant.rpc_url <> "?include_meta=body"}, method, params)
+        assert response.body["result"] in ["read", "send"]
+        assert names(ledger(fleets, before, method)) == [expected]
+
+        assert response.body["lasso_meta"]["classified_by"] ==
+                 if(expected == provider.name, do: "signed_bytes", else: "default")
+      end
+    end)
+  end
+
+  test "signed envelope methods stay in the transaction set and ambiguous responses end indeterminate" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider, true))
+      params = ["0x02e2018001028252089411111111111111111111111111111111111111118080c0800101"]
+
+      for {failure, index} <-
+            Enum.with_index([
+              {:error, -32000, "ambiguous application failure"},
+              {:error, -32000, String.duplicate("ambiguous λ ", 10_000)},
+              {:status, 200, [], "invalid json"},
+              {:disconnect, 1011}
+            ]) do
+        method = "vendor_submission_#{index}"
+        Fleet.script(public, method, [], {:answer, "unexpected"})
+        Fleet.script(provider, method, [], failure)
+        before = cursors(fleets)
+        response = Rpc.call(tenant, method, params)
+        assert response.body["error"]["code"] == -32000
+        assert response.body["error"]["message"] == "Upstream dispatch outcome is indeterminate"
+
+        if match?({:error, -32000, _}, failure) do
+          {:error, -32000, message} = failure
+          diagnostic = response.body["error"]["data"]["upstream_message"]
+          assert byte_size(diagnostic) in 1..1_000
+          assert String.starts_with?(message, diagnostic)
+          assert String.valid?(diagnostic)
+          if byte_size(message) <= 1_000, do: assert(diagnostic == message)
+        end
+
+        assert names(ledger(fleets, before, method)) == [provider.name]
+        assert Rpc.call(tenant, "eth_getBalance", @balance).body["result"] == "0x10"
+      end
+    end)
+  end
+
+  test "signed envelope refusals retain the single dispatch limit under a policy" do
+    journey(fn tenant, [public, provider] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(provider, true))
+
+      for {failure, code, method} <- [
+            {{:error, -32601, "method not found"}, -32601, "vendor_refusal"},
+            {{:status, 429, [], "Too Many Requests"}, -32005, "vendor_quota"}
+          ] do
+        Fleet.script(public, method, [], {:answer, "unexpected"})
+        Fleet.script(provider, method, [], failure)
+        before = cursors(fleets)
+
+        response =
+          Rpc.call(tenant, method, [
+            "0x02e2018001028252089411111111111111111111111111111111111111118080c0800101"
+          ])
+
+        assert response.body["error"]["code"] == code
+        assert names(ledger(fleets, before, method)) == [provider.name]
+      end
+    end)
+  end
+
   test "plain-text native-send throttling preserves shared read routes" do
     journey(fn tenant, [_public, provider] = fleets ->
       Tenant.replace!(tenant, fleets, chain: policy(provider))

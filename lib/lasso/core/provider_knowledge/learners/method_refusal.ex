@@ -230,8 +230,11 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.MethodRefusal do
 
     rate = if denominator > 0, do: refusals / denominator, else: 0.0
 
+    {minimum_samples, minimum_requests} = if method in @methods, do: {3, 2}, else: {1, 1}
+
     if is_integer(state.observed_at_ms) and now_ms < state.observed_at_ms + @half_life_ms and
-         rate >= 0.8 and length(refusal_samples) >= 3 and distinct_requests >= 2 do
+         rate >= 0.8 and length(refusal_samples) >= minimum_samples and
+         distinct_requests >= minimum_requests do
       [
         %{
           kind: :method_refusal,

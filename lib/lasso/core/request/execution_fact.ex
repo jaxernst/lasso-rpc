@@ -14,11 +14,6 @@ defmodule Lasso.RPC.ExecutionFact do
   @execution_safeties [
     :replay_safe,
     :raw_transaction_broadcast,
-    :upstream_signed,
-    :filter_create,
-    :filter_affine_read,
-    :filter_affine_consume,
-    :filter_affine_uninstall,
     :subscription,
     :unknown
   ]
@@ -105,7 +100,7 @@ defmodule Lasso.RPC.AttemptIdentity do
     :candidate_admission_count,
     :dispatch_count
   ]
-  defstruct @enforce_keys ++ [:subject_token, attempt_kind: :ordinary]
+  defstruct @enforce_keys ++ [:subject_token, classified_by: :default, attempt_kind: :ordinary]
 
   @type t :: %__MODULE__{
           request_id: binary(),
@@ -119,6 +114,7 @@ defmodule Lasso.RPC.AttemptIdentity do
           circuit_scope: :broad | :intent,
           circuit_epoch: non_neg_integer(),
           execution_safety: atom(),
+          classified_by: :registry | :signed_bytes | :default,
           attempt_kind: :ordinary | :exploration,
           routing_intent: binary(),
           workload_key: binary(),
@@ -154,7 +150,11 @@ defmodule Lasso.RPC.AttemptIdentity do
           dispatch_count: _
         } = attrs
       )
-      when map_size(attrs) == 16 or (map_size(attrs) == 17 and is_map_key(attrs, :attempt_kind)),
+      when map_size(attrs) == 16 or
+             (map_size(attrs) == 17 and
+                (is_map_key(attrs, :attempt_kind) or is_map_key(attrs, :classified_by))) or
+             (map_size(attrs) == 18 and is_map_key(attrs, :attempt_kind) and
+                is_map_key(attrs, :classified_by)),
       do: normalize(attrs)
 
   def new_runtime(_attrs), do: raise(ArgumentError, "invalid attempt identity attributes")
@@ -174,6 +174,12 @@ defmodule Lasso.RPC.AttemptIdentity do
         ExecutionFact.member!(identity.circuit_scope, :circuit_scope, @circuit_scopes),
       circuit_epoch: ExecutionFact.non_negative!(identity.circuit_epoch, :circuit_epoch),
       execution_safety: ExecutionFact.execution_safety!(identity.execution_safety),
+      classified_by:
+        ExecutionFact.member!(Map.get(identity, :classified_by, :default), :classified_by, [
+          :registry,
+          :signed_bytes,
+          :default
+        ]),
       attempt_kind:
         ExecutionFact.member!(Map.get(identity, :attempt_kind, :ordinary), :attempt_kind, [
           :ordinary,

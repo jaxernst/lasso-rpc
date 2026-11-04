@@ -26,7 +26,7 @@ defmodule Lasso.Config.TransportPolicy do
     "eth_uninstallFilter"
   ]
 
-  @signing_and_keystore_methods ["personal_sign"]
+  @signing_and_keystore_methods ["personal_sign", "personal_sendTransaction"]
 
   @product_restricted_methods Enum.uniq(
                                 MethodRegistry.category_methods(:local_only) ++

@@ -8,6 +8,17 @@ defmodule Lasso.RPC.MethodRegistry do
   explicit capability evidence.
   """
 
+  @send_methods ~w(eth_sendRawTransaction eth_sendRawTransactionSync
+    eth_sendRawTransactionConditional eth_sendPrivateRawTransaction
+    eth_sendPrivateTransaction eth_cancelPrivateTransaction eth_sendBundle
+    mev_sendBundle eth_cancelBundle eth_callBundle mev_simBundle trace_rawTransaction)
+
+  # A probe cannot submit a real transaction, so a rejection says nothing about
+  # support for one; discovery reports these instead of dispatching them.
+  # Simulations stay probeable because their probe submits nothing.
+  @unverifiable_methods (@send_methods -- ~w(eth_callBundle mev_simBundle trace_rawTransaction)) ++
+                          ["eth_sendTransaction"]
+
   @standard_methods %{
     # Common application reads
     core: [
@@ -179,44 +190,165 @@ defmodule Lasso.RPC.MethodRegistry do
   @spec method_category(String.t()) :: atom()
   def method_category(method), do: Map.get(@method_categories, method, :unknown)
 
-  # Methods whose support cannot be established without a side effect on chain.
-  # A probe can only send a deliberately invalid payload, and the resulting
-  # rejection says nothing about whether the method works for a real
-  # transaction. Probing these produces a permanently inconclusive result, so
-  # they are reported as unverifiable instead of being dispatched.
-  @unverifiable_methods ~w(eth_sendRawTransaction eth_sendTransaction)
-
-  @doc """
-  Whether a method's support can be established by probing.
-
-  `false` means any probe result would be meaningless, not that the method is
-  unsupported.
-  """
+  @doc "Methods whose payload or service state requires transaction routing."
+  @spec send_methods() :: [String.t()]
+  def send_methods, do: @send_methods
+  @doc "Whether a method's support can be established by probing."
   @spec unverifiable?(String.t()) :: boolean()
-  def unverifiable?(method) when is_binary(method), do: method in @unverifiable_methods
-
-  @doc "Methods that cannot be verified by probing."
+  def unverifiable?(method), do: method in @unverifiable_methods
   @spec unverifiable_methods() :: [String.t()]
   def unverifiable_methods, do: @unverifiable_methods
 
-  @doc """
-  Returns default support assumption for unknown methods.
+  @doc "Classify effects independently of provider support."
+  @spec classify(String.t(), term()) ::
+          {Lasso.RPC.ExecutionEnvelope.execution_safety(), :registry | :signed_bytes | :default}
+  def classify(method, params \\ []) do
+    cond do
+      method in @send_methods ->
+        {:raw_transaction_broadcast, :registry}
 
-  Conservative assumptions:
-  - Standard methods (core, state, network): Assume supported
-  - Experimental/new methods (eip4844): Assume unsupported
-  - Archive methods (debug, trace): Assume unsupported
-  - Deprecated methods: Assume unsupported
-  """
-  @spec default_support_assumption(String.t()) :: boolean()
-  def default_support_assumption(method) do
-    case method_category(method) do
-      cat when cat in [:core, :state, :network, :eip1559, :mempool] -> true
-      cat when cat in [:extended_reads, :debug, :trace, :local_only, :txpool] -> false
-      # New, conservative
-      :eip4844 -> false
-      # Conservative for unknown
-      :unknown -> false
+      method_category(method) == :subscriptions ->
+        {:subscription, :registry}
+
+      method == "eth_getLogs" ->
+        {:replay_safe, :registry}
+
+      method_category(method) not in [:unknown, :filters, :local_only] ->
+        {:replay_safe, :registry}
+
+      method_category(method) == :unknown and signed_bytes?([params]) ->
+        {:raw_transaction_broadcast, :signed_bytes}
+
+      true ->
+        {:unknown, :default}
+    end
+  end
+
+  # Tail-recursive work list visits every decoded value once, regardless of
+  # parameter nesting. The request body limit already bounds the input.
+  defp signed_bytes?([]), do: false
+  defp signed_bytes?([[] | pending]), do: signed_bytes?(pending)
+
+  defp signed_bytes?([[value | rest] | pending]),
+    do: signed_bytes?([value, rest | pending])
+
+  defp signed_bytes?([value | pending]) when is_map(value),
+    do: signed_bytes?([Map.values(value) | pending])
+
+  defp signed_bytes?([value | pending]) when is_binary(value),
+    do: signed_envelope?(value) or signed_bytes?(pending)
+
+  defp signed_bytes?([_ | pending]), do: signed_bytes?(pending)
+
+  defp signed_envelope?(value) do
+    hex =
+      case value do
+        "0x" <> hex -> hex
+        hex -> hex
+      end
+
+    case Base.decode16(hex, case: :mixed) do
+      {:ok, <<1, rest::binary>>} -> complete_list?(rest, 11)
+      {:ok, <<2, rest::binary>>} -> complete_list?(rest, 12)
+      {:ok, <<3, rest::binary>>} -> complete_list?(rest, 14) or blob_wrapper?(rest)
+      {:ok, <<4, rest::binary>>} -> complete_list?(rest, 13)
+      {:ok, bytes} -> complete_list?(bytes, 9)
+      :error -> false
+    end
+  end
+
+  # Blob gossip carries the signed payload plus sidecar lists. PeerDAS adds
+  # wrapper version 1 before those lists (EIP-4844 and EIP-7594).
+  defp blob_wrapper?(bytes) do
+    with {:list, payload, <<>>} <- rlp_item(bytes),
+         {:list, transaction, sidecar} <- rlp_item(payload) do
+      count_items(transaction, 14, 0) and
+        (sidecar_lists?(sidecar, 3) or
+           case sidecar do
+             <<1, rest::binary>> -> sidecar_lists?(rest, 3)
+             _ -> false
+           end) and valid_lists?([{payload, 1}])
+    else
+      _ -> false
+    end
+  end
+
+  defp sidecar_lists?(<<>>, 0), do: true
+
+  defp sidecar_lists?(bytes, remaining) when remaining > 0 do
+    case rlp_item(bytes) do
+      {:list, _, rest} -> sidecar_lists?(rest, remaining - 1)
+      _ -> false
+    end
+  end
+
+  defp sidecar_lists?(_, _), do: false
+
+  # Walk only the outer list's items, without allocating decoded nested terms.
+  defp complete_list?(bytes, count) do
+    case rlp_item(bytes) do
+      {:list, payload, <<>>} -> count_items(payload, count, 0)
+      _ -> false
+    end
+  end
+
+  defp count_items(<<>>, expected, actual), do: expected == actual
+
+  defp count_items(bytes, expected, actual) do
+    case rlp_item(bytes) do
+      {:list, payload, rest} ->
+        valid_lists?([{payload, 2}]) and count_items(rest, expected, actual + 1)
+
+      {:string, _, rest} ->
+        count_items(rest, expected, actual + 1)
+
+      _ ->
+        false
+    end
+  end
+
+  # Retain at most eight list levels, including the outer transaction list.
+  defp valid_lists?([]), do: true
+  defp valid_lists?([{_, depth} | _]) when depth > 8, do: false
+  defp valid_lists?([{<<>>, _} | rest]), do: valid_lists?(rest)
+
+  defp valid_lists?([{bytes, depth} | pending]) do
+    case rlp_item(bytes) do
+      {:list, payload, rest} -> valid_lists?([{payload, depth + 1}, {rest, depth} | pending])
+      {:string, _, rest} -> valid_lists?([{rest, depth} | pending])
+      _ -> false
+    end
+  end
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix < 128,
+    do: {:string, <<prefix>>, rest}
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix <= 183,
+    do: take_rlp(rest, prefix - 128, :string)
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix <= 191,
+    do: long_rlp(rest, prefix - 183, :string)
+
+  defp rlp_item(<<prefix, rest::binary>>) when prefix <= 247,
+    do: take_rlp(rest, prefix - 192, :list)
+
+  defp rlp_item(<<prefix, rest::binary>>), do: long_rlp(rest, prefix - 247, :list)
+  defp rlp_item(_), do: :error
+
+  defp long_rlp(bytes, length_bytes, kind) do
+    case bytes do
+      <<length::binary-size(length_bytes), rest::binary>> ->
+        take_rlp(rest, :binary.decode_unsigned(length), kind)
+
+      _ ->
+        :error
+    end
+  end
+
+  defp take_rlp(bytes, size, kind) do
+    case bytes do
+      <<payload::binary-size(size), rest::binary>> -> {kind, payload, rest}
+      _ -> :error
     end
   end
 end

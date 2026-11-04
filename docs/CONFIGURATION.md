@@ -486,23 +486,16 @@ remains off. The three settled effects accept no `shadow` mode. Knowledge uses
 node-local memory, no durable knowledge store, and no background model service.
 See [routing](ROUTING.md#learned-provider-limits) for evidence and safety rules.
 
-## Transaction relay policy
+## Transaction providers
 
-A chain may declare `transactions: {providers: [provider_id], fallback: none}`. Every relay ID must exist on that chain, the list must be nonempty and unique, relay declarations must support sends, and at least one non-relay provider must remain for reads. Omit the block to retain ordinary routing. The stock public profile leaves it unset.
+A chain may declare `transactions: {providers: [provider_id], fallback: none}`.
+Each listed ID must name a send-capable provider on that chain, without
+duplicates, and at least one other provider must remain to serve reads.
+`fallback` is `none` (the default) or `read_providers`. Omit the block for
+ordinary routing; the stock public profile leaves it unset. See
+[the private-send example](../config/examples/private-sends.yml), and
+[routing](ROUTING.md#transaction-providers) for how requests use the two sides.
 
-Relays serve `eth_sendRawTransaction`; all other methods, subscriptions and block recovery use the other providers. Send selection ignores head lag, since a relay can report a stale head. `fallback: read_providers` enables a second phase over the same profile's non-relay providers after relay exhaustion. Both phases share the original deadline and dispatch budget. It never merges the pools for strategy ranking or selects another profile. A send pin must name a relay even when public fallback is enabled; read pins must name a non-relay.
-
-See [the private-send example](../config/examples/private-sends.yml). Relay operators and their downstream builders remain trusted recipients. Hash acceptance does not prove inclusion; align wallet rebroadcast settings with the chosen boundary.
-
-Private sends establish no read affinity. While a transaction remains private,
-ordinary providers return null for its transaction and receipt, and their pending
-nonce excludes that transaction until inclusion. Clients manage their own nonces;
-Lasso maintains no private pending overlay.
-
-Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
-Methods requiring a sender signature header are not supported through Lasso yet.
-Configured provider headers are separate from per-request sender signatures.
-Relay-native send methods stay inside the transaction provider set, but routing
-them there does not remove an upstream signature-header requirement. Only
-`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
-return their upstream result without a hash lookup.
+Transaction providers and their downstream builders still see every transaction
+sent to them, and a wallet that rebroadcasts through another endpoint bypasses
+the boundary.

@@ -51,6 +51,15 @@ defmodule Lasso.RPC.ProviderKnowledge.AppliedEffects do
     ArgumentError -> :ok
   end
 
+  @doc "Counts a learned provider exclusion at cursor dispatch admission."
+  @spec record_exclusion(binary(), map()) :: :ok
+  def record_exclusion(profile, %{route: route, kind: kind, dimension: dimension}) do
+    increment({profile, route, kind, dimension})
+    :ok
+  rescue
+    ArgumentError -> :ok
+  end
+
   defp positions(descriptors),
     do: descriptors |> Enum.map(&Decision.route/1) |> Enum.with_index() |> Map.new()
 

@@ -10,7 +10,15 @@ defmodule Lasso.RPC.Observability do
   Respects size limits and redaction rules.
   """
   def build_client_metadata(%RequestContext{} = ctx) do
+    {safety, source} =
+      case ctx.execution_envelope do
+        nil -> Lasso.RPC.MethodRegistry.classify(ctx.method, ctx.params)
+        envelope -> {envelope.execution_safety, envelope.classified_by}
+      end
+
     metadata = %{
+      execution_safety: safety,
+      classified_by: source,
       send_policy: RequestContext.send_policy_metadata(ctx),
       version: "1.0",
       request_id: ctx.request_id,

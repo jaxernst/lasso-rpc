@@ -25,9 +25,13 @@ The pipeline ensures that healthy providers receive preference while recovering 
 
 Method refusal, historical depth and `eth_getLogs` span learning are enabled by
 default. Repeated matching outcomes move an unsuitable connection behind other
-eligible connections in the same availability tier. A learned limit never removes
-the final candidate, overrides operator capability declarations, increases the
-request deadline or grants another transaction dispatch.
+eligible connections in the same availability tier, and a learned method refusal
+skips that connection for the method while another candidate remains. Methods
+outside the registry learn sooner, since they cannot fail over within a request.
+A learned limit never removes the final candidate, overrides operator capability
+declarations, increases the request deadline or grants another transaction
+dispatch. Because the final candidate is still tried, a provider that starts
+serving a method again is found by ordinary traffic.
 
 Evidence belongs to the configured endpoint, credentials, transport and sharing
 scope. Method refusal is method-specific. Historical hints are method- and
@@ -73,7 +77,7 @@ bounds healthy-sibling deferral by its remaining candidate limit, and explicit
 recovered-head preference takes precedence over diversity.
 
 Unsafe or unknown methods retain the instance-shuffled order and existing replay limits.
-This ordering does not increase the three-dispatch budget or deadline, infer
+This ordering does not increase the dispatch budget or deadline, infer
 archive capabilities, or guarantee successful historical reads. A hash selector
 can leave more distinct providers eligible than the budget can cover. Trying
 another provider first can also delay a working alternate transport on the
@@ -141,7 +145,7 @@ method support or change a file profile.
 Only known replay-safe unary reads can explore. Priority, load-balanced,
 provider overrides, system requests, writes, subscriptions and unknown methods
 retain ordinary routing. A request selects at most one exploratory attempt,
-which counts against Core's three-dispatch limit. At least 500 ms must remain
+which counts against Core's dispatch limit. At least 500 ms must remain
 before reservation. The exploration deadline is the smaller of 100 ms and ten
 percent of the remaining request budget, including admission and I/O. The
 original deadline stays in force, and the ordinary first choice remains the
@@ -310,27 +314,24 @@ Bypass strategy selection entirely by routing directly to a specific provider:
 POST /rpc/provider/:provider_id/:chain
 ```
 
-The provider ID must match a provider configured in the profile. Health checks and circuit breakers still apply—if the provider is open-circuit, the request will fail.
+The provider ID must match a provider configured in the profile. Health checks and circuit breakers still apply—if the provider is open-circuit, the request will fail. Learned limits do not apply, so an override can check whether a provider serves a refused method again.
 
 This is useful for debugging, testing specific provider behavior, or implementing custom provider selection logic outside of Lasso.
 
-## Transaction relay routing
+## Transaction providers
 
-The optional chain `transactions` policy projects one captured routing plan by request class. `raw_transaction_broadcast` (`eth_sendRawTransaction` and the relay-native send family) selects relays with head-lag filtering disabled. Reads, subscriptions and recovery exclude relays. Filters, method fail-open, cursors, exploration, pins and retries consume that projected list. A retained subscription moves to an eligible read provider after a policy update; a configured replacement that is still connecting retains continuity until it is available.
+When a chain declares [`transactions`](CONFIGURATION.md#transaction-providers),
+every request uses one side of its providers. Sends
+([execution classes](RPC_STANDARDS.md#execution-classes)) go only to the
+transaction providers, one at a time, and ignore head lag because a send-only
+provider may report a stale head. Reads, subscriptions and block recovery never
+use them; a subscription on a provider that becomes a transaction provider moves
+to a read provider. Every selection step, including pins and retries, works on
+that side alone.
 
-The default is fail-closed. An explicit `fallback: read_providers` enters a second within-profile phase after relay exhaustion using the same request budget and deadline. It is never a strategy-ranked union. The unset policy preserves ordinary routing.
-
-After a policy send fails, transaction hash confirmation selects inside its terminal send phase and borrows the selected channel, so a public read cannot escape a fail-closed boundary. Null relay replies stay null; a response hash is not proof of inclusion.
-
-Private sends establish no read affinity. While a transaction remains private,
-ordinary providers return null for its transaction and receipt, and their pending
-nonce excludes that transaction until inclusion. Clients manage their own nonces;
-Lasso maintains no private pending overlay.
-
-Lasso does not forward caller request headers such as `X-Flashbots-Signature`.
-Methods requiring a sender signature header are not supported through Lasso yet.
-Configured provider headers are separate from per-request sender signatures.
-Relay-native send methods stay inside the transaction provider set, but routing
-them there does not remove an upstream signature-header requirement. Only
-`eth_sendRawTransaction` receives post-error hash confirmation; other send methods
-return their upstream result without a hash lookup.
+Sending fails closed: when no transaction provider can take a send, the request
+fails instead of reaching another provider. `fallback: read_providers` adds a
+second phase over the profile's read providers once the transaction providers are
+exhausted, within the same deadline and dispatch budget. The two sides are never
+ranked together, and neither phase leaves the profile. The hash lookup after a
+failed send stays in the phase that sent it.

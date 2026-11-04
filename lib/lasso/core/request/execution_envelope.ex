@@ -15,11 +15,6 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   @type execution_safety ::
           :replay_safe
           | :raw_transaction_broadcast
-          | :upstream_signed
-          | :filter_create
-          | :filter_affine_read
-          | :filter_affine_consume
-          | :filter_affine_uninstall
           | :subscription
           | :unknown
 
@@ -49,6 +44,7 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   ]
   defstruct @enforce_keys ++
               [
+                classified_by: :default,
                 dispatch_count: 0,
                 candidate_admission_limit: @max_candidate_admissions,
                 candidate_admission_count: 0,
@@ -66,7 +62,7 @@ defmodule Lasso.RPC.ExecutionEnvelope do
         _ -> System.monotonic_time(:microsecond)
       end
 
-    safety = classify(method)
+    {safety, source} = MethodRegistry.classify(method, Keyword.get(opts, :params, []))
 
     timeout_deadline_us = started_at_us + timeout_ms * 1_000
 
@@ -83,48 +79,14 @@ defmodule Lasso.RPC.ExecutionEnvelope do
       deadline_us: deadline_us,
       original_timeout_ms: timeout_ms,
       execution_safety: safety,
+      classified_by: source,
       execution_nonce: Base.url_encode64(:erlang.term_to_binary(make_ref()), padding: false),
       dispatch_limit: dispatch_limit(safety)
     }
   end
 
   @spec classify(String.t()) :: execution_safety()
-  def classify(method)
-      when method in [
-             "eth_sendRawTransaction",
-             "eth_sendRawTransactionConditional",
-             "eth_sendRawTransactionSync",
-             "eth_sendPrivateRawTransaction",
-             "eth_sendPrivateTransaction",
-             "eth_cancelPrivateTransaction",
-             "eth_sendBundle",
-             "eth_cancelBundle",
-             "mev_sendBundle"
-           ],
-      do: :raw_transaction_broadcast
-
-  def classify(method)
-      when method in [
-             "eth_sendTransaction",
-             "eth_sign",
-             "eth_signTransaction",
-             "personal_sign",
-             "personal_sendTransaction"
-           ],
-      do: :upstream_signed
-
-  def classify(method) when method in ["eth_newFilter", "eth_newBlockFilter"],
-    do: :filter_create
-
-  def classify("eth_newPendingTransactionFilter"), do: :filter_create
-  def classify("eth_getFilterLogs"), do: :filter_affine_read
-  def classify("eth_getFilterChanges"), do: :filter_affine_consume
-  def classify("eth_uninstallFilter"), do: :filter_affine_uninstall
-  def classify(method) when method in ["eth_subscribe", "eth_unsubscribe"], do: :subscription
-
-  def classify(method) do
-    if replay_safe_read?(method), do: :replay_safe, else: :unknown
-  end
+  def classify(method), do: method |> MethodRegistry.classify() |> elem(0)
 
   @spec remaining_ms(t(), integer()) :: non_neg_integer()
   def remaining_ms(%__MODULE__{} = envelope, now_us \\ System.monotonic_time(:microsecond)) do
@@ -249,19 +211,4 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   end
 
   defp attempt_timeout_ms(_envelope, remaining_ms, _fallback_available?), do: remaining_ms
-
-  defp replay_safe_read?(method) do
-    MethodRegistry.method_category(method) in [
-      :core,
-      :state,
-      :network,
-      :node_admin,
-      :eip1559,
-      :eip4844,
-      :extended_reads,
-      :debug,
-      :trace,
-      :txpool
-    ] or method == "eth_getLogs"
-  end
 end
