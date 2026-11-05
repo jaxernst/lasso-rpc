@@ -1391,7 +1391,7 @@ defmodule Lasso.RPC.RequestPipeline do
         else: ctx
 
     outcome = policy_send_outcome(outcome, ctx)
-    {decision, ctx} = qualify_response(outcome, ctx)
+    {decision, ctx} = qualify_response(outcome, ctx, channel)
 
     qualification =
       if elem(decision, 0) in [:error, :retry], do: :policy_rejected, else: :accepted
@@ -1681,13 +1681,14 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp qualify_response(
          %{fact: %AttemptTerminal.Response{kind: :success}, result: {:ok, result, _io_ms}},
-         ctx
+         ctx,
+         channel
        ) do
-    {disposition, value, ctx} = HeadPolicy.accept(result, ctx)
+    {disposition, value, ctx} = HeadPolicy.accept(result, ctx, channel.instance_id)
     {{disposition, value}, ctx}
   end
 
-  defp qualify_response(_outcome, ctx), do: {{:continue, nil}, ctx}
+  defp qualify_response(_outcome, ctx, _channel), do: {{:continue, nil}, ctx}
 
   defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision) do
     rest_channels =

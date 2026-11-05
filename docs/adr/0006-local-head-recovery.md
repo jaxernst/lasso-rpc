@@ -12,13 +12,21 @@ begins on the same application generation, B cannot successfully return below A.
 Overlapping requests may finish out of height order without retrying solely
 because another overlapping request raised the aggregate maximum.
 
-A per-scope epoch changes when global enrollment fences local admission. An old
+A per-scope fence token changes when global enrollment fences local admission. An old
 local snapshot cannot become usable again after the global policy is disabled.
 Disabling or canceling enrollment restores the greater of the remembered and
 published heights, retaining the remembered hash at equal height.
-Same-height hash conflicts against the captured floor or the current equal-height
-floor remain errors. Height ordering does not prove ancestry, canonicality or
-state availability. Explicit selectors and one-hash logical reads retain their
+At equal height, only the upstream instance that established the floor may
+replace its hash. Replacement atomically matches the captured floor revision;
+an intervening revision prevents an old response from restoring a displaced
+hash. Other providers may serve the accepted hash but cannot replace it. A
+higher accepted block transfers authority to its source. A restored floor
+without a local source cannot authorize an equal-height replacement.
+
+This trusts the establishing provider to report its revised view; inconsistent
+backends behind that upstream can still report successive revisions. Height
+ordering and provider continuity do not prove ancestry, canonicality or state
+availability. Explicit selectors and one-hash logical reads retain their
 existing behavior.
 
 ## Recovery and selection

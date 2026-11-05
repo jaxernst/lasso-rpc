@@ -135,7 +135,7 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     end
   end
 
-  test "a different hash at the accepted height fails without silently resetting the floor", %{
+  test "the floor provider can revise its hash at the accepted height", %{
     chain: chain
   } do
     setup_providers([%{id: "head", priority: 1, behavior: :healthy}])
@@ -143,7 +143,7 @@ defmodule Lasso.RPC.RequestPipelineHeadPolicyTest do
     assert {:ok, response, _} = request(chain)
     result(response)
     serve("head", Map.put(header(100), "hash", header(101)["hash"]))
-    assert {:error, %Error{data: %{reason: "block_hash_changed"}}, _} = request(chain)
+    assert {:ok, _, _} = request(chain)
   end
 
   test "latest headers preserve full-transaction requests and explicit historic reads bypass the floor",

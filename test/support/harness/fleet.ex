@@ -95,6 +95,13 @@ defmodule Lasso.Test.Harness.Fleet do
       end
 
     action = if action == :default, do: default(method), else: action
+
+    action =
+      case action do
+        {:respond, responder} when is_function(responder, 1) -> responder.(request)
+        other -> other
+      end
+
     report = %{fleet: s.name, transport: transport, request: request, action: action}
     report = if transport == :ws, do: Map.put(report, :connection, pid), else: report
     send(s.owner, {:fleet, self(), report})
