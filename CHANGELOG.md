@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-04
+
+### Added
+
+- Choose which providers receive your signed transactions. A chain's `transactions: {providers: [provider_id], fallback: none}` block sends transactions only to those providers, and reads, subscriptions and block recovery use the others. Sending fails closed by default; `fallback: read_providers` adds an explicit second phase over the read providers. See [configuration](docs/CONFIGURATION.md#transaction-providers) and [routing](docs/ROUTING.md#transaction-providers).
+- Opt-in metadata reports `send_policy` on sends, plus `execution_safety` and `classified_by` on every request. See the [API reference](docs/API_REFERENCE.md#observability-metadata).
+
+### Changed
+
+- Methods are classified by what they do, as reads, sends, subscriptions or other methods. See [execution classes](docs/RPC_STANDARDS.md#execution-classes).
+- Relay-native submission methods, bundle methods and simulations of signed transactions are now sends. An unregistered method whose params carry a signed transaction is also a send and runs once, so a transaction policy keeps its bytes on the transaction providers.
+- A learned method refusal now skips that upstream for the method while another candidate remains, and methods outside the registry learn sooner. The final candidate is always kept, and a provider override bypasses learned refusals.
+- `mix lasso.probe` reports every transaction submission method as unverifiable.
+
+### Security
+
+- Update Ecto to 3.14.3 to address the query-cache memory exhaustion advisory (EEF-CVE-2026-118391).
+
+### Compatibility
+
+- Profiles without a `transactions` block keep ordinary routing for `eth_sendRawTransaction`.
+- `execution_safety` now has four values: `replay_safe`, `raw_transaction_broadcast`, `subscription` and `unknown`. Update anything that matches on the removed values.
+
 ## [0.7.1] - 2026-10-30
 
 ### Security
@@ -434,7 +457,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.5.1...v0.6.0

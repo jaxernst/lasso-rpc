@@ -5,7 +5,7 @@
 ### One smart RPC endpoint for all your nodes and providers.
 
 [![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
-[![Release](https://img.shields.io/badge/release-v0.7.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.7.0)
+[![Release](https://img.shields.io/badge/release-v0.8.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.7.0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](LICENSE.md)
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](#documentation)
 [![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
@@ -84,7 +84,7 @@ You need Docker with the Compose plugin, curl, and OpenSSL. Start in an empty di
 
 ```bash
 mkdir lasso && cd lasso
-curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.7.0/compose.yml --output compose.yml
+curl --fail --location https://github.com/jaxernst/lasso-rpc/releases/download/v0.8.0/compose.yml --output compose.yml
 (umask 077; printf 'SECRET_KEY_BASE=%s\nRELEASE_COOKIE=%s\n' "$(openssl rand -hex 64)" "$(openssl rand -hex 32)" > .env)
 docker compose up -d --wait
 curl --fail http://localhost:4000/api/health
@@ -210,7 +210,7 @@ instead of starting with a broken provider. Declare
 methods, log-range limits, and pruning depth so Lasso routes around them. From a
 source checkout, `mix lasso.probe <provider_url>` tests a provider's method
 support, limits, and WebSocket subscriptions and recommends capability settings.
-It reports `eth_sendRawTransaction` and `eth_sendTransaction` as unverifiable:
+It reports transaction submission methods as unverifiable:
 an invalid payload cannot prove support, and discovery never submits a real
 transaction. Test transaction behavior with your own controlled workload.
 
