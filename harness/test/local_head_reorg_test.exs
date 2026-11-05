@@ -2,6 +2,7 @@ defmodule Lasso.Harness.LocalHeadReorgTest do
   use ExUnit.Case, async: false
   alias Lasso.Test.Harness.{Fleet, Rpc, Settle, Tenant}
   @moduletag :harness
+  @moduletag feature: ["core-head-policy-1"]
 
   test "the floor provider can replace its head while a fallback retains the orphan" do
     world(fn tenant, primary, fallback ->
