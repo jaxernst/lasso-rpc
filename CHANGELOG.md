@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `mix hex.audit` ignores EEF-CVE-2026-115701 and EEF-CVE-2026-113431 until a Hex release fixes them. Keep a reverse proxy that speaks HTTP/1.1 upstream in front of any public node.
+
 ### Removed
 
 - The root `examples/` directory, including the executable logical-read client. [Read at one block](docs/READ_AT_ONE_BLOCK.md) remains the guide for hash-pinned reads.

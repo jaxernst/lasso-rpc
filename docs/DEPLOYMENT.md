@@ -288,6 +288,8 @@ for series limits, units, and the versioned Grafana dashboard.
 
 Lasso serves HTTP. Terminate TLS at your reverse proxy or load balancer. Set `PHX_HOST` to your public hostname. Production URL generation defaults to HTTPS; set `PHX_SCHEME=http` when serving locally without a TLS proxy.
 
+Put a reverse proxy that speaks HTTP/1.1 upstream in front of any public node. Cowboy has no release yet that fixes [EEF-CVE-2026-115701](https://osv.dev/vulnerability/EEF-CVE-2026-115701) (HTTP/1.1 pipelining) or [EEF-CVE-2026-113431](https://osv.dev/vulnerability/EEF-CVE-2026-113431) (HTTP/2 headers in Cowlib), and both can exhaust a directly exposed node's memory.
+
 ### Reverse proxy examples
 
 The [Caddy](../deployment/proxy/Caddyfile) and

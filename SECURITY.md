@@ -36,7 +36,7 @@ credential redaction. Hostnames remain visible; do not embed secrets in them.
 
 ### 2. Network Security
 
-- Deploy behind a reverse proxy (nginx, Caddy, Traefik)
+- Deploy behind a reverse proxy (nginx, Caddy, Traefik) that speaks HTTP/1.1 upstream. See [Deployment](docs/DEPLOYMENT.md#https) for the open Cowboy and Cowlib advisories this covers.
 - Enable TLS/SSL for all external traffic
 - Use firewalls to restrict access to sensitive endpoints
 - Consider network isolation for internal services
