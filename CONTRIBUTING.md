@@ -8,7 +8,7 @@ Thank you for your interest in contributing to Lasso RPC! This document provides
 
 - **Elixir**: 1.18.4 (CI version) (check with `elixir --version`)
 - **Erlang/OTP**: 28 (CI version) (check with `erl -version`)
-- **Node.js**: 22 (CI version, for JavaScript contract and logical-read fixture tests)
+- **Node.js**: 22 (CI version, for JavaScript contract tests)
 - **Git**: For version control
 
 ### Quick Start

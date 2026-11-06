@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The root `examples/` directory, including the executable logical-read client. [Read at one block](docs/READ_AT_ONE_BLOCK.md) remains the guide for hash-pinned reads.
+
 ## [0.8.0] - 2026-11-04
 
 ### Added

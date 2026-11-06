@@ -82,7 +82,6 @@ jobs:
     timeout-minutes: 15
     env:
       LASSO_TEST_PUBLICATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/lasso_publication_test
-      LASSO_QUERY_EVIDENCE_PATH: logical-read-evidence.json
     services:
       postgres:
         image: postgres:16
@@ -123,34 +122,15 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
       - uses: foundry-rs/foundry-toolchain@v1
         with:
           version: v1.4.4
 
-      - name: Verify logical-read client and install fixture dependencies
-        run: |
-          anvil --version
-          node --test examples/published-block-query.test.mjs
-          npm ci --prefix examples/logical-read --ignore-scripts --no-audit --no-fund
-          npm test --prefix examples/logical-read
+      - name: Verify Anvil
+        run: anvil --version
 
       - name: Run hermetic integration and publication recovery tests
         run: mix test --only integration --only publication_db --only anvil
-
-      - name: Validate correlated logical-read response evidence
-        run: node examples/logical-read/verify-evidence.mjs logical-read-evidence.json
-
-      - name: Preserve logical-read evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logical-read-evidence
-          path: logical-read-evidence.json
-          if-no-files-found: error
 
   lint:
     name: Lint (Credo)
