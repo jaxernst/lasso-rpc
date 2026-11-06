@@ -498,4 +498,11 @@ ordinary routing; the stock public profile leaves it unset. See
 
 Transaction providers and their downstream builders still see every transaction
 sent to them, and a wallet that rebroadcasts through another endpoint bypasses
-the boundary.
+the boundary. `fallback: read_providers` hands the signed transaction to read
+providers, which normally broadcast it to the public mempool.
+
+Reads stay outside the boundary. `eth_call` and `eth_estimateGas` send their
+calldata to a read provider, so simulating through Lasso shows that provider your
+intent before you sign; simulate locally when that matters. Polling a private
+transaction's hash through a read provider ties the hash to your connection and
+timing.
