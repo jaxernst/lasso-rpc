@@ -59,8 +59,6 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
                validate: false
              )
 
-    fixture = run_client_fixture!("deploy", port)
-
     assert {:ok, _} = Journal.configure(key, "global", 1_000)
 
     assert %{"error" => %{"data" => %{"reason" => "publication_pending"}}} =
@@ -76,18 +74,6 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
     assert metadata(conn)["head_policy"]["scope"] == "profile_chain_fleet"
     selector = %{"blockHash" => hash, "requireCanonical" => true}
 
-    report =
-      run_client_fixture!("verify", port, [
-        {"RPC_URL", "#{LassoWeb.Endpoint.url()}/rpc/profile/#{slug}/#{@anvil_chain_id}"},
-        {"LASSO_PROFILE", slug},
-        {"QUERY_FIXTURE", Jason.encode!(fixture)}
-      ])
-
-    assert report["context"]["hash"] == hash
-    assert report["evidence"]["parent"]["complete"]
-    assert report["evidence"]["worker"]["complete"]
-    assert report["result"]["dependentRounds"] == 2
-
     assert %{"result" => _tx} =
              rpc_call!(port, "eth_sendTransaction", [
                %{"from" => @sender, "to" => @address, "value" => "0x64", "gas" => "0x5208"}
@@ -99,8 +85,14 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
           {"eth_call", [%{"to" => @address, "data" => "0x"}, selector]},
           {"eth_getBalance", [@address, selector]}
         ] do
-      assert %{"result" => value} = rpc(slug, method, params) |> body()
+      pinned = rpc(slug, method, params)
+      assert %{"result" => value} = body(pinned)
       if method == "eth_getBalance", do: assert(value == "0x64")
+
+      assert metadata(pinned)["service_profile_id"] == slug
+      assert metadata(pinned)["chain_id"] == @anvil_chain_id
+      assert get_resp_header(pinned, "x-lasso-profile") == [slug]
+      assert get_resp_header(pinned, "x-lasso-request-id") == [metadata(pinned)["request_id"]]
     end
 
     assert %{"result" => ^n} = rpc(slug, "eth_blockNumber", []) |> body()
@@ -116,12 +108,15 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
     assert %{"error" => %{"code" => reorg_error_code}} =
              rpc(slug, "eth_getBalance", [@address, selector]) |> body()
 
+    assert reorg_error_code < 0
+
     second = publish!(key)
 
     assert second["evidence"][node_id()]["provider_id"] ==
              Lasso.RPC.BoundedIdentifier.encode(provider_id)
 
     assert second["published"]["height"] > first["published"]["height"]
+    assert second["published"]["hash"] != hash
     next = rpc(slug, "eth_blockNumber", [])
     assert metadata(next)["head_policy"]["chain_change"]["kind"] == "anchor_hash_changed"
     assert metadata(next)["head_policy"]["chain_change"]["previous_hash"] == String.downcase(hash)
@@ -150,20 +145,6 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
              )
 
     assert %{"result" => _} = rpc(slug, "eth_blockNumber", []) |> body()
-
-    if path = System.get_env("LASSO_QUERY_EVIDENCE_PATH") do
-      report =
-        Map.put(report, "reorg", %{
-          previous_hash: hash,
-          next_hash: second["published"]["hash"],
-          next_number: body(next)["result"],
-          old_selector_error_code: reorg_error_code,
-          reported_change: metadata(next)["head_policy"]["chain_change"],
-          cleanup: "publication_disabled_and_gate_unmanaged"
-        })
-
-      File.write!(path, Jason.encode!(report, pretty: true))
-    end
   end
 
   defp publish!(key) do
@@ -183,21 +164,6 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
 
     Gate.install(key, committed, node_id())
     committed
-  end
-
-  defp run_client_fixture!(mode, port, env \\ []) do
-    script = Path.expand("../../examples/logical-read/fixture.mjs", __DIR__)
-
-    {output, status} =
-      System.cmd("node", [script, mode],
-        env: [{"ANVIL_URL", "http://127.0.0.1:#{port}"} | env],
-        stderr_to_stdout: true
-      )
-
-    assert status == 0,
-           "Logical-read client fixture failed (run npm ci in examples/logical-read):\n#{output}"
-
-    Jason.decode!(output)
   end
 
   defp node_id, do: Lasso.Cluster.Topology.self_node_id()

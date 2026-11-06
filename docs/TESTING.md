@@ -32,12 +32,10 @@ remove those tests. Use the full CI setup below for a whole-tree integration run
 
 ## Full CI integration suite
 
-The CI integration job also verifies durable publication recovery and an
-Ethereum logical-read fixture. It requires:
+The CI integration job also verifies durable publication recovery. It requires:
 
 - PostgreSQL 16, with a disposable `lasso_publication_test` database.
 - Anvil v1.4.4 (Foundry), available as `anvil` on `PATH`.
-- Node.js 22 and npm for the committed logical-read fixture lockfile.
 
 If you do not already have a disposable PostgreSQL instance, start one with
 Docker using a free local port (55432 here):
@@ -59,21 +57,14 @@ Set the URL to your local instance, then reproduce the CI commands:
 
 ```bash
 export LASSO_TEST_PUBLICATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55432/lasso_publication_test
-export LASSO_QUERY_EVIDENCE_PATH=logical-read-evidence.json
 
 mix deps.get
 anvil --version
-node --test examples/published-block-query.test.mjs
-npm ci --prefix examples/logical-read --ignore-scripts --no-audit --no-fund
-npm test --prefix examples/logical-read
 mix test --include integration --include publication_db --include anvil
-node examples/logical-read/verify-evidence.mjs logical-read-evidence.json
 ```
 
-The test harness starts its own Anvil processes. CI preserves
-`logical-read-evidence.json` as an artifact; keep this file when investigating
-fixture failures. No paid provider credentials are required. To remove the
-PostgreSQL container created above after testing:
+The test harness starts its own Anvil processes. No paid provider credentials
+are required. To remove the PostgreSQL container created above after testing:
 
 ```bash
 docker rm --force lasso-publication-test

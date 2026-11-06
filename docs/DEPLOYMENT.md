@@ -6,7 +6,7 @@
 
 - **Elixir**: 1.18.4 (CI version)
 - **Erlang/OTP**: 28 (CI version)
-- **Node.js**: 22 (CI and logical-read verification version)
+- **Node.js**: 22 (CI version)
 
 ### Setup
 
