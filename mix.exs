@@ -19,9 +19,15 @@ defmodule Lasso.MixProject do
         # Cowlib has no patched release for these encoder-only advisories. Lasso and its
         # Cowboy/Plug stack do not call cow_cookie:cookie/1 or Cowlib's structured-header
         # encoders.
+        #
+        # No Hex release fixes these two memory-exhaustion advisories. Keep a reverse proxy
+        # that speaks HTTP/1.1 upstream in front of any public node, and remove both ignores
+        # at the first Hex release with the fixes.
         ignore_advisories: [
           "CVE-2026-43966",
-          "CVE-2026-43969"
+          "CVE-2026-43969",
+          "CVE-2026-113431",
+          "CVE-2026-115701"
         ]
       ]
     ]
