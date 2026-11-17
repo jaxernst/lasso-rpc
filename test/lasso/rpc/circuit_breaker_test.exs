@@ -44,17 +44,20 @@ defmodule Lasso.RPC.CircuitBreakerTest do
         {id, %{failure_threshold: 1, recovery_timeout: 50, success_threshold: 2}}
       )
 
+    observe_open(id)
     assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
-    Process.sleep(20)
-    assert CircuitBreaker.get_state(id).state == :open
+    # Flush the caller's failure report before inspecting its transition event.
+    _ = CircuitBreaker.get_state(id)
+    assert_received {:circuit_open, ^id}
 
-    Process.sleep(60)
+    Eventually.assert_eventually(fn -> CircuitBreaker.get_state(id).state == :half_open end)
     # First success in half-open
     assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end)
     # Failure should re-open (caller receives wrapped exception)
     assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "oops" end)
-    Process.sleep(20)
-    assert CircuitBreaker.get_state(id).state == :open
+    # Flush the caller's failure report before inspecting its transition event.
+    _ = CircuitBreaker.get_state(id)
+    assert_received {:circuit_open, ^id}
   end
 
   test "opens after failure_threshold typed errors and rejects until recovery" do
@@ -349,16 +352,8 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       # Open the circuit
       assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :open
 
-      # Wait for proactive recovery (recovery_timeout + jitter)
-      # Using 150ms to account for ~5% jitter on 100ms
-      Process.sleep(150)
-
-      # Should have automatically transitioned to half_open
-      state = CircuitBreaker.get_state(id)
-      assert state.state == :half_open, "Circuit should auto-transition to half_open"
+      Eventually.assert_eventually(fn -> CircuitBreaker.get_state(id).state == :half_open end)
     end
 
     test "proactive recovery allows circuit to recover without traffic" do
@@ -372,17 +367,12 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       # Open the circuit
       assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
       assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :open
 
-      # Wait for proactive recovery
-      Process.sleep(120)
-      assert CircuitBreaker.get_state(id).state == :half_open
+      Eventually.assert_eventually(fn -> CircuitBreaker.get_state(id).state == :half_open end)
 
       # Now a success should close the circuit
       assert {:executed, {:ok, :recovered}} = CircuitBreaker.call(id, fn -> {:ok, :recovered} end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :closed
+      Eventually.assert_eventually(fn -> CircuitBreaker.get_state(id).state == :closed end)
     end
 
     test "manual close cancels proactive recovery timer" do
@@ -647,5 +637,28 @@ defmodule Lasso.RPC.CircuitBreakerTest do
       # Should be > 100ms (the base timeout) since we just reopened with 2x backoff
       assert remaining > 100, "Expected remaining #{remaining} > 100 (base timeout)"
     end
+  end
+
+  defp observe_open(id) do
+    handler_id = {__MODULE__, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:lasso, :circuit_breaker, :open],
+        &__MODULE__.forward_open/4,
+        {self(), id}
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
+  def forward_open(
+        _event,
+        _measurements,
+        %{instance_id: instance, transport: transport},
+        {pid, id}
+      ) do
+    if {instance, transport} == id, do: send(pid, {:circuit_open, id})
   end
 end

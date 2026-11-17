@@ -80,6 +80,15 @@ These opt-in tests can make real network requests. Check the specific test's
 configuration and credentials before running it. This command does not enable
 `:publication_db` or `:anvil`.
 
+Two wall-clock checks are tagged `:slow` because they measure the host's
+scheduler rather than Lasso: the parser latency ceiling and the deadline-wakeup
+p95. The same tests' correctness, memory and reduction checks run by default.
+Run the timing checks on an idle machine:
+
+```bash
+mix test test/lasso/core/transport/upstream_response_test.exs test/lasso/core/request/request_owner_test.exs --include slow
+```
+
 ## Tags
 
 | Tag | Purpose | Default |

@@ -396,7 +396,17 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
   end
 
   @tag timeout: 10_000
-  test "large success has bounded retained memory and a generous parser latency ceiling" do
+  test "large success has bounded retained memory and reductions" do
+    validate_large_success()
+  end
+
+  @tag :slow
+  @tag timeout: 10_000
+  test "large success has a generous parser latency ceiling" do
+    assert validate_large_success() < 2_000_000
+  end
+
+  defp validate_large_success do
     result = "[" <> String.duplicate("0,", 524_288) <> "0]"
     raw = ~s({"jsonrpc":"2.0","id":"internal","result":#{result}})
     parent = self()
@@ -430,9 +440,9 @@ defmodule Lasso.Core.Transport.UpstreamResponseTest do
 
     assert heap_growth < 100_000
     assert reductions < byte_size(raw) * 50
-    assert elapsed_us < 2_000_000
 
     assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}
+    elapsed_us
   end
 
   test "same-id HTTP validation returns the exact upstream binary" do

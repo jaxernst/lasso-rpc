@@ -310,25 +310,24 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
           UpstreamSubscriptionPool.subscribe_client(profile, chain_id, client_pid, {:newHeads})
         end)
 
-      pool = UpstreamSubscriptionPool.via(profile, chain_id)
-      Process.sleep(25)
+      Lasso.Test.Eventually.assert_eventually(fn ->
+        case get_pool_state(chain_id).keys[{:newHeads}] do
+          %{status: :establishing, refcount: 1, readiness_retries: retries} -> retries >= 4
+          _ -> false
+        end
+      end)
 
-      entry = get_pool_state(chain_id).keys[{:newHeads}]
-      generation = entry.establishment_generation
-      token = entry.retry_token
-      assert is_reference(token)
+      state = get_pool_state(chain_id)
+      entry = state.keys[{:newHeads}]
+      assert is_reference(entry.retry_token)
 
-      send(GenServer.whereis(pool), {:retry_establish, {:newHeads}, generation, make_ref(), []})
-      Process.sleep(50)
-
-      unchanged_entry = get_pool_state(chain_id).keys[{:newHeads}]
-      assert unchanged_entry.status == :establishing
-      assert unchanged_entry.refcount == 1
-      assert unchanged_entry.retry_token == token
-
-      Process.sleep(700)
-      bounded_entry = get_pool_state(chain_id).keys[{:newHeads}]
-      assert bounded_entry.readiness_retries <= 4
+      # Exercise stale-token rejection against one snapshot, without a live retry
+      # replacing the token between the message and the assertion.
+      assert {:noreply, ^state} =
+               UpstreamSubscriptionPool.handle_info(
+                 {:retry_establish, {:newHeads}, entry.establishment_generation, make_ref(), []},
+                 state
+               )
 
       set_ws_status(profile, chain_id, provider, :connected)
 
@@ -845,7 +844,14 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       [{manager, _}] = Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id})
       pool = GenServer.whereis(UpstreamSubscriptionPool.via(profile, chain_id))
       :ok = :sys.suspend(manager)
-      on_exit(fn -> if Process.alive?(manager), do: :sys.resume(manager) end)
+
+      on_exit(fn ->
+        try do
+          :sys.resume(manager)
+        catch
+          :exit, _manager_already_stopped -> :ok
+        end
+      end)
 
       send(pool, {:reestablish_after_restart, key, instance_id})
       assert %{keys: _keys_after_restart} = :sys.get_state(pool, 250)

@@ -62,7 +62,10 @@ defmodule Lasso.RPC.HeadWsSourceAcceptanceTest do
     end
 
     Lasso.Test.Eventually.assert_eventually(fn ->
-      match?({:ok, %{qualification: :ambiguous}}, HeadEvidence.snapshot(profile, chain))
+      Enum.all?([minority, majority_a], fn provider ->
+        match?({:ok, %{height: 100}}, Registry.get_observation(chain, ids[provider], :ws))
+      end) and
+        match?({:ok, %{qualification: :ambiguous}}, HeadEvidence.snapshot(profile, chain))
     end)
 
     assert {:ok, %{provider_id: ^minority}, _} =

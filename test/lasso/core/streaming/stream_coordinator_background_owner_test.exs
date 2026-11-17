@@ -1785,19 +1785,18 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     chain_id = System.unique_integer([:positive])
     profile = "profile-#{chain_id}"
 
-    {:ok, pid} =
-      StreamCoordinator.start_link(
-        {profile, chain_id, {:newHeads},
-         [
-           primary_provider_id: "ws-old",
-           max_failover_attempts: 1,
-           backfill_provider_selector: fn ^profile, ^chain_id, ["ws-old", "ws-new"] ->
-             {:error, :no_http_provider}
-           end
-         ]}
+    pid =
+      start_supervised!(
+        {StreamCoordinator,
+         {profile, chain_id, {:newHeads},
+          [
+            primary_provider_id: "ws-old",
+            max_failover_attempts: 1,
+            backfill_provider_selector: fn ^profile, ^chain_id, ["ws-old", "ws-new"] ->
+              {:error, :no_http_provider}
+            end
+          ]}}
       )
-
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
 
     GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
 

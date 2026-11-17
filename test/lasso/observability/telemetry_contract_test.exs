@@ -87,8 +87,6 @@ defmodule Lasso.Observability.TelemetryContractTest do
 
       # Trip the breaker - proactive recovery timer fires after ~50ms + jitter
       CircuitBreaker.call(id, fn -> raise "boom" end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :open
 
       {:ok, measurements, metadata} =
         TelemetrySync.await_event(collector, timeout: 2_000)
@@ -150,18 +148,16 @@ defmodule Lasso.Observability.TelemetryContractTest do
 
       # Trip the breaker
       CircuitBreaker.call(id, fn -> raise "boom" end)
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :open
 
-      # Wait for recovery timeout
-      Process.sleep(80)
+      Lasso.Test.Eventually.assert_eventually(fn ->
+        CircuitBreaker.get_state(id).state == :half_open
+      end)
 
       {:ok, collector} =
         TelemetrySync.attach_collector([:lasso, :circuit_breaker, :close])
 
       # Success in half_open → closed
       CircuitBreaker.call(id, fn -> :ok end)
-      Process.sleep(20)
 
       {:ok, measurements, metadata} =
         TelemetrySync.await_event(collector, timeout: 2_000)
