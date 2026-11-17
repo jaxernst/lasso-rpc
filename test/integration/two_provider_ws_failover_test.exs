@@ -4,7 +4,16 @@ defmodule Lasso.TwoProviderWsFailoverTest do
   alias Lasso.Config.ConfigStore
   alias Lasso.Test.Harness.{Fleet, Rpc}
 
-  test "newHeads stays consecutive when one of two HTTP and WS providers stops", %{chain: chain} do
+  test "newHeads stays consecutive when one of two HTTP and WS providers stops", context do
+    assert_continuity(context)
+  end
+
+  @tag stalled_replacement: true
+  test "independent HTTP backfill survives a replacement with unresponsive HTTP", context do
+    assert_continuity(context)
+  end
+
+  defp assert_continuity(%{chain: chain} = context) do
     original_http = Application.get_env(:lasso, :http_client)
     original_ws = Application.get_env(:lasso, :ws_client_module)
     Application.put_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch)
@@ -18,11 +27,20 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     a = Fleet.start!(self(), "own-a-#{chain}")
     b = Fleet.start!(self(), "own-b-#{chain}")
 
+    fleets =
+      if context[:stalled_replacement],
+        do: [a, b, Fleet.start!(self(), "own-c-#{chain}")],
+        else: [a, b]
+
     on_exit(fn ->
-      for fleet <- [a, b], Process.alive?(fleet.pid), do: Fleet.stop(fleet)
+      # Fleet monitors the test owner and shuts its listener down on owner death.
+      for fleet <- fleets do
+        monitor = Process.monitor(fleet.pid)
+        assert_receive {:DOWN, ^monitor, :process, _, _}, 5_000
+      end
     end)
 
-    for fleet <- [a, b] do
+    for fleet <- fleets do
       Fleet.script(fleet, "eth_chainId", [], {:answer, hex(chain)})
       Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(102)})
 
@@ -53,11 +71,11 @@ defmodule Lasso.TwoProviderWsFailoverTest do
 
     assert :ok = Lasso.Testing.ChainHelper.ensure_chain_exists(chain, profile: "public")
 
-    for {fleet, priority} <- [{a, 1}, {b, 2}] do
+    for {fleet, priority} <- Enum.with_index(fleets, 1) do
       config = %{
         id: fleet.name,
         url: fleet.url,
-        ws_url: fleet.ws_url,
+        ws_url: if(priority <= 2, do: fleet.ws_url),
         priority: priority,
         subscribe_new_heads: true,
         background_observations: false
@@ -67,8 +85,18 @@ defmodule Lasso.TwoProviderWsFailoverTest do
       assert :ok = Lasso.RPC.ChainSupervisor.ensure_provider("public", chain, config)
     end
 
-    wire = Rpc.wire!("ws://127.0.0.1:4002/ws/rpc/profile/public/priority/#{chain}")
-    on_exit(fn -> if Process.alive?(wire.pid), do: Rpc.close!(wire) end)
+    if context[:stalled_replacement] do
+      Fleet.script(b, "eth_blockNumber", [], {:hold, :blocked})
+    end
+
+    port = System.get_env("PORT", "4002")
+    wire = Rpc.wire!("ws://127.0.0.1:#{port}/ws/rpc/profile/public/priority/#{chain}")
+
+    on_exit(fn ->
+      monitor = Process.monitor(wire.pid)
+      assert_receive {:DOWN, ^monitor, :process, _, _}, 5_000
+    end)
+
     Rpc.send!(wire, "eth_subscribe", ["newHeads"])
     a_pid = a.pid
 
@@ -93,6 +121,9 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     assert_head!(wire, subscription, 102)
     Fleet.notify(replacement, header(103))
     assert_head!(wire, subscription, 103)
+    Rpc.send!(wire, "eth_unsubscribe", [subscription], 2)
+    assert %{"id" => 2, "result" => true} = frame!(wire)
+    Rpc.close!(wire)
     refute_received {:rpc_disconnect, _, _}
     refute_received {:rpc_frame, _, {:close, _, _}}
   end

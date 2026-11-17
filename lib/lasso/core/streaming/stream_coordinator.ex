@@ -2004,9 +2004,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp pick_failover_http_provider(profile, chain_id, preferred, excluded) do
     case Selection.policy(Selection.capture(profile, chain_id)) do
       nil ->
-        case pick_backfill_http_provider(profile, chain_id, preferred, excluded) do
-          {:ok, provider_id} -> {:ok, provider_id}
-          {:error, :no_http_provider} -> pick_best_http_provider(profile, chain_id, excluded)
+        case pick_best_http_provider(profile, chain_id, Enum.uniq([preferred | excluded])) do
+          {:ok, provider_id} ->
+            {:ok, provider_id}
+
+          {:error, :no_http_provider} ->
+            pick_backfill_http_provider(profile, chain_id, preferred, excluded)
         end
 
       _policy ->
@@ -2014,7 +2017,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  # Policy continuity and live reorgs certify through the source HTTP endpoint.
   defp pick_best_http_provider(profile, chain_id, excluded) do
     case Selection.select_provider(
            profile,
