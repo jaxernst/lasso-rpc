@@ -51,6 +51,7 @@ defmodule Lasso.RPC.RequestPipeline do
     Selection,
     Selection.CandidateCursor,
     Selection.Exhaustion,
+    Selection.SiblingLast,
     TransportRegistry
   }
 
@@ -958,6 +959,17 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
+  defp order_siblings(source, %{refused_vendor_groups: []}), do: source
+
+  defp order_siblings(source, %{execution_envelope: envelope})
+       when envelope.dispatch_limit - envelope.dispatch_count < 2,
+       do: source
+
+  defp order_siblings(%CandidateCursor{} = cursor, %{refused_vendor_groups: groups}),
+    do: CandidateCursor.sibling_last(cursor, groups)
+
+  defp order_siblings(source, _groups), do: source
+
   defp prepare_candidates(channels, ctx) when is_list(channels) do
     channels = deduplicate_attempted_instances(channels, ctx)
     {selected, remaining, ctx} = pop_candidate(channels, ctx)
@@ -969,6 +981,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp prepare_candidates(%CandidateCursor{} = cursor, ctx) do
+    cursor = order_siblings(cursor, ctx)
     {selected, remaining, ctx} = pop_candidate(cursor, ctx)
 
     labels =
@@ -1432,6 +1445,8 @@ defmodule Lasso.RPC.RequestPipeline do
           knowledge_options
       end
 
+    ctx = SiblingLast.mark(ctx, outcome, channel, knowledge_options)
+
     _knowledge_result =
       ProviderKnowledge.record_attempt(
         channel,
@@ -1860,6 +1875,7 @@ defmodule Lasso.RPC.RequestPipeline do
        do: ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
 
   defp ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard) do
+    rest_channels = order_siblings(rest_channels, ctx)
     {reason, _latency_ms} = owner_error(outcome)
     profile = channel.profile
     mode = ClaimAudit.mode(profile)

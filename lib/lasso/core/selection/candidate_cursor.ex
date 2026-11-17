@@ -38,7 +38,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   alias Lasso.RPC.ProviderKnowledge.{Decision, Effects}
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RoutingEvidence.Workload
-  alias Lasso.RPC.Selection.HeadSuitability
+  alias Lasso.RPC.Selection.{HeadSuitability, SiblingLast}
   alias Lasso.RPC.Strategies.{Fastest, LoadBalanced}
 
   # Each availability tier scans its ordinary routes before the routes deferred
@@ -596,6 +596,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp pop_deferred(cursor, field, [key | rest]) do
     cursor = order_deferred(cursor, field, key)
+    cursor = order_refusal_queue(cursor, field, key)
     queues = Map.fetch!(cursor, field)
 
     case :queue.out(Map.fetch!(queues, key)) do
@@ -606,6 +607,17 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         pop_deferred(cursor, field, rest)
     end
   end
+
+  defp order_refusal_queue(%{effect_context: %{sibling_last: groups}} = cursor, field, key) do
+    queues = Map.fetch!(cursor, field)
+
+    queue =
+      queues[key] |> :queue.to_list() |> order_siblings(groups, cursor) |> :queue.from_list()
+
+    Map.put(cursor, field, Map.put(queues, key, queue))
+  end
+
+  defp order_refusal_queue(cursor, _field, _key), do: cursor
 
   defp return(channel, cursor) do
     provider = Enum.find(cursor.plan.providers, &(&1.instance_id == channel.instance_id))
@@ -629,6 +641,72 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
+  @doc "Defers known-company siblings within each existing availability and knowledge band."
+  @spec sibling_last(t(), [atom()]) :: t()
+  def sibling_last(%{preferred: [_ | _]} = cursor, groups),
+    do: %{cursor | preferred: order_siblings(cursor.preferred, groups, cursor)}
+
+  def sibling_last(cursor, groups) do
+    cursor = %{cursor | effect_context: Map.put(cursor.effect_context, :sibling_last, groups)}
+    # An unresolved route is a barrier: only selection may open its channel.
+    {entries, _unresolved?} =
+      Enum.map_reduce(cursor.descriptors, false, fn descriptor, unresolved? ->
+        band = if not unresolved?, do: cached_band(cursor, descriptor)
+        {{descriptor, band}, unresolved? or is_nil(band)}
+      end)
+
+    # Other bands finish materialising into queues before the same rule is applied.
+    band = {1, :ordinary, true}
+
+    ordered =
+      entries
+      |> Enum.filter(&(elem(&1, 1) == band))
+      |> Enum.map(&elem(&1, 0))
+      |> order_descriptors(groups, cursor)
+
+    {descriptors, []} =
+      Enum.map_reduce(entries, ordered, fn
+        {_descriptor, ^band}, [next | rest] -> {next, rest}
+        {descriptor, _other}, remaining -> {descriptor, remaining}
+      end)
+
+    %{cursor | descriptors: descriptors}
+  end
+
+  defp cached_band(cursor, descriptor) do
+    case materialize(%{cursor | channel_lookup: :cached}, descriptor) do
+      {:ok, _channel, tier, supported?} -> {tier, bucket(cursor, descriptor), supported?}
+      {:skip, _reason} -> nil
+    end
+  end
+
+  defp order_descriptors(descriptors, groups, cursor) do
+    SiblingLast.order(
+      descriptors,
+      groups,
+      fn descriptor ->
+        {provider, transport} =
+          case descriptor do
+            {provider, transport} -> {provider, transport}
+            {:ranked, candidate, transport} -> {candidate, transport}
+          end
+
+        %{template_provider_config: provider.config, transport: transport}
+      end,
+      &head_class(cursor, &1)
+    )
+  end
+
+  defp order_siblings(channels, groups, cursor),
+    do: SiblingLast.order(channels, groups, & &1, &head_class(cursor, &1))
+
+  defp head_class(cursor, route),
+    do:
+      elem(
+        HeadSuitability.classify(cursor.effect_context.head_suitability, Decision.route(route)),
+        0
+      )
+
   @doc "Records a dispatch so learned recovery cannot add another send."
   @spec attempted_provider(t(), Channel.t()) :: t()
   def attempted_provider(cursor, _channel),
@@ -636,6 +714,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp return_allowed(channel, cursor) do
     if current?(cursor) do
+      cursor = %{cursor | effect_context: Map.delete(cursor.effect_context, :sibling_last)}
       seen = cursor.diversity_seen && MapSet.put(cursor.diversity_seen, channel.instance_id)
       {:ok, channel, %{cursor | returned: cursor.returned + 1, diversity_seen: seen}}
     else

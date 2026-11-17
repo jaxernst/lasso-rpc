@@ -77,6 +77,7 @@ defmodule Lasso.RPC.RequestContext do
           # Channel execution tracking (for observability without polluting return types)
           executed_channel: channel_identity() | nil,
           attempted_channels: [channel_attempt()],
+          refused_vendor_groups: [atom()],
           # Full error retained for a terminal upstream answer.
           last_attempt_error: JError.t() | nil,
           # An upstream's eth_getLogs range or result limit. Other upstreams may
@@ -186,6 +187,7 @@ defmodule Lasso.RPC.RequestContext do
             repeated_error_categories: %{},
             executed_channel: nil,
             attempted_channels: [],
+            refused_vendor_groups: [],
             last_attempt_error: nil,
             log_range_error: nil,
             claim_audit: nil,
