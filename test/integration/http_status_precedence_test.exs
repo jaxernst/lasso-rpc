@@ -20,10 +20,10 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
           "eth_chainId" ->
             {200, %{result: "0x" <> Integer.to_string(opts[:chain], 16)}}
 
-          "eth_getBalance" ->
+          method when method in ["eth_getBalance", "eth_sendRawTransaction"] ->
             send(opts[:observer], {:called, opts[:name]})
 
-            if opts[:status] == 200,
+            if opts[:name] == "healthy",
               do: {200, %{result: "0x123"}},
               else: {opts[:status], %{error: %{code: opts[:code], message: "Invalid request"}}}
 
@@ -36,8 +36,23 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
     end
   end
 
-  for status <- [429, 401, 403], code <- [-32_600, -32_700] do
-    test "HTTP #{status} with code #{code} fails over through the HTTP endpoint" do
+  @read_params ["0x0000000000000000000000000000000000000001", "latest"]
+  @cases for(
+           status <- [429, 401, 403],
+           code <- [-32_600, -32_700],
+           do: {"eth_getBalance", @read_params, status, code, true}
+         ) ++
+           for(
+             status <- [429, 401, 403],
+             do: {"eth_sendRawTransaction", ["0x02"], status, -32_600, false}
+           ) ++
+           for(
+             status <- [200, 400],
+             do: {"eth_getBalance", @read_params, status, -32_600, false}
+           )
+
+  for {method, params, status, code, failover?} <- @cases do
+    test "#{method} HTTP #{status} code #{code} failover=#{failover?}" do
       chain = 700_000_000 + System.unique_integer([:positive, :monotonic])
       previous = Application.get_env(:lasso, :http_client)
       Application.put_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch)
@@ -82,8 +97,8 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
       request = %{
         jsonrpc: "2.0",
         id: 1,
-        method: "eth_getBalance",
-        params: ["0x0000000000000000000000000000000000000001", "latest"]
+        method: unquote(method),
+        params: unquote(params)
       }
 
       {:ok, response} =
@@ -96,9 +111,19 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
         |> Finch.request(Lasso.Finch)
 
       assert response.status == 200
-      assert %{"id" => 1, "result" => "0x123"} = Jason.decode!(response.body)
+      body = Jason.decode!(response.body)
       assert_receive {:called, "refused"}
-      assert_receive {:called, "healthy"}
+
+      if unquote(failover?) do
+        assert %{"id" => 1, "result" => "0x123"} = body
+        assert_receive {:called, "healthy"}
+      else
+        assert %{"id" => 1, "error" => error} = body
+        if unquote(status) in [200, 400], do: assert(error["code"] == -32_600)
+        refute_receive {:called, "healthy"}
+      end
+
+      refute_receive {:called, _provider}
     end
   end
 end

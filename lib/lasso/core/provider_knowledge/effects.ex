@@ -565,7 +565,12 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   @doc "Whether live method evidence excludes this route."
-  @spec method_refused?(map(), map(), String.t(), map()) :: boolean()
+  @spec method_refused?(
+          {map(), atom()} | {:ranked, map(), atom()},
+          map(),
+          String.t(),
+          map()
+        ) :: boolean()
   def method_refused?(descriptor, plan, method, context) do
     scope = effect_scope(descriptor, plan, method, context)
 
