@@ -29,6 +29,8 @@ defmodule Lasso.Test.Harness.Fleet do
   def request(fleet, transport, request),
     do: GenServer.call(fleet, {:request, transport, request})
 
+  def connection_event(fleet, method), do: GenServer.call(fleet, {:connection_event, method})
+
   @impl true
   def init({owner, name}) do
     ref = {__MODULE__, make_ref()}
@@ -81,6 +83,14 @@ defmodule Lasso.Test.Harness.Fleet do
       {pid, holds} ->
         send(pid, {:release, token, action})
         {:reply, :ok, %{s | holds: holds}}
+    end
+  end
+
+  def handle_call({:connection_event, method}, from, s) do
+    if Map.has_key?(s.scripts, method) do
+      handle_call({:request, :ws, %{"method" => method}}, from, s)
+    else
+      {:reply, {:answer, true}, s}
     end
   end
 
@@ -140,6 +150,9 @@ defmodule Lasso.Test.Harness.Fleet do
   defmodule Wire do
     def init(req, fleet) do
       if :cowboy_req.path(req) == "/ws" do
+        Lasso.Test.Harness.Fleet.connection_event(fleet, "fixture_upgrade")
+        |> released()
+
         {:cowboy_websocket, req, fleet}
       else
         {:ok, body, req} = read_body(req, [])
@@ -166,7 +179,10 @@ defmodule Lasso.Test.Harness.Fleet do
       end
     end
 
-    def websocket_init(fleet), do: {:ok, fleet}
+    def websocket_init(fleet) do
+      Lasso.Test.Harness.Fleet.connection_event(fleet, "fixture_connected")
+      {:ok, fleet}
+    end
 
     def websocket_handle({:text, bytes}, fleet) do
       request = Jason.decode!(bytes)
@@ -193,6 +209,9 @@ defmodule Lasso.Test.Harness.Fleet do
             method: "eth_subscription",
             params: %{subscription: subscription, result: result}
           })}, fleet}
+
+    def websocket_info(:fixture_disconnect, fleet),
+      do: {:reply, {:close, 1011, "scripted disconnect"}, fleet}
 
     def websocket_info(_, fleet), do: {:ok, fleet}
 
