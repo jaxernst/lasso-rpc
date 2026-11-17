@@ -326,8 +326,12 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
       spawn(fn ->
         {:ok, socket} = :gen_tcp.accept(listener, 1_000)
         {:ok, _request} = receive_headers(socket, "")
-        send(parent, :first_received)
-        Process.sleep(150)
+        send(parent, {:first_received, System.monotonic_time(:microsecond)})
+
+        receive do
+          :respond -> :ok
+        end
+
         _ = :gen_tcp.send(socket, http_response("first"))
 
         case receive_headers(socket, "") do
@@ -344,14 +348,19 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
 
     request = Finch.build(:get, "http://127.0.0.1:#{port}")
 
-    assert {:error, _} =
+    deadline_us = System.monotonic_time(:microsecond) + 500_000
+
+    # This deadline tests cancellation; the fixture holds its response until it fires.
+    assert {:error, %Finch.TransportError{reason: :timeout}} =
              FinchClient.bounded_request(
                request,
-               [finch_name: finch_name, admission: @admission, timeout: 50],
+               [finch_name: finch_name, admission: @admission, deadline_us: deadline_us],
                & &1
              )
 
-    assert_receive :first_received
+    assert_receive {:first_received, received_at_us}
+    assert received_at_us < deadline_us
+    send(first_server, :respond)
 
     second_server =
       spawn(fn ->

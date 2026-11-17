@@ -361,32 +361,31 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     refute outcome.projection.fallback_eligible
   end
 
+  @tag :manual_clock
   test "positive proof after a predispatch candidate prevents unsafe fallback" do
-    for _iteration <- 1..100 do
-      outcome =
-        RequestOwner.execute(identity(:unknown), deadline_after(100), fn ->
-          context = AttemptProtocol.context()
-          transport_task = self()
+    outcome =
+      RequestOwner.execute(identity(:unknown), deadline_after(100), fn ->
+        context = AttemptProtocol.context()
+        transport_task = self()
 
-          confirmer =
-            spawn(fn ->
-              receive do
-                :confirm ->
-                  AttemptProtocol.send_confirmed(context)
-                  send(transport_task, :confirmed)
-              end
-            end)
+        confirmer =
+          spawn(fn ->
+            receive do
+              :confirm ->
+                AttemptProtocol.send_confirmed(context)
+                send(transport_task, :confirmed)
+            end
+          end)
 
-          send(confirmer, :confirm)
-          assert :ok = AttemptProtocol.predispatch_failure(context, :not_connected)
-          assert_receive :confirmed
-          {:error, :not_connected}
-        end)
+        assert :ok = AttemptProtocol.predispatch_failure(context, :not_connected)
+        send(confirmer, :confirm)
+        assert_receive :confirmed
+        {:error, :not_connected}
+      end)
 
-      assert %AttemptTerminal.TransportFailure{dispatch_certainty: :dispatched} = outcome.fact
-      refute outcome.projection.fallback_eligible
-      refute match?(%AttemptTerminal.PredispatchFailure{}, outcome.fact)
-    end
+    assert %AttemptTerminal.TransportFailure{dispatch_certainty: :dispatched} = outcome.fact
+    refute outcome.projection.fallback_eligible
+    refute match?(%AttemptTerminal.PredispatchFailure{}, outcome.fact)
   end
 
   test "D and D+1 terminal stamps are expired" do
@@ -835,23 +834,24 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     end
   end
 
+  test "deadline expiry terminates an unfinished transport" do
+    assert_deadline_expiry()
+  end
+
+  @tag :slow
   test "deadline wakeup p95 stays within the bounded runtime tolerance" do
-    overshoots =
-      for _iteration <- 1..30 do
-        deadline_us = deadline_after(5)
-
-        outcome =
-          RequestOwner.execute(identity(), deadline_us, fn ->
-            Process.sleep(:infinity)
-          end)
-
-        assert outcome.result == {:error, :deadline_expired}
-        max(System.monotonic_time(:microsecond) - deadline_us, 0)
-      end
-
+    overshoots = for _iteration <- 1..30, do: assert_deadline_expiry()
     p95 = overshoots |> Enum.sort() |> Enum.at(28)
 
     assert p95 <= 25_000,
            "deadline wakeup p95 exceeded 25ms: p95=#{p95}us max=#{Enum.max(overshoots)}us"
+  end
+
+  defp assert_deadline_expiry do
+    deadline_us = deadline_after(5)
+    outcome = RequestOwner.execute(identity(), deadline_us, fn -> Process.sleep(:infinity) end)
+    assert outcome.result == {:error, :deadline_expired}
+    assert %AttemptTerminal.Deadline{} = outcome.fact
+    max(System.monotonic_time(:microsecond) - deadline_us, 0)
   end
 end

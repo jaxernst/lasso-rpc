@@ -80,6 +80,14 @@ These opt-in tests can make real network requests. Check the specific test's
 configuration and credentials before running it. This command does not enable
 `:publication_db` or `:anvil`.
 
+The parser latency ceiling and deadline-wakeup p95 measurements use `:slow`.
+Their correctness, memory and reduction assertions remain in the default suite.
+Run these scheduler-sensitive measurements explicitly on an unloaded host:
+
+```bash
+mix test test/lasso/core/transport/upstream_response_test.exs test/lasso/core/request/request_owner_test.exs --include slow
+```
+
 ## Tags
 
 | Tag | Purpose | Default |
