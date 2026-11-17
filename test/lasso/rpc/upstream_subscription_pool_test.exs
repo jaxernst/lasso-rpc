@@ -844,7 +844,14 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       [{manager, _}] = Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id})
       pool = GenServer.whereis(UpstreamSubscriptionPool.via(profile, chain_id))
       :ok = :sys.suspend(manager)
-      on_exit(fn -> if Process.alive?(manager), do: :sys.resume(manager) end)
+
+      on_exit(fn ->
+        try do
+          :sys.resume(manager)
+        catch
+          :exit, _manager_already_stopped -> :ok
+        end
+      end)
 
       send(pool, {:reestablish_after_restart, key, instance_id})
       assert %{keys: _keys_after_restart} = :sys.get_state(pool, 250)
