@@ -185,7 +185,15 @@ checks. Each release record names the exact source commit and links its
 verification evidence. No destructive journal rollback is part of
 an ordinary binary rollback.
 
-For a previous-version upgrade check, provide the prior public image by digest:
+The publication workflow runs the previous-version upgrade check on each native
+architecture. It selects the highest published stable version below the candidate
+and reads that architecture's immutable digest from its `container-release.json`
+asset. Missing or unreadable records fail verification. When no older published
+stable release exists, the job summary explicitly records that the check was
+skipped. Upgrade evidence is included in the existing verification report and
+release assets.
+
+For the same check locally, provide the prior public image by digest:
 
 ```sh
 python3 scripts/distribution/verify.py \
