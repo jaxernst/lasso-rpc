@@ -1284,6 +1284,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   defp canonical_breaker_category(%AttemptTerminal.Response{error_category: :provider_failure}),
     do: :server_error
 
+  defp canonical_breaker_category(%AttemptTerminal.PredispatchFailure{reason: :connect_failure}),
+    do: :network_error
+
   defp canonical_breaker_category(%AttemptTerminal.InvalidResponse{}), do: :protocol_error
   defp canonical_breaker_category(%AttemptTerminal.Deadline{}), do: :timeout
 

@@ -531,6 +531,22 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   end
 
   defp handle_request_outcome(
+         {{:returned, {:error, %Finch.TransportError{reason: reason}}}, :not_started, true},
+         %AttemptProtocol.Context{} = context,
+         _lease,
+         _io_duration_us
+       ) do
+    if reason in [:timeout, :econnrefused, :econnreset, :closed, :nxdomain] do
+      AttemptProtocol.predispatch_failure(context, :connect_failure)
+      {:error, {:network_error, "Connection establishment failed"}}
+    else
+      # Local socket resources and ambiguous transport errors stay neutral.
+      AttemptProtocol.predispatch_failure(context, :local)
+      {:error, {:local_capacity_rejection, :connect_unavailable}}
+    end
+  end
+
+  defp handle_request_outcome(
          {{:returned, {:error, reason}}, dispatch_state, tracker_healthy?},
          context,
          _lease,
