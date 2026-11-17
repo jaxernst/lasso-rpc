@@ -4,8 +4,9 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
   """
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Providers.{Catalog, InstanceState}
-  alias Lasso.RPC.ChainState
+  alias Lasso.Observations.HeadSnapshot
+  alias Lasso.Providers.{Catalog, HeadEvidence, InstanceState}
+  alias LassoWeb.Dashboard.StatusHelpers
   require Logger
 
   @doc false
@@ -32,35 +33,27 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
   def fetch_connections(profile) do
     chains = ConfigStore.list_chains_for_profile(profile)
 
-    Enum.flat_map(chains, fn chain_name ->
-      fetch_chain_connections(profile, chain_name)
-    end)
+    Enum.flat_map(chains, &fetch_chain_connections(profile, &1))
   end
 
-  defp fetch_chain_connections(profile, chain_name) do
-    profile_providers = Catalog.get_profile_providers(profile, chain_name)
+  defp fetch_chain_connections(profile, chain_id) do
+    reference_height = profile_reference_height(profile, chain_id)
 
-    instance_ids =
-      profile_providers
-      |> Enum.map(& &1.instance_id)
-      |> Enum.uniq()
-
-    consensus_height =
-      case ChainState.consensus_height(chain_name, provider_ids: instance_ids) do
-        {:ok, h} -> h
-        {:error, _} -> nil
-      end
-
-    Enum.map(profile_providers, fn pp ->
-      build_provider_connection(pp, profile, chain_name, consensus_height)
-    end)
+    profile
+    |> Catalog.get_profile_providers(chain_id)
+    |> Enum.map(&build_provider_connection(&1, profile, chain_id, reference_height))
   end
 
-  defp build_provider_connection(profile_provider, profile, chain_name, consensus_height) do
+  defp profile_reference_height(profile, chain_id) do
+    case HeadEvidence.snapshot(profile, chain_id) do
+      {:ok, %HeadSnapshot{qualification: :qualified, reference_height: height}} -> height
+      _unqualified_or_missing -> nil
+    end
+  end
+
+  defp build_provider_connection(profile_provider, profile, chain_id, reference_height) do
     instance_id = profile_provider.instance_id
     provider_id = profile_provider.provider_id
-
-    chain_id = resolve_chain_id(profile, chain_name)
 
     instance_config =
       case Catalog.get_instance(instance_id) do
@@ -106,15 +99,12 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
         {http_rem, ws_rem} -> now_ms + max(http_rem, ws_rem)
       end
 
-    {block_height, blocks_behind} =
-      calculate_block_sync(chain_name, instance_id, consensus_height)
-
     observation = read_observation(chain_id, instance_id)
 
     %{
       id: provider_id,
       profile_id: profile,
-      chain: chain_name,
+      chain: chain_id,
       chain_id: chain_id,
       name: provider_name,
       status: health.status,
@@ -141,11 +131,11 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
       subscriptions: 0,
       url: safe_endpoint(url),
       ws_url: safe_endpoint(ws_url),
-      block_height: block_height,
+      block_height: Map.get(observation, :height),
       block_observed_at_ms: Map.get(observation, :observed_at_ms),
       block_stale_after_ms: Map.get(observation, :stale_after_ms),
-      consensus_height: consensus_height,
-      blocks_behind: blocks_behind
+      consensus_height: reference_height,
+      blocks_behind: StatusHelpers.blocks_behind(chain_id, instance_id, profile)
     }
   end
 
@@ -156,24 +146,8 @@ defmodule LassoWeb.Dashboard.ProviderConnection do
     end
   end
 
-  defp resolve_chain_id(profile, chain_name) do
-    case ConfigStore.get_chain(profile, chain_name) do
-      {:ok, %{chain_id: value}} when is_integer(value) -> value
-      _ -> nil
-    end
-  end
-
   defp derive_health_status(:up), do: :healthy
   defp derive_health_status(:down), do: :unhealthy
   defp derive_health_status(:limited), do: :degraded
   defp derive_health_status(other), do: other
-
-  defp calculate_block_sync(_, _, nil), do: {nil, nil}
-
-  defp calculate_block_sync(chain_name, instance_id, consensus_height) do
-    case ChainState.provider_lag(chain_name, instance_id) do
-      {:ok, lag} when is_integer(lag) -> {consensus_height + lag, -lag}
-      _ -> {nil, nil}
-    end
-  end
 end

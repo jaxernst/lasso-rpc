@@ -268,28 +268,24 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
   defp transport_assessments(_chain_id, _instance_id, _profile_id, _threshold), do: []
 
   @doc """
-  Calculate optimistic lag that accounts for observation delay.
-
-  With HTTP polling always running (see BlockSync.Worker), the registry
-  always has reasonably fresh data. This formula credits providers for
-  blocks that likely arrived since the last observation.
-
-  The 30s cap prevents runaway values in edge cases.
+  Blocks behind the profile's qualified head, from the provider's best assessable
+  transport. Uses the same assessments as `check_block_lag/3`, so the displayed
+  lag and the lagging status always agree. Returns nil when no transport can be
+  compared with a qualified profile reference.
   """
-  def calculate_optimistic_lag(chain, provider_id) do
-    block_time_ms = LagCalculation.get_block_time_ms(chain)
+  def blocks_behind(chain_id, instance_id, profile_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) do
+    lags =
+      for %{lag: lag} when is_integer(lag) <-
+            transport_assessments(
+              chain_id,
+              instance_id,
+              profile_id,
+              lag_threshold_blocks(profile_id, chain_id)
+            ),
+          do: lag
 
-    case LagCalculation.calculate_optimistic_lag(chain, provider_id, block_time_ms) do
-      {:ok, optimistic_lag, _raw_lag} -> {:ok, optimistic_lag}
-      error -> error
-    end
-  end
-
-  @doc """
-  Get block_time_ms for a chain. Prefers dynamic measurement, falls back to config.
-  """
-  def get_block_time_ms(chain) do
-    LagCalculation.get_block_time_ms(chain)
+    if lags != [], do: max(0, -Enum.max(lags))
   end
 
   @doc """

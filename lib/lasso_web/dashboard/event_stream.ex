@@ -42,6 +42,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   use GenServer, restart: :transient
   require Logger
 
+  alias Lasso.BlockSync.Observation
   alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.{HeadObserved, RoutingDecision, Subscription}
@@ -370,8 +371,8 @@ defmodule LassoWeb.Dashboard.EventStream do
              observation.transport,
              observation.observed_at_ms
            ) do
-        {:unchanged, state} ->
-          {:noreply, state}
+        {:refreshed, state} ->
+          {:noreply, queue_block_state(state, provider_id, node_id, observation.height, chain_id)}
 
         {:changed, state} ->
           {:noreply,
@@ -394,12 +395,11 @@ defmodule LassoWeb.Dashboard.EventStream do
 
     if chain do
       case update_block_height(state, provider_id, chain, node_id, height, source, timestamp) do
-        {:unchanged, state} ->
-          {:noreply, state}
+        {:refreshed, state} ->
+          {:noreply, queue_block_state(state, provider_id, node_id, height, chain)}
 
         {:changed, state} ->
-          state = queue_block_update(state, provider_id, node_id, height, chain)
-          {:noreply, state}
+          {:noreply, queue_block_update(state, provider_id, node_id, height, chain)}
       end
     else
       {:noreply, state}
@@ -1019,8 +1019,9 @@ defmodule LassoWeb.Dashboard.EventStream do
     key = {provider_id, chain, region}
 
     case Map.get(state.block_heights, key) do
-      %{height: ^height} ->
-        {:unchanged, state}
+      %{height: ^height} = entry ->
+        refreshed = %{entry | timestamp: timestamp}
+        {:refreshed, %{state | block_heights: Map.put(state.block_heights, key, refreshed)}}
 
       _ ->
         block_heights =
@@ -1142,11 +1143,6 @@ defmodule LassoWeb.Dashboard.EventStream do
   end
 
   defp queue_block_update(state, provider_id, node_id, height, chain_id) do
-    key = {provider_id, node_id}
-    lag = get_block_lag(state, provider_id, chain_id, node_id)
-
-    block_data = %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}
-
     block_event = %{
       chain_id: chain_id,
       block_number: height,
@@ -1154,11 +1150,33 @@ defmodule LassoWeb.Dashboard.EventStream do
       margin_ms: nil
     }
 
+    state
+    |> queue_block_state(provider_id, node_id, height, chain_id)
+    |> Map.update!(:pending_block_events, &[block_event | &1])
+  end
+
+  defp queue_block_state(state, provider_id, node_id, height, chain_id) do
+    block_data = %{
+      provider_id: provider_id,
+      node_id: node_id,
+      height: height,
+      lag: get_block_lag(state, provider_id, chain_id, node_id),
+      observed_at_ms: get_in(state.block_heights, [{provider_id, chain_id, node_id}, :timestamp]),
+      stale_after_ms: block_stale_after_ms(state.profile, chain_id, provider_id)
+    }
+
     %{
       state
-      | pending_block_states: Map.put(state.pending_block_states, key, block_data),
-        pending_block_events: [block_event | state.pending_block_events]
+      | pending_block_states:
+          Map.put(state.pending_block_states, {provider_id, node_id}, block_data)
     }
+  end
+
+  defp block_stale_after_ms(profile, chain_id, provider_id) do
+    case Catalog.lookup_instance_id(profile, chain_id, provider_id) do
+      instance_id when is_binary(instance_id) -> Observation.stale_after_ms(instance_id, chain_id)
+      _unknown -> nil
+    end
   end
 
   # Batch flush — send one {:dashboard_batch, batch} per subscriber per tick

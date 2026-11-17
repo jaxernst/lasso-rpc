@@ -34,10 +34,6 @@ defmodule LassoWeb.Dashboard do
     selected_profile = determine_initial_profile(params, session, profiles)
 
     if connected?(socket) do
-      subscribe_profile_topics(selected_profile)
-      subscribe_global_topics(selected_profile)
-
-      # Subscribe to real-time event stream
       EventStream.subscribe(selected_profile)
 
       if Lasso.VMMetricsCollector.enabled?() do
@@ -116,10 +112,7 @@ defmodule LassoWeb.Dashboard do
 
   @impl true
   def terminate(_reason, socket) do
-    # Clean up PubSub subscriptions to prevent orphaned subscriptions
     if profile = socket.assigns[:selected_profile] do
-      unsubscribe_profile_topics(profile)
-      unsubscribe_global_topics(profile)
       EventStream.unsubscribe(profile)
     end
 
@@ -172,26 +165,6 @@ defmodule LassoWeb.Dashboard do
     end
   end
 
-  defp subscribe_profile_topics(_profile) do
-    # All per-chain subscriptions now consolidated in EventStream:
-    # - circuit:events, block_sync, provider_pool:events, health_probe
-    # This reduces per-LiveView subscriptions from O(chains) to O(1)
-    :ok
-  end
-
-  defp subscribe_global_topics(_profile) do
-    :ok
-  end
-
-  defp unsubscribe_global_topics(_profile) do
-    :ok
-  end
-
-  defp unsubscribe_profile_topics(_profile) do
-    # All per-chain subscriptions now consolidated in EventStream
-    :ok
-  end
-
   defp load_profile_meta(socket) do
     alias Lasso.Config.ConfigStore
 
@@ -214,10 +187,6 @@ defmodule LassoWeb.Dashboard do
     # Mount guarantees selected_profile is set
     old_profile = socket.assigns.selected_profile
 
-    unsubscribe_profile_topics(old_profile)
-    subscribe_profile_topics(new_profile)
-
-    # Switch event stream subscription
     EventStream.unsubscribe(old_profile)
     EventStream.subscribe(new_profile)
 
@@ -1331,7 +1300,7 @@ defmodule LassoWeb.Dashboard do
         if data[:stale?] == true or is_nil(data.height) do
           Map.delete(acc, key)
         else
-          Map.put(acc, key, %{height: data.height, lag: data.lag})
+          Map.put(acc, key, Map.take(data, [:height, :lag, :observed_at_ms, :stale_after_ms]))
         end
       end)
 
