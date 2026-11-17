@@ -818,7 +818,7 @@ Drop-in replacement for existing RPC URLs.
 
 **Transaction routing**:
 
-- `eth_sendRawTransaction` is supported, with ordinary routing when no transaction policy is configured
+- `eth_sendRawTransaction` is supported. Without a chain `transactions` block a send runs once and is not retried after dispatch; with one, sends go only to the listed providers and may be resent among them within the request deadline
 - Node-local signing methods such as `eth_sendTransaction` are rejected
 - See [RPC Standards](RPC_STANDARDS.md#transaction-sends) for transaction policy and submission behavior
 
