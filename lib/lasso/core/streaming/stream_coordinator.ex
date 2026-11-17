@@ -242,16 +242,23 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   @impl true
   def handle_cast({:provider_unhealthy, failed_id, proposed_new_id}, state) do
-    if state.failover_status == :active do
-      initiate_failover(state, failed_id, proposed_new_id)
-    else
-      Logger.warning("Ignoring provider_unhealthy signal during active failover",
-        chain_id: state.chain_id,
-        key: inspect(state.key),
-        current_status: state.failover_status
-      )
+    cond do
+      state.failover_status == :active ->
+        initiate_failover(state, failed_id, proposed_new_id)
 
-      {:noreply, state}
+      state.failover_status in [:switching, :backfilling] and
+          failed_id == state.failover_context.new_provider_id ->
+        context = Map.put(state.failover_context, :route_loss, {failed_id, proposed_new_id})
+        {:noreply, %{state | failover_context: context}}
+
+      true ->
+        Logger.debug("Ignoring provider_unhealthy signal outside the completing route",
+          chain_id: state.chain_id,
+          current_status: state.failover_status,
+          provider_id: failed_id
+        )
+
+        {:noreply, state}
     end
   end
 
@@ -1476,7 +1483,18 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           duration_ms
         )
 
-        {:noreply, final_state}
+        case Map.get(state.failover_context, :route_loss) do
+          {failed_id, proposed_id} ->
+            :telemetry.execute([:lasso, :subs, :recovery, :route_lost], %{count: 1}, %{
+              chain_id: state.chain_id,
+              recovery_kind: recovery_kind
+            })
+
+            initiate_failover(final_state, failed_id, proposed_id)
+
+          nil ->
+            {:noreply, final_state}
+        end
 
       {:repair, new_state, pending_events, details} ->
         restart_state = %{
@@ -1486,7 +1504,20 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             failover_context: nil
         }
 
-        initiate_live_reorg_repair(restart_state, provider_id, pending_events, details)
+        case initiate_live_reorg_repair(restart_state, provider_id, pending_events, details) do
+          {:noreply, %{failover_status: :backfilling} = restarted} ->
+            context =
+              Map.put(
+                restarted.failover_context,
+                :route_loss,
+                Map.get(state.failover_context, :route_loss)
+              )
+
+            {:noreply, %{restarted | failover_context: context}}
+
+          result ->
+            result
+        end
 
       {:error, reason, retained_bytes} ->
         continuity_resource_exhausted(state, reason, retained_bytes)

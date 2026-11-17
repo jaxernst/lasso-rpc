@@ -13,6 +13,11 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     assert_continuity(context)
   end
 
+  @tag refused_replacement: true
+  test "replacement ingress refusal during replay closes with continuity failure", context do
+    assert_continuity(context)
+  end
+
   defp assert_continuity(%{chain: chain} = context) do
     original_http = Application.get_env(:lasso, :http_client)
     original_ws = Application.get_env(:lasso, :ws_client_module)
@@ -109,6 +114,10 @@ defmodule Lasso.TwoProviderWsFailoverTest do
 
     Fleet.notify(source, header(100))
     assert_head!(wire, subscription, 100)
+
+    if context[:refused_replacement],
+      do: Fleet.script(b, "eth_blockNumber", [], {:hold, :replay_head})
+
     Fleet.stop(a)
 
     b_pid = b.pid
@@ -117,15 +126,56 @@ defmodule Lasso.TwoProviderWsFailoverTest do
                     %{transport: :ws, request: %{"method" => "eth_subscribe"}} = replacement},
                    5_000
 
+    if context[:refused_replacement] do
+      refuse_replacement_during_replay(chain, b, replacement)
+    end
+
     assert_head!(wire, subscription, 101)
     assert_head!(wire, subscription, 102)
-    Fleet.notify(replacement, header(103))
-    assert_head!(wire, subscription, 103)
-    Rpc.send!(wire, "eth_unsubscribe", [subscription], 2)
-    assert %{"id" => 2, "result" => true} = frame!(wire)
-    Rpc.close!(wire)
-    refute_received {:rpc_disconnect, _, _}
-    refute_received {:rpc_frame, _, {:close, _, _}}
+
+    if context[:refused_replacement] do
+      ref = wire.reference
+      assert_receive {:rpc_disconnect, ^ref, %{reason: {:remote, 1011, _reason}}}, 5_000
+    else
+      Fleet.notify(replacement, header(103))
+      assert_head!(wire, subscription, 103)
+      Rpc.send!(wire, "eth_unsubscribe", [subscription], 2)
+      assert %{"id" => 2, "result" => true} = frame!(wire)
+      Rpc.close!(wire)
+      refute_received {:rpc_disconnect, _, _}
+      refute_received {:rpc_frame, _, {:close, _, _}}
+    end
+  end
+
+  defp refuse_replacement_during_replay(chain, fleet, replacement) do
+    alias Lasso.Core.Streaming.{Ingress, InstanceSubscriptionManager}
+    fleet_pid = fleet.pid
+
+    assert_receive {:fleet, ^fleet_pid,
+                    %{
+                      transport: :http,
+                      request: %{"method" => "eth_blockNumber"},
+                      action: {:hold, :replay_head}
+                    }},
+                   5_000
+
+    instance = Lasso.Providers.Catalog.lookup_instance_id("public", chain, fleet.name)
+    manager = GenServer.whereis(InstanceSubscriptionManager.via(instance))
+
+    tokens =
+      for _ <- 1..128 do
+        {:ok, token} = Ingress.reserve(:lasso_stream_ingress, manager, 256)
+        token
+      end
+
+    try do
+      Fleet.notify(replacement, header(103))
+      assert_receive {:fleet, ^fleet_pid, %{request: %{"method" => "eth_unsubscribe"}}}, 5_000
+    after
+      Enum.each(tokens, &Ingress.release/1)
+    end
+
+    :ok = Fleet.release(fleet, :replay_head, {:answer, hex(102)})
   end
 
   defp frame!(wire) do
