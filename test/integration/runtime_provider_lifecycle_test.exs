@@ -416,11 +416,10 @@ defmodule Lasso.Integration.RuntimeProviderLifecycleTest do
       is_pid(restarted) and restarted != config_store
     end)
 
-    send(Process.whereis(ConfigStore), :retry_runtime_reconcile)
     assert_receive {:runtime_provider_removed, "public", ^provider_id, ^instance_id}, 5_000
 
     Lasso.Test.Eventually.assert_eventually(fn ->
-      :ets.lookup(:lasso_runtime_provider_cleanup, {"public", chain_id, provider_id}) == []
+      not ConfigStore.status().runtime_reconcile_pending
     end)
 
     assert Catalog.get_instance_refs(instance_id) == [other_profile]
