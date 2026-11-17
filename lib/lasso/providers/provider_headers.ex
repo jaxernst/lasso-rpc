@@ -81,7 +81,8 @@ defmodule Lasso.Providers.ProviderHeaders do
     headers = fetch(provider, :headers)
     auth_headers = fetch(provider, :auth_headers)
 
-    if valid_api_key?(api_key) and valid_headers?(headers) and
+    if valid_url?(fetch(provider, :url)) and valid_url?(fetch(provider, :ws_url)) and
+         valid_api_key?(api_key) and valid_headers?(headers) and
          valid_headers?(auth_headers) and
          header_count(headers) + header_count(auth_headers) <= @max_headers,
        do: validate_url_auth(provider),
@@ -109,6 +110,8 @@ defmodule Lasso.Providers.ProviderHeaders do
       :error -> Map.get(provider, Atom.to_string(key))
     end
   end
+
+  defp valid_url?(value), do: is_nil(value) or is_binary(value)
 
   defp valid_api_key?(nil), do: true
   defp valid_api_key?(value) when is_binary(value), do: valid_header_value?(value)

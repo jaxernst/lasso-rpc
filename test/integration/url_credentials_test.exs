@@ -155,8 +155,17 @@ defmodule Lasso.URLCredentialsTest do
           Rpc.close!(wire)
           assert_receive {:target, :http, "/rpc", "key=a%2Fb", [^http_auth]}, 5_000
           assert_receive {:target, :ws, "/rpc", "key=a%2Fb", ^ws_auth}, 5_000
-          results = Lasso.Discovery.probe(url, probes: [:methods], method_level: :critical)
-          assert is_list(results.methods)
+          discovery_url = url <> "&discovery=1"
+
+          results =
+            Lasso.Discovery.probe(discovery_url, probes: [:methods], method_level: :critical)
+
+          assert Enum.any?(
+                   results.methods,
+                   &(&1.method == "eth_chainId" and &1.status == :supported)
+                 )
+
+          assert_receive {:target, :http, "/rpc", "key=a%2Fb&discovery=1", [^http_auth]}, 5_000
           refute results.url =~ "@"
         end)
 
@@ -171,6 +180,38 @@ defmodule Lasso.URLCredentialsTest do
         refute diagnostic =~ secret
       end
     end
+  end
+
+  test "malformed runtime URL fields return errors without crashing or logging credentials", %{
+    chain: chain
+  } do
+    :ok = ConfigStore.register_chain_runtime("public", chain, %{providers: []})
+    owner = Process.whereis(ConfigStore)
+
+    logs =
+      capture_log(fn ->
+        for field <- [:url, :ws_url] do
+          config =
+            Map.put(
+              %{
+                id: "bad-url",
+                name: "Bad URL",
+                url: "http://127.0.0.1:1/rpc",
+                auth_headers: %{"Authorization" => "Basic review-secret"}
+              },
+              field,
+              123
+            )
+
+          assert {:error, :invalid_provider_headers} =
+                   ConfigStore.register_provider_runtime("public", chain, config)
+
+          assert Process.whereis(ConfigStore) == owner
+          assert Process.alive?(owner)
+        end
+      end)
+
+    refute logs =~ "Basic review-secret"
   end
 
   test "conflicting configured authorization fails validation before dialing" do
