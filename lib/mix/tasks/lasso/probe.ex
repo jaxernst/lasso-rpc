@@ -99,6 +99,11 @@ defmodule Mix.Tasks.Lasso.Probe do
       {:error, {:already_started, _}} -> :ok
     end
 
+    case Lasso.Core.Transport.UpstreamAdmission.start_link() do
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
+    end
+
     url = List.first(args)
     probes = parse_probes(Keyword.get(opts, :probes, "methods,limits,websocket"))
     level = parse_level(Keyword.get(opts, :level, "standard"))

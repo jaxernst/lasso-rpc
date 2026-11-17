@@ -345,6 +345,8 @@ GET /api/health
 ```
 
 Returns process liveness and cluster topology; it does not check upstream routing.
+`cluster.enabled` reflects configured clustering (expected peers or libcluster topologies)
+or an active distributed node, independently of cached topology snapshots.
 The response keeps HTTP 200 when cluster diagnostics are stale or unavailable.
 `cluster.snapshot_status` is `current`, `stale`, `unavailable`, or `standalone`,
 and `cluster.snapshot_age_ms` is the age of the last local topology publication
