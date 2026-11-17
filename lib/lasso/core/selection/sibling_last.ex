@@ -23,11 +23,39 @@ defmodule Lasso.RPC.Selection.SiblingLast do
 
   def mark(ctx, _outcome, _channel, _evidence), do: ctx
 
-  @spec sibling?(map(), [atom()]) :: boolean()
-  def sibling?(channel, groups) do
-    case ClaimAudit.vendor_group(channel) do
-      nil -> false
-      group -> group in groups
+  @doc "Promotes one recognised independent route, retaining unknown positions and sibling order."
+  @spec order([term()], [atom()], (term() -> map()), (term() -> term())) :: [term()]
+  def order(items, groups, channel, band) do
+    recognised =
+      Enum.filter(
+        items,
+        &(not is_nil(ClaimAudit.vendor_group(channel.(&1))) and band.(&1) == band.(hd(items)))
+      )
+
+    sibling = Enum.find_index(recognised, &(ClaimAudit.vendor_group(channel.(&1)) in groups))
+
+    independent =
+      Enum.find_index(recognised, &(ClaimAudit.vendor_group(channel.(&1)) not in groups))
+
+    if sibling == 0 and is_integer(independent) and independent > 0 and
+         ClaimAudit.vendor_group(channel.(hd(items))) in groups do
+      {promoted, rest} = List.pop_at(recognised, independent)
+      ordered = List.insert_at(rest, sibling, promoted)
+
+      {result, []} =
+        Enum.map_reduce(items, ordered, fn item, remaining ->
+          if is_nil(ClaimAudit.vendor_group(channel.(item))) or band.(item) != band.(hd(items)) do
+            {item, remaining}
+          else
+            [next | rest] = remaining
+            {next, rest}
+          end
+        end)
+
+      # Unknown positions cannot consume the slot reserved for the ordinary next route.
+      if Enum.at(result, 1) == hd(items), do: result, else: items
+    else
+      items
     end
   end
 

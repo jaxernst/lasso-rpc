@@ -460,8 +460,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         deferred_complete?(next_deferred)
       )
 
-    ordered = sibling_descriptors(ordered, cursor)
-
     scan(%{
       cursor
       | descriptors: ordered,
@@ -496,8 +494,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         cursor.effect_context,
         true
       )
-
-    ordered = sibling_descriptors(ordered, cursor)
 
     scan(%{
       cursor
@@ -566,27 +562,12 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       else: :ordinary
   end
 
-  defp defer_alternate?(%{effect_context: %{sibling_last: groups}} = cursor, channel) do
-    pending? =
-      cursor.deferred_ranking != nil or
-        not :queue.is_empty(cursor.supported_deferred[{1, :ordinary}])
+  defp defer_alternate?(%{diversity_seen: nil}, _channel), do: false
 
-    (pending? and SiblingLast.sibling?(channel, groups)) or
-      defer_diversity?(cursor, channel)
-  end
-
-  defp defer_alternate?(cursor, channel), do: defer_diversity?(cursor, channel)
-
-  defp defer_diversity?(%{diversity_seen: nil}, _channel), do: false
-
-  defp defer_diversity?(cursor, channel) do
+  defp defer_alternate?(cursor, channel) do
     MapSet.member?(cursor.diversity_seen, channel.instance_id) and
       :queue.len(cursor.supported_deferred[{1, :ordinary}]) < cursor.limit - cursor.returned
   end
-
-  # Ranked batches already applied learning effects before holding siblings back.
-  defp order_deferred(%{candidate_labels: [_ | _]} = cursor, :supported_deferred, {1, :ordinary}),
-    do: cursor
 
   defp order_deferred(%{diversity_seen: nil} = cursor, _field, _tier), do: cursor
 
@@ -615,6 +596,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp pop_deferred(cursor, field, [key | rest]) do
     cursor = order_deferred(cursor, field, key)
+    cursor = order_refusal_queue(cursor, field, key)
     queues = Map.fetch!(cursor, field)
 
     case :queue.out(Map.fetch!(queues, key)) do
@@ -625,6 +607,17 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         pop_deferred(cursor, field, rest)
     end
   end
+
+  defp order_refusal_queue(%{effect_context: %{sibling_last: groups}} = cursor, field, key) do
+    queues = Map.fetch!(cursor, field)
+
+    queue =
+      queues[key] |> :queue.to_list() |> order_siblings(groups, cursor) |> :queue.from_list()
+
+    Map.put(cursor, field, Map.put(queues, key, queue))
+  end
+
+  defp order_refusal_queue(cursor, _field, _key), do: cursor
 
   defp return(channel, cursor) do
     provider = Enum.find(cursor.plan.providers, &(&1.instance_id == channel.instance_id))
@@ -650,56 +643,86 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   @doc "Defers known-company siblings within each existing availability and knowledge band."
   @spec sibling_last(t(), [atom()]) :: t()
+  def sibling_last(%{preferred: [_ | _]} = cursor, groups),
+    do: %{cursor | preferred: order_siblings(cursor.preferred, groups, cursor)}
+
   def sibling_last(cursor, groups) do
-    queues = fn
-      @empty_queues ->
-        @empty_queues
-
-      queues ->
-        Map.new(queues, fn
-          {{_tier, :deferred}, _queue} = entry ->
-            entry
-
-          {key, queue} ->
-            {key, queue |> :queue.to_list() |> order_siblings(groups) |> :queue.from_list()}
-        end)
-    end
-
     cursor = %{cursor | effect_context: Map.put(cursor.effect_context, :sibling_last, groups)}
+    entries = Enum.map(cursor.descriptors, &{&1, descriptor_band(cursor, &1)})
+    fields = [supported_deferred: true, unsupported_deferred: false]
 
-    %{
-      cursor
-      | descriptors: sibling_descriptors(cursor.descriptors, cursor),
-        supported_deferred: queues.(cursor.supported_deferred),
-        unsupported_deferred: queues.(cursor.unsupported_deferred),
-        preferred: order_siblings(cursor.preferred, groups)
-    }
+    queued_bands =
+      for {field, supported?} <- fields,
+          {{tier, bucket}, queue} <- Map.fetch!(cursor, field),
+          not :queue.is_empty(queue),
+          do: {tier, bucket, supported?}
+
+    band =
+      (Enum.map(entries, &elem(&1, 1)) ++ queued_bands)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.min_by(
+        fn {tier, bucket, supported?} ->
+          {not supported?, tier, bucket != :ordinary}
+        end,
+        fn -> nil end
+      )
+
+    descriptors_first? =
+      (band == {1, :ordinary, true} and Enum.any?(entries, &(elem(&1, 1) == band))) or
+        band not in queued_bands
+
+    ordered =
+      entries
+      |> Enum.filter(&(not is_nil(band) and elem(&1, 1) == band))
+      |> Enum.map(&elem(&1, 0))
+      |> then(fn descriptors ->
+        if descriptors_first?,
+          do: order_descriptors(descriptors, groups, cursor),
+          else: descriptors
+      end)
+
+    {descriptors, []} =
+      Enum.map_reduce(entries, ordered, fn
+        {_descriptor, ^band}, [next | rest] -> {next, rest}
+        {descriptor, _other}, remaining -> {descriptor, remaining}
+      end)
+
+    %{cursor | descriptors: descriptors}
   end
 
-  defp sibling_descriptors(descriptors, %{effect_context: %{sibling_last: groups}}) do
-    {ordinary, siblings} =
-      Enum.split_with(descriptors, fn descriptor ->
+  defp descriptor_band(cursor, descriptor) do
+    case materialize(cursor, descriptor) do
+      {:ok, _channel, tier, supported?} -> {tier, bucket(cursor, descriptor), supported?}
+      {:skip, _reason} -> nil
+    end
+  end
+
+  defp order_descriptors(descriptors, groups, cursor) do
+    SiblingLast.order(
+      descriptors,
+      groups,
+      fn descriptor ->
         {provider, transport} =
           case descriptor do
             {provider, transport} -> {provider, transport}
             {:ranked, candidate, transport} -> {candidate, transport}
           end
 
-        not SiblingLast.sibling?(
-          %{template_provider_config: provider.config, transport: transport},
-          groups
-        )
-      end)
-
-    ordinary ++ siblings
+        %{template_provider_config: provider.config, transport: transport}
+      end,
+      &head_class(cursor, &1)
+    )
   end
 
-  defp sibling_descriptors(descriptors, _cursor), do: descriptors
+  defp order_siblings(channels, groups, cursor),
+    do: SiblingLast.order(channels, groups, & &1, &head_class(cursor, &1))
 
-  defp order_siblings(channels, groups) do
-    {ordinary, siblings} = Enum.split_with(channels, &(not SiblingLast.sibling?(&1, groups)))
-    ordinary ++ siblings
-  end
+  defp head_class(cursor, route),
+    do:
+      elem(
+        HeadSuitability.classify(cursor.effect_context.head_suitability, Decision.route(route)),
+        0
+      )
 
   @doc "Records a dispatch so learned recovery cannot add another send."
   @spec attempted_provider(t(), Channel.t()) :: t()
@@ -708,6 +731,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp return_allowed(channel, cursor) do
     if current?(cursor) do
+      cursor = %{cursor | effect_context: Map.delete(cursor.effect_context, :sibling_last)}
       seen = cursor.diversity_seen && MapSet.put(cursor.diversity_seen, channel.instance_id)
       {:ok, channel, %{cursor | returned: cursor.returned + 1, diversity_seen: seen}}
     else

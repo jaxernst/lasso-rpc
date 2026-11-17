@@ -20,7 +20,8 @@ defmodule Lasso.RefusalVendorDiversityTest do
           send(opts[:observer], {:called, opts[:name]})
 
           if opts[:name] == "first" or
-               (opts[:name] == "sibling" and opts[:sibling_refuses]) do
+               (opts[:name] in ["sibling", "sibling2"] and opts[:sibling_refuses]) or
+               (opts[:name] == "other" and opts[:other_refuses]) do
             {opts[:status], %{error: %{code: opts[:code], message: opts[:message]}}}
           else
             {200, %{result: if(opts[:name] == "sibling", do: "0x22", else: "0x33")}}
@@ -63,7 +64,33 @@ defmodule Lasso.RefusalVendorDiversityTest do
     run_case("archive refusal", 200, -32000, "missing trie node", false, true, "other")
   end
 
-  defp run_case(label, status, code, message, unknown?, independent?, expected) do
+  test "the last slot reaches the answering sibling" do
+    run_case("budget control", 200, -32601, "Method not found", false, true, "sibling",
+      budget: 2,
+      other_refuses: true
+    )
+  end
+
+  test "one promotion leaves the ordinary next route reachable" do
+    run_case("budget control", 200, -32601, "Method not found", false, true, "sibling",
+      other_refuses: true,
+      calls: ["first", "other", "sibling"]
+    )
+  end
+
+  test "a mixed unknown host retains its ordinary position" do
+    run_case("mixed unknown", 200, -32601, "Method not found", false, true, "sibling",
+      other_host: "other.fixture.invalid"
+    )
+  end
+
+  test "an intervening unknown route does not displace the ordinary next sibling" do
+    run_case("mixed positions", 200, -32601, "Method not found", false, true, "sibling",
+      middle_unknown: true
+    )
+  end
+
+  defp run_case(label, status, code, message, unknown?, independent?, expected, options \\ []) do
     chain = 700_000_000 + System.unique_integer([:positive, :monotonic])
     previous = Application.get_env(:lasso, :http_client)
     Application.put_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch)
@@ -85,7 +112,21 @@ defmodule Lasso.RefusalVendorDiversityTest do
     hosts =
       if unknown?,
         do: ["first.fixture.invalid", "second.fixture.invalid", "other.fixture.invalid"],
-        else: ["first.alchemy.com", "second.alchemy.com", "other.drpc.org"]
+        else: [
+          "first.alchemy.com",
+          "second.alchemy.com",
+          Keyword.get(options, :other_host, "other.drpc.org")
+        ]
+
+    hosts =
+      if label == "archive refusal",
+        do: List.insert_at(hosts, 2, "third.alchemy.com"),
+        else: hosts
+
+    hosts =
+      if options[:middle_unknown],
+        do: List.insert_at(hosts, 2, "middle.fixture.invalid"),
+        else: hosts
 
     :ok = :inet_db.add_host({127, 0, 0, 1}, Enum.map(hosts, &String.to_charlist/1))
     prior_lookup = :inet_db.res_option(:lookup)
@@ -97,7 +138,14 @@ defmodule Lasso.RefusalVendorDiversityTest do
 
     on_exit(fn -> :inet_db.set_lookup(prior_lookup) end)
 
-    routes = Enum.zip(["first", "sibling", "other"], hosts)
+    names =
+      cond do
+        label == "archive refusal" -> ["first", "sibling", "sibling2", "other"]
+        options[:middle_unknown] -> ["first", "sibling", "unknown", "other"]
+        true -> ["first", "sibling", "other"]
+      end
+
+    routes = Enum.zip(names, hosts)
     routes = if independent?, do: routes, else: Enum.take(routes, 2)
 
     for {{name, host}, priority} <- Enum.with_index(routes, 1) do
@@ -113,6 +161,7 @@ defmodule Lasso.RefusalVendorDiversityTest do
             code: code,
             message: message,
             sibling_refuses: label == "archive refusal",
+            other_refuses: options[:other_refuses],
             observer: self()
           ],
           ref: ref,
@@ -136,7 +185,7 @@ defmodule Lasso.RefusalVendorDiversityTest do
                )
     end
 
-    if label == "archive refusal" do
+    if budget = options[:budget] do
       alias Lasso.RPC.{RequestContext, RequestOptions, RequestPipeline}
 
       opts = %RequestOptions{
@@ -148,7 +197,7 @@ defmodule Lasso.RefusalVendorDiversityTest do
 
       ctx = RequestContext.new(chain, "eth_getBalance", @params, opts)
       envelope = Lasso.RPC.ExecutionEnvelope.new(ctx.request_id, "eth_getBalance", 2_000)
-      ctx = %{ctx | execution_envelope: %{envelope | dispatch_limit: 2}}
+      ctx = %{ctx | execution_envelope: %{envelope | dispatch_limit: budget}}
 
       assert {:ok, _, completed} =
                RequestPipeline.execute_via_channels(
@@ -158,29 +207,30 @@ defmodule Lasso.RefusalVendorDiversityTest do
                  %{opts | request_context: ctx}
                )
 
+      assert completed.executed_channel.provider_id == expected
       assert completed.execution_envelope.dispatch_count == 2
-      assert completed.execution_envelope.dispatch_limit == 2
-      assert_receive {:called, "first"}
-      assert_receive {:called, "other"}
-      refute_receive {:called, _}
+      assert completed.execution_envelope.dispatch_limit == budget
+    else
+      port = LassoWeb.Endpoint.config(:http)[:port]
+      request = %{jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: @params}
+
+      {:ok, response} =
+        Finch.build(
+          :post,
+          "http://127.0.0.1:#{port}/rpc/priority/#{chain}",
+          [{"content-type", "application/json"}],
+          Jason.encode!(request)
+        )
+        |> Finch.request(Lasso.Finch)
+
+      result = if expected == "other", do: "0x33", else: "0x22"
+      assert %{"result" => ^result} = Jason.decode!(response.body)
     end
 
-    port = LassoWeb.Endpoint.config(:http)[:port]
-    request = %{jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: @params}
+    for name <- Keyword.get(options, :calls, ["first", expected]) do
+      assert_receive {:called, ^name}
+    end
 
-    {:ok, response} =
-      Finch.build(
-        :post,
-        "http://127.0.0.1:#{port}/rpc/priority/#{chain}",
-        [{"content-type", "application/json"}],
-        Jason.encode!(request)
-      )
-      |> Finch.request(Lasso.Finch)
-
-    result = if expected == "other", do: "0x33", else: "0x22"
-    assert %{"result" => ^result} = Jason.decode!(response.body)
-    assert_receive {:called, "first"}
-    assert_receive {:called, ^expected}
     refute_receive {:called, _}
   end
 end
