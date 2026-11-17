@@ -97,7 +97,7 @@ defmodule Lasso.SubscriptionReconnectTest do
 
       wire =
         Rpc.wire!(
-          "ws://127.0.0.1:#{System.fetch_env!("PORT")}/ws/rpc/profile/public/priority/#{chain}"
+          "ws://127.0.0.1:#{System.get_env("PORT", "4002")}/ws/rpc/profile/public/priority/#{chain}"
         )
 
       on_exit(fn ->
