@@ -4,6 +4,17 @@ defmodule Lasso.RPC.ResponseTest do
   alias Lasso.RPC.Response
   alias Lasso.RPC.Response.{Success, Error, Batch}
 
+  test "nested error data IDs never replace the top-level response ID" do
+    bytes =
+      ~s({"error":{"code":-32603,"data":{"id":0},"message":"failure"},"id":4,"jsonrpc":"2.0"})
+
+    assert {:ok, %{id: 4, error: %{"data" => %{"id" => 0}}}} =
+             Lasso.RPC.EnvelopeParser.parse(bytes)
+
+    assert {:ok, %Batch{request_ids: [4], items: [%Error{id: 4}]}} =
+             Response.from_batch_bytes("[" <> bytes <> "]")
+  end
+
   describe "Response.from_bytes/1" do
     test "parses success response" do
       raw = ~s({"jsonrpc":"2.0","id":1,"result":"0x123"})
