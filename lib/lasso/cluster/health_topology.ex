@@ -31,7 +31,7 @@ defmodule Lasso.Cluster.HealthTopology do
         node_ids = [topology.self_node_id | topology.node_ids] |> Enum.uniq()
 
         %{
-          enabled: true,
+          enabled: clustering_enabled?(),
           coverage:
             Map.put(topology.coverage, :expected, expected_nodes(topology.coverage.connected)),
           regions: extract_regions(node_ids),
@@ -77,8 +77,7 @@ defmodule Lasso.Cluster.HealthTopology do
   end
 
   defp unavailable do
-    if expected_nodes(1) > 1 or Node.alive?() or
-         Application.get_env(:libcluster, :topologies, []) != [] do
+    if clustering_enabled?() do
       %{
         enabled: true,
         coverage: %{connected: 1, responding: 1, expected: expected_nodes(1)},
@@ -89,6 +88,11 @@ defmodule Lasso.Cluster.HealthTopology do
     else
       standalone()
     end
+  end
+
+  defp clustering_enabled? do
+    expected_nodes(1) > 1 or Node.list() != [] or
+      Application.get_env(:libcluster, :topologies, []) != []
   end
 
   defp expected_nodes(connected) do

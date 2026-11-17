@@ -53,14 +53,16 @@ defmodule LassoWeb.EndpointCowboyTelemetryTest do
 
       assert stream_handlers == if(expected, do: nil, else: [:cowboy_stream_h])
       assert get_in(config, [:lasso, LassoWeb.Endpoint, :http, :ip]) == {127, 0, 0, 1}
-      assert get_in(config, [:lasso, LassoWeb.Endpoint, :http, :port]) == 4002
+
+      assert get_in(config, [:lasso, LassoWeb.Endpoint, :http, :port]) ==
+               String.to_integer(System.get_env("PORT", "4002"))
     end
 
     dev_http_options = get_in(runtime_config("false", :dev), [:lasso, LassoWeb.Endpoint, :http])
 
     assert dev_http_options[:stream_handlers] == [:cowboy_stream_h]
     assert dev_http_options[:ip] == {127, 0, 0, 1}
-    assert dev_http_options[:port] == 4000
+    assert dev_http_options[:port] == String.to_integer(System.get_env("PORT", "4000"))
     assert dev_http_options[:protocol_options] == [max_connections: 1000, idle_timeout: 60_000]
   end
 
