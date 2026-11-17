@@ -284,6 +284,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  @impl true
+  def handle_info({:retry_replacement, deadline}, state) do
+    if state.failover_status == :switching and state.recovery_deadline_us == deadline and
+         recovery_remaining_ms(deadline) > 0 do
+      retry_replacement(state)
+    else
+      {:noreply, state}
+    end
+  end
+
   # Subscription failure from Pool
   @impl true
   def handle_info({:subscription_failed, reason}, state) do
@@ -597,8 +607,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         recovery_attempts: 0
     }
 
-    if is_binary(new_provider_id) do
-      initiate_failover_with_buffer(state, old_provider_id, new_provider_id, [])
+    if is_binary(new_provider_id || old_provider_id) do
+      initiate_failover_with_buffer(
+        state,
+        old_provider_id,
+        new_provider_id || old_provider_id,
+        []
+      )
     else
       enter_degraded_mode(state, failover_budget(state))
     end
@@ -1763,6 +1778,19 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp continuity_limit(_state, _reason), do: 0
 
+  defp handle_resubscribe_failure(state, reason)
+       when reason in [:not_connected, :connection_unknown] do
+    Process.send_after(self(), {:retry_replacement, state.recovery_deadline_us}, 100)
+    {:noreply, state}
+  end
+
+  defp handle_resubscribe_failure(state, %Lasso.JSONRPC.Error{
+         source: :transport,
+         retriable?: true
+       }) do
+    handle_resubscribe_failure(state, :not_connected)
+  end
+
   defp handle_resubscribe_failure(state, reason) do
     Logger.error("Resubscription failed: #{inspect(reason)}",
       chain_id: state.chain_id,
@@ -1821,6 +1849,29 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
           enter_degraded_mode(state, budget)
       end
+    end
+  end
+
+  defp retry_replacement(state) do
+    proposal = state.failover_context.new_provider_id
+
+    case pick_next_provider(state, [proposal], include_half_open: false) do
+      {:ok, provider_id} ->
+        reset = %{state | failover_status: :active, failover_context: nil}
+
+        initiate_failover_with_buffer(
+          reset,
+          proposal,
+          provider_id,
+          state.failover_context.event_buffer
+        )
+
+      {:error, :no_providers} ->
+        if recovery_remaining_ms(state.recovery_deadline_us) > 0 do
+          state.replacement_requester.(state.profile, state.chain_id, state.key, proposal, self())
+        end
+
+        {:noreply, state}
     end
   end
 
@@ -2036,8 +2087,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp select_backfill_provider(selector, profile, chain_id, preferred, excluded) do
     case :erlang.fun_info(selector, :arity) do
-      {:arity, 4} -> selector.(profile, chain_id, preferred, excluded -- [preferred])
-      {:arity, 3} -> selector.(profile, chain_id, excluded)
+      {:arity, 4} ->
+        selector.(profile, chain_id, preferred, Enum.reject(excluded, &(&1 == preferred)))
+
+      {:arity, 3} ->
+        selector.(profile, chain_id, excluded)
     end
   end
 

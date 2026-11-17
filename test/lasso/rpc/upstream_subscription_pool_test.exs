@@ -227,7 +227,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
       assert entry.provider_constraint == nil
     end
 
-    test "an active sole-provider route terminates and can be re-established after reconnect", %{
+    test "an active sole-provider route survives reconnect", %{
       chain_id: chain_id,
       provider: provider,
       profile: profile,
@@ -258,8 +258,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
         }
       )
 
-      assert_receive {:subscription_terminated, ^subscription_id, :continuity_exhausted}, 1_000
-      assert TestHelper.eventually(fn -> get_pool_state(chain_id).keys == %{} end)
+      refute_receive {:subscription_terminated, ^subscription_id, :continuity_exhausted}, 250
 
       set_ws_status(profile, chain_id, provider, :connected)
 
@@ -277,21 +276,18 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
       :ok = wait_for_ws_channel(profile, chain_id, provider)
 
-      {:ok, replacement_subscription_id} =
-        UpstreamSubscriptionPool.subscribe_client(profile, chain_id, self(), {:newHeads})
-
       :ok = wait_until_key_active(chain_id, {:newHeads})
       assert get_pool_state(chain_id).keys[{:newHeads}].refcount == 1
 
       client_registry = :sys.get_state(ClientSubscriptionRegistry.via(profile, chain_id))
-      assert client_registry.by_id[replacement_subscription_id].client_pid == self()
-      assert client_registry.by_id[replacement_subscription_id].key == {:newHeads}
+      assert client_registry.by_id[subscription_id].client_pid == self()
+      assert client_registry.by_id[subscription_id].key == {:newHeads}
 
       assert :ok =
                UpstreamSubscriptionPool.unsubscribe_client(
                  profile,
                  chain_id,
-                 replacement_subscription_id
+                 subscription_id
                )
     end
 

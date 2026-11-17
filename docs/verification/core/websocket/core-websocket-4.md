@@ -1,6 +1,6 @@
 # core-websocket-4
 
-- `core-websocket-4` Failover uses bounded replay and deduplication; exceeding recovery limits closes the affected connection explicitly. **unguarded**.
+- `core-websocket-4` Failover uses bounded replay and deduplication; exceeding recovery limits closes the affected connection explicitly..
 
 [Area and shared preconditions](README.md).
 
@@ -30,4 +30,16 @@ websocat "$WS"
 {"jsonrpc":"2.0","id":2,"method":"eth_subscribe","params":["newHeads"]}
 {"jsonrpc":"2.0","id":3,"method":"eth_subscribe","params":["logs",{}]}
 {"jsonrpc":"2.0","id":4,"method":"eth_unsubscribe","params":["REPLACE_WITH_RETURNED_SUBSCRIPTION_ID"]}
+```
+
+## Reconnect regression guard
+
+`test/integration/subscription_reconnect_test.exs` drives real HTTP and WebSocket
+fixtures through the public subscription socket. It holds upstream reconnect
+upgrades, verifies replayed consecutive heads after recovery (including a sole
+upstream and a returning original), and requires close code 1011 when every
+route stays down for the original 30-second recovery budget.
+
+```bash
+PORT=41937 mix test test/integration/subscription_reconnect_test.exs --include integration
 ```
