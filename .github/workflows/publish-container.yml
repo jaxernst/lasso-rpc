@@ -166,13 +166,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ needs.prepare.outputs.image }}@${{ needs.assemble.outputs.digest }}
         run: gh attestation verify "oci://$IMAGE" --repo "$GITHUB_REPOSITORY"
+      - name: Resolve previous stable release for upgrade verification
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: python3 scripts/distribution/previous_release.py --tag "$RELEASE_TAG" --architecture "$ARCHITECTURE"
       - name: Install and exercise the distribution on a native runner
         env:
           IMAGE: ${{ needs.prepare.outputs.image }}@${{ needs.assemble.outputs.digest }}
           VERSION: ${{ needs.prepare.outputs.version }}
           REVISION: ${{ needs.prepare.outputs.revision }}
           ARCHITECTURE: ${{ matrix.architecture }}
-        run: python3 scripts/distribution/verify.py --image "$IMAGE" --version "$VERSION" --revision "$REVISION" --report "$RUNNER_TEMP/verification-$ARCHITECTURE.json"
+          PREVIOUS_IMAGE: ${{ steps.previous.outputs.image }}
+          PREVIOUS_VERSION: ${{ steps.previous.outputs.version }}
+        run: |
+          previous=()
+          if [[ -n "$PREVIOUS_IMAGE" ]]; then
+            previous=(--previous-image "$PREVIOUS_IMAGE" --previous-version "$PREVIOUS_VERSION")
+          fi
+          python3 scripts/distribution/verify.py --image "$IMAGE" --version "$VERSION" --revision "$REVISION" --report "$RUNNER_TEMP/verification-$ARCHITECTURE.json" "${previous[@]}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
