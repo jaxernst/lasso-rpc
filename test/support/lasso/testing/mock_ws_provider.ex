@@ -316,6 +316,13 @@ defmodule Lasso.Testing.MockWSProvider do
 
   @impl true
   def init({chain, spec}) do
+    instance_id =
+      instance_id_for(Map.get(spec, :profile, @test_profile), chain, Map.fetch!(spec, :id))
+
+    # The mock owns this instance's runtime, including its breaker snapshots.
+    # Recovery must find that owner instead of starting production breakers.
+    {:ok, _} = Registry.register(Lasso.Registry, {:instance_supervisor, instance_id}, nil)
+
     state = %{
       chain: chain,
       provider_id: Map.get(spec, :id),
