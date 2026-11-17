@@ -242,16 +242,23 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   @impl true
   def handle_cast({:provider_unhealthy, failed_id, proposed_new_id}, state) do
-    if state.failover_status == :active do
-      initiate_failover(state, failed_id, proposed_new_id)
-    else
-      Logger.warning("Ignoring provider_unhealthy signal during active failover",
-        chain_id: state.chain_id,
-        key: inspect(state.key),
-        current_status: state.failover_status
-      )
+    cond do
+      state.failover_status == :active ->
+        initiate_failover(state, failed_id, proposed_new_id)
 
-      {:noreply, state}
+      state.failover_status in [:switching, :backfilling] and
+          failed_id == state.failover_context.new_provider_id ->
+        context = Map.put(state.failover_context, :route_loss, {failed_id, proposed_new_id})
+        {:noreply, %{state | failover_context: context}}
+
+      true ->
+        Logger.debug("Ignoring provider_unhealthy signal outside the completing route",
+          chain_id: state.chain_id,
+          current_status: state.failover_status,
+          provider_id: failed_id
+        )
+
+        {:noreply, state}
     end
   end
 
@@ -865,7 +872,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       enter_degraded_mode(state, budget)
     else
-      excluded_providers = [old_provider_id, new_provider_id] |> Enum.reject(&is_nil/1)
+      excluded_providers =
+        [old_provider_id, new_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
+        |> Enum.reject(&is_nil/1)
 
       case select_backfill_provider(
              state.backfill_provider_selector,
@@ -933,7 +942,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       continuity_policy: state.continuity_policy,
       allow_head_regression: false,
       minimum_head: nil,
-      excluded_providers: [old_provider_id, new_provider_id],
+      excluded_providers:
+        [old_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
+        |> Enum.reject(&(&1 == new_provider_id)),
       plan: plan
     }
 
@@ -1444,15 +1455,30 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp complete_failover(state, provider_id, _upstream_id) do
     recovery_kind = Map.get(state.failover_context, :recovery_kind, :failover)
 
-    Logger.info("WebSocket continuity recovery complete",
-      chain_id: state.chain_id,
-      key: inspect(state.key),
-      provider_id: provider_id,
-      recovery_kind: recovery_kind
-    )
-
     case drain_event_buffer(state) do
+      {:ok, %{failover_context: %{route_loss: {_failed, _proposed}}} = new_state} ->
+        :telemetry.execute([:lasso, :subs, :recovery, :route_lost], %{count: 1}, %{
+          chain_id: state.chain_id,
+          recovery_kind: recovery_kind
+        })
+
+        context = %{
+          new_state.failover_context
+          | event_buffer: [],
+            event_buffer_bytes: 0,
+            event_buffer_count: 0
+        }
+
+        handle_resubscribe_failure(%{new_state | failover_context: context}, :route_lost)
+
       {:ok, new_state} ->
+        Logger.info("WebSocket continuity recovery complete",
+          chain_id: state.chain_id,
+          key: inspect(state.key),
+          provider_id: provider_id,
+          recovery_kind: recovery_kind
+        )
+
         final_state = %{
           new_state
           | primary_provider_id: provider_id,
@@ -1486,7 +1512,20 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             failover_context: nil
         }
 
-        initiate_live_reorg_repair(restart_state, provider_id, pending_events, details)
+        case initiate_live_reorg_repair(restart_state, provider_id, pending_events, details) do
+          {:noreply, %{failover_status: :backfilling} = restarted} ->
+            context =
+              Map.put(
+                restarted.failover_context,
+                :route_loss,
+                Map.get(state.failover_context, :route_loss)
+              )
+
+            {:noreply, %{restarted | failover_context: context}}
+
+          result ->
+            result
+        end
 
       {:error, reason, retained_bytes} ->
         continuity_resource_exhausted(state, reason, retained_bytes)
@@ -1815,7 +1854,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       |> Enum.uniq()
 
     with remaining_ms when remaining_ms > 0 <- recovery_remaining_ms(state.recovery_deadline_us),
-         {:ok, provider_id} <- pick_best_http_provider(state.profile, state.chain_id, excluded) do
+         {:ok, provider_id} <-
+           select_backfill_retry(state.profile, state.chain_id, context.new_provider_id, excluded) do
       plan =
         GapFiller.Plan.new(
           state.profile,
@@ -1998,6 +2038,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     case :erlang.fun_info(selector, :arity) do
       {:arity, 4} -> selector.(profile, chain_id, preferred, excluded -- [preferred])
       {:arity, 3} -> selector.(profile, chain_id, excluded)
+    end
+  end
+
+  defp select_backfill_retry(profile, chain_id, preferred, excluded) do
+    case pick_best_http_provider(profile, chain_id, excluded) do
+      {:ok, _} = selected ->
+        selected
+
+      {:error, :no_http_provider} ->
+        pick_backfill_http_provider(profile, chain_id, preferred, excluded)
     end
   end
 

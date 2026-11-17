@@ -4,6 +4,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   """
 
   alias Lasso.Core.Transport.UpstreamResponse
+  alias Lasso.RPC.Response
 
   @spec handle_connect(map(), map()) :: {:ok, map()}
   def handle_connect(_conn, state) do
@@ -25,12 +26,29 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
 
     case send_parsed_frame(state, parsed, message, received_at, validated_at) do
       :ok ->
-        {:ok, state}
+        :ok
 
       {:error, _} ->
-        send(state.parent, {:ws_local_overload, self(), state.connection_generation})
-        {:close, state}
+        case subscription_notification(parsed, message) do
+          {:ok, %Response.Notification{method: "eth_subscription"} = notification} ->
+            GenServer.call(
+              state.parent,
+              {:subscription_ingress_refused, self(), state.connection_generation,
+               Response.Notification.subscription_id(notification)},
+              :infinity
+            )
+
+          _ ->
+            GenServer.call(
+              state.parent,
+              {:ws_message, self(), state.connection_generation, parsed, message, received_at,
+               validated_at},
+              :infinity
+            )
+        end
     end
+
+    {:ok, state}
   end
 
   def handle_frame(_frame, state), do: {:ok, state}
@@ -126,6 +144,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
 
     {:ok, state}
   end
+
+  defp subscription_notification(:legacy, message), do: Response.from_bytes(message)
+  defp subscription_notification(_parsed, _message), do: :not_subscription
 
   defp send_parsed_frame(state, parsed, message, received_at, validated_at) do
     Lasso.Core.Streaming.Ingress.send(

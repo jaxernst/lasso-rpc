@@ -277,67 +277,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       assert state.failover_status == :active
       assert state.primary_provider_id == "provider_2"
     end
-
-    test "ignores signal when status is :backfilling", %{coordinator: pid} do
-      # Force status to :backfilling
-      state = get_coordinator_state(pid)
-
-      fake_context = %{
-        old_provider_id: "p1",
-        new_provider_id: "p2",
-        backfill_task_ref: make_ref(),
-        started_at: now(),
-        event_buffer: [],
-        attempt_count: 1
-      }
-
-      new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
-      :sys.replace_state(pid, fn _ -> new_state end)
-
-      old_context = fake_context
-
-      log =
-        capture_log(fn ->
-          GenServer.cast(pid, {:provider_unhealthy, "p2", "p3"})
-          Process.sleep(10)
-        end)
-
-      # Verify signal was ignored
-      assert log =~ "Ignoring provider_unhealthy signal"
-
-      state = get_coordinator_state(pid)
-      assert state.failover_status == :backfilling
-      assert state.failover_context == old_context
-    end
-
-    test "ignores signal when status is :switching", %{coordinator: pid} do
-      # Force status to :switching
-      state = get_coordinator_state(pid)
-
-      fake_context = %{
-        old_provider_id: "p1",
-        new_provider_id: "p2",
-        backfill_task_ref: make_ref(),
-        started_at: now(),
-        event_buffer: [],
-        attempt_count: 1
-      }
-
-      new_state = %{state | failover_status: :switching, failover_context: fake_context}
-      :sys.replace_state(pid, fn _ -> new_state end)
-
-      log =
-        capture_log(fn ->
-          GenServer.cast(pid, {:provider_unhealthy, "p2", "p3"})
-          Process.sleep(10)
-        end)
-
-      # Verify signal was ignored
-      assert log =~ "Ignoring provider_unhealthy signal"
-
-      state = get_coordinator_state(pid)
-      assert state.failover_status == :switching
-    end
   end
 
   describe "circuit breaker" do

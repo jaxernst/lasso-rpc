@@ -174,6 +174,15 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   end
 
   @impl true
+  def handle_cast({:subscription_ingress_refused, generation, upstream_id}, state) do
+    with sub_key when not is_nil(sub_key) <- Map.get(state.upstream_index, upstream_id),
+         %{connection_id: ^generation} <- Map.get(state.active_subscriptions, sub_key) do
+      {:noreply, shed_subscription(state, upstream_id)}
+    else
+      _ -> {:noreply, state}
+    end
+  end
+
   def handle_cast({:check_teardown, sub_key}, state) do
     case Map.get(state.active_subscriptions, sub_key) do
       nil ->
@@ -229,9 +238,17 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
             :ok ->
               {:noreply, update_subscription_liveness(state, sub_key, received_at)}
 
-            {:error, :ingress_exhausted} ->
-              Connection.close_for_ingress_overload(state.instance_id)
-              handle_disconnect(state)
+            {:error, refused} ->
+              for {pid, meta} <- refused do
+                send(
+                  pid,
+                  {:instance_subscription_invalidated, state.instance_id, sub_key,
+                   :ingress_refused, meta.refusal_signal}
+                )
+              end
+
+              GenServer.cast(self(), {:check_teardown, sub_key})
+              {:noreply, update_subscription_liveness(state, sub_key, received_at)}
           end
         else
           emit_telemetry(:invalid_event, state, sub_key)
@@ -381,6 +398,23 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # Private helpers
+
+  defp shed_subscription(state, upstream_id) do
+    case Map.get(state.upstream_index, upstream_id) do
+      nil ->
+        state
+
+      sub_key ->
+        InstanceSubscriptionRegistry.dispatch(
+          state.instance_id,
+          sub_key,
+          {:instance_subscription_invalidated, state.instance_id, sub_key, :ingress_refused}
+        )
+
+        teardown_upstream_subscription(state.instance_id, sub_key, upstream_id)
+        remove_subscription(state, sub_key, upstream_id)
+    end
+  end
 
   defp handle_disconnect(state) do
     conn_state = %{
