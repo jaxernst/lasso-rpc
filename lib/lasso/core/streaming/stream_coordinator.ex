@@ -801,7 +801,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         max_backfill: state.max_backfill_blocks,
         backfill_timeout: state.backfill_timeout,
         continuity_policy: state.continuity_policy,
-        excluded_providers: [http_provider],
+        excluded_providers: failed_http_providers(state),
         allow_head_regression: true,
         minimum_head: max_pending_head(pending_events),
         plan: plan
@@ -872,9 +872,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       enter_degraded_mode(state, budget)
     else
-      excluded_providers =
-        [old_provider_id, new_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
-        |> Enum.reject(&is_nil/1)
+      excluded_providers = failed_http_providers(state)
 
       case select_backfill_provider(
              state.backfill_provider_selector,
@@ -942,9 +940,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       continuity_policy: state.continuity_policy,
       allow_head_regression: false,
       minimum_head: nil,
-      excluded_providers:
-        [old_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
-        |> Enum.reject(&(&1 == new_provider_id)),
+      excluded_providers: failed_http_providers(state),
       plan: plan
     }
 
@@ -1803,11 +1799,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           # This prevents losing buffered events during multi-provider failover
           preserved_buffer = state.failover_context.event_buffer
 
-          # Reset to active and re-initiate, but pass preserved buffer
-          reset_state = %{state | failover_status: :active, failover_context: nil}
-
           initiate_failover_with_buffer(
-            reset_state,
+            state,
             state.failover_context.new_provider_id,
             next_provider_id,
             preserved_buffer
@@ -1832,6 +1825,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       reason: inspect(reason)
     )
 
+    failed = Enum.uniq([state.failover_context.http_provider_id | failed_http_providers(state)])
+    state = put_in(state.failover_context.backfill_context.excluded_providers, failed)
+
     case retry_backfill_with_fallback(state) do
       {:ok, next_state} ->
         start_backfill_after_replacement(
@@ -1855,12 +1851,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
     with remaining_ms when remaining_ms > 0 <- recovery_remaining_ms(state.recovery_deadline_us),
          {:ok, provider_id} <-
-           pick_failover_http_provider(
-             state.profile,
-             state.chain_id,
-             context.new_provider_id,
-             excluded
-           ) do
+           select_backfill_retry(state.profile, state.chain_id, context.new_provider_id, excluded) do
       plan =
         GapFiller.Plan.new(
           state.profile,
@@ -1874,7 +1865,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       backfill_context = %{
         context.backfill_context
-        | excluded_providers: [provider_id | excluded],
+        | excluded_providers: excluded,
           plan: plan
       }
 
@@ -2041,8 +2032,23 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp select_backfill_provider(selector, profile, chain_id, preferred, excluded) do
     case :erlang.fun_info(selector, :arity) do
-      {:arity, 4} -> selector.(profile, chain_id, preferred, excluded -- [preferred])
+      {:arity, 4} -> selector.(profile, chain_id, preferred, excluded)
       {:arity, 3} -> selector.(profile, chain_id, excluded)
+    end
+  end
+
+  defp failed_http_providers(%{failover_context: %{backfill_context: context}}),
+    do: context.excluded_providers
+
+  defp failed_http_providers(_state), do: []
+
+  defp select_backfill_retry(profile, chain_id, preferred, excluded) do
+    case pick_best_http_provider(profile, chain_id, Enum.uniq([preferred | excluded])) do
+      {:ok, _} = selected ->
+        selected
+
+      {:error, :no_http_provider} ->
+        pick_backfill_http_provider(profile, chain_id, preferred, excluded)
     end
   end
 

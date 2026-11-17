@@ -422,7 +422,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     await_state(pid, &(&1.state.markers.last_block_num == 10))
     GenServer.cast(pid, {:provider_unhealthy, "ws-old", "ws-new"})
 
-    assert_receive {:provider_selection, ^pid, ^profile, ^chain_id, ["ws-old", "ws-new"]}
+    assert_receive {:provider_selection, ^pid, ^profile, ^chain_id, []}
 
     assert_receive {:backfill_request, owner_pid, head_scope, ^chain_id, "eth_blockNumber", [],
                     head_opts}
@@ -1792,7 +1792,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
           [
             primary_provider_id: "ws-old",
             max_failover_attempts: 1,
-            backfill_provider_selector: fn ^profile, ^chain_id, ["ws-old", "ws-new"] ->
+            backfill_provider_selector: fn ^profile, ^chain_id, [] ->
               {:error, :no_http_provider}
             end
           ]}}

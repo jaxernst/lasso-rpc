@@ -41,8 +41,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
     {:ok, [], %{}}
   end
 
-  defp successful_backfill_provider(_profile, _chain_id, excluded) do
-    {:ok, List.last(excluded)}
+  defp successful_backfill_provider(_profile, _chain_id, preferred, _excluded) do
+    {:ok, preferred}
   end
 
   defp successful_replacement(_profile, _chain_id, _key, provider_id, coordinator_pid) do
@@ -109,7 +109,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       opts = [
         primary_provider_id: "provider_1",
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3,
+        backfill_provider_selector: &successful_backfill_provider/4,
         replacement_requester: &successful_replacement/5
       ]
 
@@ -249,7 +249,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       opts = [
         primary_provider_id: "provider_1",
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3,
+        backfill_provider_selector: &successful_backfill_provider/4,
         replacement_requester: &successful_replacement/5
       ]
 
@@ -289,7 +289,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         max_failover_attempts: 2,
         failover_cooldown_ms: 1_000,
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3,
+        backfill_provider_selector: &successful_backfill_provider/4,
         replacement_requester: &successful_replacement/5
       ]
 
@@ -439,7 +439,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       opts = [
         primary_provider_id: "provider_1",
         backfill_requester: &successful_backfill_request/5,
-        backfill_provider_selector: &successful_backfill_provider/3,
+        backfill_provider_selector: &successful_backfill_provider/4,
         replacement_requester: &successful_replacement/5
       ]
 
@@ -660,7 +660,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
         primary_provider_id: "provider_1",
         max_failover_attempts: 1,
         backfill_requester: requester,
-        backfill_provider_selector: &successful_backfill_provider/3,
+        backfill_provider_selector: &successful_backfill_provider/4,
         replacement_requester: &successful_replacement/5
       ]
 
