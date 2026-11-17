@@ -470,11 +470,7 @@ defmodule Lasso.RPC.EnvelopeParser do
   defp find_valid_key_match(_chunk, []), do: :nomatch
 
   defp find_valid_key_match(chunk, [{match_pos, match_len} | rest_matches]) do
-    # Check if this match is inside a quoted string
-    if inside_string?(chunk, match_pos) do
-      # Skip this match, try next
-      find_valid_key_match(chunk, rest_matches)
-    else
+    if envelope_key?(chunk, match_pos) do
       # Check if followed by colon (valid key)
       rest_start = match_pos + match_len
       rest = binary_part(chunk, rest_start, byte_size(chunk) - rest_start)
@@ -487,34 +483,32 @@ defmodule Lasso.RPC.EnvelopeParser do
           # Not followed by colon, try next match
           find_valid_key_match(chunk, rest_matches)
       end
+    else
+      find_valid_key_match(chunk, rest_matches)
     end
   end
 
-  # Check if a byte position is inside a quoted string by counting quotes before it
-  defp inside_string?(chunk, pos) do
+  defp envelope_key?(chunk, pos) do
     prefix = binary_part(chunk, 0, pos)
-    # Count unescaped quotes before this position
-    quote_count = count_unescaped_quotes(prefix, 0)
-    # Odd number of quotes = inside string
-    rem(quote_count, 2) == 1
+    envelope_key?(prefix, 0, false)
   end
 
-  defp count_unescaped_quotes(<<>>, count), do: count
+  defp envelope_key?(<<>>, depth, in_string), do: depth == 1 and not in_string
 
-  # Skip escaped characters
-  defp count_unescaped_quotes(<<"\\", _, rest::binary>>, count) do
-    count_unescaped_quotes(rest, count)
-  end
+  defp envelope_key?(<<"\\", _, rest::binary>>, depth, true),
+    do: envelope_key?(rest, depth, true)
 
-  # Count quote
-  defp count_unescaped_quotes(<<?", rest::binary>>, count) do
-    count_unescaped_quotes(rest, count + 1)
-  end
+  defp envelope_key?(<<?", rest::binary>>, depth, in_string),
+    do: envelope_key?(rest, depth, not in_string)
 
-  # Skip other characters
-  defp count_unescaped_quotes(<<_, rest::binary>>, count) do
-    count_unescaped_quotes(rest, count)
-  end
+  defp envelope_key?(<<char, rest::binary>>, depth, false) when char in [?{, ?[],
+    do: envelope_key?(rest, depth + 1, false)
+
+  defp envelope_key?(<<char, rest::binary>>, depth, false) when char in [?}, ?]],
+    do: envelope_key?(rest, depth - 1, false)
+
+  defp envelope_key?(<<_, rest::binary>>, depth, in_string),
+    do: envelope_key?(rest, depth, in_string)
 
   # Skip optional whitespace, colon, optional whitespace -> return value start offset
   defp skip_to_value(<<ws, rest::binary>>, offset) when ws in ~c[ \t\n\r] do
