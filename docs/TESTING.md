@@ -77,8 +77,8 @@ mix test --include integration --include real_providers --include slow
 ```
 
 These opt-in tests can make real network requests. Check the specific test's
-configuration and credentials before running it. This command does not enable
-`:publication_db` or `:anvil`.
+configuration and credentials before running it. It also selects `:integration`
+tests that carry `:publication_db` or `:anvil`.
 
 Two wall-clock checks are tagged `:slow` because they measure the host's
 scheduler rather than Lasso: the parser latency ceiling and the deadline-wakeup
@@ -102,8 +102,9 @@ mix test test/lasso/core/transport/upstream_response_test.exs test/lasso/core/re
 | `:skip` | Explicitly disabled tests | Excluded |
 
 Use `@moduletag :integration` for a module or `@tag :integration` for one test.
-Some tests carry multiple tags; enabling `:integration` alone does not enable
-an excluded service-specific tag.
+Some tests carry multiple tags. An included tag wins over the default
+exclusions, so `--include integration` also runs integration tests tagged
+`:publication_db` or `:anvil`.
 
 ## Other CI checks
 

@@ -587,7 +587,6 @@ defmodule LassoWeb.Dashboard do
         data-canvas-center={@canvas_center}
       >
         <div class="h-full w-full" data-draggable-content>
-          <div id="provider-request-animator" phx-hook="ProviderRequestAnimator" class="hidden"></div>
           <NetworkTopology.nodes_display
             id="network-topology"
             topology_data={@topology_data}
