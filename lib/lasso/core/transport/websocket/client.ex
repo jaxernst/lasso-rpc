@@ -4,6 +4,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Client do
   use GenServer
 
   alias Lasso.Core.Transport.OriginResolver
+  alias Lasso.Providers.ProviderHeaders
 
   @default_connect_timeout 10_000
   @default_attempt_timeout 2_000
@@ -132,11 +133,15 @@ defmodule Lasso.RPC.Transport.WebSocket.Client do
     timeout = Keyword.get(opts, :connect_timeout, @default_connect_timeout)
     deadline = System.monotonic_time(:millisecond) + timeout
 
-    with {:ok, uri} <- parse_url(url),
+    headers = Keyword.get(opts, :extra_headers, [])
+    {clean_url, auth} = ProviderHeaders.split_url(url)
+
+    with :ok <- ProviderHeaders.validate_url_auth(%{ws_url: url, headers: headers}),
+         {:ok, uri} <- parse_url(clean_url),
          {:ok, addresses} <- OriginResolver.resolve(uri.host, resolver) do
       addresses
       |> order_addresses(opts)
-      |> connect_addresses(uri, opts, deadline, nil)
+      |> connect_addresses(uri, Keyword.put(opts, :extra_headers, headers ++ auth), deadline, nil)
     else
       {:error, {:network_error, _reason} = error} -> {:error, error}
       {:error, reason} -> {:error, {:network_error, reason}}

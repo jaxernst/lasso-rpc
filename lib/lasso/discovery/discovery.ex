@@ -78,7 +78,7 @@ defmodule Lasso.Discovery do
       end)
 
     Map.merge(results, %{
-      url: url,
+      url: elem(Lasso.Providers.ProviderHeaders.split_url(url), 0),
       probes_run: probes,
       timestamp: timestamp
     })

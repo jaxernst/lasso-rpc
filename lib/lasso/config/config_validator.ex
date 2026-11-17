@@ -166,7 +166,10 @@ defmodule Lasso.Config.ConfigValidator do
   def format_error(:duplicate_provider_ids), do: "Provider IDs must be unique"
   def format_error(:duplicate_provider_urls), do: "Provider URLs must be unique"
   def format_error(:invalid_provider_structure), do: "Provider must have id, name, and url"
-  def format_error(:invalid_provider_headers), do: "Provider headers contain invalid fields"
+
+  def format_error(:invalid_provider_headers),
+    do: "Provider headers contain invalid fields or authorization conflicts with URL userinfo"
+
   def format_error(:invalid_priority_range), do: "Provider priorities must be >= 1"
   def format_error(:duplicate_priorities), do: "Provider priorities must be unique"
   def format_error(:invalid_subscribe_new_heads), do: "subscribe_new_heads must be a boolean"

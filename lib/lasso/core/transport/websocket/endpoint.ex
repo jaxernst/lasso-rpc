@@ -6,7 +6,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Endpoint do
   than HTTP endpoints. This struct includes WebSocket-specific configuration.
   """
 
-  @derive {Inspect, except: [:headers]}
+  @derive {Inspect, except: [:headers, :ws_url]}
   @type t :: %__MODULE__{
           profile: String.t() | nil,
           id: String.t(),
