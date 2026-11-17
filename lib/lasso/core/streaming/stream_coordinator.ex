@@ -872,7 +872,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       enter_degraded_mode(state, budget)
     else
-      excluded_providers = [old_provider_id, new_provider_id] |> Enum.reject(&is_nil/1)
+      excluded_providers =
+        [old_provider_id, new_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
+        |> Enum.reject(&is_nil/1)
 
       case select_backfill_provider(
              state.backfill_provider_selector,
@@ -940,7 +942,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       continuity_policy: state.continuity_policy,
       allow_head_regression: false,
       minimum_head: nil,
-      excluded_providers: [old_provider_id, new_provider_id],
+      excluded_providers:
+        [old_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
+        |> Enum.reject(&(&1 == new_provider_id)),
       plan: plan
     }
 
@@ -1451,15 +1455,30 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp complete_failover(state, provider_id, _upstream_id) do
     recovery_kind = Map.get(state.failover_context, :recovery_kind, :failover)
 
-    Logger.info("WebSocket continuity recovery complete",
-      chain_id: state.chain_id,
-      key: inspect(state.key),
-      provider_id: provider_id,
-      recovery_kind: recovery_kind
-    )
-
     case drain_event_buffer(state) do
+      {:ok, %{failover_context: %{route_loss: {_failed, _proposed}}} = new_state} ->
+        :telemetry.execute([:lasso, :subs, :recovery, :route_lost], %{count: 1}, %{
+          chain_id: state.chain_id,
+          recovery_kind: recovery_kind
+        })
+
+        context = %{
+          new_state.failover_context
+          | event_buffer: [],
+            event_buffer_bytes: 0,
+            event_buffer_count: 0
+        }
+
+        handle_resubscribe_failure(%{new_state | failover_context: context}, :route_lost)
+
       {:ok, new_state} ->
+        Logger.info("WebSocket continuity recovery complete",
+          chain_id: state.chain_id,
+          key: inspect(state.key),
+          provider_id: provider_id,
+          recovery_kind: recovery_kind
+        )
+
         final_state = %{
           new_state
           | primary_provider_id: provider_id,
@@ -1483,18 +1502,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           duration_ms
         )
 
-        case Map.get(state.failover_context, :route_loss) do
-          {failed_id, proposed_id} ->
-            :telemetry.execute([:lasso, :subs, :recovery, :route_lost], %{count: 1}, %{
-              chain_id: state.chain_id,
-              recovery_kind: recovery_kind
-            })
-
-            initiate_failover(final_state, failed_id, proposed_id)
-
-          nil ->
-            {:noreply, final_state}
-        end
+        {:noreply, final_state}
 
       {:repair, new_state, pending_events, details} ->
         restart_state = %{
@@ -1846,7 +1854,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       |> Enum.uniq()
 
     with remaining_ms when remaining_ms > 0 <- recovery_remaining_ms(state.recovery_deadline_us),
-         {:ok, provider_id} <- pick_best_http_provider(state.profile, state.chain_id, excluded) do
+         {:ok, provider_id} <-
+           pick_failover_http_provider(
+             state.profile,
+             state.chain_id,
+             context.new_provider_id,
+             excluded
+           ) do
       plan =
         GapFiller.Plan.new(
           state.profile,
