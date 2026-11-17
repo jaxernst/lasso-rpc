@@ -4,7 +4,7 @@
 
 Elixir/OTP application providing RPC provider orchestration and routing for blockchain applications.
 
-See [CONTEXT.md](../CONTEXT.md) for domain terms and routing concepts.
+Domain terms are defined in [CONTEXT.md](../CONTEXT.md).
 
 ### Core Capabilities
 
@@ -582,10 +582,9 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 
 ### Selection API
 
-See [`Lasso.RPC.Selection`](../lib/lasso/core/selection/selection.ex) for the
-selection API and return types. `select_channels/4` returns a bare list of
-[`Channel`](../lib/lasso/core/transport/channel.ex) structs, whose provider field
-is `provider_id`.
+[`Lasso.RPC.Selection`](../lib/lasso/core/selection/selection.ex) holds the
+selection API and its types. `select_channels/4` returns a plain list of
+[`Channel`](../lib/lasso/core/transport/channel.ex) structs.
 
 ---
 
@@ -642,9 +641,9 @@ All circuit breaker events use consistent metadata:
 
 ### RequestContext Lifecycle
 
-RPC requests are tracked through
-[`Lasso.RPC.RequestContext`](../lib/lasso/core/request/request_context.ex).
-See its type and struct for the current fields, including numeric `chain_id`.
+Each request carries a
+[`Lasso.RPC.RequestContext`](../lib/lasso/core/request/request_context.ex);
+the struct and its type list the current fields.
 
 ### Request Telemetry
 
@@ -816,11 +815,10 @@ Drop-in replacement for existing RPC URLs.
 - A single provider is selected upfront for the whole batch for consistency; all items prefer that provider but can failover independently per-item
 - Responses preserve request order
 
-**Transaction routing**:
+**Transactions**:
 
-- `eth_sendRawTransaction` is supported. Without a chain `transactions` block a send runs once and is not retried after dispatch; with one, sends go only to the listed providers and may be resent among them within the request deadline
-- Node-local signing methods such as `eth_sendTransaction` are rejected
-- See [RPC Standards](RPC_STANDARDS.md#transaction-sends) for transaction policy and submission behavior
+- `eth_sendRawTransaction` is supported. Without a chain `transactions` block, a send runs once and is not retried after dispatch. With one, sends go only to the listed providers and may be resent among them within the request deadline. See [RPC Standards](RPC_STANDARDS.md#transaction-sends).
+- Methods that need node-held keys, such as `eth_sendTransaction`, are rejected.
 
 ---
 

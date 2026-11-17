@@ -60,7 +60,7 @@ Follow [the test guide](docs/TESTING.md#full-ci-integration-suite) for service s
 fixture dependencies, and evidence verification. These services are not required
 for the default suite or mock-provider integration tests.
 
-With those services configured, run the service-backed integration suite separately:
+With those services running, the full integration suite is:
 
 ```bash
 mix test --include integration --include publication_db --include anvil

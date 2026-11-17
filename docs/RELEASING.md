@@ -180,8 +180,8 @@ controlled upstream is a packaging fixture; Anvil and three-BEAM tests in source
 CI independently exercise logical-query reorg handling and fleet coordination.
 
 Record these results for each native platform alongside ordinary install/upgrade
-checks. Release records must identify this repository's exact source commit
-and link its verification evidence. No destructive journal rollback is part of
+checks. Each release record names the exact source commit and links its
+verification evidence. No destructive journal rollback is part of
 an ordinary binary rollback.
 
 For a previous-version upgrade check, provide the prior public image by digest:
