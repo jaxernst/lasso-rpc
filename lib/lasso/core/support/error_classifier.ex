@@ -44,6 +44,9 @@ defmodule Lasso.Core.Support.ErrorClassifier do
     {baseline_category, baseline_path, baseline_claim} =
       ErrorClassification.categorize_with_claim(code, original_message, data)
 
+    {baseline_category, baseline_path} =
+      status_baseline(Keyword.get(opts, :http_status), message, baseline_category, baseline_path)
+
     {category, classification_path} =
       if definitive_baseline_evidence?(baseline_category, baseline_path) do
         {baseline_category, baseline_path}
@@ -125,6 +128,30 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   defp classify_with_path(code, message, data, _provider_id, _profile, _chain, _capabilities) do
     ErrorClassification.categorize_with_path(code, message, data)
   end
+
+  defp status_baseline(status, message, category, :definitive_code)
+       when status in [401, 403] and category in [:invalid_request, :parse_error],
+       do: {credential_refusal_category(message), :http_status}
+
+  defp status_baseline(_status, _message, category, path), do: {category, path}
+
+  defp credential_refusal_category(message) do
+    case ErrorClassification.categorize(-32_000, message) do
+      category
+      when category in [
+             :execution_revert,
+             :invalid_params,
+             :unknown_error,
+             :unclassified_server_error
+           ] ->
+        :auth_error
+
+      category ->
+        category
+    end
+  end
+
+  defp definitive_baseline_evidence?(_category, :http_status), do: true
 
   defp definitive_baseline_evidence?(:execution_revert, path)
        when path in [:data_selector, :definitive_code, :message_pattern],

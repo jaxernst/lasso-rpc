@@ -166,6 +166,9 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
           )
 
         case result do
+          {:ok, {:raw, _body, ^lease, _status}} = retained ->
+            retained
+
           {:ok, {:raw, _body, ^lease}} = retained ->
             retained
 
@@ -501,9 +504,11 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
         error
 
       {:ok, {:raw, raw_body}} ->
-        if is_nil(context),
-          do: {:ok, {:raw, raw_body}},
-          else: {:ok, {:raw, raw_body, lease}}
+        cond do
+          is_nil(context) -> {:ok, {:raw, raw_body}}
+          status in [401, 403] -> {:ok, {:raw, raw_body, lease, status}}
+          true -> {:ok, {:raw, raw_body, lease}}
+        end
     end
   end
 
@@ -607,6 +612,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   defp transport_message(reason) when is_atom(reason), do: "Connection error: #{reason}"
   defp transport_message(_reason), do: "Connection error"
 
+  defp handle_response(429, _body), do: {:error, {:rate_limit, %{status: 429}}}
+
   defp handle_response(status, body) when status in 200..299, do: {:ok, {:raw, body}}
 
   defp handle_response(status, body) do
@@ -618,9 +625,6 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
         classify_http_error(status, body)
     end
   end
-
-  defp classify_http_error(429, body),
-    do: {:error, {:rate_limit, %{status: 429, body: body}}}
 
   defp classify_http_error(408, body),
     do: {:error, {:server_error, %{status: 408, body: body}}}

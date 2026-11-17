@@ -122,8 +122,7 @@ defmodule Lasso.RPC.Transports.HTTP do
             raw_bytes,
             nil,
             channel,
-            upstream_id,
-            client_id,
+            {upstream_id, client_id},
             dispatch_context,
             deadline_us,
             io_start_us
@@ -134,11 +133,22 @@ defmodule Lasso.RPC.Transports.HTTP do
             raw_bytes,
             lease,
             channel,
-            upstream_id,
-            client_id,
+            {upstream_id, client_id},
             dispatch_context,
             deadline_us,
             io_start_us
+          )
+
+        {:ok, {:raw, raw_bytes, lease, status}} ->
+          validate_received_response(
+            raw_bytes,
+            lease,
+            channel,
+            {upstream_id, client_id},
+            dispatch_context,
+            deadline_us,
+            io_start_us,
+            status
           )
 
         {:error, reason} ->
@@ -170,11 +180,11 @@ defmodule Lasso.RPC.Transports.HTTP do
          raw_bytes,
          lease,
          channel,
-         upstream_id,
-         client_id,
+         {upstream_id, client_id},
          dispatch_context,
          deadline_us,
-         io_start_us
+         io_start_us,
+         http_status \\ nil
        ) do
     received_at_us = System.monotonic_time(:microsecond)
     tune_response_heap()
@@ -183,6 +193,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
     settle_raw_response(%{
       validation: validation,
+      http_status: http_status,
       raw_bytes: raw_bytes,
       response_lease: lease,
       provider_id: channel.provider_id,
@@ -309,6 +320,7 @@ defmodule Lasso.RPC.Transports.HTTP do
     resolution =
       ErrorClassifier.resolve(jerr.code, jerr.message,
         data: jerr.data,
+        http_status: input.http_status,
         provider_id: input.provider_id,
         profile: Map.get(input, :profile),
         chain_id: Map.get(input, :chain_id),
@@ -319,6 +331,7 @@ defmodule Lasso.RPC.Transports.HTTP do
     jerr = %{
       jerr
       | provider_id: input.provider_id,
+        http_status: input.http_status,
         source: :jsonrpc,
         transport: :http,
         category: resolution.category,
