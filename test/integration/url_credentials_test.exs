@@ -130,7 +130,7 @@ defmodule Lasso.URLCredentialsTest do
 
           :ok = ConfigStore.register_provider_runtime("public", chain, config)
           :ok = Lasso.RPC.ChainSupervisor.ensure_provider("public", chain, config)
-          port = System.fetch_env!("PORT")
+          port = LassoWeb.Endpoint.config(:http)[:port]
 
           response =
             Rpc.call(
