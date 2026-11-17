@@ -28,7 +28,10 @@ defmodule Lasso.TracingIntegrationTest do
     :otel_tracer_provider.force_flush()
 
     receive do
-      {:span, record} -> collect(count - 1, [record | records], deadline)
+      {:span, record} ->
+        if background?(record),
+          do: collect(count, records, deadline),
+          else: collect(count - 1, [record | records], deadline)
     after
       25 ->
         # HTTP response receipt precedes the router span's finalizer. Re-flush
@@ -37,6 +40,21 @@ defmodule Lasso.TracingIntegrationTest do
         collect(count, records, deadline)
     end
   end
+
+  defp refute_request_span(timeout) do
+    receive do
+      {:span, record} ->
+        if background?(record),
+          do: refute_request_span(timeout),
+          else: flunk("unexpected span #{span(record, :name)}")
+    after
+      timeout -> :ok
+    end
+  end
+
+  # Head polling of the same mock providers emits system-origin spans.
+  defp background?(record),
+    do: :otel_attributes.map(span(record, :attributes))["lasso.origin"] == "system"
 
   test "real routing retains a successful parent and both failed and fallback attempts", %{
     chain: chain
@@ -106,7 +124,7 @@ defmodule Lasso.TracingIntegrationTest do
 
     assert untraced_response == response
     :otel_tracer_provider.force_flush()
-    refute_receive {:span, _}, 100
+    refute_request_span(100)
   end
 
   test "metrics, readiness, health and dashboard ingress do not trace their own monitoring" do
@@ -123,7 +141,7 @@ defmodule Lasso.TracingIntegrationTest do
     end
 
     :otel_tracer_provider.force_flush()
-    refute_receive {:span, _}, 100
+    refute_request_span(100)
   end
 
   test "ordinary WebSocket item ownership creates an independent RPC root", %{chain: chain} do
