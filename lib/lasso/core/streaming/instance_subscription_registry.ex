@@ -26,15 +26,14 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionRegistry do
     if Process.get(pd_key) do
       :ok
     else
+      signal = :atomics.new(1, signed: false)
+
       case Registry.register(__MODULE__, key, %{
-             subscribed_at: System.monotonic_time(:millisecond)
+             subscribed_at: System.monotonic_time(:millisecond),
+             refusal_signal: signal
            }) do
         {:ok, _} ->
-          Process.put(pd_key, true)
-          :ok
-
-        {:error, {:already_registered, _}} ->
-          Process.put(pd_key, true)
+          Process.put(pd_key, signal)
           :ok
 
         {:error, reason} ->
@@ -50,15 +49,19 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionRegistry do
     Registry.unregister(__MODULE__, key)
   end
 
-  @spec dispatch(String.t(), term(), term()) :: :ok | {:error, :ingress_exhausted}
+  @spec dispatch(String.t(), term(), term()) :: :ok | {:error, [{pid(), map()}]}
   def dispatch(instance_id, sub_key, {:instance_subscription_event, _, _, _, _} = message) do
-    Registry.lookup(__MODULE__, {instance_id, sub_key})
-    |> Enum.reduce(:ok, fn {pid, _meta}, result ->
-      case Lasso.Core.Streaming.Ingress.send(pid, message) do
-        :ok -> result
-        {:error, _} -> {:error, :ingress_exhausted}
-      end
-    end)
+    refused =
+      for {pid, meta} <- Registry.lookup(__MODULE__, {instance_id, sub_key}),
+          :atomics.get(meta.refusal_signal, 1) == 0,
+          {:error, _} <- [Lasso.Core.Streaming.Ingress.send(pid, message)],
+          :ok <- [:atomics.compare_exchange(meta.refusal_signal, 1, 0, 1)],
+          do: {pid, meta}
+
+    case refused do
+      [] -> :ok
+      consumers -> {:error, consumers}
+    end
   end
 
   def dispatch(instance_id, sub_key, message) do
@@ -71,7 +74,13 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionRegistry do
 
   @spec count_consumers(String.t(), term()) :: non_neg_integer()
   def count_consumers(instance_id, sub_key) do
-    Registry.count_match(__MODULE__, {instance_id, sub_key}, :_)
+    Registry.lookup(__MODULE__, {instance_id, sub_key})
+    |> Enum.count(fn {_pid, meta} -> :atomics.get(meta.refusal_signal, 1) == 0 end)
+  end
+
+  @spec current_consumer?(String.t(), term(), :atomics.atomics_ref()) :: boolean()
+  def current_consumer?(instance_id, sub_key, signal) do
+    Process.get({:instance_sub_registered, {instance_id, sub_key}}) == signal
   end
 
   @spec has_consumers?(String.t(), term()) :: boolean()

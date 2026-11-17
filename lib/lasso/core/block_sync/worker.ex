@@ -375,6 +375,20 @@ defmodule Lasso.BlockSync.Worker do
 
   # Subscription invalidation
   def handle_info(
+        {:instance_subscription_invalidated, instance_id, {:newHeads}, reason, signal},
+        state
+      ) do
+    registry = Lasso.Core.Streaming.InstanceSubscriptionRegistry
+
+    if registry.current_consumer?(instance_id, {:newHeads}, signal) do
+      registry.unregister_consumer(instance_id, {:newHeads})
+      handle_info({:instance_subscription_invalidated, instance_id, {:newHeads}, reason}, state)
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info(
         {:instance_subscription_invalidated, instance_id, {:newHeads}, reason},
         state
       )

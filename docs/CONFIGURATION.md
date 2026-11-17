@@ -153,9 +153,12 @@ repair remains tracked under [issue #186](https://github.com/jaxernst/lasso-rpc/
 
 Lasso also admits incoming upstream frames and instance fanout
 before they enter recipient mailboxes. The node-local ingress envelope is
-128 MiB, with 32 MiB and 128 queued messages per recipient. Exhaustion closes
-the affected upstream connection locally and reconnects without penalizing the
-provider circuit. The pool-to-coordinator mailbox uses the same envelope. If
+128 MiB, with 32 MiB and 128 queued messages per recipient. Exhaustion
+invalidates only the affected subscriptions, which recover through the continuity
+path or close with code `1011` on continuity failure. Unrelated RPC requests
+and subscriptions retain their shared upstream connection. RPC responses apply
+backpressure while the connection owner drains its mailbox. The pool-to-coordinator
+mailbox uses the same envelope. If
 its reservation fails, the affected pool key stops delivering and its clients
 receive a continuity failure. Coordinator-to-client fanout uses the same
 envelope; exhaustion terminates continuity without advancing the stream marker.

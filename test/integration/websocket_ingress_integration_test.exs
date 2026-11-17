@@ -53,7 +53,17 @@ defmodule Lasso.Integration.WebSocketIngressTest do
   end
 
   test "a stalled upstream connection owner cannot accumulate unbounded frames" do
-    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    owner =
+      spawn(fn ->
+        receive do
+          :drain ->
+            receive do
+              {:"$gen_call", from, _message} -> GenServer.reply(from, :ok)
+            end
+
+            receive do: (:stop -> :ok)
+        end
+      end)
 
     on_exit(fn ->
       if Process.alive?(owner), do: Process.exit(owner, :kill)
@@ -69,10 +79,17 @@ defmodule Lasso.Integration.WebSocketIngressTest do
       assert {:ok, ^state} = Handler.handle_frame({:text, frame}, state)
     end
 
-    assert {:close, ^state} = Handler.handle_frame({:text, frame}, state)
+    blocked = Task.async(fn -> Handler.handle_frame({:text, frame}, state) end)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Process.info(owner, :message_queue_len) == {:message_queue_len, 129}
+    end)
+
     assert {:message_queue_len, 129} = Process.info(owner, :message_queue_len)
     assert Ingress.stats().messages == before.messages + 128
 
+    send(owner, :drain)
+    assert {:ok, ^state} = Task.await(blocked)
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
     assert :ok = Ingress.audit()
@@ -104,7 +121,7 @@ defmodule Lasso.Integration.WebSocketIngressTest do
       assert :ok = InstanceSubscriptionRegistry.dispatch(instance_id, key, event)
     end
 
-    assert {:error, :ingress_exhausted} =
+    assert {:error, [{^consumer, _meta}]} =
              InstanceSubscriptionRegistry.dispatch(instance_id, key, event)
 
     assert {:message_queue_len, 128} = Process.info(consumer, :message_queue_len)

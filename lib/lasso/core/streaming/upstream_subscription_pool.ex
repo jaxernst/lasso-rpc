@@ -453,6 +453,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
           send(coordinator_pid, {:subscription_failed, :no_instance})
           {:noreply, state}
         else
+          InstanceSubscriptionRegistry.register_consumer(new_instance_id, entry.subscription_key)
           token = make_ref()
           pool_pid = self()
           subscription_key = entry.subscription_key
@@ -542,6 +543,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
          provider_id,
          instance_id
        ) do
+    InstanceSubscriptionRegistry.register_consumer(instance_id, entry.subscription_key)
     token = make_ref()
     pool_pid = self()
     timeout_ms = establishment_attempt_timeout(entry)
@@ -598,7 +600,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
       {:noreply, new_state}
     else
-      InstanceSubscriptionManager.release_subscription(instance_id, entry.subscription_key)
+      release_unused_registration(state, instance_id, entry.subscription_key)
       retry_readiness(state, pool_key, generation, excluded_providers)
     end
   end
@@ -874,20 +876,24 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
       entry ->
         pending_subscribers = Map.get(entry, :pending_subscribers, [])
 
-        Enum.each(pending_subscribers, fn waiter ->
-          ClientSubscriptionRegistry.remove_client(
-            state.profile,
-            state.chain_id,
-            waiter.subscription_id
-          )
-        end)
+        removed_pending =
+          Enum.count(pending_subscribers, fn waiter ->
+            case ClientSubscriptionRegistry.remove_client(
+                   state.profile,
+                   state.chain_id,
+                   waiter.subscription_id
+                 ) do
+              {:ok, nil} -> false
+              {:ok, _key} -> true
+            end
+          end)
 
         updated_entry =
           entry
           |> Map.put(:status, :failed)
           |> Map.put(:establishment_generation, make_ref())
           |> settle_pending_subscribers({:error, :upstream_establishment_failed})
-          |> Map.update!(:refcount, &max(&1 - length(pending_subscribers), 0))
+          |> Map.update!(:refcount, &max(&1 - removed_pending, 0))
 
         broadcast_subscription_event(state, %Subscription.Failed{
           ts: System.system_time(:millisecond),
@@ -900,6 +906,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         Logger.error("Subscription failed for #{inspect(key)}: #{reason}")
 
         if updated_entry.refcount == 0 do
+          release_entry_upstreams(state, key, entry)
           send(self(), {:stop_coordinator_if_unused, key})
 
           state
@@ -1039,6 +1046,9 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         cleared_entry = clear_establishment_attempt(entry)
         new_state = %{state | keys: Map.put(state.keys, pool_key, cleared_entry)}
 
+        if not match?({:ok, _}, result),
+          do: release_unused_registration(new_state, instance_id, entry.subscription_key)
+
         handle_establishment_result(
           new_state,
           pool_key,
@@ -1051,6 +1061,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         )
 
       _stale ->
+        release_unused_registration(state, instance_id, subscription_key(pool_key))
+
         if match?({:ok, _status}, result) do
           InstanceSubscriptionManager.release_subscription(
             instance_id,
@@ -1077,8 +1089,13 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         cleared_entry = clear_resubscribe_attempt(entry)
         new_state = %{state | keys: Map.put(state.keys, pool_key, cleared_entry)}
 
+        if not match?({:ok, _}, result),
+          do: release_unused_registration(new_state, new_instance_id, entry.subscription_key)
+
         if match?({:ok, _}, result) and
              not valid_establishment_target?(state, new_provider_id, new_instance_id) do
+          release_unused_registration(new_state, new_instance_id, entry.subscription_key)
+
           InstanceSubscriptionManager.release_subscription(
             new_instance_id,
             entry.subscription_key
@@ -1099,6 +1116,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         end
 
       _stale ->
+        release_unused_registration(state, new_instance_id, subscription_key(pool_key))
+
         if match?({:ok, _status}, result) do
           InstanceSubscriptionManager.release_subscription(
             new_instance_id,
@@ -1120,6 +1139,13 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         exclusions = Map.get(entry, :establishment_attempt_exclusions, [])
         cleared_entry = clear_establishment_attempt(entry)
         new_state = %{state | keys: Map.put(state.keys, pool_key, cleared_entry)}
+
+        release_unused_registration(
+          new_state,
+          entry.establishment_attempt_instance_id,
+          entry.subscription_key
+        )
+
         retry_readiness(new_state, pool_key, generation, exclusions)
 
       nil ->
@@ -1131,7 +1157,15 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
             coordinator_pid = entry.resubscribe_coordinator_pid
             cleared_entry = clear_resubscribe_attempt(entry)
             send(coordinator_pid, {:subscription_failed, :replacement_owner_down})
-            {:noreply, %{state | keys: Map.put(state.keys, pool_key, cleared_entry)}}
+            new_state = %{state | keys: Map.put(state.keys, pool_key, cleared_entry)}
+
+            release_unused_registration(
+              new_state,
+              entry.resubscribe_instance_id,
+              entry.subscription_key
+            )
+
+            {:noreply, new_state}
 
           nil ->
             case Enum.find(state.coordinator_monitors, fn {_pool_key, monitor} ->
@@ -1271,19 +1305,54 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   # Invalidation from InstanceSubscriptionManager
   def handle_info(
+        {:instance_subscription_invalidated, instance_id, subscription_key, reason, signal},
+        state
+      ) do
+    if InstanceSubscriptionRegistry.current_consumer?(instance_id, subscription_key, signal) do
+      InstanceSubscriptionRegistry.unregister_consumer(instance_id, subscription_key)
+
+      handle_info(
+        {:instance_subscription_invalidated, instance_id, subscription_key, reason},
+        state
+      )
+    else
+      {:noreply, state}
+    end
+  end
+
+  def handle_info(
         {:instance_subscription_invalidated, instance_id, subscription_key, reason},
         state
       ) do
     new_state =
-      Enum.reduce(state.keys, state, fn {pool_key, entry}, acc ->
-        if entry.subscription_key == subscription_key and entry.instance_id == instance_id do
-          handle_subscription_invalidation(
-            acc,
-            entry.primary_provider_id,
-            instance_id,
-            pool_key,
-            reason
-          )
+      Enum.reduce(state.keys, state, fn {pool_key, _entry}, acc ->
+        entry = Map.fetch!(acc.keys, pool_key)
+
+        if entry.subscription_key == subscription_key do
+          cond do
+            entry.instance_id == instance_id ->
+              handle_subscription_invalidation(
+                acc,
+                entry.primary_provider_id,
+                instance_id,
+                pool_key,
+                reason
+              )
+
+            entry.establishment_attempt_instance_id == instance_id ->
+              invalidate_establishing_attempts(acc, instance_id, subscription_key)
+
+            entry.resubscribe_instance_id == instance_id ->
+              invalidate_resubscribe_attempts(
+                acc,
+                entry.resubscribe_provider_id,
+                instance_id,
+                subscription_key
+              )
+
+            true ->
+              acc
+          end
         else
           acc
         end
@@ -1366,30 +1435,35 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
 
   def handle_info(_, state), do: {:noreply, state}
 
-  defp invalidate_establishing_attempts(state, instance_id) do
+  defp invalidate_establishing_attempts(state, instance_id, only_key \\ :all) do
     Enum.reduce(state.keys, state, fn
       {key,
        %{
          status: :establishing,
          establishment_attempt_instance_id: ^instance_id,
          establishment_attempt_pid: owner_pid,
-         establishment_attempt_ref: owner_ref
+         establishment_attempt_ref: owner_ref,
+         subscription_key: subscription_key
        } = entry},
-      acc ->
+      acc
+      when only_key == :all or subscription_key == only_key ->
         Process.demonitor(owner_ref, [:flush])
         Process.exit(owner_pid, :kill)
         updated = clear_establishment_attempt(entry)
         GenServer.cast(self(), {:establish_upstream, key, entry.establishment_generation, []})
-        %{acc | keys: Map.put(acc.keys, key, updated)}
+        next = %{acc | keys: Map.put(acc.keys, key, updated)}
+        release_unused_registration(next, instance_id, entry.subscription_key)
+        next
 
       _, acc ->
         acc
     end)
   end
 
-  defp invalidate_resubscribe_attempts(state, provider_id, instance_id) do
+  defp invalidate_resubscribe_attempts(state, provider_id, instance_id, only_key \\ :all) do
     Enum.reduce(state.keys, state, fn {key, entry}, acc ->
-      if entry.resubscribe_provider_id == provider_id and
+      if (only_key == :all or entry.subscription_key == only_key) and
+           entry.resubscribe_provider_id == provider_id and
            entry.resubscribe_instance_id == instance_id and
            is_pid(entry.resubscribe_pid) do
         Process.demonitor(entry.resubscribe_ref, [:flush])
@@ -1397,7 +1471,9 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         InstanceSubscriptionManager.release_subscription(instance_id, entry.subscription_key)
         send(entry.resubscribe_coordinator_pid, {:subscription_failed, :provider_removed})
         updated = clear_resubscribe_attempt(entry)
-        %{acc | keys: Map.put(acc.keys, key, updated)}
+        next = %{acc | keys: Map.put(acc.keys, key, updated)}
+        release_unused_registration(next, instance_id, entry.subscription_key)
+        next
       else
         acc
       end
@@ -1642,7 +1718,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
   end
 
   defp release_entry_upstreams(state, pool_key, entry) do
-    [entry.instance_id, Map.get(entry, :transitioning_from_instance_id)]
+    entry_instances(entry)
     |> Enum.reject(&is_nil/1)
     |> Enum.uniq()
     |> Enum.each(fn instance_id ->
@@ -1653,11 +1729,30 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     end)
   end
 
+  defp entry_instances(entry),
+    do: [
+      entry.instance_id,
+      Map.get(entry, :transitioning_from_instance_id),
+      entry.establishment_attempt_instance_id,
+      entry.resubscribe_instance_id
+    ]
+
+  defp release_unused_registration(state, instance_id, subscription_key) do
+    in_use? =
+      Enum.any?(state.keys, fn {_key, entry} ->
+        entry.subscription_key == subscription_key and instance_id in entry_instances(entry)
+      end)
+
+    unless in_use? do
+      InstanceSubscriptionRegistry.unregister_consumer(instance_id, subscription_key)
+      InstanceSubscriptionManager.release_subscription(instance_id, subscription_key)
+    end
+  end
+
   defp instance_in_use_elsewhere?(state, pool_key, instance_id, subscription_key) do
     Enum.any?(state.keys, fn {other_key, entry} ->
       other_key != pool_key and entry.subscription_key == subscription_key and
-        (entry.instance_id == instance_id or
-           Map.get(entry, :transitioning_from_instance_id) == instance_id)
+        instance_id in entry_instances(entry)
     end)
   end
 

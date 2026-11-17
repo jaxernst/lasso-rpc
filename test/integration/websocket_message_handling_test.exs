@@ -86,6 +86,85 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
       "#{endpoint.chain_id}:#{endpoint.id}"
   end
 
+  test "subscription ingress refusal preserves an in-flight RPC and its shared socket", %{
+    chain: chain
+  } do
+    alias Lasso.Core.Streaming.{
+      Ingress,
+      InstanceSubscriptionManager,
+      InstanceSubscriptionRegistry
+    }
+
+    endpoint = build_endpoint(chain, "ingress")
+
+    {:ok, collector} =
+      TelemetrySync.attach_collector([:lasso, :websocket, :connected],
+        match: [provider_id: endpoint.id]
+      )
+
+    instance = resolve_instance_id(endpoint)
+    manager = start_supervised!({InstanceSubscriptionManager, {chain, instance}})
+    {connection, endpoint} = start_connection_with_cb(endpoint)
+    on_exit(fn -> cleanup_connection(endpoint) end)
+    {:ok, _, _} = TelemetrySync.await_event(collector, timeout: 2_000)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      match?(
+        %{connection_state: %{status: :connected}},
+        InstanceSubscriptionManager.get_status(instance)
+      )
+    end)
+
+    :ok = InstanceSubscriptionRegistry.register_consumer(instance, {:newHeads})
+    assert {:ok, :new} = InstanceSubscriptionManager.ensure_subscription(instance, {:newHeads})
+    socket = :sys.get_state(connection).connection
+    generation = :sys.get_state(connection).connection_id
+    [upstream_id] = Map.keys(:sys.get_state(connection).subscription_delivery)
+    TestSupport.MockWSClient.set_response_delay(socket, 60_000)
+    :sys.get_state(socket)
+
+    rpc =
+      Task.async(fn -> Connection.request(instance, "eth_blockNumber", [], 5_000, "held-rpc") end)
+
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      Connection.status(instance).pending_requests == 1
+    end)
+
+    :ok = :sys.suspend(manager)
+    on_exit(fn -> if Process.alive?(manager), do: :sys.resume(manager) end)
+    before = Ingress.stats().messages
+
+    for _ <- 1..129 do
+      TestSupport.MockWSClient.emit_subscription_notification(socket, upstream_id, %{
+        "number" => "0x1",
+        "hash" => "0xabc"
+      })
+
+      :sys.get_state(socket)
+      Connection.status(instance)
+    end
+
+    assert Ingress.stats().messages == before + 128
+
+    TestSupport.MockWSClient.emit_message(socket, %{
+      "jsonrpc" => "2.0",
+      "id" => "held-rpc",
+      "result" => "0x64"
+    })
+
+    assert {:ok, response} = Task.await(rpc)
+    assert {:ok, "0x64"} = Lasso.RPC.Response.Success.decode_result(response)
+    assert :sys.get_state(connection).connection == socket
+    assert :sys.get_state(connection).connection_id == generation
+    assert Connection.status(instance).connected
+    TestSupport.MockWSClient.set_response_delay(socket, 0)
+    :sys.get_state(socket)
+    :ok = :sys.resume(manager)
+
+    assert_receive {:instance_subscription_invalidated, ^instance, {:newHeads}, :ingress_refused},
+                   2_000
+  end
+
   describe "request correlation" do
     test "sends request and receives correlated response", %{chain: chain} do
       endpoint = build_endpoint(chain, "correlation")

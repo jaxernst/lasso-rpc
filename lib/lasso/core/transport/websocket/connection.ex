@@ -174,6 +174,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
       instance_id: instance_id,
       connection: nil,
       connected: false,
+      subscription_delivery: %{},
       reconnect_attempts: 0,
       pending_requests: %{},
       transport_pending: %{},
@@ -504,6 +505,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           encoded_message,
           from,
           method,
+          params,
           request_id,
           timeout_ms,
           state
@@ -532,6 +534,22 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
+  def handle_call({:ws_message, _, _, _, _, _, _} = message, _from, state) do
+    {:noreply, next} = handle_info(message, state)
+    {:reply, :ok, next}
+  end
+
+  def handle_call(
+        {:subscription_ingress_refused, connection, generation, upstream_id},
+        _from,
+        %{connection: connection, connection_id: generation} = state
+      ) do
+    {:reply, :ok, refuse_subscription(state, upstream_id)}
+  end
+
+  def handle_call({:subscription_ingress_refused, _connection, _generation, _id}, _from, state),
+    do: {:reply, :ok, state}
+
   def handle_call(:status, _from, state) do
     legacy_pending = map_size(state.pending_requests)
     transport_pending = map_size(state.transport_pending)
@@ -737,9 +755,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     do: {:reply, {:error, :stale_connection}, state}
 
   @impl true
-  def handle_cast(:close_for_ingress_overload, state),
-    do: {:noreply, close_for_local_ingress_overload(state)}
-
   def handle_cast({:cancel_transport, transport_id, generation, token}, state) do
     {:noreply, cancel_transport_by_key(state, transport_id, generation, token)}
   end
@@ -749,6 +764,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
          encoded_message,
          from,
          method,
+         params,
          request_id,
          timeout_ms,
          state
@@ -795,6 +811,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           send_state: :queued
         }
 
+        state = retire_subscription_delivery(state, method, params)
         state = put_in(state, [:pending_requests, request_id], pending)
 
         case cast_send(
@@ -825,6 +842,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
          _encoded_message,
          _from,
          _method,
+         _params,
          _request_id,
          _timeout_ms,
          state
@@ -841,15 +859,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
-  def handle_info(
-        {:ws_local_overload, connection, generation},
-        %{connection: connection, connection_id: generation} = state
-      ) do
-    {:noreply, close_for_local_ingress_overload(state)}
-  end
-
-  def handle_info({:ws_local_overload, _connection, _generation}, state), do: {:noreply, state}
-
   def handle_info({:stream_ingress, token, message}, state) do
     Ingress.consume(token, fn -> handle_info(message, state) end)
   end
@@ -1046,7 +1055,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     # Mark as connected but DON'T reset reconnect_attempts yet.
     # Schedule stability timer - only reset attempts after connection proves stable.
     # This prevents thrashing when providers drop connections immediately after connect.
-    state = %{state | connected: true}
+    state = %{state | connected: true, subscription_delivery: %{}}
 
     # Cancel any pending reconnect timer (stale) now that we're connected
     state =
@@ -1773,6 +1782,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
         duration_ms = div(System.monotonic_time(:microsecond) - pending.sent_at, 1000)
 
         emit_completion_telemetry(state.endpoint.id, pending.method, id, :success, duration_ms)
+        state = update_subscription_delivery(state, pending, resp)
         GenServer.reply(pending.from, {:ok, resp})
 
         {:noreply, remove_legacy_pending(state, id, pending)}
@@ -1826,9 +1836,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     payload = Response.Notification.result(notification)
     received_at = System.monotonic_time(:millisecond)
 
-    broadcast_subscription_event(state, sub_id, payload, received_at)
-
-    {:noreply, state}
+    {:noreply, broadcast_subscription_event(state, sub_id, payload, received_at)}
   end
 
   defp handle_notification(%Response.Notification{method: method}, state) do
@@ -2323,6 +2331,24 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     deadline_us = pending.deadline_us
 
     receive do
+      {:"$gen_call", from,
+       {:ws_message, ^connection, ^generation,
+        {:transport, %Validated{id: ^transport_id}} = parsed, raw_bytes, frame_received_at,
+        validated_at}}
+      when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) and
+             validated_at < deadline_us ->
+        GenServer.reply(from, :ok)
+        {:ok, parsed, raw_bytes, frame_received_at, validated_at}
+
+      {:"$gen_call", from,
+       {:ws_message, ^connection, ^generation,
+        {:transport_invalid, ^transport_id, _reason} = parsed, raw_bytes, frame_received_at,
+        validated_at}}
+      when is_binary(raw_bytes) and is_integer(frame_received_at) and is_integer(validated_at) and
+             validated_at < deadline_us ->
+        GenServer.reply(from, :ok)
+        {:ok, parsed, raw_bytes, frame_received_at, validated_at}
+
       {:ws_message, ^connection, ^generation,
        {:transport, %Validated{id: ^transport_id}} = parsed, raw_bytes, frame_received_at,
        validated_at}
@@ -2523,36 +2549,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp terminate_connection_generation(state, _connection, _generation), do: state
-
-  defp close_for_local_ingress_overload(%{connected: false} = state), do: state
-
-  defp close_for_local_ingress_overload(state) do
-    error =
-      JError.new(-32_000, "WebSocket local resource capacity exhausted",
-        provider_id: state.endpoint.id,
-        transport: :ws,
-        category: :local_capacity_rejection,
-        retriable?: true,
-        breaker_penalty?: false
-      )
-
-    state = cancel_stability_timer(state)
-    if state.heartbeat_ref, do: Process.cancel_timer(state.heartbeat_ref)
-    if is_pid(state.connection), do: Process.exit(state.connection, :kill)
-    state = cleanup_pending_requests(state, error)
-
-    state = %{
-      state
-      | connected: false,
-        connection: nil,
-        connection_stable: false,
-        heartbeat_ref: nil
-    }
-
-    broadcast_conn_event(state, fn provider_id -> {:ws_disconnected, provider_id, error} end)
-    write_ws_status(state, :disconnected)
-    schedule_reconnect_with_circuit_check(state)
-  end
 
   defp remove_transport_entry(state, transport_id, pending) do
     cleanup_send_entry(pending)
@@ -2848,20 +2844,55 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   defp broadcast_subscription_event(state, sub_id, payload, received_at) do
-    case Ingress.send(
-           InstanceSubscriptionManager.via(state.instance_id),
-           {:subscription_event, state.instance_id, sub_id, payload, received_at}
-         ) do
-      :ok -> :ok
-      {:error, _} -> close_for_ingress_overload(state.instance_id)
+    case Map.get(state.subscription_delivery, sub_id) do
+      :live ->
+        case Ingress.send(
+               InstanceSubscriptionManager.via(state.instance_id),
+               {:subscription_event, state.instance_id, sub_id, payload, received_at}
+             ) do
+          :ok -> state
+          {:error, _} -> refuse_subscription(state, sub_id)
+        end
+
+      _ ->
+        state
     end
   end
 
-  @doc "Closes an overloaded socket locally without penalizing the provider circuit."
-  @spec close_for_ingress_overload(String.t()) :: :ok
-  def close_for_ingress_overload(instance_id) when is_binary(instance_id) do
-    GenServer.cast(via_instance_name(instance_id), :close_for_ingress_overload)
+  defp refuse_subscription(state, upstream_id) do
+    case Map.get(state.subscription_delivery, upstream_id) do
+      :live ->
+        send_subscription_loss(state, upstream_id)
+        %{state | subscription_delivery: Map.delete(state.subscription_delivery, upstream_id)}
+
+      _ ->
+        state
+    end
   end
+
+  defp send_subscription_loss(state, upstream_id) do
+    GenServer.cast(
+      InstanceSubscriptionManager.via(state.instance_id),
+      {:subscription_ingress_refused, state.connection_id, upstream_id}
+    )
+  end
+
+  defp retire_subscription_delivery(state, "eth_unsubscribe", [id | _]),
+    do: %{state | subscription_delivery: Map.delete(state.subscription_delivery, id)}
+
+  defp retire_subscription_delivery(state, _method, _params), do: state
+
+  defp update_subscription_delivery(state, %{method: "eth_subscribe"}, response) do
+    case Response.Success.decode_result(response) do
+      {:ok, upstream_id} ->
+        put_in(state.subscription_delivery[upstream_id], :live)
+
+      _ ->
+        state
+    end
+  end
+
+  defp update_subscription_delivery(state, _pending, _response), do: state
 
   defp profile_provider_refs(%{
          profile: @shared_profile,
