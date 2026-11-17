@@ -204,12 +204,14 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   end
 
   # Regional heads have no qualified reference, so a region shows only the
-  # provider's own height. Stale regional observations are removed before they
-  # reach the panel.
+  # provider's own fresh height.
   defp compute_sync_data(region, _conn, cluster_block_heights, provider_id) do
-    case Map.get(cluster_block_heights, {provider_id, region}) do
-      %{height: height} when is_integer(height) -> sync_data(height, nil, nil)
-      _missing -> sync_data(nil, nil, nil)
+    with %{height: height} = observation when is_integer(height) <-
+           Map.get(cluster_block_heights, {provider_id, region}),
+         true <- Observation.fresh?(observation) do
+      sync_data(height, nil, nil)
+    else
+      _missing_or_stale -> sync_data(nil, nil, nil)
     end
   end
 

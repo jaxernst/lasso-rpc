@@ -42,6 +42,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   use GenServer, restart: :transient
   require Logger
 
+  alias Lasso.BlockSync.Observation
   alias Lasso.Cluster.Topology
   alias Lasso.Config.ConfigStore
   alias Lasso.Events.{HeadObserved, RoutingDecision, Subscription}
@@ -1145,7 +1146,14 @@ defmodule LassoWeb.Dashboard.EventStream do
     key = {provider_id, node_id}
     lag = get_block_lag(state, provider_id, chain_id, node_id)
 
-    block_data = %{provider_id: provider_id, node_id: node_id, height: height, lag: lag}
+    block_data = %{
+      provider_id: provider_id,
+      node_id: node_id,
+      height: height,
+      lag: lag,
+      observed_at_ms: get_in(state.block_heights, [{provider_id, chain_id, node_id}, :timestamp]),
+      stale_after_ms: block_stale_after_ms(state.profile, chain_id, provider_id)
+    }
 
     block_event = %{
       chain_id: chain_id,
@@ -1159,6 +1167,13 @@ defmodule LassoWeb.Dashboard.EventStream do
       | pending_block_states: Map.put(state.pending_block_states, key, block_data),
         pending_block_events: [block_event | state.pending_block_events]
     }
+  end
+
+  defp block_stale_after_ms(profile, chain_id, provider_id) do
+    case Catalog.lookup_instance_id(profile, chain_id, provider_id) do
+      instance_id when is_binary(instance_id) -> Observation.stale_after_ms(instance_id, chain_id)
+      _unknown -> nil
+    end
   end
 
   # Batch flush — send one {:dashboard_batch, batch} per subscriber per tick

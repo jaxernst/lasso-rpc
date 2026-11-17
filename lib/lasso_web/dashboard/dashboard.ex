@@ -1300,7 +1300,7 @@ defmodule LassoWeb.Dashboard do
         if data[:stale?] == true or is_nil(data.height) do
           Map.delete(acc, key)
         else
-          Map.put(acc, key, %{height: data.height, lag: data.lag})
+          Map.put(acc, key, Map.take(data, [:height, :lag, :observed_at_ms, :stale_after_ms]))
         end
       end)
 
