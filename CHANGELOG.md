@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A WebSocket subscription in a profile with exactly two providers now survives losing either one. Previously the subscription closed with `1011 Lasso subscription continuity exhausted`, because the blocks missed during failover could only be fetched from a third provider. Lasso now fills them from another eligible HTTP provider first and, when none is left, from the replacement provider's own HTTP endpoint.
 - `head_policy: local` follows a same-height reorg. It could return the displaced latest block, and a canonical EIP-1898 state read that followed could fail.
+- The dashboard reads each provider's height and lag from its own profile. With two profiles on one chain ID it could show a negative block height while reporting Healthy. The chain panel's recent decisions, distribution and RPS show live traffic again, and load-balanced mode is described as randomized order rather than even shares.
 - `mix test` passes reliably on a fresh clone. Tests that relied on fixed sleeps now wait for the transitions they check. Two wall-clock measurements, the parser latency ceiling and the deadline-wakeup p95, moved under the excluded `:slow` tag; see [testing](docs/TESTING.md).
 
 ### Security
