@@ -23,6 +23,8 @@ defmodule Lasso.Integration.DiscoverySafeProbeTest do
           :quota -> {402, "Payment required: credits exhausted", -32_000}
           :typed_quota -> {200, "monthly quota exceeded", 30}
           :rate_limit -> {429, "Too many requests", -32_000}
+          :quota_429 -> {429, "monthly quota exceeded", -32_005}
+          :rate_limit_429 -> {429, "Rate limit exceeded", -32_005}
           :definitive_quota_word -> {200, "monthly quota exceeded", -32_700}
           _ -> {200, "Method is not available", -32_000}
         end
@@ -84,7 +86,8 @@ defmodule Lasso.Integration.DiscoverySafeProbeTest do
     for {mode, reason} <- [
           auth: :auth_required,
           quota: :quota_exhausted,
-          typed_quota: :quota_exhausted
+          typed_quota: :quota_exhausted,
+          quota_429: :quota_exhausted
         ] do
       url = start_upstream(mode)
 
@@ -105,21 +108,23 @@ defmodule Lasso.Integration.DiscoverySafeProbeTest do
              "aborted"
   end
 
-  test "a 429 signals throttling without retrying the throttled method" do
-    caller = self()
-    url = start_upstream(:rate_limit)
+  for mode <- [:rate_limit, :rate_limit_429] do
+    test "#{mode} signals throttling without retrying the throttled method" do
+      caller = self()
+      url = start_upstream(unquote(mode))
 
-    results =
-      MethodSupport.probe(url,
-        level: :critical,
-        timeout: 2_000,
-        concurrent: 100,
-        on_throttle: fn info -> send(caller, {:throttled, info}) end
-      )
+      results =
+        MethodSupport.probe(url,
+          level: :critical,
+          timeout: 2_000,
+          concurrent: 100,
+          on_throttle: fn info -> send(caller, {:throttled, info}) end
+        )
 
-    assert is_list(results)
-    assert_receive {:throttled, %{phase: :methods}}
-    assert count_probe_requests("eth_chainId", 0) == 1
+      assert is_list(results)
+      assert_receive {:throttled, %{phase: :methods}}
+      assert count_probe_requests("eth_chainId", 0) == 1
+    end
   end
 
   test "definitive JSON-RPC errors with quota words do not abort method discovery" do
