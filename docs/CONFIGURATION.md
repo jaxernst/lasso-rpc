@@ -224,6 +224,8 @@ providers:
 
 ## Environment Variable Substitution
 
+Provider URLs also accept percent-encoded Basic credentials (`https://user:password@host/rpc` or `wss://user:password@host/ws`); a username alone sends an empty password. Credentials apply only to that URL and cannot be combined with an explicit Authorization header (including `auth_headers`) or `api_key`.
+
 Provider URLs support `${ENV_VAR}` substitution. Unresolved variables reject a profile at startup or reload. Substitution also applies to `api_key`, `headers`, and `auth_headers`.
 
 ```yaml

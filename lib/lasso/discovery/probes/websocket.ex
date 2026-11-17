@@ -344,7 +344,7 @@ defmodule Lasso.Discovery.Probes.WebSocket.Client do
   @spec start_link(String.t(), non_neg_integer()) :: {:ok, pid()} | {:error, term()}
   def start_link(url, timeout) do
     state = %__MODULE__{
-      url: url,
+      url: Lasso.URLMask.redact(url),
       parent: self(),
       pending_requests: %{},
       pending_subscriptions: %{},

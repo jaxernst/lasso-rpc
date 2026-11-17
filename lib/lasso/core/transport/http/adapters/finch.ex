@@ -41,6 +41,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @doc false
   @spec prepare_provider(map()) :: map()
   def prepare_provider(%{url: url} = provider) do
+    {url, _auth} = ProviderHeaders.split_url(url)
     template = Finch.build(:post, url, bounded_headers(provider), nil)
     Map.put(provider, :lasso_finch_template, template)
   rescue
@@ -107,6 +108,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   end
 
   defp build_request(provider, url, json, context) do
+    {url, _auth} = ProviderHeaders.split_url(url)
+
     request =
       :post
       |> Finch.build(url, bounded_headers(provider), json)

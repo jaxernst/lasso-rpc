@@ -563,7 +563,10 @@ defmodule Lasso.Providers.Catalog do
       |> Map.merge(%{
         chain_id: chain_id,
         block_time_ms: chain_config.block_time_ms,
-        headers: ProviderHeaders.build(provider),
+        headers:
+          ProviderHeaders.build(
+            Map.take(Map.from_struct(provider), [:headers, :auth_headers, :api_key])
+          ),
         mock?: provider.__mock__ == true,
         identity_config: identity_config,
         canonical_config: %{

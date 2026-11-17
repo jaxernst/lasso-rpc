@@ -12,6 +12,38 @@ defmodule Lasso.Providers.ProviderHeaders do
   @max_header_value_bytes 8_192
   @header_name ~r/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
 
+  @doc "Separates percent-decoded Basic credentials from the upstream target."
+  @spec split_url(String.t() | nil) :: {String.t() | nil, [{String.t(), String.t()}]}
+  def split_url(nil), do: {nil, []}
+
+  def split_url(url) when is_binary(url) do
+    case URI.parse(url) do
+      %URI{userinfo: nil} ->
+        {url, []}
+
+      %URI{userinfo: userinfo} = uri ->
+        credentials =
+          case String.split(userinfo, ":", parts: 2) do
+            [user, password] -> URI.decode(user) <> ":" <> URI.decode(password)
+            [user] -> URI.decode(user) <> ":"
+          end
+
+        {URI.to_string(%{uri | userinfo: nil}),
+         [{"authorization", "Basic " <> Base.encode64(credentials)}]}
+    end
+  end
+
+  @spec validate_url_auth(map()) :: :ok | {:error, :conflicting_url_authorization}
+  def validate_url_auth(provider) do
+    authorization? =
+      Enum.any?(identity_headers(provider), fn {name, _} -> name == "authorization" end)
+
+    userinfo? =
+      Enum.any?([:url, :ws_url], fn key -> elem(split_url(fetch(provider, key)), 1) != [] end)
+
+    if authorization? and userinfo?, do: {:error, :conflicting_url_authorization}, else: :ok
+  end
+
   @spec build(map()) :: [{String.t(), String.t()}]
   def build(provider) when is_map(provider) do
     defaults = [
@@ -19,7 +51,8 @@ defmodule Lasso.Providers.ProviderHeaders do
       {"accept", "application/json"}
     ]
 
-    merge(defaults, identity_headers(provider))
+    {_url, auth} = split_url(fetch(provider, :url))
+    defaults |> merge(auth) |> merge(identity_headers(provider))
   end
 
   @doc "Canonical configured headers defining the upstream learning identity."
@@ -41,16 +74,18 @@ defmodule Lasso.Providers.ProviderHeaders do
   end
 
   @doc "Validates credential and configured HTTP/WebSocket headers before publication."
-  @spec validate(map()) :: :ok | {:error, :invalid_provider_headers}
+  @spec validate(map()) ::
+          :ok | {:error, :invalid_provider_headers | :conflicting_url_authorization}
   def validate(provider) when is_map(provider) do
     api_key = fetch(provider, :api_key)
     headers = fetch(provider, :headers)
     auth_headers = fetch(provider, :auth_headers)
 
-    if valid_api_key?(api_key) and valid_headers?(headers) and
+    if valid_url?(fetch(provider, :url)) and valid_url?(fetch(provider, :ws_url)) and
+         valid_api_key?(api_key) and valid_headers?(headers) and
          valid_headers?(auth_headers) and
          header_count(headers) + header_count(auth_headers) <= @max_headers,
-       do: :ok,
+       do: validate_url_auth(provider),
        else: {:error, :invalid_provider_headers}
   end
 
@@ -75,6 +110,8 @@ defmodule Lasso.Providers.ProviderHeaders do
       :error -> Map.get(provider, Atom.to_string(key))
     end
   end
+
+  defp valid_url?(value), do: is_nil(value) or is_binary(value)
 
   defp valid_api_key?(nil), do: true
   defp valid_api_key?(value) when is_binary(value), do: valid_header_value?(value)
