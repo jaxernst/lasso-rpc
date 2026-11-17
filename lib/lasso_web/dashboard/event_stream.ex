@@ -873,7 +873,7 @@ defmodule LassoWeb.Dashboard.EventStream do
   defp compute_chain_totals(windows) do
     windows
     |> Enum.flat_map(fn {{_provider, chain, region}, events} ->
-      Enum.map(events, fn _ -> {chain, region} end)
+      for event <- events, client_request?(event), do: {chain, region}
     end)
     |> Enum.frequencies()
   end
@@ -888,19 +888,15 @@ defmodule LassoWeb.Dashboard.EventStream do
       |> Enum.map(fn {region, events} ->
         region_chain_total = Map.get(chain_totals, {chain, region}, 0)
 
-        metrics = %{
-          total_calls: length(events),
-          success_rate: compute_success_rate(events),
-          error_count: Enum.count(events, &(&1.result == :error)),
-          p50_latency: compute_percentile(events, 50),
-          p95_latency: compute_percentile(events, 95),
-          traffic_pct: compute_traffic_pct(length(events), region_chain_total),
-          events_per_second: length(events) / (@window_duration_ms / 1000),
-          block_height: get_block_height(state, provider_id, chain, region),
-          block_lag: get_block_lag(state, provider_id, chain, region),
-          circuit: get_circuit_state(state, provider_id, region),
-          rpc_stats: compute_method_stats(events)
-        }
+        metrics =
+          events
+          |> Enum.filter(&client_request?/1)
+          |> client_traffic_metrics(region_chain_total)
+          |> Map.merge(%{
+            block_height: get_block_height(state, provider_id, chain, region),
+            block_lag: get_block_lag(state, provider_id, chain, region),
+            circuit: get_circuit_state(state, provider_id, region)
+          })
 
         {region, metrics}
       end)
@@ -916,19 +912,15 @@ defmodule LassoWeb.Dashboard.EventStream do
         0
       end
 
-    aggregate = %{
-      total_calls: length(all_events),
-      success_rate: compute_success_rate(all_events),
-      error_count: Enum.count(all_events, &(&1.result == :error)),
-      p50_latency: compute_percentile(all_events, 50),
-      p95_latency: compute_percentile(all_events, 95),
-      traffic_pct: compute_traffic_pct(length(all_events), total_chain_calls),
-      events_per_second: length(all_events) / (@window_duration_ms / 1000),
-      block_height: get_max_block_height(state, provider_id, chain),
-      block_lag: get_worst_block_lag(state, provider_id, chain),
-      regions_reporting: Map.keys(by_region),
-      rpc_stats: compute_method_stats(all_events)
-    }
+    aggregate =
+      all_events
+      |> Enum.filter(&client_request?/1)
+      |> client_traffic_metrics(total_chain_calls)
+      |> Map.merge(%{
+        block_height: get_max_block_height(state, provider_id, chain),
+        block_lag: get_worst_block_lag(state, provider_id, chain),
+        regions_reporting: Map.keys(by_region)
+      })
 
     %{
       provider_id: provider_id,
@@ -936,6 +928,24 @@ defmodule LassoWeb.Dashboard.EventStream do
       aggregate: aggregate,
       by_region: by_region,
       updated_at: System.system_time(:millisecond)
+    }
+  end
+
+  # Head polling, health probes and discovery send :system-origin requests.
+  # Dashboard traffic figures count client requests only.
+  defp client_request?(%{request_origin: :system}), do: false
+  defp client_request?(_event), do: true
+
+  defp client_traffic_metrics(events, chain_calls) do
+    %{
+      total_calls: length(events),
+      success_rate: compute_success_rate(events),
+      error_count: Enum.count(events, &(&1.result == :error)),
+      p50_latency: compute_percentile(events, 50),
+      p95_latency: compute_percentile(events, 95),
+      traffic_pct: compute_traffic_pct(length(events), chain_calls),
+      events_per_second: length(events) / (@window_duration_ms / 1000),
+      rpc_stats: compute_method_stats(events)
     }
   end
 
