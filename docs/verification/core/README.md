@@ -42,8 +42,8 @@ scripts/verify-harness harness/test/core_routing_test.exs
 ```
 
 The runner creates the VM's own profiles directory, copies empty baseline
-profiles and boots real clients in a separate test root. `Tenant.isolate!`,
-`open!`, `credentials` and `close!` form the adapter contract. Core writes YAML,
+profiles and boots real clients in a separate test root. `Tenant.open!`,
+`Tenant.credentials` and `Tenant.close!` form the adapter contract. Core writes YAML,
 reloads through `Lasso.Diagnostics.reload_profiles/0`, checks readiness and
 proves the credentials route. Removal is followed by
 `Lasso.Diagnostics.retire_tenant/1`; completion names profile, node, generation,

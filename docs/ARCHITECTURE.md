@@ -4,6 +4,8 @@
 
 Elixir/OTP application providing RPC provider orchestration and routing for blockchain applications.
 
+See [CONTEXT.md](../CONTEXT.md) for domain terms and routing concepts.
+
 ### Core Capabilities
 
 - **Multi-profile isolation**: Independent routing configurations per profile with isolated metrics and circuit breakers
@@ -580,30 +582,10 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 
 ### Selection API
 
-```elixir
-# Select best provider for a method
-{:ok, provider_id} = Selection.select_provider(
-  profile,
-  chain,
-  method
-)
-
-# Select ordered list of channels (provider + transport combinations)
-{:ok, channels} = Selection.select_channels(
-  profile,
-  chain,
-  method
-)
-# Returns: [%Channel{provider: "alchemy", transport: :http}, ...]
-
-# Select specific provider channel
-{:ok, channel} = Selection.select_provider_channel(
-  profile,
-  chain,
-  provider_id,
-  transport  # :http or :ws
-)
-```
+See [`Lasso.RPC.Selection`](../lib/lasso/core/selection/selection.ex) for the
+selection API and return types. `select_channels/4` returns a bare list of
+[`Channel`](../lib/lasso/core/transport/channel.ex) structs, whose provider field
+is `provider_id`.
 
 ---
 
@@ -660,30 +642,9 @@ All circuit breaker events use consistent metadata:
 
 ### RequestContext Lifecycle
 
-RPC requests tracked via:
-
-```elixir
-%RequestContext{
-  request_id: "uuid",
-  chain: "ethereum",
-  method: "eth_blockNumber",
-  transport: :http,
-  strategy: :fastest,
-
-  # Selection
-  candidate_providers: ["ethereum_llamarpc:http"],
-  selected_provider: %{id: "ethereum_llamarpc", protocol: :http},
-  selection_latency_ms: 3,
-
-  # Execution
-  retries: 0,
-  circuit_breaker_state: :closed,
-  upstream_latency_ms: 592,
-
-  # Result
-  status: :success
-}
-```
+RPC requests are tracked through
+[`Lasso.RPC.RequestContext`](../lib/lasso/core/request/request_context.ex).
+See its type and struct for the current fields, including numeric `chain_id`.
 
 ### Request Telemetry
 
@@ -855,9 +816,11 @@ Drop-in replacement for existing RPC URLs.
 - A single provider is selected upfront for the whole batch for consistency; all items prefer that provider but can failover independently per-item
 - Responses preserve request order
 
-**Not yet supported**:
+**Transaction routing**:
 
-- Write methods: `eth_sendRawTransaction`, `eth_sendTransaction`
+- `eth_sendRawTransaction` is supported, with ordinary routing when no transaction policy is configured
+- Node-local signing methods such as `eth_sendTransaction` are rejected
+- See [RPC Standards](RPC_STANDARDS.md#transaction-sends) for transaction policy and submission behavior
 
 ---
 
