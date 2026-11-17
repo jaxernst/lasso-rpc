@@ -244,7 +244,7 @@ if config_env() == :prod do
   # Get host from environment variable, defaulting to localhost for development
   host = System.get_env("PHX_HOST") || "localhost"
 
-  # External URL scheme (HTTPS in production behind Fly.io proxy)
+  # External URL scheme (HTTPS in production behind a reverse proxy)
   scheme = System.get_env("PHX_SCHEME") || "https"
 
   # Require SECRET_KEY_BASE in production for security

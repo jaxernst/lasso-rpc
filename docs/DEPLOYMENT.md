@@ -214,13 +214,41 @@ MIX_ENV=prod mix release
 
 Or build a Docker image using the included `Dockerfile`.
 
+### Launching a Native Release
+
+A release looks for profiles in `config/profiles` under its working directory.
+Set `LASSO_DATA_DIR` so it finds them wherever it starts. From the source
+checkout:
+
+```bash
+export LASSO_DATA_DIR="$HOME/lasso-data"
+mkdir -p "$LASSO_DATA_DIR/config/profiles" "$LASSO_DATA_DIR/benchmark_snapshots"
+cp config/profiles/*.yml "$LASSO_DATA_DIR/config/profiles/"
+
+export SECRET_KEY_BASE="$(openssl rand -base64 64)"
+export PHX_HOST="rpc.example.com"
+export LASSO_NODE_ID="node-1"
+
+_build/prod/rel/lasso/bin/lasso start
+```
+
+Lasso reads profiles from `$LASSO_DATA_DIR/config/profiles` and writes snapshots
+to `$LASSO_DATA_DIR/benchmark_snapshots`. `LASSO_PROFILES_DIR` and
+`LASSO_SNAPSHOTS_DIR` override either path.
+
+To run the release on another machine, copy the whole `_build/prod/rel/lasso`
+directory and your profile files, set the same variables there, and keep
+`SECRET_KEY_BASE` the same across restarts. The runtime user needs read access to
+the profiles and write access to the snapshots directory, and any `${VAR}` a
+profile references must be set in its environment.
+
 ### Required Environment Variables
 
 | Variable | Description |
 |----------|-------------|
 | `SECRET_KEY_BASE` | Phoenix signing/encryption secret. Generate with `mix phx.gen.secret` (64+ bytes) |
 | `PHX_HOST` | Public hostname for URL generation (e.g., `rpc.example.com`) |
-| `PHX_SERVER` | Set to `true` to start the HTTP server (required for releases) |
+| `PHX_SERVER` | Optional. Production releases already serve HTTP (`server: true` in `config/prod.exs`) |
 | `LASSO_NODE_ID` | Unique, stable identifier for this node. Required in production. Convention: use region names (e.g., `us-east-1`) for geo-distributed deployments |
 | `PORT` | HTTP listener port (default: `4000`) |
 
@@ -438,7 +466,7 @@ The dashboard aggregates data across all nodes for unified observability with re
 | `SECRET_KEY_BASE` | Prod | Phoenix signing secret (64+ bytes) | - |
 | `PHX_HOST` | Prod | Public hostname | `localhost` |
 | `PHX_SCHEME` | No | External URL scheme | `https` in production |
-| `PHX_SERVER` | Prod | Set to `true` to start HTTP server | - |
+| `PHX_SERVER` | No | Starts the HTTP server; production already enables it in `config/prod.exs` | Enabled in production |
 | `PORT` | No | HTTP listener port | `4000` |
 | `LASSO_NODE_ID` | Prod | Unique node identifier | `"local"` in dev |
 | `LASSO_DATA_DIR` | No | Base directory for profiles and snapshots | `/data` in Docker; unset outside Docker |
@@ -471,7 +499,6 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 
 - [ ] `SECRET_KEY_BASE` set (64+ bytes)
 - [ ] `PHX_HOST` set to public hostname
-- [ ] `PHX_SERVER=true` set
 - [ ] `LASSO_NODE_ID` set to a unique, stable value
 - [ ] Provider credentials set when referenced by profile configuration
 - [ ] Liveness (`GET /api/health`) and readiness (`GET /api/ready`) probes configured in the orchestrator

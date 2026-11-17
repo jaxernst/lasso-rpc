@@ -4,6 +4,8 @@
 
 Elixir/OTP application providing RPC provider orchestration and routing for blockchain applications.
 
+Domain terms are defined in [CONTEXT.md](../CONTEXT.md).
+
 ### Core Capabilities
 
 - **Multi-profile isolation**: Independent routing configurations per profile with isolated metrics and circuit breakers
@@ -580,30 +582,9 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 
 ### Selection API
 
-```elixir
-# Select best provider for a method
-{:ok, provider_id} = Selection.select_provider(
-  profile,
-  chain,
-  method
-)
-
-# Select ordered list of channels (provider + transport combinations)
-{:ok, channels} = Selection.select_channels(
-  profile,
-  chain,
-  method
-)
-# Returns: [%Channel{provider: "alchemy", transport: :http}, ...]
-
-# Select specific provider channel
-{:ok, channel} = Selection.select_provider_channel(
-  profile,
-  chain,
-  provider_id,
-  transport  # :http or :ws
-)
-```
+[`Lasso.RPC.Selection`](../lib/lasso/core/selection/selection.ex) holds the
+selection API and its types. `select_channels/4` returns a plain list of
+[`Channel`](../lib/lasso/core/transport/channel.ex) structs.
 
 ---
 
@@ -660,30 +641,9 @@ All circuit breaker events use consistent metadata:
 
 ### RequestContext Lifecycle
 
-RPC requests tracked via:
-
-```elixir
-%RequestContext{
-  request_id: "uuid",
-  chain: "ethereum",
-  method: "eth_blockNumber",
-  transport: :http,
-  strategy: :fastest,
-
-  # Selection
-  candidate_providers: ["ethereum_llamarpc:http"],
-  selected_provider: %{id: "ethereum_llamarpc", protocol: :http},
-  selection_latency_ms: 3,
-
-  # Execution
-  retries: 0,
-  circuit_breaker_state: :closed,
-  upstream_latency_ms: 592,
-
-  # Result
-  status: :success
-}
-```
+Each request carries a
+[`Lasso.RPC.RequestContext`](../lib/lasso/core/request/request_context.ex);
+the struct and its type list the current fields.
 
 ### Request Telemetry
 
@@ -855,9 +815,10 @@ Drop-in replacement for existing RPC URLs.
 - A single provider is selected upfront for the whole batch for consistency; all items prefer that provider but can failover independently per-item
 - Responses preserve request order
 
-**Not yet supported**:
+**Transactions**:
 
-- Write methods: `eth_sendRawTransaction`, `eth_sendTransaction`
+- `eth_sendRawTransaction` is supported. Without a chain `transactions` block, a send runs once and is not retried after dispatch. With one, sends go only to the listed providers and may be resent among them within the request deadline. See [RPC Standards](RPC_STANDARDS.md#transaction-sends).
+- Methods that need node-held keys, such as `eth_sendTransaction`, are rejected.
 
 ---
 

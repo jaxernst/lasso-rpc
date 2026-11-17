@@ -180,9 +180,9 @@ controlled upstream is a packaging fixture; Anvil and three-BEAM tests in source
 CI independently exercise logical-query reorg handling and fleet coordination.
 
 Record these results for each native platform alongside ordinary install/upgrade
-checks. Cloud and Core release records must identify both exact source commits
-and shared-publication parity; one repository's green CI does not attest the
-other. No destructive journal rollback is part of an ordinary binary rollback.
+checks. Each release record names the exact source commit and links its
+verification evidence. No destructive journal rollback is part of
+an ordinary binary rollback.
 
 For a previous-version upgrade check, provide the prior public image by digest:
 

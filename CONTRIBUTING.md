@@ -52,13 +52,19 @@ mix test test/lasso/core/request/request_pipeline_test.exs
 mix test --cover
 
 # Run local mock-provider integration tests
-mix test --include integration
+mix test test/integration/archive_provider_diversity_test.exs --include integration
 ```
 
 The full CI integration job also uses PostgreSQL 16 and Anvil v1.4.4.
 Follow [the test guide](docs/TESTING.md#full-ci-integration-suite) for service setup,
 fixture dependencies, and evidence verification. These services are not required
 for the default suite or mock-provider integration tests.
+
+With those services running, the full integration suite is:
+
+```bash
+mix test --include integration --include publication_db --include anvil
+```
 
 ### Code Quality Tools
 
