@@ -82,6 +82,26 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  def normalize({:rate_limit, %{status: 429} = payload}, opts) do
+    {message, data, original_code} =
+      case extract_nested_error(payload, -32_005, "Rate limited by provider") do
+        {:json_rpc, code, message, data} -> {message, data, code}
+        {:raw, code, message} -> {message, public_transport_data(payload), code}
+      end
+
+    JError.new(-32_005, message,
+      data: add_retry_after(data, payload),
+      original_code: original_code,
+      provider_id: Keyword.get(opts, :provider_id),
+      source: Keyword.get(opts, :context, :transport),
+      transport: Keyword.get(opts, :transport),
+      category: :rate_limit,
+      retriable?: true,
+      breaker_penalty?: false,
+      http_status: 429
+    )
+  end
+
   # Rate limiting errors
   def normalize({:rate_limit, payload}, opts) do
     provider_id = Keyword.get(opts, :provider_id)

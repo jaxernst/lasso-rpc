@@ -5,6 +5,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
   @behaviour Lasso.RPC.Transport.HTTP.Client
 
+  alias Lasso.Core.Support.ErrorNormalizer
+  alias Lasso.RPC.RateLimitState
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission, UpstreamResponse}
   alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Providers.ProviderHeaders
@@ -166,6 +168,9 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
           )
 
         case result do
+          {:ok, {:raw, _body, ^lease, _status}} = retained ->
+            retained
+
           {:ok, {:raw, _body, ^lease}} = retained ->
             retained
 
@@ -501,9 +506,11 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
         error
 
       {:ok, {:raw, raw_body}} ->
-        if is_nil(context),
-          do: {:ok, {:raw, raw_body}},
-          else: {:ok, {:raw, raw_body, lease}}
+        cond do
+          is_nil(context) -> {:ok, {:raw, raw_body}}
+          status in [401, 403] -> {:ok, {:raw, raw_body, lease, status}}
+          true -> {:ok, {:raw, raw_body, lease}}
+        end
     end
   end
 
@@ -607,6 +614,16 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   defp transport_message(reason) when is_atom(reason), do: "Connection error: #{reason}"
   defp transport_message(_reason), do: "Connection error"
 
+  defp handle_response(429, body) do
+    payload =
+      case UpstreamResponse.parse_unary(body) do
+        {:ok, %UpstreamResponse.Validated{kind: :error}} -> %{status: 429, body: body}
+        _other -> %{status: 429}
+      end
+
+    {:error, {:rate_limit, payload}}
+  end
+
   defp handle_response(status, body) when status in 200..299, do: {:ok, {:raw, body}}
 
   defp handle_response(status, body) do
@@ -618,9 +635,6 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
         classify_http_error(status, body)
     end
   end
-
-  defp classify_http_error(429, body),
-    do: {:error, {:rate_limit, %{status: 429, body: body}}}
 
   defp classify_http_error(408, body),
     do: {:error, {:server_error, %{status: 408, body: body}}}
@@ -634,12 +648,21 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   defp emit_http_error(context, reason, io_duration_us) do
     case reason do
       {:rate_limit, _payload} ->
-        AttemptProtocol.terminal(context, :response, %{
+        error = ErrorNormalizer.normalize(reason)
+
+        attrs = %{
           response_kind: :error,
           error_code: -32_005,
           error_category: :rate_limit,
+          retry_after_ms: RateLimitState.extract_retry_after(error.data),
           io_duration_us: io_duration_us
-        })
+        }
+
+        AttemptProtocol.terminal(
+          context,
+          :response,
+          Map.reject(attrs, fn {_key, value} -> is_nil(value) end)
+        )
 
       _other ->
         AttemptProtocol.terminal(context, :transport_failure, %{

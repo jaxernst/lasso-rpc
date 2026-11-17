@@ -217,7 +217,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchResponseBoundsTest do
         fn -> rpc(url, attempt_dispatch: AttemptProtocol.context()) end
       )
 
-    assert outcome.result == {:error, {:rate_limit, %{status: 429, body: body}}}
+    assert outcome.result == {:error, {:rate_limit, %{status: 429}}}
 
     assert %AttemptTerminal.Response{
              kind: :application_error,

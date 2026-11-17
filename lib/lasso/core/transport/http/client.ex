@@ -31,6 +31,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
   @type raw_response :: {:raw, binary()}
   @type retained_raw_response ::
           {:raw, binary(), Lasso.Core.Transport.UpstreamAdmission.Lease.t()}
+          | {:raw, binary(), Lasso.Core.Transport.UpstreamAdmission.Lease.t(), integer()}
 
   @callback request(provider_config, method, params, opts) ::
               {:ok, raw_response() | retained_raw_response()} | {:error, error_reason}
@@ -107,6 +108,16 @@ defmodule Lasso.RPC.Transport.HTTP.Client do
         end
 
       {:ok, {:raw, bytes, lease}} ->
+        try do
+          case Jason.decode(bytes) do
+            {:ok, json} -> {:ok, json}
+            {:error, reason} -> {:error, {:response_decode_error, inspect(reason)}}
+          end
+        after
+          Lasso.Core.Transport.UpstreamAdmission.release(lease, :decoded)
+        end
+
+      {:ok, {:raw, bytes, lease, _status}} ->
         try do
           case Jason.decode(bytes) do
             {:ok, json} -> {:ok, json}
