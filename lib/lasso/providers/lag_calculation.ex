@@ -3,15 +3,13 @@ defmodule Lasso.Providers.LagCalculation do
   Shared transport assessment for provider selection and dashboard status.
 
   A qualified profile-scoped reference and an HTTP poll-start reference are
-  required for a lagging verdict. The older optimistic calculation remains for
-  callers that explicitly use the chain-wide compatibility API.
+  required for a lagging verdict.
   """
 
   alias Lasso.BlockSync.{Observation, ObservationProjection, Registry}
   alias Lasso.Config.ConfigStore
   alias Lasso.Observations.{HeadComparison, HeadObservation, HeadSnapshot}
   alias Lasso.Observations.HeadComparison.{Assessment, AssessmentPolicy}
-  alias Lasso.RPC.ChainState
 
   @doc "Assess one retained transport fact against a profile-scoped head snapshot."
   @spec assess_transport(
@@ -53,21 +51,6 @@ defmodule Lasso.Providers.LagCalculation do
           compared_height: nil,
           age_ms: 0
         }
-    end
-  end
-
-  @spec calculate_optimistic_lag(pos_integer(), String.t(), non_neg_integer()) ::
-          {:ok, integer(), integer()} | {:error, term()}
-  def calculate_optimistic_lag(chain_id, provider_or_instance_id, block_time_ms)
-      when is_integer(chain_id) and chain_id > 0 do
-    with {:ok, observation} <- Observation.read(chain_id, provider_or_instance_id),
-         {:ok, consensus} <- ChainState.consensus_height(chain_id) do
-      calculate_from_observation(observation, block_time_ms, consensus)
-    else
-      {:error, :not_found} -> {:error, :no_provider_data}
-      {:error, {:stale, _observation}} -> {:error, :stale_provider_data}
-      {:error, :no_data} -> {:error, :no_consensus}
-      error -> error
     end
   end
 

@@ -8,7 +8,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   use LassoWeb, :live_component
 
-  alias Lasso.BlockSync.Observation
   alias LassoWeb.Components.DetailPanelComponents
   alias LassoWeb.Components.RegionSelector
   alias LassoWeb.Dashboard.{Formatting, Helpers, ProviderStatusProjection, StatusHelpers}
@@ -16,17 +15,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   require Logger
 
   @impl true
-  def update(%{_metrics_only: true} = assigns, socket) do
-    if assigns[:live_provider_metrics] != socket.assigns[:live_provider_metrics] do
-      {:ok,
-       socket
-       |> assign(:live_provider_metrics, assigns[:live_provider_metrics])
-       |> assign_region_data(socket.assigns[:provider_connection])}
-    else
-      {:ok, socket}
-    end
-  end
-
   def update(assigns, socket) do
     provider_connection = Enum.find(assigns.connections, &(&1.id == assigns.provider_id))
 
@@ -37,7 +25,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         socket.assigns[:cluster_circuit_states] != assigns[:cluster_circuit_states] or
         socket.assigns[:cluster_block_heights] != assigns[:cluster_block_heights] or
         socket.assigns[:cluster_health_counters] != assigns[:cluster_health_counters] or
-        socket.assigns[:chain_consensus_height] != assigns[:chain_consensus_height] or
         socket.assigns[:available_node_ids] != assigns[:available_node_ids] or
         socket.assigns[:selected_provider_metrics] != assigns[:selected_provider_metrics] or
         socket.assigns[:selected_provider_unified_events] !=
@@ -55,7 +42,6 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         |> assign(:cluster_circuit_states, assigns[:cluster_circuit_states])
         |> assign(:cluster_health_counters, assigns[:cluster_health_counters])
         |> assign(:cluster_block_heights, assigns[:cluster_block_heights])
-        |> assign(:chain_consensus_height, assigns[:chain_consensus_height])
         |> assign(:available_node_ids, assigns[:available_node_ids])
         |> assign(:provider_connection, provider_connection)
         |> assign_new(:selected_region, fn -> "aggregate" end)
@@ -74,15 +60,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     |> assign(:cluster_health_counters, %{})
     |> assign(:events, [])
     |> assign(:regions_with_issues, [])
-    |> assign(:sync_data, %{
-      block_height: nil,
-      consensus_height: nil,
-      optimistic_lag: nil,
-      effective_lag: nil,
-      height_estimated?: false,
-      sync_status: :unknown,
-      mode: :aggregate
-    })
+    |> assign(:sync_data, sync_data(nil, nil, nil))
     |> assign(:metrics_data, %{
       success_rate: nil,
       p50_latency: nil,
@@ -109,7 +87,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
     socket
     |> assign(:show_region_tabs, length(available_node_ids) > 1)
-    |> assign(:live_metrics, socket.assigns[:live_provider_metrics])
+    |> assign(
+      :live_metrics,
+      Map.get(socket.assigns[:live_provider_metrics] || %{}, socket.assigns.provider_id)
+    )
     |> assign(:cluster_circuits, socket.assigns[:cluster_circuit_states] || %{})
     |> assign(:cluster_health_counters, socket.assigns[:cluster_health_counters] || %{})
     |> assign(:events, socket.assigns[:selected_provider_unified_events] || [])
@@ -145,16 +126,12 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     # Find regions with circuit issues
     regions_with_issues = find_regions_with_issues(cluster_circuits, provider_id)
 
-    chain_consensus = socket.assigns[:chain_consensus_height]
-
     sync_data =
       compute_sync_data(
         selected_region,
-        region_data,
-        provider_connection,
+        provider_connection || %{},
         cluster_block_heights,
-        provider_id,
-        chain_consensus
+        provider_id
       )
 
     metrics_data = compute_metrics_data(region_data, cached_fallback)
@@ -214,145 +191,30 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     Map.get(by_region, region, %{})
   end
 
-  defp compute_sync_data(
-         selected_region,
-         region_data,
-         provider_connection,
-         cluster_block_heights,
-         provider_id,
-         chain_consensus
-       ) do
-    conn = provider_connection || %{}
-    chain_id = Map.get(conn, :chain_id)
-    instance_id = Map.get(conn, :instance_id) || provider_id
+  defp compute_sync_data("aggregate", conn, _cluster_block_heights, _provider_id) do
+    sync_data(conn[:block_height], conn[:consensus_height], conn[:blocks_behind])
+  end
 
-    cluster_block_heights =
-      Map.filter(cluster_block_heights, fn {_, observation} -> Observation.fresh?(observation) end)
+  defp compute_sync_data(region, _conn, cluster_block_heights, provider_id) do
+    case Map.get(cluster_block_heights, {provider_id, region}) do
+      %{height: height, lag: lag} when is_integer(height) and is_integer(lag) ->
+        sync_data(height, height - lag, max(0, -lag))
 
-    {block_height, block_lag, consensus_height} =
-      resolve_block_heights(
-        selected_region,
-        region_data,
-        conn,
-        cluster_block_heights,
-        provider_id,
-        chain_consensus
-      )
+      %{height: height} ->
+        sync_data(height, nil, nil)
 
-    optimistic_lag =
-      if is_integer(chain_id) do
-        case StatusHelpers.calculate_optimistic_lag(chain_id, instance_id) do
-          {:ok, lag} -> lag
-          {:error, _} -> nil
-        end
-      else
-        nil
-      end
+      _missing ->
+        sync_data(nil, nil, nil)
+    end
+  end
 
-    current_raw_lag =
-      if is_integer(block_height) and is_integer(consensus_height) do
-        block_height - consensus_height
-      else
-        block_lag
-      end
-
-    fresh? = fresh_sync_evidence?(selected_region, conn, cluster_block_heights, provider_id)
-    effective_lag = if fresh?, do: resolve_effective_lag(current_raw_lag, optimistic_lag, conn)
-    optimistic_lag = if fresh?, do: optimistic_lag
-    block_height = if fresh?, do: block_height
-
-    display_block_height = block_height
-
+  defp sync_data(block_height, consensus_height, blocks_behind) do
     %{
-      block_height: display_block_height,
+      block_height: block_height,
       consensus_height: consensus_height,
-      optimistic_lag: optimistic_lag,
-      effective_lag: effective_lag,
-      height_estimated?: display_block_height != block_height,
-      sync_status: sync_status_level(effective_lag),
-      mode: if(selected_region == "aggregate", do: :aggregate, else: :region)
+      blocks_behind: blocks_behind,
+      sync_status: sync_status_level(blocks_behind)
     }
-  end
-
-  defp fresh_sync_evidence?(region, conn, blocks, provider_id) do
-    evidence =
-      Enum.filter(blocks, fn {{id, node}, _} ->
-        id == provider_id and (region == "aggregate" or region == node)
-      end)
-
-    if evidence == [] and region == "aggregate" do
-      Observation.fresh?(%{
-        observed_at_ms: conn[:block_observed_at_ms],
-        stale_after_ms: conn[:block_stale_after_ms]
-      })
-    else
-      Enum.any?(evidence, fn {_, observation} -> Observation.fresh?(observation) end)
-    end
-  end
-
-  defp resolve_block_heights(
-         "aggregate",
-         region_data,
-         conn,
-         cluster_block_heights,
-         provider_id,
-         chain_consensus
-       ) do
-    provider_heights =
-      cluster_block_heights
-      |> Enum.filter(fn {{pid, _region}, _data} -> pid == provider_id end)
-      |> Enum.map(fn {{_pid, _region}, data} -> data end)
-
-    consensus =
-      chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
-
-    if provider_heights != [] do
-      max_height =
-        provider_heights
-        |> Enum.map(& &1[:height])
-        |> Enum.reject(&is_nil/1)
-        |> Enum.max(fn -> nil end)
-
-      min_lag =
-        provider_heights
-        |> Enum.map(& &1[:lag])
-        |> Enum.reject(&is_nil/1)
-        |> Enum.min(fn -> 0 end)
-
-      {max_height, min_lag, consensus}
-    else
-      {Map.get(conn, :block_height), nil, consensus}
-    end
-  end
-
-  defp resolve_block_heights(
-         selected_region,
-         region_data,
-         conn,
-         cluster_block_heights,
-         provider_id,
-         chain_consensus
-       ) do
-    region_height_data = Map.get(cluster_block_heights, {provider_id, selected_region}, %{})
-
-    {
-      region_height_data[:height] || region_data[:block_height] || Map.get(conn, :block_height),
-      region_height_data[:lag] || region_data[:block_lag] || 0,
-      chain_consensus || region_data[:consensus_height] || Map.get(conn, :consensus_height)
-    }
-  end
-
-  defp resolve_effective_lag(_block_lag, optimistic_lag, _conn)
-       when is_integer(optimistic_lag) do
-    abs(min(0, optimistic_lag))
-  end
-
-  defp resolve_effective_lag(block_lag, _optimistic_lag, conn) do
-    cond do
-      is_integer(block_lag) and block_lag < 0 -> abs(block_lag)
-      is_integer(block_lag) -> 0
-      true -> Map.get(conn, :blocks_behind)
-    end
   end
 
   defp compute_metrics_data(region_data, cached_metrics) do
@@ -525,6 +387,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
           <.issues_section
             provider_connection={@provider_connection}
+            status_projection={assigns[:status_projection] || %{status: :unknown}}
             provider_unified_events={@filtered_events}
           />
 
@@ -606,10 +469,10 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     ~H"""
     <DetailPanelComponents.panel_section border={false} class="pb-2">
       <DetailPanelComponents.section_header title="Sync Status" />
-      <div :if={@sync_data.block_height && @sync_data.consensus_height}>
+      <div :if={@sync_data.block_height}>
         <div class="flex items-center justify-between text-sm mb-2">
           <span class="text-gray-400">
-            {if @sync_data.height_estimated?, do: "Estimated Height:", else: "Block Height:"}
+            Block Height:
             <span class="text-white font-mono">
               {Formatting.format_number(@sync_data.block_height)}
             </span>
@@ -617,24 +480,24 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
           <span class="text-gray-400">
             Consensus:
             <span class="text-white font-mono">
-              {Formatting.format_number(@sync_data.consensus_height)}
+              {if @sync_data.consensus_height,
+                do: Formatting.format_number(@sync_data.consensus_height),
+                else: "—"}
             </span>
           </span>
           <span class={["font-mono font-bold", sync_color(@sync_data.sync_status)]}>
-            {sync_label(@sync_data.optimistic_lag, @sync_data.effective_lag)}
+            {sync_label(@sync_data.blocks_behind)}
           </span>
         </div>
         <DetailPanelComponents.progress_bar
+          :if={@sync_data.consensus_height}
           value={sync_progress(@sync_data.block_height, @sync_data.consensus_height)}
           status={@sync_data.sync_status}
           class="mb-2"
         />
         <div class="text-xs text-gray-500 text-right">{sync_description(@sync_data.sync_status)}</div>
       </div>
-      <div
-        :if={!@sync_data.block_height || !@sync_data.consensus_height}
-        class="text-sm text-gray-600 pt-2 pb-6"
-      >
+      <div :if={!@sync_data.block_height} class="text-sm text-gray-600 pt-2 pb-6">
         Block height data unavailable
       </div>
     </DetailPanelComponents.panel_section>
@@ -898,10 +761,11 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   # --- Issues ---
 
   attr(:provider_connection, :map, required: true)
+  attr(:status_projection, :map, required: true)
   attr(:provider_unified_events, :list, required: true)
 
   defp issues_section(assigns) do
-    active_alerts = build_active_alerts(assigns.provider_connection)
+    active_alerts = build_active_alerts(assigns.provider_connection, assigns.status_projection)
 
     event_feed =
       assigns.provider_unified_events
@@ -1153,27 +1017,15 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   defp sync_color(:degraded), do: "text-yellow-400"
   defp sync_color(:down), do: "text-red-400"
 
-  defp sync_label(nil, nil), do: "Awaiting evidence"
+  defp sync_label(nil), do: "Unknown"
+  defp sync_label(blocks_behind) when blocks_behind <= 2, do: "Synced"
+  defp sync_label(blocks_behind), do: "-#{blocks_behind}"
 
-  defp sync_label(optimistic_lag, _effective_lag) when is_integer(optimistic_lag) do
-    cond do
-      optimistic_lag >= -2 -> "Synced"
-      optimistic_lag < 0 -> "#{optimistic_lag}"
-      true -> "+#{optimistic_lag}"
-    end
-  end
-
-  defp sync_label(nil, effective_lag) when effective_lag <= 2, do: "Synced"
-  defp sync_label(nil, effective_lag) when effective_lag > 2, do: "-#{effective_lag}"
-  defp sync_label(nil, _), do: "—"
-
-  defp sync_description(:unknown), do: "(no fresh head observation)"
+  defp sync_description(:unknown), do: "(no qualified profile head to compare)"
   defp sync_description(:healthy), do: "(within range)"
   defp sync_description(:degraded), do: "(slightly behind)"
   defp sync_description(:down), do: "(significantly behind)"
 
-  defp sync_progress(_, nil), do: 0
-  defp sync_progress(nil, _), do: 0
   defp sync_progress(_, 0), do: 100
 
   defp sync_progress(block_height, consensus_height),
@@ -1200,13 +1052,23 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   defp truncate_message(message, _), do: message
 
-  defp build_active_alerts(conn) do
+  defp build_active_alerts(conn, status_projection) do
     []
+    |> add_lag_alert(conn, status_projection)
     |> add_circuit_alerts(conn)
     |> add_rate_limit_alerts(conn)
     |> add_failure_alerts(conn)
     |> add_ws_disconnect_alert(conn)
   end
+
+  defp add_lag_alert(alerts, conn, %{status: :lagging}) do
+    case conn[:blocks_behind] do
+      n when is_integer(n) -> [{:warn, "#{n} blocks behind the profile head", nil} | alerts]
+      _unknown -> [{:warn, "Behind the profile head", nil} | alerts]
+    end
+  end
+
+  defp add_lag_alert(alerts, _conn, _status_projection), do: alerts
 
   defp add_circuit_alerts(alerts, conn) do
     http_cb = Map.get(conn, :http_circuit_state)

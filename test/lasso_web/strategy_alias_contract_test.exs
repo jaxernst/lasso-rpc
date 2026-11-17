@@ -10,7 +10,6 @@ defmodule LassoWeb.StrategyAliasContractTest do
 
   # Files that name balanced-fast only to emit or display it, never to read a caller's choice.
   @emit_only %{
-    "assets/js/app.js" => "dashboard description keyed by the selected canonical strategy",
     "lib/lasso_web/components/simulator_controls.ex" => "dashboard buttons send canonical names",
     "lib/lasso_web/dashboard/endpoint_helpers.ex" => "dashboard labels"
   }

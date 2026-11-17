@@ -9,34 +9,6 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
   alias LassoWeb.Dashboard.{EndpointHelpers, Formatting, Helpers, StatusHelpers}
 
   @impl true
-  def update(%{_metrics_only: true} = assigns, socket) do
-    live_provider_metrics = assigns[:live_provider_metrics] || %{}
-
-    if socket.assigns[:live_provider_metrics] != live_provider_metrics do
-      selected_region = socket.assigns[:chain_metrics_region] || "aggregate"
-      chain = socket.assigns[:chain]
-      chain_connections = socket.assigns[:chain_connections] || []
-      aggregate_cached = socket.assigns[:aggregate_cached] || %{}
-      cached_fallback = if selected_region == "aggregate", do: aggregate_cached, else: %{}
-
-      filtered_metrics =
-        compute_filtered_chain_metrics(
-          selected_region,
-          live_provider_metrics,
-          chain,
-          cached_fallback,
-          chain_connections
-        )
-
-      {:ok,
-       socket
-       |> assign(:live_provider_metrics, live_provider_metrics)
-       |> assign(:filtered_chain_metrics, filtered_metrics)}
-    else
-      {:ok, socket}
-    end
-  end
-
   def update(assigns, socket) do
     chain = assigns.chain
     chain_connections = Enum.filter(assigns.connections, &(&1.chain == chain))
@@ -335,7 +307,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
           </div>
 
           <div class="text-[11px] text-gray-500 pl-1" id="mode-description">
-            Distributes requests evenly across all available providers
+            {EndpointHelpers.strategy_description("load-balanced")}
           </div>
         </div>
       </div>
@@ -353,6 +325,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
     ~H"""
     <button
       data-strategy={@strategy}
+      data-description={EndpointHelpers.strategy_description(@strategy)}
       data-state="inactive"
       class="px-3 py-1.5 rounded-md text-xs font-medium border bg-gray-800/50"
     >
@@ -524,7 +497,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
        ) do
     chain_providers_with_ids =
       live_provider_metrics
-      |> Enum.filter(fn {_pid, metrics} -> metrics[:chain] == chain end)
+      |> Enum.filter(fn {_pid, metrics} -> metrics[:chain_id] == chain end)
 
     chain_providers =
       chain_providers_with_ids
@@ -587,7 +560,7 @@ defmodule LassoWeb.Dashboard.Components.ChainDetailsPanel do
        ) do
     chain_providers_with_ids =
       live_provider_metrics
-      |> Enum.filter(fn {_pid, metrics} -> metrics[:chain] == chain end)
+      |> Enum.filter(fn {_pid, metrics} -> metrics[:chain_id] == chain end)
 
     region_providers_with_ids =
       chain_providers_with_ids

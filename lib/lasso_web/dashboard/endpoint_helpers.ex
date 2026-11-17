@@ -19,8 +19,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   def available_strategies, do: @available_strategies
 
   @doc """
-  Get comprehensive chain endpoints structure with all available routes.
-  Returns a map with HTTP and WebSocket URLs for all strategies.
+  Get the chain endpoint bases used to build strategy and provider URLs.
   """
   def get_chain_endpoints(profile, chain_name) do
     base_url = LassoWeb.Endpoint.url()
@@ -35,19 +34,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
       ws_base_url: ws_base_url,
       # Base endpoints (use default strategy configured in config.exs)
       http_base: "#{base_url}/rpc/profile/#{profile}/#{chain_name}",
-      ws_base: "#{ws_base_url}/ws/rpc/profile/#{profile}/#{chain_name}",
-      # Strategy-specific endpoints
-      strategies:
-        Enum.map(@available_strategies, fn strategy ->
-          %{
-            name: strategy,
-            display_name: strategy_display_name(strategy),
-            icon: strategy_icon(strategy),
-            description: strategy_description(strategy),
-            http_url: "#{base_url}/rpc/profile/#{profile}/#{strategy}/#{chain_name}",
-            ws_url: "#{ws_base_url}/ws/rpc/profile/#{profile}/#{strategy}/#{chain_name}"
-          }
-        end)
+      ws_base: "#{ws_base_url}/ws/rpc/profile/#{profile}/#{chain_name}"
     }
   end
 
@@ -118,15 +105,9 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
   def strategy_display_name("fastest"), do: "Fastest"
   def strategy_display_name(other), do: other |> String.replace("-", " ") |> String.capitalize()
 
-  # Strategy icons
-  defp strategy_icon("fastest"), do: "⚡"
-  defp strategy_icon("load-balanced"), do: "🔄"
-  defp strategy_icon("balanced-fast"), do: "⚖️"
-  defp strategy_icon(_), do: "🎯"
-
   @doc "Get description for a strategy"
   def strategy_description("load-balanced") do
-    "Distributes requests evenly across all available providers — good for general purpose workloads"
+    "Randomizes provider order for each request, so traffic spreads across providers without fixed shares"
   end
 
   def strategy_description("balanced-fast") do

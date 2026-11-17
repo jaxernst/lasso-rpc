@@ -1392,28 +1392,12 @@ const EndpointSelector = {
     const descriptionEl = this.el.querySelector("#mode-description");
     if (!descriptionEl) return;
 
-    if (this.mode === "strategy" && this.selectedStrategy) {
-      const descriptions = {
-        "load-balanced":
-          "Distributes requests evenly across all available providers — good for general purpose workloads",
-        "balanced-fast":
-          "Spreads requests while favoring faster providers, for fast reads without concentrating load on one",
-        fastest:
-          "Routes all requests to the single fastest provider — best suited for low-volume, latency-sensitive calls",
-      };
-      descriptionEl.textContent =
-        descriptions[this.selectedStrategy] || "Strategy-based routing";
-      descriptionEl.classList.remove("text-amber-400");
-      descriptionEl.classList.add("text-gray-500");
-    } else if (this.mode === "provider" && this.selectedProvider) {
+    if (this.mode === "provider" && this.selectedProvider) {
       descriptionEl.textContent = `Direct connection to ${this.selectedProvider} (bypasses routing strategies)`;
-      descriptionEl.classList.remove("text-amber-400");
-      descriptionEl.classList.add("text-gray-500");
     } else {
-      descriptionEl.textContent =
-        "Distributes requests evenly across all available providers";
-      descriptionEl.classList.remove("text-amber-400");
-      descriptionEl.classList.add("text-gray-500");
+      const strategy = this.selectedStrategy || "load-balanced";
+      const button = this.el.querySelector(`[data-strategy="${strategy}"]`);
+      descriptionEl.textContent = button?.dataset.description || "";
     }
   },
 };
