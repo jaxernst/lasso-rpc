@@ -25,7 +25,19 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
 
             if opts[:name] == "healthy",
               do: {200, %{result: "0x123"}},
-              else: {opts[:status], %{error: %{code: opts[:code], message: "Invalid request"}}}
+              else:
+                {opts[:status],
+                 %{
+                   error: %{
+                     code: opts[:code],
+                     message:
+                       if(opts[:code] == -32_005,
+                         do: "monthly quota exceeded",
+                         else: "Invalid request"
+                       ),
+                     data: if(opts[:code] == -32_005, do: %{retry_after_ms: 3_600_000}, else: nil)
+                   }
+                 }}
 
           _ ->
             {200, %{result: "0x100"}}
@@ -51,7 +63,8 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
              do: {"eth_getBalance", @read_params, status, -32_600, false}
            )
 
-  for {method, params, status, code, failover?} <- @cases do
+  for {method, params, status, code, failover?} <-
+        @cases ++ [{"eth_getBalance", @read_params, 429, -32_005, true}] do
     test "#{method} HTTP #{status} code #{code} failover=#{failover?}" do
       chain = 700_000_000 + System.unique_integer([:positive, :monotonic])
       previous = Application.get_env(:lasso, :http_client)
@@ -121,6 +134,12 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
         assert %{"id" => 1, "error" => error} = body
         if unquote(status) in [200, 400], do: assert(error["code"] == -32_600)
         refute_receive {:called, "healthy"}
+      end
+
+      if unquote(code) == -32_005 do
+        instance_id = Providers.Catalog.lookup_instance_id("public", chain, "refused")
+        evidence = Providers.InstanceState.read_rate_limit(instance_id, :http)
+        assert evidence.remaining_ms > 3_500_000
       end
 
       refute_receive {:called, _provider}
