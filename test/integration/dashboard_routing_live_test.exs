@@ -70,6 +70,7 @@ defmodule LassoWeb.DashboardRoutingLiveTest do
   test "system failures remain visible without lowering client routing success", %{chain: chain} do
     system_request_id = "dashboard-system-#{System.unique_integer([:positive])}"
     client_request_id = "dashboard-client-#{System.unique_integer([:positive])}"
+    system_success_request_id = "dashboard-system-ok-#{System.unique_integer([:positive])}"
     profile = "dashboard-origin-#{System.unique_integer([:positive])}"
 
     setup_providers(
@@ -98,20 +99,26 @@ defmodule LassoWeb.DashboardRoutingLiveTest do
                }
              )
 
-    assert {:ok, _result, _ctx} =
-             RequestPipeline.execute_via_channels(
-               chain,
-               "eth_blockNumber",
-               [],
-               %RequestOptions{
-                 profile: profile,
-                 provider_override: "dashboard-client-success",
-                 failover_on_override: false,
-                 strategy: :priority,
-                 timeout_ms: 30_000,
-                 request_id: client_request_id
-               }
-             )
+    for {request_id, origin} <- [
+          {client_request_id, :client},
+          {system_success_request_id, :system}
+        ] do
+      assert {:ok, _result, _ctx} =
+               RequestPipeline.execute_via_channels(
+                 chain,
+                 "eth_blockNumber",
+                 [],
+                 %RequestOptions{
+                   profile: profile,
+                   provider_override: "dashboard-client-success",
+                   failover_on_override: false,
+                   strategy: :priority,
+                   timeout_ms: 30_000,
+                   request_id: request_id,
+                   request_origin: origin
+                 }
+               )
+    end
 
     assert %{request_origin: :system, result: :error} =
              await_live_routing_event(view, system_request_id)
@@ -119,11 +126,27 @@ defmodule LassoWeb.DashboardRoutingLiveTest do
     assert %{request_origin: :client, result: :success} =
              await_live_routing_event(view, client_request_id)
 
+    assert %{request_origin: :system, result: :success} =
+             await_live_routing_event(view, system_success_request_id)
+
     state = await_exact_traffic(view, 1)
     assert MetricsHelpers.success_rate_percent(state.socket.assigns.routing_events) == 100.0
     assert state.socket.assigns.traffic_metrics.count == 1
     assert state.socket.assigns.traffic_metrics.successes == 1
     assert state.socket.assigns.traffic_metrics.errors == 0
+
+    metrics =
+      await_live_provider_metrics(view, ["dashboard-system-failure", "dashboard-client-success"])
+
+    assert %{total_calls: 0, error_count: 0, p50_latency: nil, traffic_pct: +0.0, rpc_stats: []} =
+             metrics["dashboard-system-failure"].aggregate
+
+    assert %{
+             total_calls: 1,
+             success_rate: 100.0,
+             traffic_pct: 100.0,
+             rpc_stats: [%{method: "eth_blockNumber", total_calls: 1}]
+           } = metrics["dashboard-client-success"].aggregate
 
     html = render(view)
     assert html =~ "Success (1)"
@@ -147,6 +170,23 @@ defmodule LassoWeb.DashboardRoutingLiveTest do
 
       event ->
         event
+    end
+  end
+
+  defp await_live_provider_metrics(view, provider_ids, attempts \\ 60)
+
+  defp await_live_provider_metrics(_view, provider_ids, 0),
+    do: flunk("LiveView did not receive live metrics for #{inspect(provider_ids)}")
+
+  defp await_live_provider_metrics(view, provider_ids, attempts) do
+    _html = render(view)
+    metrics = :sys.get_state(view.pid).socket.assigns.live_provider_metrics
+
+    if Enum.all?(provider_ids, &Map.has_key?(metrics, &1)) do
+      metrics
+    else
+      Process.sleep(50)
+      await_live_provider_metrics(view, provider_ids, attempts - 1)
     end
   end
 
