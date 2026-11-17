@@ -648,38 +648,21 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   def sibling_last(cursor, groups) do
     cursor = %{cursor | effect_context: Map.put(cursor.effect_context, :sibling_last, groups)}
-    entries = Enum.map(cursor.descriptors, &{&1, descriptor_band(cursor, &1)})
-    fields = [supported_deferred: true, unsupported_deferred: false]
+    # An unresolved route is a barrier: only selection may open its channel.
+    {entries, _unresolved?} =
+      Enum.map_reduce(cursor.descriptors, false, fn descriptor, unresolved? ->
+        band = if not unresolved?, do: cached_band(cursor, descriptor)
+        {{descriptor, band}, unresolved? or is_nil(band)}
+      end)
 
-    queued_bands =
-      for {field, supported?} <- fields,
-          {{tier, bucket}, queue} <- Map.fetch!(cursor, field),
-          not :queue.is_empty(queue),
-          do: {tier, bucket, supported?}
-
-    band =
-      (Enum.map(entries, &elem(&1, 1)) ++ queued_bands)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.min_by(
-        fn {tier, bucket, supported?} ->
-          {not supported?, tier, bucket != :ordinary}
-        end,
-        fn -> nil end
-      )
-
-    descriptors_first? =
-      (band == {1, :ordinary, true} and Enum.any?(entries, &(elem(&1, 1) == band))) or
-        band not in queued_bands
+    # Other bands finish materialising into queues before the same rule is applied.
+    band = {1, :ordinary, true}
 
     ordered =
       entries
-      |> Enum.filter(&(not is_nil(band) and elem(&1, 1) == band))
+      |> Enum.filter(&(elem(&1, 1) == band))
       |> Enum.map(&elem(&1, 0))
-      |> then(fn descriptors ->
-        if descriptors_first?,
-          do: order_descriptors(descriptors, groups, cursor),
-          else: descriptors
-      end)
+      |> order_descriptors(groups, cursor)
 
     {descriptors, []} =
       Enum.map_reduce(entries, ordered, fn
@@ -690,8 +673,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     %{cursor | descriptors: descriptors}
   end
 
-  defp descriptor_band(cursor, descriptor) do
-    case materialize(cursor, descriptor) do
+  defp cached_band(cursor, descriptor) do
+    case materialize(%{cursor | channel_lookup: :cached}, descriptor) do
       {:ok, _channel, tier, supported?} -> {tier, bucket(cursor, descriptor), supported?}
       {:skip, _reason} -> nil
     end

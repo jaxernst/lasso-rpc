@@ -90,6 +90,14 @@ defmodule Lasso.RefusalVendorDiversityTest do
     )
   end
 
+  test "an unused cold route cannot starve the ready answering sibling" do
+    run_case("cold registry", 200, -32601, "Method not found", false, true, "sibling",
+      budget: 3,
+      other_host: "third.alchemy.com",
+      cold_registry: true
+    )
+  end
+
   defp run_case(label, status, code, message, unknown?, independent?, expected, options \\ []) do
     chain = 700_000_000 + System.unique_integer([:positive, :monotonic])
     previous = Application.get_env(:lasso, :http_client)
@@ -185,46 +193,64 @@ defmodule Lasso.RefusalVendorDiversityTest do
                )
     end
 
-    if budget = options[:budget] do
-      alias Lasso.RPC.{RequestContext, RequestOptions, RequestPipeline}
+    alias Lasso.RPC.TransportRegistry
 
-      opts = %RequestOptions{
-        profile: "public",
-        strategy: :priority,
-        transport: :http,
-        timeout_ms: 2_000
-      }
+    for {name, _host} <- routes do
+      assert {:ok, _channel} = TransportRegistry.get_channel("public", chain, name, :http)
+    end
 
-      ctx = RequestContext.new(chain, "eth_getBalance", @params, opts)
-      envelope = Lasso.RPC.ExecutionEnvelope.new(ctx.request_id, "eth_getBalance", 2_000)
-      ctx = %{ctx | execution_envelope: %{envelope | dispatch_limit: budget}}
+    registry =
+      if options[:cold_registry] do
+        :ets.delete(:transport_channel_cache, {"public", chain, "other", :http})
+        registry = GenServer.whereis(TransportRegistry.via_name("public", chain))
+        assert :ok = :sys.suspend(registry)
+        registry
+      end
 
-      assert {:ok, _, completed} =
-               RequestPipeline.execute_via_channels(
-                 chain,
-                 "eth_getBalance",
-                 @params,
-                 %{opts | request_context: ctx}
-               )
+    try do
+      if budget = options[:budget] do
+        alias Lasso.RPC.{RequestContext, RequestOptions, RequestPipeline}
 
-      assert completed.executed_channel.provider_id == expected
-      assert completed.execution_envelope.dispatch_count == 2
-      assert completed.execution_envelope.dispatch_limit == budget
-    else
-      port = LassoWeb.Endpoint.config(:http)[:port]
-      request = %{jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: @params}
+        opts = %RequestOptions{
+          profile: "public",
+          strategy: :priority,
+          transport: :http,
+          timeout_ms: 2_000
+        }
 
-      {:ok, response} =
-        Finch.build(
-          :post,
-          "http://127.0.0.1:#{port}/rpc/priority/#{chain}",
-          [{"content-type", "application/json"}],
-          Jason.encode!(request)
-        )
-        |> Finch.request(Lasso.Finch)
+        ctx = RequestContext.new(chain, "eth_getBalance", @params, opts)
+        envelope = Lasso.RPC.ExecutionEnvelope.new(ctx.request_id, "eth_getBalance", 2_000)
+        ctx = %{ctx | execution_envelope: %{envelope | dispatch_limit: budget}}
 
-      result = if expected == "other", do: "0x33", else: "0x22"
-      assert %{"result" => ^result} = Jason.decode!(response.body)
+        assert {:ok, _, completed} =
+                 RequestPipeline.execute_via_channels(
+                   chain,
+                   "eth_getBalance",
+                   @params,
+                   %{opts | request_context: ctx}
+                 )
+
+        assert completed.executed_channel.provider_id == expected
+        assert completed.execution_envelope.dispatch_count == 2
+        assert completed.execution_envelope.dispatch_limit == budget
+      else
+        port = LassoWeb.Endpoint.config(:http)[:port]
+        request = %{jsonrpc: "2.0", id: 1, method: "eth_getBalance", params: @params}
+
+        {:ok, response} =
+          Finch.build(
+            :post,
+            "http://127.0.0.1:#{port}/rpc/priority/#{chain}",
+            [{"content-type", "application/json"}],
+            Jason.encode!(request)
+          )
+          |> Finch.request(Lasso.Finch)
+
+        result = if expected == "other", do: "0x33", else: "0x22"
+        assert %{"result" => ^result} = Jason.decode!(response.body)
+      end
+    after
+      if registry, do: :sys.resume(registry)
     end
 
     for name <- Keyword.get(options, :calls, ["first", expected]) do
