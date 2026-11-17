@@ -8,6 +8,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
 
   use LassoWeb, :live_component
 
+  alias Lasso.BlockSync.Observation
   alias LassoWeb.Components.DetailPanelComponents
   alias LassoWeb.Components.RegionSelector
   alias LassoWeb.Dashboard.{Formatting, Helpers, ProviderStatusProjection, StatusHelpers}
@@ -192,16 +193,24 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   end
 
   defp compute_sync_data("aggregate", conn, _cluster_block_heights, _provider_id) do
-    sync_data(conn[:block_height], conn[:consensus_height], conn[:blocks_behind])
+    observation = %{
+      observed_at_ms: conn[:block_observed_at_ms],
+      stale_after_ms: conn[:block_stale_after_ms]
+    }
+
+    if Observation.fresh?(observation),
+      do: sync_data(conn[:block_height], conn[:consensus_height], conn[:blocks_behind]),
+      else: sync_data(nil, conn[:consensus_height], nil)
   end
 
+  # Regional heads have no qualified reference, so a region shows only the
+  # provider's own fresh height.
   defp compute_sync_data(region, _conn, cluster_block_heights, provider_id) do
     case Map.get(cluster_block_heights, {provider_id, region}) do
-      %{height: height, lag: lag} when is_integer(height) and is_integer(lag) ->
-        sync_data(height, height - lag, max(0, -lag))
-
-      %{height: height} ->
-        sync_data(height, nil, nil)
+      %{height: height} = observation when is_integer(height) ->
+        if Observation.fresh?(observation),
+          do: sync_data(height, nil, nil),
+          else: sync_data(nil, nil, nil)
 
       _missing ->
         sync_data(nil, nil, nil)
