@@ -1,10 +1,53 @@
 defmodule Lasso.Core.Request.RequestOwnerTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Lasso.Core.Request.{ExecutionScope, RequestOwner}
   alias Lasso.Core.Transport.AttemptProtocol
   alias Lasso.RPC.AttemptIdentity
   alias Lasso.RPC.AttemptTerminal
+
+  setup context do
+    if context[:manual_clock] do
+      tick = :atomics.new(1, signed: true)
+      :atomics.put(tick, 1, 0)
+      clock = {tick, self()}
+      Process.put(:request_test_clock, clock)
+
+      :ok = :meck.new(System, [:passthrough, :no_link])
+
+      on_exit(fn ->
+        :meck.unload(System)
+      end)
+
+      :meck.expect(System, :monotonic_time, fn unit ->
+        case request_test_clock() do
+          {tick, _parent} -> :erlang.convert_time_unit(:atomics.get(tick, 1), :microsecond, unit)
+          nil -> :meck.passthrough([unit])
+        end
+      end)
+
+      :erlang.trace_pattern({:erlang, :send_after, 4}, true, [])
+      on_exit(fn -> :erlang.trace_pattern({:erlang, :send_after, 4}, false, []) end)
+
+      {:ok, manual_clock: clock}
+    else
+      :ok
+    end
+  end
+
+  defp request_test_clock do
+    Process.get(:request_test_clock) ||
+      Enum.find_value(Process.get(:"$ancestors", []), fn
+        pid when is_pid(pid) ->
+          case Process.info(pid, :dictionary) do
+            {:dictionary, dictionary} -> Keyword.get(dictionary, :request_test_clock)
+            nil -> nil
+          end
+
+        _ ->
+          nil
+      end)
+  end
 
   defp identity(execution_safety \\ :replay_safe) do
     AttemptIdentity.new(
@@ -452,6 +495,7 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     refute outcome.projection.fallback_eligible
   end
 
+  @tag :manual_clock
   test "runtime error categories map to the four canonical application classes" do
     cases = [
       {:invalid_params, :deterministic, :return_response, :none},
@@ -523,49 +567,56 @@ defmodule Lasso.Core.Request.RequestOwnerTest do
     end
   end
 
-  test "a D-1 stamp delivered after the prearmed cutoff marker is late" do
-    for _iteration <- 1..20 do
-      test_pid = self()
+  @tag :manual_clock
+  test "a D-1 stamp delivered after the prearmed cutoff marker is late", %{manual_clock: clock} do
+    test_pid = self()
 
-      owner =
-        spawn(fn ->
-          deadline_us = deadline_after(100)
+    owner =
+      spawn(fn ->
+        Process.put(:request_test_clock, clock)
+        :erlang.trace(self(), true, [:call, {:tracer, test_pid}])
+        deadline_us = deadline_after(100)
 
-          outcome =
-            RequestOwner.execute(identity(), deadline_us, fn ->
-              send(test_pid, {:transport_waiting, self(), deadline_us})
-              assert_receive :complete_after_cutoff, 1_000
+        outcome =
+          RequestOwner.execute(identity(), deadline_us, fn ->
+            send(test_pid, {:transport_waiting, self(), deadline_us})
+            assert_receive :complete_after_cutoff, 1_000
 
-              AttemptProtocol.terminal_at(
-                AttemptProtocol.context(),
-                :response,
-                %{response_kind: :success, io_duration_us: 1},
-                deadline_us - 1
-              )
+            AttemptProtocol.terminal_at(
+              AttemptProtocol.context(),
+              :response,
+              %{response_kind: :success, io_duration_us: 1},
+              deadline_us - 1
+            )
 
-              {:ok, :too_late}
-            end)
+            {:ok, :too_late}
+          end)
 
-          send(test_pid, {:owner_outcome, outcome})
-        end)
-
-      assert_receive {:transport_waiting, task, deadline_us}, 1_000
-      assert :erlang.suspend_process(owner)
-      wait_past(deadline_us)
-
-      await_mailbox(owner, fn messages ->
-        Enum.any?(messages, &match?({:request_owner_cutoff, _, _}, &1))
+        send(test_pid, {:owner_outcome, outcome})
       end)
 
-      send(task, :complete_after_cutoff)
-      await_down(task)
+    assert_receive {:transport_waiting, task, deadline_us}, 1_000
+    assert :erlang.suspend_process(owner)
 
-      assert :erlang.resume_process(owner)
+    assert_receive {:trace, ^owner, :call,
+                    {:erlang, :send_after, [_delay, ^owner, marker, _opts]}},
+                   1_000
 
-      assert_receive {:owner_outcome, outcome}, 1_000
-      assert outcome.result == {:error, :deadline_expired}
-      assert %AttemptTerminal.Deadline{} = outcome.fact
-    end
+    :atomics.put(elem(clock, 0), 1, deadline_us)
+    send(owner, marker)
+
+    await_mailbox(owner, fn messages ->
+      Enum.any?(messages, &match?({:request_owner_cutoff, _, _}, &1))
+    end)
+
+    send(task, :complete_after_cutoff)
+    await_down(task)
+
+    assert :erlang.resume_process(owner)
+
+    assert_receive {:owner_outcome, outcome}, 1_000
+    assert outcome.result == {:error, :deadline_expired}
+    assert %AttemptTerminal.Deadline{} = outcome.fact
   end
 
   test "a caller already down prevents transport task creation" do
