@@ -91,7 +91,7 @@ defmodule Lasso.Cluster.HealthTopology do
   end
 
   defp clustering_enabled? do
-    expected_nodes(1) > 1 or Node.alive?() or
+    expected_nodes(1) > 1 or Node.list() != [] or
       Application.get_env(:libcluster, :topologies, []) != []
   end
 

@@ -277,7 +277,7 @@ jobs:
 
           after="$(docker exec lasso-rpc-ci /app/bin/lasso rpc 'IO.puts(Lasso.Config.ConfigStore.route_generation())')"
           test "$before" = "$after"
-          curl --fail --silent --show-error http://127.0.0.1:4000/api/health
+          curl --fail --silent --show-error http://127.0.0.1:4000/api/health | jq --exit-status '.cluster.enabled == false'
 
       - name: Boot with a distribution cookie that starts with a flag character
         shell: bash

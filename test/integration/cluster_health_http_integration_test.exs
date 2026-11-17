@@ -20,18 +20,6 @@ defmodule LassoWeb.ClusterHealthHTTPIntegrationTest do
     :ok
   end
 
-  test "a cached topology does not enable clustering on a standalone node" do
-    refute Node.alive?()
-    assert Application.get_env(:libcluster, :topologies, []) == []
-    Application.delete_env(:lasso, :expected_cluster_nodes)
-
-    response = build_conn() |> get("/api/health") |> json_response(200)
-
-    refute response["cluster"]["enabled"]
-    assert response["cluster"]["status"] == "standalone"
-    assert is_integer(response["cluster"]["snapshot_age_ms"])
-  end
-
   test "health reports missing configured peers without failing local liveness" do
     # Distributed fixtures can leave responding peers connected between cases.
     expected_nodes = 4 * Lasso.Cluster.Topology.get_coverage().connected
