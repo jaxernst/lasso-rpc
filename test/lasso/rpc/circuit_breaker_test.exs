@@ -46,14 +46,18 @@ defmodule Lasso.RPC.CircuitBreakerTest do
 
     observe_open(id)
     assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "boom" end)
-    assert_receive {:circuit_open, ^id}
+    # Flush the caller's failure report before inspecting its transition event.
+    _ = CircuitBreaker.get_state(id)
+    assert_received {:circuit_open, ^id}
 
     Eventually.assert_eventually(fn -> CircuitBreaker.get_state(id).state == :half_open end)
     # First success in half-open
     assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end)
     # Failure should re-open (caller receives wrapped exception)
     assert {:executed, {:exception, _}} = CircuitBreaker.call(id, fn -> raise "oops" end)
-    assert_receive {:circuit_open, ^id}
+    # Flush the caller's failure report before inspecting its transition event.
+    _ = CircuitBreaker.get_state(id)
+    assert_received {:circuit_open, ^id}
   end
 
   test "opens after failure_threshold typed errors and rejects until recovery" do
