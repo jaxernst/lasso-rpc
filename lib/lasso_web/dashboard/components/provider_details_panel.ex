@@ -860,7 +860,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
     ~H"""
     <div class="flex items-center gap-2 text-xs">
       <span class="w-28 text-gray-300 truncate font-mono" title={@stat.method}>{@stat.method}</span>
-      <span class="w-16 text-gray-400">p50: {@latency}</span>
+      <span class="w-16 text-gray-400">avg: {@latency}</span>
       <span class={["w-12", @success_class]}>{@success_pct}</span>
       <div class="flex-1 bg-gray-800 rounded h-2">
         <div class="bg-gray-600 h-2 rounded" style={"width: #{@bar_width}%"}></div>

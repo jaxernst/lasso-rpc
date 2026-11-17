@@ -7,8 +7,9 @@ pass installation checks. A green build alone is not distribution verification.
 ## Prepare and verify the source release
 
 1. Start from a clean checkout; review the changes since the previous release.
-2. Update `mix.exs`, the README version badge, and the changelog/version comparison
-   links together. Describe any configuration or storage compatibility changes.
+2. Update `mix.exs`, the README version badge, the default image tag in
+   `deployment/compose.release.yml`, and the changelog/version comparison links
+   together. Describe any configuration or storage compatibility changes.
 3. Review public setup, API, configuration, deployment, and security guidance.
    Keep private operational material, credentials, `.env` files, local data, and
    generated build artifacts out of the commit.

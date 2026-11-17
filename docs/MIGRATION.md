@@ -35,7 +35,7 @@ limits instead of relying on failover to discover them in production.
 | HTTP endpoint | `url` | Use `${ENV_VAR}` substitution for credential-bearing values. |
 | WebSocket endpoint | `ws_url` | Qualify subscriptions independently from HTTP. |
 | Authorization or custom headers sent upstream | `api_key`, `headers`, or `auth_headers` | These authenticate Lasso to an upstream; they do not authenticate clients to Lasso. |
-| Ordered primary and fallback | Provider `priority` plus the `:priority` application strategy | The shipped default is `load_balanced`; priority has no dedicated URL slug. |
+| Ordered primary and fallback | Provider `priority` plus the `:priority` application strategy | The shipped default is `load_balanced`; use `/rpc/priority/:chain` to select priority explicitly. |
 | Even/random pool | `/rpc/load-balanced/:chain` | This is bounded randomized ordering, not exact traffic shares or quota-aware weighting. |
 | Latency routing | `/rpc/fastest/:chain` or `/rpc/balanced-fast/:chain` | Rankings use successful-attempt evidence and still apply health/capability filtering. |
 | Per-backend method restrictions | `capabilities.unsupported_methods`, `unsupported_categories`, and `limits` | Declare known restrictions before canary traffic. |
@@ -99,8 +99,11 @@ explicitly allow only the headers the upstream contract requires.
 Lasso applies a single method-specific deadline to each JSON-RPC item. Replay-safe
 reads may dispatch to as many as three distinct eligible channels within that
 deadline; the first attempt receives at most 60% of the original budget so that
-fallback retains time. Transaction broadcast, signing, filter creation and
-consumption, subscriptions, and unknown methods receive one dispatch.
+fallback retains time. Signing, filter creation and consumption,
+subscriptions, and unknown methods receive one dispatch. A transaction send
+receives one dispatch unless the chain declares
+[transaction providers](ROUTING.md#transaction-providers); then the same signed
+bytes may be sent up to three times, one provider at a time, within the deadline.
 
 Default deadlines range from one second for simple identity/head methods to
 longer budgets for proofs and trace/debug calls; unknown methods default to ten
@@ -113,9 +116,9 @@ client can receive Core's final response. Avoid retrying every error at the clie
 or ingress layer: Core already performs bounded fallback for replay-safe reads,
 and another retry layer multiplies upstream attempts and quota use. If clients
 retry reads, use a bounded count, jittered backoff, and an end-to-end deadline.
-Do not automatically replay signing or state-changing requests. Core sends
-`eth_sendRawTransaction` once; applications may safely reconcile a known signed
-transaction by its hash before deciding what to do next.
+Do not automatically replay signing or state-changing requests. Core bounds its
+own send attempts as described above; applications may safely reconcile a known
+signed transaction by its hash before deciding what to do next.
 
 ## Qualify before shifting traffic
 

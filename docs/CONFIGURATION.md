@@ -143,7 +143,7 @@ Controls upstream WebSocket subscription behavior.
 
 Failover limits are captured from the active profile at the beginning of each recovery, including after YAML reload. An in-progress recovery keeps its captured limits. The effective block allowance is the greater of `max_backfill_blocks` and the blocks expected during one backfill-timeout horizon, with time-derived expansion capped at 2048 blocks. The backfill timeout is also bounded by the overall 30-second recovery deadline. Gaps beyond the effective allowance terminate continuity rather than silently skipping missing blocks.
 
-On the unreleased v0.5 candidate, RPC socket notifications also have a node-local
+RPC socket notifications also have a node-local
 delivery bound: 16 MiB and 32 queued notifications per client, within 128 MiB
 across the node. A client that cannot keep up loses its subscription and its
 WebSocket closes with code `1013`; the `[:lasso, :stream, :slow_consumer]`
@@ -151,7 +151,7 @@ telemetry event names the reason. Reservations are reclaimed when a socket
 dies. These are runtime defaults, not profile YAML settings. Connected-reorg
 repair remains tracked under [issue #186](https://github.com/jaxernst/lasso-rpc/issues/186).
 
-The v0.5 candidate also admits incoming upstream frames and instance fanout
+Lasso also admits incoming upstream frames and instance fanout
 before they enter recipient mailboxes. The node-local ingress envelope is
 128 MiB, with 32 MiB and 128 queued messages per recipient. Exhaustion closes
 the affected upstream connection locally and reconnects without penalizing the
@@ -303,10 +303,15 @@ capabilities:
 | `unsupported_methods` | list | Specific methods this provider doesn't support |
 | `limits.max_block_range` | integer | Max block range for `eth_getLogs` |
 | `limits.max_block_age` | integer | Max block age for state methods (pruned provider) |
-| `limits.block_age_methods` | list | Methods subject to `max_block_age` limit |
+| `limits.block_age_methods` | list | Methods subject to `max_block_age` limit; only methods with a block number parameter (such as `eth_call`, `eth_getBalance`, `eth_getStorageAt`, `eth_getBlockByNumber`) |
 | `error_rules` | list | Provider-specific error classification overrides (first match wins) |
 
 When `capabilities` is omitted, defaults to permissive (only `local_only` methods blocked, no limits).
+
+Unsupported methods and categories keep a provider out of a request while
+another provider supports the method. When none does, Lasso tries the
+unsupported providers as a last resort instead of refusing the request. `max_block_age` reads the request's block number parameter, so
+it has no effect on `eth_getLogs`; use `max_block_range` for log queries.
 
 ## Read Exploration Policy
 
@@ -404,6 +409,14 @@ running release:
 ```bash
 _build/prod/rel/lasso/bin/lasso check-config
 _build/prod/rel/lasso/bin/lasso reload
+```
+
+From source, run the same commands in the IEx session started with
+`iex -S mix phx.server`:
+
+```elixir
+Lasso.Operator.Commands.check_config!()
+Lasso.Operator.Commands.reload!()
 ```
 
 `check-config` reads the existing file profiles without changing disk or the
