@@ -77,19 +77,24 @@ defmodule Lasso.Providers.Catalog do
   @doc "Validates candidate profiles without changing the published catalog or control rows."
   @spec validate_profile_batch([map()]) :: :ok | {:error, term()}
   def validate_profile_batch(specs) do
+    overrides =
+      Map.new(specs, fn spec ->
+        {spec.profile_id, Map.new(spec.chains, fn {_alias, chain} -> {chain.chain_id, chain} end)}
+      end)
+
+    validate_profiles(Map.merge(configured_profiles(), overrides))
+  end
+
+  @doc "Validates a complete candidate catalog without publishing it."
+  @spec validate_profiles(map()) :: :ok | {:error, term()}
+  def validate_profiles(profiles) do
     candidate = :ets.new(:lasso_catalog_validation, [:private, :set])
 
     try do
-      overrides =
-        Map.new(specs, fn spec ->
-          {spec.profile_id,
-           Map.new(spec.chains, fn {_alias, chain} -> {chain.chain_id, chain} end)}
-        end)
-
       populate_profiles(
         candidate,
         ConfigStore.route_generation() + 1,
-        Map.merge(configured_profiles(), overrides)
+        profiles
       )
     rescue
       error -> {:error, {error.__struct__, Exception.message(error)}}

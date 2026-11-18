@@ -451,7 +451,13 @@ Lasso.Providers.add_provider(1, %{
 
 `name` defaults to `id`; either an HTTP `url` or a `ws_url` is required.
 `update_provider(chain, id, updates)` merges partial updates before validation,
-preserving omitted settings. Both functions reject unknown keys, including nested
-keys, and return `{:error, reason}` without publishing invalid configuration.
+preserving omitted settings. Explicit `nil` deletes an optional setting, such as
+`%{ws_url: nil}` when an HTTP endpoint remains; removing every endpoint is rejected.
+Both functions reject unknown keys, including nested keys, and validate the full
+candidate catalog (including shared upstream budget conflicts) before publication.
+Invalid input returns `{:error, reason}` without changing the active configuration.
+YAML reload uses the same candidate catalog checks. WebSocket-only providers are
+supported in both paths, and existing WebSocket connections use the current
+published upstream budget on every send.
 Schema validation applies even with `validate: false`. The test adapter's
 `__mock__` marker remains available for mock providers.

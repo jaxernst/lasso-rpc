@@ -35,7 +35,7 @@ defmodule Lasso.Providers.InstanceId do
     sharing_mode = Keyword.get(opts, :sharing_mode, :auto)
     profile_id = Keyword.get(opts, :profile_id) || Keyword.get(opts, :profile)
 
-    url = normalize_url(provider_config.url)
+    url = optional_normalize_url(provider_config.url)
     ws_url = optional_normalize_url(Map.get(provider_config, :ws_url))
     auth = auth_fingerprint(provider_config)
 
@@ -56,7 +56,7 @@ defmodule Lasso.Providers.InstanceId do
       |> Base.encode16(case: :lower)
       |> binary_part(0, 12)
 
-    host_hint = extract_host_hint(provider_config.url)
+    host_hint = extract_host_hint(provider_config.url || provider_config.ws_url)
 
     "#{chain_id}:#{host_hint}:#{hash_suffix}"
   end

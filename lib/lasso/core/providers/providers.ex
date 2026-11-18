@@ -9,7 +9,7 @@ defmodule Lasso.Providers do
   require Logger
   alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, InstanceState}
-  alias Lasso.RPC.{ChainSupervisor, TransportRegistry}
+  alias Lasso.RPC.ChainSupervisor
 
   @default_profile Lasso.Config.ProfileValidator.default_profile()
 
@@ -147,7 +147,8 @@ defmodule Lasso.Providers do
 
   @doc """
   Merges a partial provider update and validates it with the profile YAML schema.
-  Omitted settings are preserved; unknown keys return an error before removal.
+  Omitted settings are preserved; explicit nil values delete optional settings.
+  Invalid candidates return an error before publication.
   """
   @spec update_provider(chain_identifier(), String.t(), map(), keyword()) ::
           :ok | {:error, term()}
@@ -163,9 +164,9 @@ defmodule Lasso.Providers do
     with {:ok, existing} <- get_provider(profile, chain_name, provider_id),
          {:ok, updated_config} <- normalize_provider_updates(existing, updates),
          {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
-         :ok <- close_provider_channels_before_update(profile, chain_id, provider_id),
-         :ok <- remove_for_update(profile, chain_name, provider_id),
-         :ok <- replace_removed_provider(profile, chain_name, existing, updated_config, persist?) do
+         :ok <-
+           ConfigStore.update_provider_runtime(profile, chain_id, provider_id, updated_config),
+         :ok <- maybe_persist_add(chain_id, updated_config, persist?) do
       Logger.info("Successfully updated provider #{provider_id} in #{chain_name}")
       :ok
     else
@@ -173,38 +174,6 @@ defmodule Lasso.Providers do
         Logger.error(
           "Failed to update provider #{provider_id} in #{chain_name}: #{inspect(reason)}"
         )
-
-        error
-    end
-  end
-
-  defp close_provider_channels_before_update(profile, chain_id, provider_id) do
-    results =
-      for transport <- [:http, :ws] do
-        TransportRegistry.close_channel_sync(profile, chain_id, provider_id, transport)
-      end
-
-    case Enum.find(results, &match?({:error, _}, &1)) do
-      nil -> :ok
-      error -> error
-    end
-  end
-
-  defp remove_for_update(profile, chain_name, provider_id) do
-    case remove_provider(profile, chain_name, provider_id, persist: false) do
-      {:error, {:runtime_reconcile_pending, _}} -> :ok
-      result -> result
-    end
-  end
-
-  defp replace_removed_provider(profile, chain_name, existing, updated, persist?) do
-    case add_provider(profile, chain_name, stored_provider_attrs(updated), persist: persist?) do
-      {:ok, _provider_id} ->
-        :ok
-
-      {:error, _reason} = error ->
-        _ =
-          add_provider(profile, chain_name, stored_provider_attrs(existing), persist: false)
 
         error
     end
@@ -345,6 +314,7 @@ defmodule Lasso.Providers do
     |> stored_provider_attrs()
     |> stringify()
     |> Map.merge(stringify(updates))
+    |> Lasso.Config.FileSchema.delete_nil_provider_fields()
     |> normalize_provider_config()
   end
 

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Runtime provider additions and partial updates now use the profile YAML provider schema, preserving observation settings, request budgets and capabilities with the same defaults and validation. Unknown keys return an error instead of being silently discarded.
+- Runtime provider additions and partial updates now use the profile YAML schema and validate the full candidate catalog before publication, rejecting unknown keys and conflicting upstream budgets without changing the active configuration. WebSocket-only providers now load safely, live WebSocket sends use the current shared budget, and explicit nil updates clear optional settings.
 
 - Stop repeatedly routing to refused HTTP connections and restore recovered endpoints within seconds, including subscription backfill during circuit probation.
 

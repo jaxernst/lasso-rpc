@@ -155,6 +155,12 @@ defmodule Lasso.Config.FileSchema do
   end
 
   @doc false
+  @spec delete_nil_provider_fields(map()) :: map()
+  def delete_nil_provider_fields(attrs) do
+    Map.reject(attrs, fn {key, value} -> is_nil(value) and Map.has_key?(@provider, key) end)
+  end
+
+  @doc false
   @spec validate_provider_entry!(map(), String.t()) :: :ok
   def validate_provider_entry!(provider, path) do
     validate!(provider, @provider, path)
