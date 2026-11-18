@@ -352,13 +352,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         if head >= (state.minimum_head || 0) do
           complete_failover(state, context.new_provider_id, nil)
         else
-          context = %{context | replay_buffer: [], replay_buffer_count: 0, replay_buffer_bytes: 0}
-
-          start_backfill_after_replacement(
-            %{state | failover_context: context},
-            context.new_provider_id,
-            nil
-          )
+          extend_backfill(state, head)
         end
 
       {:error, reason} ->
@@ -1057,6 +1051,32 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
      }}
   end
 
+  defp extend_backfill(state, head) do
+    context = state.failover_context
+    replay_only = %{context | event_buffer: [], event_buffer_count: 0, event_buffer_bytes: 0}
+
+    case drain_event_buffer(%{state | failover_context: replay_only}, context.event_buffer_bytes) do
+      {:ok, next_state} ->
+        context = %{
+          context
+          | replay_buffer: [],
+            replay_buffer_count: 0,
+            replay_buffer_bytes: 0,
+            continuity_marker: head,
+            continuity_snapshot: StreamState.continuity_snapshot(next_state.state)
+        }
+
+        start_backfill_after_replacement(
+          %{next_state | failover_context: context},
+          context.new_provider_id,
+          nil
+        )
+
+      {:error, reason, retained_bytes} ->
+        continuity_resource_exhausted(state, reason, retained_bytes)
+    end
+  end
+
   defp start_backfill_after_replacement(state, provider_id, _upstream_id) do
     context = state.failover_context
 
@@ -1192,8 +1212,19 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           {:error, :source_behind_observed_head}
 
         true ->
-          Process.sleep(min(100, recovery_remaining_ms(ctx.plan.deadline_us)))
-          fetch_covered_head(ctx)
+          case select_backfill_retry(
+                 ctx.profile,
+                 ctx.chain_id,
+                 ctx.plan.provider_id,
+                 [ctx.plan.provider_id | ctx.excluded_providers]
+               ) do
+            {:ok, _provider_id} ->
+              {:error, :source_behind_observed_head}
+
+            {:error, :no_http_provider} ->
+              Process.sleep(min(100, recovery_remaining_ms(ctx.plan.deadline_us)))
+              fetch_covered_head(ctx)
+          end
       end
     end
   end
@@ -1600,7 +1631,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp drain_event_buffer(state) do
+  defp drain_event_buffer(state, buffered_bytes \\ 0) do
     context = state.failover_context || %{}
     live_buffer = context |> Map.get(:event_buffer, []) |> Enum.reverse()
     replay_buffer = context |> Map.get(:replay_buffer, []) |> Enum.reverse()
@@ -1622,7 +1653,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       end
 
     case result do
-      {:ok, new_state} -> admit_drained_state(new_state)
+      {:ok, new_state} -> admit_drained_state(new_state, buffered_bytes)
       {:repair, _new_state, _pending_events, _details} = repair -> repair
       {:error, reason, retained_bytes} -> {:error, reason, retained_bytes}
     end
@@ -1750,10 +1781,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp admit_drained_state(state) do
-    retained_bytes = StreamState.retained_bytes(state.state)
+  defp admit_drained_state(state, buffered_bytes) do
+    retained_bytes = StreamState.retained_bytes(state.state) + buffered_bytes
 
-    case reserve_retained_bytes(state, state.state, 0) do
+    case reserve_retained_bytes(state, state.state, buffered_bytes) do
       :ok -> {:ok, state}
       {:error, reason} -> {:error, reason, retained_bytes}
     end

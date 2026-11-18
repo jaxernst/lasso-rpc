@@ -459,6 +459,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Client do
   end
 
   defp dispatch_frames(frames, state) do
+    frames =
+      if Enum.any?(frames, &match?({:close, _, _}, &1)),
+        do: Enum.reject(frames, &match?({:ping, _}, &1)),
+        else: frames
+
     Enum.reduce_while(frames, {:noreply, state}, fn
       {:ping, payload}, {:noreply, state} ->
         case write_frame({:pong, payload}, state) do

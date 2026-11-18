@@ -19,6 +19,16 @@ defmodule Lasso.ReplayCoverageTest do
     assert_continuity(context)
   end
 
+  @tag heads: true, lagging_source: true
+  test "live repair uses an already caught-up alternate HTTP source", context do
+    assert_continuity(context)
+  end
+
+  @tag heads: true, moving_head: true
+  test "a moving head retains verified progress during slow replay", context do
+    assert_continuity(context)
+  end
+
   defp assert_continuity(%{chain: chain} = context) do
     original_http = Application.get_env(:lasso, :http_client)
     original_ws = Application.get_env(:lasso, :ws_client_module)
@@ -135,6 +145,66 @@ defmodule Lasso.ReplayCoverageTest do
     assert is_binary(subscription)
 
     replay_coverage(chain, a, b, List.last(fleets), source, wire, subscription, context)
+  end
+
+  defp replay_coverage(_chain, a, b, c, source, wire, subscription, %{moving_head: true}) do
+    Fleet.notify(source, header(100))
+    assert_head!(wire, subscription, 100)
+    head = start_supervised!({Agent, fn -> 120 end})
+
+    for fleet <- [a, b, c] do
+      Fleet.script(
+        fleet,
+        "eth_blockNumber",
+        [],
+        {:respond,
+         fn _ ->
+           {:answer, hex(Agent.get(head, & &1))}
+         end}
+      )
+
+      Fleet.script(
+        fleet,
+        "eth_getBlockByNumber",
+        [],
+        {:respond,
+         fn request ->
+           [number | _] = request["params"]
+           Process.sleep(100)
+           {:answer, header(String.to_integer(String.trim_leading(number, "0x"), 16))}
+         end}
+      )
+    end
+
+    start_supervised!(
+      {Task,
+       fn ->
+         for height <- 121..150 do
+           Process.sleep(1_000)
+           Agent.update(head, fn _ -> height end)
+           Fleet.notify(source, header(height))
+         end
+       end}
+    )
+
+    Fleet.notify(source, header(120))
+    for height <- 101..123, do: assert_head!(wire, subscription, height)
+    Rpc.close!(wire)
+  end
+
+  defp replay_coverage(_chain, _a, b, c, source, wire, subscription, %{
+         lagging_source: true
+       }) do
+    Fleet.notify(source, header(100))
+    assert_head!(wire, subscription, 100)
+    Fleet.script(b, "eth_blockNumber", [], {:answer, hex(103)})
+    Fleet.script(c, "eth_blockNumber", [], {:answer, hex(103)})
+    Fleet.notify(source, header(103))
+    for height <- 101..103, do: assert_head!(wire, subscription, height)
+
+    Fleet.notify(source, header(104))
+    assert_head!(wire, subscription, 104)
+    Rpc.close!(wire)
   end
 
   defp replay_coverage(chain, a, b, c, source, wire, subscription, context) do
