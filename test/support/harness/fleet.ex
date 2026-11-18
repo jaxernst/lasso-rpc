@@ -14,6 +14,9 @@ defmodule Lasso.Test.Harness.Fleet do
     GenServer.call(pid, :endpoint)
   end
 
+  def offline(f), do: GenServer.call(f.pid, :offline)
+  def online(f), do: GenServer.call(f.pid, :online)
+
   def stop(f), do: GenServer.stop(f.pid)
 
   def script(f, method, calls, fallback \\ :default),
@@ -68,6 +71,22 @@ defmodule Lasso.Test.Harness.Fleet do
   def terminate(_, state), do: :cowboy.stop_listener(state.ref)
 
   @impl true
+  def handle_call(:offline, _, s) do
+    :ok = :cowboy.stop_listener(s.ref)
+    {:reply, :ok, s}
+  end
+
+  def handle_call(:online, _, s) do
+    port = URI.parse(s.endpoint.url).port
+
+    {:ok, _} =
+      :cowboy.start_clear(s.ref, %{socket_opts: [ip: {127, 0, 0, 1}, port: port]}, %{
+        env: %{dispatch: :cowboy_router.compile([{:_, [{:_, __MODULE__.Wire, self()}]}])}
+      })
+
+    {:reply, :ok, s}
+  end
+
   def handle_call(:endpoint, _, s), do: {:reply, s.endpoint, s}
 
   def handle_call({:script, method, calls, fallback}, _, s),

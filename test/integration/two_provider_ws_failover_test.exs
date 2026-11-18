@@ -8,6 +8,11 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     assert_continuity(context)
   end
 
+  @tag returning_open_http: true
+  test "returning provider replays consecutive heads with its HTTP circuit still open", context do
+    assert_continuity(context)
+  end
+
   @tag stalled_replacement: true
   test "independent HTTP backfill survives a replacement with unresponsive HTTP", context do
     assert_continuity(context)
@@ -61,6 +66,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     end)
 
     for fleet <- fleets do
+      Fleet.script(fleet, "fixture_connected", [], {:answer, true})
       Fleet.script(fleet, "eth_chainId", [], {:answer, hex(chain)})
       Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(102)})
 
@@ -127,7 +133,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
       Fleet.script(b, "eth_blockNumber", [], action)
     end
 
-    port = System.get_env("PORT", "4002")
+    port = LassoWeb.Endpoint.config(:http)[:port]
     wire = Rpc.wire!("ws://127.0.0.1:#{port}/ws/rpc/profile/public/priority/#{chain}")
 
     on_exit(fn ->
@@ -145,6 +151,8 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     assert %{"result" => subscription} = frame!(wire)
     assert is_binary(subscription)
 
+    assert_receive {:fleet, ^a_pid, %{request: %{"method" => "fixture_connected"}}}, 5_000
+
     Fleet.notify(source, header(100))
     assert_head!(wire, subscription, 100)
 
@@ -156,7 +164,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     if context[:refused_replacement],
       do: Fleet.script(http, "eth_blockNumber", [{:hold, :replay_head}], {:answer, hex(102)})
 
-    Fleet.stop(a)
+    if context[:returning_open_http], do: Fleet.offline(a), else: Fleet.stop(a)
 
     b_pid = b.pid
 
@@ -202,6 +210,48 @@ defmodule Lasso.TwoProviderWsFailoverTest do
       else
         Fleet.notify(replacement, header(103))
         assert_head!(wire, subscription, 103)
+
+        if context[:returning_open_http] do
+          credentials = %{
+            rpc_url: "http://127.0.0.1:#{port}/rpc/profile/public/priority/#{chain}"
+          }
+
+          for _ <- 1..3 do
+            Rpc.call(credentials, "eth_getBalance", ["0x0", "latest"])
+          end
+
+          instance = Lasso.Providers.Catalog.lookup_instance_id("public", chain, a.name)
+
+          Lasso.Test.Harness.Settle.await("refused connections open HTTP circuit", fn ->
+            state = Lasso.Core.Support.CircuitBreaker.get_state({instance, :http}).state
+            if state == :open, do: {:ok, state}, else: {:waiting, state}
+          end)
+
+          Fleet.script(a, "eth_blockNumber", [], {:answer, hex(105)})
+          :ok = Fleet.online(a)
+
+          assert_receive {:fleet, ^a_pid, %{request: %{"method" => "fixture_connected"}}},
+                         15_000
+
+          Fleet.stop(b)
+
+          assert_receive {:fleet, ^a_pid,
+                          %{transport: :ws, request: %{"method" => "eth_subscribe"}} = returned},
+                         5_000
+
+          assert_head!(wire, subscription, 104)
+          assert_head!(wire, subscription, 105)
+          Fleet.notify(returned, header(106))
+          assert_head!(wire, subscription, 106)
+          assert Lasso.Core.Support.CircuitBreaker.get_state({instance, :http}).state == :open
+
+          assert Enum.any?(Fleet.drain(a), fn call ->
+                   call.transport == :ws and
+                     call.request["method"] == "eth_getBlockByNumber" and
+                     call.request["params"] == [hex(104), false]
+                 end)
+        end
+
         Rpc.send!(wire, "eth_unsubscribe", [subscription], 2)
         assert %{"id" => 2, "result" => true} = frame!(wire)
         Rpc.close!(wire)

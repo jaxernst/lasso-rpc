@@ -1,6 +1,6 @@
 defmodule Lasso.Core.Support.GapFiller do
   @moduledoc """
-  HTTP backfill utilities with one immutable route and absolute request budget.
+  Provider-pinned backfill utilities with one immutable route and absolute request budget.
   """
 
   alias Lasso.Core.Request.ExecutionScope
@@ -141,6 +141,16 @@ defmodule Lasso.Core.Support.GapFiller do
 
   def ensure_logs(%Plan{}, _filter, _from, _to), do: {:ok, []}
 
+  defp backfill_transport(plan) do
+    instance =
+      Lasso.Providers.Catalog.lookup_instance_id(plan.profile, plan.chain_id, plan.provider_id)
+
+    case Lasso.Core.Support.CircuitBreaker.Snapshot.lookup({instance, :http}) do
+      {:ok, %{state: :open}} -> :ws
+      _ -> :http
+    end
+  end
+
   defp request(plan, method, params) do
     with {:ok, timeout_ms} <- remaining_timeout_ms(plan.deadline_us),
          true <- Process.alive?(plan.caller_pid) or {:error, :caller_abandoned} do
@@ -153,7 +163,7 @@ defmodule Lasso.Core.Support.GapFiller do
         profile: plan.profile,
         strategy: :priority,
         provider_override: plan.provider_id,
-        transport: :http,
+        transport: backfill_transport(plan),
         failover_on_override: false,
         timeout_ms: timeout_ms,
         request_origin: :system,
