@@ -219,6 +219,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
         try do
           :ok = Fleet.release(http, :third_subscription, {:answer, "third-sub"})
           Fleet.notify(%{third | action: {:answer, "third-sub"}}, header(103))
+          Fleet.script(http, "eth_blockNumber", [], {:answer, hex(103)})
 
           Lasso.Test.Eventually.assert_eventually(fn ->
             state = :sys.get_state(coordinator)

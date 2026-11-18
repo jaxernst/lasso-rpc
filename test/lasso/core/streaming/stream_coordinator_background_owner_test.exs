@@ -970,22 +970,29 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     canonical = %{
       99 => shared,
       100 => %{"number" => "0x64", "hash" => "0xnew-100", "parentHash" => "0xshared-99"},
-      101 => %{"number" => "0x65", "hash" => "0xnew-101", "parentHash" => "0xnew-100"}
+      101 => %{"number" => "0x65", "hash" => "0xnew-101", "parentHash" => "0xnew-100"},
+      102 => %{"number" => "0x66", "hash" => "0xnew-102", "parentHash" => "0xnew-101"},
+      103 => %{"number" => "0x67", "hash" => "0xnew-103", "parentHash" => "0xnew-102"}
     }
 
-    future = %{"number" => "0x67", "hash" => "0xnew-103", "parentHash" => "0xnew-102"}
+    future = %{"number" => "0x67", "hash" => "0xorphan-103", "parentHash" => "0xorphan-102"}
+    http_head = start_supervised!({Agent, fn -> 101 end})
 
     requester = fn _scope, _chain_id, method, params, _opts ->
       case {method, params} do
         {"eth_blockNumber", []} ->
-          {:ok, "0x65", %{}}
+          {:ok, "0x" <> Integer.to_string(Agent.get(http_head, & &1), 16), %{}}
 
         {"eth_getBlockByNumber", ["0x65", false]} ->
-          send(test_pid, {:attempt_budget_repair_waiting, self()})
+          if Agent.get(http_head, & &1) == 101 do
+            send(test_pid, {:attempt_budget_repair_waiting, self()})
 
-          receive do
-            :release_attempt_budget_repair -> {:ok, canonical[101], %{}}
+            receive do
+              :release_attempt_budget_repair -> :ok
+            end
           end
+
+          {:ok, canonical[101], %{}}
 
         {"eth_getBlockByNumber", [number, false]} ->
           height = number |> String.trim_leading("0x") |> String.to_integer(16)
@@ -1026,9 +1033,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     GenServer.cast(pid, {:upstream_event, "ws-live", "sub-live", canonical[101], 2})
     assert_receive {:attempt_budget_repair_waiting, owner_pid}
     GenServer.cast(pid, {:upstream_event, "ws-live", "sub-live", future, 3})
+    Agent.update(http_head, fn _ -> 103 end)
     send(owner_pid, :release_attempt_budget_repair)
 
-    for height <- 100..101 do
+    for height <- 100..103 do
       expected = canonical[height]
       assert_receive {:subscription_event, %{"params" => %{"result" => ^expected}}}
     end
@@ -1101,6 +1109,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
         {profile, chain_id, key,
          primary_provider_id: "ws-live",
          max_failover_attempts: 1,
+         recovery_timeout_ms: 100,
          backfill_requester: requester,
          backfill_provider_selector: fn _profile, _chain_id, _preferred, _excluded ->
            {:ok, "http-fixed"}
@@ -1113,7 +1122,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
     assert_receive {:subscription_event, _}
     GenServer.cast(pid, {:upstream_event, "ws-live", "sub-live", observed, 2})
 
-    assert_receive {:subscription_terminated, "client-live-behind", :continuity_exhausted}
+    assert_receive {:subscription_terminated, "client-live-behind", :continuity_exhausted}, 1_000
     assert await_state(pid, &(&1.failover_status == :degraded)).state.retained_bytes == 0
   end
 
@@ -1496,7 +1505,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
       }
     end)
 
-    send(pid, {:backfill_result, owner_id, owner_pid, :ok})
+    send(pid, {:backfill_result, owner_id, owner_pid, {:ok, 101}})
 
     delivered =
       for _ <- 1..4 do
@@ -1547,7 +1556,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorBackgroundOwnerTest do
       }
     end)
 
-    send(pid, {:backfill_result, owner_id, owner_pid, :ok})
+    send(pid, {:backfill_result, owner_id, owner_pid, {:ok, 101}})
 
     delivered =
       for _ <- 1..5 do

@@ -178,6 +178,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       recovery_timeout_ms: Keyword.get(opts, :recovery_timeout_ms, @default_recovery_timeout_ms),
       recovery_deadline_us: nil,
       recovery_started_at_ms: nil,
+      minimum_head: nil,
       recovery_attempts: 0
     }
 
@@ -347,8 +348,21 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     Process.demonitor(context.backfill_owner_ref, [:flush])
 
     case result do
-      :ok -> complete_failover(state, context.new_provider_id, nil)
-      {:error, reason} -> handle_backfill_failure(state, reason)
+      {:ok, head} ->
+        if head >= (state.minimum_head || 0) do
+          complete_failover(state, context.new_provider_id, nil)
+        else
+          context = %{context | replay_buffer: [], replay_buffer_count: 0, replay_buffer_bytes: 0}
+
+          start_backfill_after_replacement(
+            %{state | failover_context: context},
+            context.new_provider_id,
+            nil
+          )
+        end
+
+      {:error, reason} ->
+        handle_backfill_failure(state, reason)
     end
   end
 
@@ -541,7 +555,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             :ok ->
               updated_context = put_recovery_event(context, kind, payload, payload_bytes)
 
-              {:noreply, %{state | failover_context: updated_context}}
+              # Discarded attempt payloads still require canonical replay through their height.
+              minimum_head =
+                if kind == :live,
+                  do: max(state.minimum_head || 0, max_pending_head([payload])),
+                  else: state.minimum_head
+
+              {:noreply, %{state | failover_context: updated_context, minimum_head: minimum_head}}
 
             {:error, reason} ->
               continuity_resource_exhausted(state, reason, retained_bytes)
@@ -604,6 +624,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       state
       | recovery_deadline_us: deadline_us,
         recovery_started_at_ms: System.monotonic_time(:millisecond),
+        minimum_head: nil,
         recovery_attempts: 0
     }
 
@@ -956,7 +977,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       backfill_timeout: state.backfill_timeout,
       continuity_policy: state.continuity_policy,
       allow_head_regression: false,
-      minimum_head: nil,
+      minimum_head: state.minimum_head,
       excluded_providers:
         [old_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
         |> Enum.reject(&(&1 == new_provider_id)),
@@ -1038,6 +1059,16 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp start_backfill_after_replacement(state, provider_id, _upstream_id) do
     context = state.failover_context
+
+    minimum_head =
+      Enum.max([
+        state.minimum_head || 0,
+        context.backfill_context.minimum_head || 0,
+        max_pending_head(context.event_buffer)
+      ])
+
+    backfill_context = %{context.backfill_context | minimum_head: minimum_head}
+    context = %{context | backfill_context: backfill_context}
     owner_id = make_ref()
     coordinator_pid = self()
     key = state.key
@@ -1083,67 +1114,89 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp execute_backfill(ctx, key, continuity_marker, continuity_snapshot, owner_id) do
-    case subscription_key(key) do
-      {:newHeads} ->
-        backfill_blocks(ctx, key, continuity_marker, continuity_snapshot, owner_id)
+    with {:ok, head} <- fetch_covered_head(ctx) do
+      result =
+        case subscription_key(key) do
+          {:newHeads} ->
+            backfill_blocks(ctx, key, continuity_marker, continuity_snapshot, owner_id, head)
 
-      {:logs, filter} ->
-        backfill_logs(ctx, key, filter, continuity_marker, continuity_snapshot, owner_id)
+          {:logs, filter} ->
+            backfill_logs(
+              ctx,
+              key,
+              filter,
+              continuity_marker,
+              continuity_snapshot,
+              owner_id,
+              head
+            )
+        end
+
+      with :ok <- result, do: {:ok, head}
     end
   end
 
-  defp backfill_blocks(ctx, key, last, snapshot, owner_id) do
-    with {:ok, head} <- GapFiller.fetch_head(ctx.plan),
-         :ok <- ensure_minimum_head(head, ctx.minimum_head) do
-      case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
-        {:none} ->
-          :ok
+  defp backfill_blocks(ctx, key, last, snapshot, owner_id, head) do
+    case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
+      {:none} ->
+        :ok
 
-        {:regressed, _last_seen, observed_head} when ctx.allow_head_regression ->
-          backfill_canonical_blocks(
-            ctx,
-            key,
-            snapshot,
-            observed_head,
-            observed_head,
-            owner_id,
-            allow_observation_boundary: true
-          )
+      {:regressed, _last_seen, observed_head} when ctx.allow_head_regression ->
+        backfill_canonical_blocks(
+          ctx,
+          key,
+          snapshot,
+          observed_head,
+          observed_head,
+          owner_id,
+          allow_observation_boundary: true
+        )
 
-        {:regressed, last_seen, observed_head} ->
-          Logger.error("Backfill source head regressed below the delivered stream",
-            chain_id: ctx.chain_id,
-            key: inspect(key),
-            last_seen: last_seen,
-            observed_head: observed_head
-          )
+      {:regressed, last_seen, observed_head} ->
+        Logger.error("Backfill source head regressed below the delivered stream",
+          chain_id: ctx.chain_id,
+          key: inspect(key),
+          last_seen: last_seen,
+          observed_head: observed_head
+        )
 
-          {:error, :head_regressed}
+        {:error, :head_regressed}
 
-        {:range, from_n, to_n} ->
-          backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
-            allow_observation_boundary: ctx.allow_head_regression
-          )
+      {:range, from_n, to_n} ->
+        backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
+          allow_observation_boundary: ctx.allow_head_regression
+        )
 
-        {:exceeded, from_n, to_n} ->
-          Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
-            chain_id: ctx.chain_id,
-            key: inspect(key)
-          )
+      {:exceeded, from_n, to_n} ->
+        Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
+          chain_id: ctx.chain_id,
+          key: inspect(key)
+        )
 
-          if ctx.continuity_policy == :best_effort,
-            do:
-              backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
-                allow_observation_boundary: ctx.allow_head_regression
-              ),
-            else: {:error, :gap_exceeded}
+        if ctx.continuity_policy == :best_effort,
+          do:
+            backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
+              allow_observation_boundary: ctx.allow_head_regression
+            ),
+          else: {:error, :gap_exceeded}
+    end
+  end
+
+  defp fetch_covered_head(ctx) do
+    with {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
+      cond do
+        head >= (ctx.minimum_head || 0) ->
+          {:ok, head}
+
+        recovery_remaining_ms(ctx.plan.deadline_us) <= 0 ->
+          {:error, :source_behind_observed_head}
+
+        true ->
+          Process.sleep(min(100, recovery_remaining_ms(ctx.plan.deadline_us)))
+          fetch_covered_head(ctx)
       end
     end
   end
-
-  defp ensure_minimum_head(_head, nil), do: :ok
-  defp ensure_minimum_head(head, minimum_head) when head >= minimum_head, do: :ok
-  defp ensure_minimum_head(_head, _minimum_head), do: {:error, :source_behind_observed_head}
 
   defp backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id, opts) do
     history = Map.get(snapshot, :head_history, %{})
@@ -1358,9 +1411,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp backfill_logs(ctx, key, filter, last, snapshot, owner_id) do
-    with :ok <- ensure_history_complete(snapshot),
-         {:ok, head} <- GapFiller.fetch_head(ctx.plan) do
+  defp backfill_logs(ctx, key, filter, last, snapshot, owner_id, head) do
+    with :ok <- ensure_history_complete(snapshot) do
       case continuity_range(last, head, ctx.max_backfill, ctx.continuity_policy) do
         {:none} ->
           :ok
@@ -1502,6 +1554,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             failover_history: [],
             recovery_deadline_us: nil,
             recovery_started_at_ms: nil,
+            minimum_head: nil,
             recovery_attempts: 0
         }
 
@@ -2025,6 +2078,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
          failover_history: [],
          recovery_deadline_us: nil,
          recovery_started_at_ms: nil,
+         minimum_head: nil,
          recovery_attempts: 0
      }}
   end

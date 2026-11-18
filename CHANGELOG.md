@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Subscription recovery replays canonically through the highest block observed during recovery, including discarded replacement events. A lagging replay source has the remaining recovery budget to catch up; otherwise the client closes with `1011` instead of silently skipping logs or the last observed head.
+
 ## [0.8.2] - 2026-11-17
 
 ### Security
