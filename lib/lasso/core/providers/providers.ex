@@ -158,15 +158,12 @@ defmodule Lasso.Providers do
 
   @spec update_provider(String.t(), chain_identifier(), String.t(), map(), keyword()) ::
           :ok | {:error, term()}
-  def update_provider(profile, chain_name, provider_id, updates, opts) do
-    persist? = Keyword.get(opts, :persist, false)
-
-    with {:ok, existing} <- get_provider(profile, chain_name, provider_id),
-         {:ok, updated_config} <- normalize_provider_updates(existing, updates),
-         {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
+  def update_provider(profile, chain_name, provider_id, updates, _opts) do
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
          :ok <-
-           ConfigStore.update_provider_runtime(profile, chain_id, provider_id, updated_config),
-         :ok <- maybe_persist_add(chain_id, updated_config, persist?) do
+           ConfigStore.update_provider_runtime(profile, chain_id, provider_id, fn existing ->
+             normalize_provider_updates(existing, updates)
+           end) do
       Logger.info("Successfully updated provider #{provider_id} in #{chain_name}")
       :ok
     else

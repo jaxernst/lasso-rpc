@@ -134,6 +134,50 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
     assert_ready()
   end
 
+  test "concurrent partial updates preserve both accepted changes", ctx do
+    assert :ok = apply_provider(ctx, :runtime, "public", provider(ctx, "race"))
+    owner = Process.whereis(ConfigStore)
+    :ok = :sys.suspend(owner)
+    on_exit(fn -> :sys.resume(owner) end)
+
+    first =
+      Task.async(fn ->
+        Providers.update_provider(@chain, "race", %{
+          request_budget: %{requests_per_second: 1, burst: 2}
+        })
+      end)
+
+    wait_for_updates(owner, 1)
+    second = Task.async(fn -> Providers.update_provider(@chain, "race", %{priority: 17}) end)
+    wait_for_updates(owner, 2)
+    :ok = :sys.resume(owner)
+
+    assert Task.await(first, 15_000) == :ok
+    assert Task.await(second, 15_000) == :ok
+    assert {:ok, updated} = Providers.get_provider(@chain, "race")
+    assert updated.request_budget == %{requests_per_second: 1, burst: 2}
+    assert updated.priority == 17
+    assert_ready()
+  end
+
+  defp wait_for_updates(owner, count, attempts \\ 1_000)
+  defp wait_for_updates(_owner, _count, 0), do: flunk("updates did not reach owner")
+
+  defp wait_for_updates(owner, count, attempts) do
+    {:messages, messages} = Process.info(owner, :messages)
+
+    queued =
+      Enum.count(messages, fn
+        {:"$gen_call", _, {:update_provider_runtime, _, _, _, _}} -> true
+        _ -> false
+      end)
+
+    if queued < count do
+      Process.sleep(5)
+      wait_for_updates(owner, count, attempts - 1)
+    end
+  end
+
   defp provider(ctx, id),
     do: %{
       id: id,

@@ -566,13 +566,15 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
-  @doc "Replaces a runtime provider through validated profile publication."
-  @spec update_provider_runtime(profile_id(), pos_integer(), String.t(), map()) ::
+  @type provider_update :: (Provider.t() -> {:ok, Provider.t()} | {:error, term()})
+
+  @doc "Applies an update to the latest provider inside the owner, then validates and publishes it."
+  @spec update_provider_runtime(profile_id(), pos_integer(), String.t(), provider_update()) ::
           :ok | {:error, term()}
-  def update_provider_runtime(profile, chain, id, provider) do
+  def update_provider_runtime(profile, chain, id, update) when is_function(update, 1) do
     GenServer.call(
       __MODULE__,
-      {:update_provider_runtime, profile, chain, id, provider},
+      {:update_provider_runtime, profile, chain, id, update},
       :infinity
     )
   end
@@ -882,10 +884,11 @@ defmodule Lasso.Config.ConfigStore do
   end
 
   @impl true
-  def handle_call({:update_provider_runtime, profile, chain_id, id, provider}, _from, state) do
+  def handle_call({:update_provider_runtime, profile, chain_id, id, update}, _from, state) do
     reply =
       with {:ok, chain} <- get_chain(profile, chain_id),
-           true <- Enum.any?(chain.providers, &(&1.id == id)) do
+           %Provider{} = existing <- Enum.find(chain.providers, &(&1.id == id)),
+           {:ok, provider} <- update.(existing) do
         updated = %{
           chain
           | providers:
@@ -901,7 +904,7 @@ defmodule Lasso.Config.ConfigStore do
           publish_changed_profiles(Enum.filter(specs, &(&1.profile_id == profile)))
         end
       else
-        false -> {:error, :provider_not_found}
+        nil -> {:error, :provider_not_found}
         error -> error
       end
 
