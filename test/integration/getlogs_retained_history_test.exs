@@ -61,6 +61,70 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
     end
   end
 
+  for {variant, data} <- [
+        {"message only", nil},
+        {"advice data", %{action: "reduce_block_range", reason: "log_range_too_large"}}
+      ] do
+    test "HTTP normalizes provider-rule client refusal before claim audit with #{variant}", %{
+      chain: chain
+    } do
+      previous = Application.get_env(:lasso, :claim_audit_mode, :off)
+      Application.put_env(:lasso, :claim_audit_mode, :on)
+      on_exit(fn -> Application.put_env(:lasso, :claim_audit_mode, previous) end)
+      observer = self()
+
+      capabilities = %{
+        error_rules: [
+          %{
+            code: -32_000,
+            message_contains: "range too large",
+            category: :client_error
+          }
+        ]
+      }
+
+      refusal =
+        JError.new(-32_000, "range too large; reduce the block range",
+          data: unquote(Macro.escape(data))
+        )
+
+      setup_providers([
+        refusing_provider("pruned_reader", 1, capabilities, observer, refusal),
+        refusing_provider("other_reader", 2, capabilities, observer, refusal)
+      ])
+
+      assert_capability_failure(request(chain, %{fromBlock: "0x1", toBlock: "0x1"}))
+      assert_receive {:refused, "pruned_reader"}
+      assert_receive {:refused, "other_reader"}
+    end
+  end
+
+  test "HTTP preserves an unrelated request-fault claim after an inconclusive audit", %{
+    chain: chain
+  } do
+    previous = Application.get_env(:lasso, :claim_audit_mode, :off)
+    Application.put_env(:lasso, :claim_audit_mode, :on)
+    on_exit(fn -> Application.put_env(:lasso, :claim_audit_mode, previous) end)
+    observer = self()
+
+    setup_providers([
+      refusing_provider("claim_reader", 1, %{}, observer, JError.new(-32_602, "invalid params")),
+      refusing_provider(
+        "peer_reader",
+        2,
+        %{},
+        observer,
+        JError.new(-32_000, "unclassified peer failure")
+      )
+    ])
+
+    error = request(chain, %{fromBlock: "0x1", toBlock: "0x1"})["error"]
+    assert error["code"] == -32_602
+    assert error["message"] == "invalid params"
+    assert_receive {:refused, "claim_reader"}
+    assert_receive {:refused, "peer_reader"}
+  end
+
   test "HTTP preserves range advice when every provider refuses a two-block query", %{
     chain: chain
   } do
