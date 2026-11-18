@@ -121,7 +121,7 @@ defmodule Lasso.Config.FileSchemaTest do
     end)
 
     assert {:error, {_, {:invalid_profile_config, path, reason}}} = ConfigStore.reload()
-    assert path =~ "auth_headers.authorization"
+    assert path =~ "auth_headers"
     refute reason =~ "resolved-token"
     assert ConfigStore.route_generation() == generation
     assert ConfigStore.get_profile("public") == previous_profile

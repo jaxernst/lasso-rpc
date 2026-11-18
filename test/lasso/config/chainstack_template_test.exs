@@ -125,7 +125,7 @@ defmodule Lasso.Config.ChainstackTemplateTest do
     System.delete_env(@token_var)
 
     assert {:error, {:invalid_profile_config, path, detail}} = load_template()
-    assert path =~ ~r/^chains\.\w+\.providers\.url$/
+    assert path =~ ~r/^profile\.[\w-]+\.chains\.\w+\.providers\.[\w-]+\.url$/
     assert detail =~ "unresolved environment variable"
     refute detail =~ "mt_"
   end

@@ -77,17 +77,50 @@ defmodule Lasso.Providers.ProviderHeaders do
   @spec validate(map()) ::
           :ok | {:error, :invalid_provider_headers | :conflicting_url_authorization}
   def validate(provider) when is_map(provider) do
-    api_key = fetch(provider, :api_key)
-    headers = fetch(provider, :headers)
-    auth_headers = fetch(provider, :auth_headers)
-
-    if valid_url?(fetch(provider, :url)) and valid_url?(fetch(provider, :ws_url)) and
-         valid_api_key?(api_key) and valid_headers?(headers) and
-         valid_headers?(auth_headers) and
-         header_count(headers) + header_count(auth_headers) <= @max_headers,
-       do: validate_url_auth(provider),
-       else: {:error, :invalid_provider_headers}
+    case validation_detail(provider) do
+      :ok -> :ok
+      {reason, _, _, _} -> {:error, reason}
+    end
   end
+
+  @doc false
+  @spec validation_detail(map()) :: :ok | {atom(), atom(), String.t(), String.t()}
+  def validation_detail(provider) do
+    checks = [
+      {:url, valid_url?(fetch(provider, :url)), "URL string or null"},
+      {:ws_url, valid_url?(fetch(provider, :ws_url)), "URL string or null"},
+      {:api_key, valid_api_key?(fetch(provider, :api_key)), "valid header string or null"},
+      {:headers, valid_headers?(fetch(provider, :headers)), "valid HTTP header mapping or pairs"},
+      {:auth_headers, valid_headers?(fetch(provider, :auth_headers)),
+       "valid HTTP header mapping or pairs"},
+      {:headers,
+       header_count(fetch(provider, :headers)) + header_count(fetch(provider, :auth_headers)) <=
+         @max_headers, "at most 32 headers combined"}
+    ]
+
+    case Enum.find(checks, fn {_, valid, _} -> not valid end) do
+      {field, false, expected} ->
+        {:invalid_provider_headers, field, expected,
+         "#{value_type(fetch(provider, field))} with invalid type, name, value or count (values withheld)"}
+
+      nil ->
+        case validate_url_auth(provider) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            {reason, :auth_headers, "Authorization or URL userinfo, exclusively",
+             "both configured (values withheld)"}
+        end
+    end
+  end
+
+  defp value_type(nil), do: "null"
+  defp value_type(value) when is_binary(value), do: "string"
+  defp value_type(value) when is_map(value), do: "mapping"
+  defp value_type(value) when is_list(value), do: "list"
+  defp value_type(value) when is_integer(value), do: "integer"
+  defp value_type(_value), do: "value"
 
   defp normalize(headers) when is_map(headers), do: normalize(Map.to_list(headers))
 

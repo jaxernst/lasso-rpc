@@ -203,9 +203,12 @@ defmodule Lasso.URLCredentialsTest do
               123
             )
 
-          assert {:error, :invalid_provider_headers} =
+          assert {:error, {:invalid_profile_config, path, reason}} =
                    ConfigStore.register_provider_runtime("public", chain, config)
 
+          assert path =~ "providers.bad-url.#{field}"
+          assert reason =~ "string"
+          assert reason =~ "integer"
           assert Process.whereis(ConfigStore) == owner
           assert Process.alive?(owner)
         end
