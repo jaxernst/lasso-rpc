@@ -5,7 +5,8 @@ defmodule LassoWeb.Components.ClusterStatus do
   use Phoenix.Component
 
   @doc """
-  Renders a coverage indicator showing how many nodes contributed to the data.
+  Renders a coverage indicator showing responding nodes out of expected nodes.
+  Without `:expected_cluster_nodes`, the total is the connected node count.
 
   ## Examples
 

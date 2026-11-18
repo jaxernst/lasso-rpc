@@ -415,7 +415,7 @@ defmodule LassoWeb.Dashboard do
       |> assign(:cluster_health_counters, snapshot.health_counters)
       |> assign(:cluster_status, cluster)
       |> assign(:available_node_ids, cluster.node_ids || [])
-      |> assign(:metrics_coverage, %{responding: cluster.responding, total: cluster.connected})
+      |> assign(:metrics_coverage, %{responding: cluster.responding, total: cluster.expected})
       |> apply_traffic_metrics(Map.get(snapshot, :traffic_metrics))
       |> recompute_provider_statuses()
       |> MessageHandlers.handle_events_snapshot(snapshot.events)
@@ -1309,7 +1309,7 @@ defmodule LassoWeb.Dashboard do
   defp apply_cluster(socket, nil), do: socket
 
   defp apply_cluster(socket, cluster_state) do
-    new_coverage = %{responding: cluster_state.responding, total: cluster_state.connected}
+    new_coverage = %{responding: cluster_state.responding, total: cluster_state.expected}
     new_node_ids = cluster_state.node_ids
 
     socket

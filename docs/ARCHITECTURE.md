@@ -317,13 +317,19 @@ Caches aggregated metrics from all cluster nodes using stale-while-revalidate:
 ```elixir
 # Queries all responding nodes, aggregates results
 MetricsStore.get_provider_leaderboard("public", "ethereum")
-# => %{data: [...], coverage: %{responding: 3, total: 3}, stale: false}
+# => %{data: [...], coverage: %{responding: 2, total: 3}, stale: false}
 ```
 
 - **Cache TTL**: 15 seconds
 - **RPC timeout**: 5 seconds
 - **Invalidation**: Automatic on node connect/disconnect
 - **Aggregation**: Weighted averages by call volume across nodes
+
+Dashboard coverage is responding nodes out of expected nodes. The total uses
+`:expected_cluster_nodes` when configured (at least the connected node count),
+so a missing configured node does not shrink the denominator. Without that
+setting, the total remains the connected node count. Traffic summaries require
+responses from every expected node before treating the figures as complete.
 
 ### Node Identity
 
