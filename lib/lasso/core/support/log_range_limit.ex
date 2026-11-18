@@ -50,7 +50,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
     if local_response_too_large?(error) or provider_range_limit?(error) do
       {:ok,
        JError.new(-32_005, @message,
-         data: %{reason: :log_range_too_large, action: :reduce_block_range},
+         data: range_advice(Keyword.get(opts, :capabilities)),
          category: :log_range_limit,
          retriable?: false,
          breaker_penalty?: false,
@@ -64,6 +64,24 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   end
 
   def translate(_method, _reason, _opts), do: :not_range_limit
+
+  @doc "Keeps the smallest configured block cap, or uncapped narrowing advice."
+  @spec keep_advice(JError.t() | nil, JError.t()) :: JError.t()
+  def keep_advice(nil, error), do: error
+
+  def keep_advice(previous, error) do
+    case {Map.get(previous.data, :max_block_range), Map.get(error.data, :max_block_range)} do
+      {nil, cap} when is_integer(cap) -> error
+      {old, cap} when is_integer(cap) and cap < old -> error
+      _ -> previous
+    end
+  end
+
+  defp range_advice(%{limits: %{max_block_range: cap}}) when is_integer(cap) and cap > 0,
+    do: Map.put(range_advice(nil), :max_block_range, cap)
+
+  defp range_advice(_capabilities),
+    do: %{reason: :log_range_too_large, action: :reduce_block_range}
 
   @doc "Whether a translated limit belongs to the upstream rather than to Lasso's response cap."
   @spec upstream_limit?(term(), keyword()) :: boolean()
