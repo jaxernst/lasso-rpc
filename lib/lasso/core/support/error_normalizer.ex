@@ -641,10 +641,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     do: seconds_to_ms(seconds)
 
   defp body_retry_after_seconds(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, ""} -> body_retry_after_seconds(seconds)
-      _ -> nil
-    end
+    value |> bounded_digits(600) |> seconds_to_ms()
   end
 
   defp body_retry_after_seconds(_value), do: nil
@@ -691,9 +688,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   defp parse_retry_after_value(value) when is_integer(value), do: seconds_to_ms(value)
 
   defp parse_retry_after_value(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, _} -> seconds_to_ms(seconds)
-      :error -> nil
+    case Regex.run(~r/\A[+-]?\d+/, value) do
+      [digits] -> digits |> bounded_digits(600) |> seconds_to_ms()
+      nil -> nil
     end
   end
 
@@ -719,27 +716,45 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
   defp seconds_to_ms(_seconds), do: nil
 
+  defp bounded_digits(value, cap) do
+    case Regex.run(~r/\A([+-]?)([0-9]+)\z/, value, capture: :all_but_first) do
+      [sign, digits] ->
+        significant = String.trim_leading(digits, "0")
+
+        cond do
+          significant == "" -> 0
+          sign == "-" -> nil
+          byte_size(significant) > byte_size(Integer.to_string(cap)) -> cap
+          true -> min(String.to_integer(significant), cap)
+        end
+
+      nil ->
+        nil
+    end
+  end
+
   # Shared by decoded HTTP errors and legacy raw-body normalization.
   defp parse_retry_from_message(message) when is_binary(message) do
     cond do
-      match = Regex.run(~r/try again in (\d+(?:\.\d+)?) second/i, message) ->
-        [_, value] = match
+      match =
+          Regex.run(~r/try again in (\d+)(?:\.(\d+))? second/i, message, capture: :all_but_first) ->
+        [whole | fraction] = match
+        seconds = bounded_digits(whole, 600)
 
-        case Integer.parse(value) do
-          {seconds, _} when seconds >= 600 ->
-            600_000
+        milliseconds =
+          case fraction do
+            [] ->
+              0
 
-          _ ->
-            case Float.parse(value) do
-              {seconds, _} -> seconds_to_ms(seconds)
-              :error -> nil
-            end
-        end
+            [digits] ->
+              digits |> String.slice(0, 3) |> String.pad_trailing(3, "0") |> bounded_digits(999)
+          end
+
+        min(seconds_to_ms(seconds) + milliseconds, 600_000)
 
       match = Regex.run(~r/try again in (\d+) minute/i, message) ->
         [_, value] = match
-        {minutes, ""} = Integer.parse(value)
-        seconds_to_ms(min(minutes, 10) * 60)
+        bounded_digits(value, 10) * 60_000
 
       true ->
         nil

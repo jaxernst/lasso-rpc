@@ -238,6 +238,10 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
   end
 
   for {label, message, data, header, lower, upper} <- [
+        {"long body seconds", "Rate limited", %{retry_after: String.duplicate("9", 4_000_000)},
+         nil, 595_000, 600_000},
+        {"long message delay", "Try again in " <> String.duplicate("9", 4_000_000) <> " seconds",
+         %{}, nil, 595_000, 600_000},
         {"past HTTP date", "Rate limited", %{retry_after_ms: 1_000},
          "Wed, 21 Oct 2015 07:28:00 GMT", 0, 1_000},
         {"zero header", "Rate limited", %{retry_after_ms: 1_000}, "0", 0, 1_000},
