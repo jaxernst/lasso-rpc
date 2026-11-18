@@ -4,6 +4,9 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
   alias Lasso.JSONRPC.Error, as: JError
 
   setup do
+    previous_audit = Application.get_env(:lasso, :claim_audit_mode, :off)
+    Application.put_env(:lasso, :claim_audit_mode, :on)
+    on_exit(fn -> Application.put_env(:lasso, :claim_audit_mode, previous_audit) end)
     previous = Application.get_env(:lasso, :method_timeouts, %{})
     Application.put_env(:lasso, :method_timeouts, Map.put(previous, "eth_getLogs", 800))
     on_exit(fn -> Application.put_env(:lasso, :method_timeouts, previous) end)
@@ -12,6 +15,7 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
 
   for {label, failures, expected_cap} <- [
         {"deadline", [10_000, :always_timeout], nil},
+        {"claim audit deadline", [10_000, :invalid_params, :always_timeout], nil},
         {"rate limit", [10_000, :rate_limit], nil},
         {"dispatch budget", [10_000, :rate_limit, :rate_limit], nil},
         {"smaller then larger stated number", [10_000, 20_000, :rate_limit], nil},
@@ -90,6 +94,9 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
 
   defp behavior(cap) when is_integer(cap),
     do: {:error, JError.new(-32_000, "range too large, max #{cap} blocks")}
+
+  defp behavior(:invalid_params),
+    do: {:error, JError.new(-32_602, "invalid params")}
 
   defp behavior(:result_limit),
     do: {:error, JError.new(-32_000, "query returned more than 10000 results")}

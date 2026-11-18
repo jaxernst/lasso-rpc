@@ -2716,6 +2716,12 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp finalize_selected_error(jerr, ctx) do
     {ctx, jerr} = ClaimAudit.finish_failure(ctx, jerr)
+
+    jerr =
+      if ctx.terminal_reason == :deadline_exhausted and jerr.category != :cancelled,
+        do: exhaustion_advice(ctx, jerr),
+        else: jerr
+
     previous = ctx.last_attempt_error
 
     if Capacity.lease(previous) != Capacity.lease(jerr),
