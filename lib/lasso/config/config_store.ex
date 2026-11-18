@@ -2335,6 +2335,10 @@ defmodule Lasso.Config.ConfigStore do
       archival: archival,
       subscribe_new_heads:
         Map.get(attrs, :subscribe_new_heads, Map.get(attrs, "subscribe_new_heads")),
+      request_budget:
+        Lasso.Core.Transport.UpstreamAdmission.normalize_budget(
+          Map.get(attrs, :request_budget, Map.get(attrs, "request_budget"))
+        ),
       background_observations:
         Map.get(attrs, :background_observations, Map.get(attrs, "background_observations", true)),
       observation_overrides:

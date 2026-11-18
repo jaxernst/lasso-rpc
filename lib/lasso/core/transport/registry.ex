@@ -836,12 +836,27 @@ defmodule Lasso.RPC.TransportRegistry do
 
     %{
       channel
-      | route_generation: generation,
+      | raw_channel: bind_request_budget(channel, Keyword.get(opts, :provider_config)),
+        route_generation: generation,
         learning_subject: learning_subject,
         template_provider_config: template_provider_config,
         provider_capabilities: provider_capabilities
     }
   end
+
+  defp bind_request_budget(
+         %Channel{transport: :http, raw_channel: %{request_config: config} = raw},
+         provider
+       )
+       when is_map(provider) do
+    bucket = Map.get(provider, :request_budget_handle)
+
+    if Map.get(config, :request_budget_handle) == bucket,
+      do: raw,
+      else: %{raw | request_config: Map.put(config, :request_budget_handle, bucket)}
+  end
+
+  defp bind_request_budget(channel, _provider), do: channel.raw_channel
 
   defp template_provider_config(config) do
     keys = [

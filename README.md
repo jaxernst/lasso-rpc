@@ -239,14 +239,35 @@ upstream costs:
 
 | Background request | Rate per upstream, per node |
 |--------------------|-----------------------------|
-| `newHeads` notification, when the provider has a `ws_url` | One per block |
+| `newHeads` notification, when the provider has a `ws_url` | One per block, pushed by the provider; it does not spend a `request_budget` |
 | `eth_blockNumber` | One per 12 s, or one per 36 s while its feed is current |
 | `eth_chainId` | One per 12 s |
 
 Successful routed `eth_blockNumber` and `eth_getBlockByNumber("latest")`
 responses also provide head evidence for the provider that served them. A chain
-needs one head feed, and any provider with a free WebSocket can carry it. Turn
-background tracking off for providers that bill per request:
+needs one head feed, and any provider with a free WebSocket can carry it.
+Declare a provider `request_budget` to cap combined client attempts and
+background work on each node:
+
+```yaml
+providers:
+  - id: metered
+    url: https://rpc.example.com/${METERED_KEY}
+    request_budget:
+      requests_per_second: 3
+      burst: 20
+```
+
+The bucket is shared across profiles and HTTP/WebSocket transports. When spent,
+client requests try another provider and background polls skip the tick without
+penalizing provider health. If every eligible route is spent, Lasso returns
+`-32005` with a retry delay. WebSocket notifications and upgrades do not spend
+tokens. Omit `burst` for one second's allowance, or omit `request_budget` for
+unlimited outbound requests. Provider details show admitted/refused totals per
+upstream. See [outbound budgets](docs/CONFIGURATION.md#outbound-request-budget)
+for identity, reload and per-node semantics.
+
+To avoid periodic work entirely, turn background tracking off:
 
 ```yaml
 providers:

@@ -210,6 +210,7 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
+| `request_budget` | map | No | Per-node outbound JSON-RPC token bucket: positive integer `requests_per_second`, optional positive integer `burst` (defaults to the rate). Shared by HTTP, WebSocket, client attempts and background work; omitted means unlimited unless another reference to the same upstream declares a budget |
 | `background_observations` | boolean | No | `false` removes this provider reference's periodic identity checks, block-height polls, and `newHeads` demand (default: true). Shared upstreams may still observe for another enabled reference; client requests and subscriptions remain available |
 | `observation_overrides` | map | No | Sparse per-provider overrides for `background_observations`, `subscribe_new_heads`, and the HTTP head, backup, and chain-identity intervals |
 | `capabilities` | map | No | Provider capabilities (see Capabilities below) |
@@ -221,6 +222,46 @@ providers:
 *At least one of `url` or `ws_url` is required.
 
 `observation_overrides` is sparse: an omitted field keeps the provider's legacy preference, then the chain setting. An explicit override wins. The chain-wide `background_observations: false` switch still disables periodic work for that chain reference.
+
+### Outbound request budget
+
+```yaml
+providers:
+  - id: metered
+    url: https://rpc.example.com/${RPC_KEY}
+    request_budget:
+      requests_per_second: 3
+      burst: 20
+```
+
+A bucket starts full, refills continuously, and admits at most `burst +
+requests_per_second * elapsed_seconds` requests over an interval. This is a
+sustained-rate/burst allowance, not a fixed or rolling one-second window.
+One outbound JSON-RPC item costs one token: every HTTP attempt (including
+retry/fallback), WebSocket request, subscribe/resubscribe/unsubscribe, head
+poll and identity observation. Incoming subscription notifications, WebSocket
+upgrades, and protocol ping/pong/close frames cost nothing. An admitted attempt
+keeps its charge if cancelled or failed before sending; tokens are not refunded.
+
+The bucket is shared across profiles and transports with the same canonical
+upstream identity (chain, normalized HTTP and WS URLs, authentication), even
+with `sharing_mode: isolated`. An omitted declaration inherits another
+reference's explicit budget. Conflicting explicit budgets reject startup or
+reload without replacing the active configuration. Different endpoint identities
+and different nodes have separate buckets; this is not an account-wide quota.
+Unchanged reloads reuse the bucket; a changed budget or node restart starts a
+fresh bucket. Removing all declarations disables enforcement.
+
+A spent budget skips dispatch and tries another eligible provider within the
+ordinary routing and transaction-provider boundaries. Background work skips
+that tick. Refusals do not open circuits, create learned cooldowns, or count as
+provider failures. If every eligible route is budget-refused, JSON-RPC returns
+`-32005` with `data.reason: "upstream_request_budget_exhausted"` and
+`data.retry_after_ms` for the earliest refill. Mixed failures retain the ordinary
+error rules, including log-range advice. Opt-in `lasso_meta.budget_refusals`
+identifies refused provider/transport routes separately from dispatched attempts.
+Provider details show this node's rate/burst and admitted/refused totals per
+upstream. Counts reset with a fresh bucket.
 
 ## Environment Variable Substitution
 

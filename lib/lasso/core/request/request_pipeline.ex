@@ -868,6 +868,19 @@ defmodule Lasso.RPC.RequestPipeline do
     {reason, exhaustion_advice(ctx, error)}
   end
 
+  defp ordinary_exhaustion_error(%{budget_refusals: [_ | _], non_budget_attempts: 0} = ctx) do
+    {:upstream_request_budget_exhausted,
+     JError.new(-32_005, "Upstream request budget exhausted",
+       category: :local_capacity_rejection,
+       retriable?: true,
+       breaker_penalty?: false,
+       data: %{
+         reason: :upstream_request_budget_exhausted,
+         retry_after_ms: max(1, ctx.budget_retry_at_ms - System.monotonic_time(:millisecond))
+       }
+     )}
+  end
+
   defp ordinary_exhaustion_error(%RequestContext{shared_capacity_denials: count})
        when count > 0 do
     {
@@ -1447,6 +1460,7 @@ defmodule Lasso.RPC.RequestPipeline do
       end
 
     ctx = RequestContext.record_terminal_attempt(ctx, channel, outcome.fact)
+    ctx = record_budget_outcome(ctx, channel, outcome)
 
     %{
       ctx
@@ -1455,6 +1469,31 @@ defmodule Lasso.RPC.RequestPipeline do
         request_dispatch_certainty: certainty,
         terminal_reason: nil
     }
+  end
+
+  defp record_budget_outcome(ctx, _channel, %{result: {:ok, _result, _latency}}), do: ctx
+
+  defp record_budget_outcome(ctx, channel, outcome) do
+    case owner_error(outcome) do
+      {%JError{data: %{reason: :upstream_request_budget_exhausted, retry_after_ms: delay}}, _} ->
+        refusal = %{
+          provider_id: channel.provider_id,
+          transport: channel.transport,
+          reason: :upstream_request_budget_exhausted,
+          retry_after_ms: delay
+        }
+
+        retry_at = System.monotonic_time(:millisecond) + delay
+
+        %{
+          ctx
+          | budget_refusals: ctx.budget_refusals ++ [refusal],
+            budget_retry_at_ms: min(ctx.budget_retry_at_ms || retry_at, retry_at)
+        }
+
+      _ ->
+        %{ctx | non_budget_attempts: ctx.non_budget_attempts + 1}
+    end
   end
 
   # Identical signed bytes can be resent within the declared send boundary.

@@ -482,6 +482,9 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     }
   end
 
+  defp apply_poll_error(state, %JError{data: %{reason: :upstream_request_budget_exhausted}}),
+    do: state
+
   defp apply_poll_error(state, %JError{category: category} = reason) do
     if ErrorClassification.provider_health_failure?(category) do
       apply_health_failure(state, reason)
@@ -619,7 +622,10 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         else: summary
 
     if is_integer(retry_after) and retry_after > 0,
-      do: %{summary | data: %{retry_after_ms: retry_after}},
+      do: %{
+        summary
+        | data: Map.merge(Map.take(error.data || %{}, [:reason]), %{retry_after_ms: retry_after})
+      },
       else: summary
   end
 

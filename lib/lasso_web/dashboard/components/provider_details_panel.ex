@@ -19,6 +19,18 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
   def update(assigns, socket) do
     provider_connection = Enum.find(assigns.connections, &(&1.id == assigns.provider_id))
 
+    budget =
+      with %{instance_id: id} <- provider_connection,
+           {:ok, config} <- Lasso.Providers.Catalog.get_instance(id) do
+        Lasso.Core.Transport.UpstreamAdmission.budget_stats(
+          Map.get(config, :request_budget_handle)
+        )
+      else
+        _ -> nil
+      end
+
+    socket = assign(socket, :request_budget, budget)
+
     inputs_changed =
       socket.assigns[:provider_id] != assigns.provider_id or
         socket.assigns[:provider_connection] != provider_connection or
@@ -388,6 +400,13 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
         <div class="px-2">
           <.sync_status_section sync_data={@sync_data} />
           <.performance_metrics_strip metrics_data={@metrics_data} />
+          <div :if={@request_budget} class="py-2 text-xs text-gray-400">
+            <p>Outbound budget (this node): {@request_budget.requests_per_second} requests/s,
+              burst {@request_budget.burst}</p>
+            <p>
+              {@request_budget.admitted} admitted, {@request_budget.refused} refused
+            </p>
+          </div>
           <.circuit_breaker_section circuit_data={@circuit_data} />
 
           <hr class="border-gray-800 mt-2 -mx-2" />

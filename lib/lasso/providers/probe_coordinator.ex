@@ -136,6 +136,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
       inst ->
         updated =
           case result do
+            :budget_refused ->
+              inst
+
             :success ->
               %{inst | consecutive_failures: 0, current_backoff_ms: 0}
 
@@ -348,13 +351,27 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
     request = Finch.build(:post, url, headers, body)
 
-    run_probe_request(fn ->
-      BoundedHTTP.bounded_request(
-        request,
-        [receive_timeout: @default_timeout_ms, upstream_instance_id: instance_id],
-        &handle_probe_response_with_cooldown(&1, instance_id, chain_id, observation)
-      )
-    end)
+    result =
+      run_probe_request(fn ->
+        BoundedHTTP.bounded_request(
+          request,
+          [
+            receive_timeout: @default_timeout_ms,
+            upstream_instance_id: instance_id,
+            request_budget:
+              case Catalog.get_instance(instance_id) do
+                {:ok, config} -> Map.get(config, :request_budget_handle)
+                _ -> nil
+              end
+          ],
+          &handle_probe_response_with_cooldown(&1, instance_id, chain_id, observation)
+        )
+      end)
+
+    case result do
+      {:error, {:upstream_request_budget_exhausted, _}} -> {instance_id, :budget_refused}
+      other -> other
+    end
   end
 
   defp handle_probe_response_with_cooldown(response, instance_id, chain_id, observation) do

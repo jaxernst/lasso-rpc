@@ -63,6 +63,7 @@ defmodule Lasso.Config.FileSchema do
       "http_backup_interval_ms" => :observation_interval,
       "chain_identity_interval_ms" => :observation_interval
     },
+    "request_budget" => %{"requests_per_second" => :positive, "burst" => :positive},
     "archival" => :boolean,
     "sharing_mode" => {:enum, ["auto", "isolated"]},
     "api_key" => :secret,
@@ -153,6 +154,14 @@ defmodule Lasso.Config.FileSchema do
             invalid!(
               provider_path <> ".url",
               "expected url or ws_url endpoint string; found missing"
+            )
+
+        if provider["request_budget"],
+          do:
+            require_keys!(
+              provider["request_budget"],
+              ["requests_per_second"],
+              provider_path <> ".request_budget"
             )
 
         validate_headers!(provider, provider_path)

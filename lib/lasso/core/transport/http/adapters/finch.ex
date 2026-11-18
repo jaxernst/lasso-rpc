@@ -29,9 +29,13 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     with {:ok, request_options} <- request_options(deadline_us, nil, opts),
          {:ok, lease} <- acquire_admission(request, nil, opts) do
       try do
-        request
-        |> stream_request(finch_name, request_options, lease, nil, nil)
-        |> consumer.()
+        case UpstreamAdmission.admit_budget(Keyword.get(opts, :request_budget), :http) do
+          :ok ->
+            request |> stream_request(finch_name, request_options, lease, nil, nil) |> consumer.()
+
+          {:error, reason} ->
+            {:error, reason}
+        end
       after
         UpstreamAdmission.release(lease, :bounded_request_finished)
       end
@@ -82,6 +86,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
            build_request(provider, url, encoded, context),
          {:ok, tracker_token} <- tracker_token(context) do
       request = %{request | headers: Lasso.Observability.Tracing.inject(request.headers)}
+      opts = Keyword.put(opts, :request_budget, Map.get(provider, :request_budget_handle))
       run_request(request, finch_name, deadline_us, context, tracker_token, opts)
     end
   end
@@ -193,8 +198,13 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
 
     case request_options(deadline_us, context, opts) do
       {:ok, request_options} ->
-        with :ok <- DispatchTracker.open_send(context, tracker_token),
-             :ok <- final_deadline_gate(deadline_us, context, opts) do
+        with :ok <- final_deadline_gate(deadline_us, context, opts),
+             :ok <-
+               UpstreamAdmission.admit_budget(
+                 Keyword.get(opts, :request_budget),
+                 :http
+               ),
+             :ok <- DispatchTracker.open_send(context, tracker_token) do
           io_start_us = System.monotonic_time(:microsecond)
 
           outcome =
@@ -247,6 +257,11 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
       Keyword.get(opts, :monotonic_now_fun, fn -> System.monotonic_time(:microsecond) end)
 
     if monotonic_now.() < deadline_us, do: :ok, else: {:error, :deadline_expired}
+  end
+
+  defp send_start_error({:upstream_request_budget_exhausted, _} = reason, context) do
+    AttemptProtocol.predispatch_failure(context, :local)
+    {:error, reason}
   end
 
   defp send_start_error(:deadline_expired, context) do

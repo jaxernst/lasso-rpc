@@ -305,6 +305,8 @@ defmodule Lasso.Config.Backend.File do
         ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
         capabilities: parse_capabilities(provider_data["capabilities"]),
         subscribe_new_heads: parse_subscribe_new_heads(provider_data["subscribe_new_heads"]),
+        request_budget:
+          Lasso.Core.Transport.UpstreamAdmission.normalize_budget(provider_data["request_budget"]),
         background_observations:
           parse_background_observations(provider_data["background_observations"]),
         observation_overrides: provider_data["observation_overrides"],

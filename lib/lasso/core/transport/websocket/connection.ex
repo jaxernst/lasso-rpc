@@ -167,9 +167,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     Process.flag(:trap_exit, true)
 
     instance_id = endpoint_instance_id(endpoint)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_config_updated(instance_id))
 
     state = %{
       endpoint: endpoint,
+      request_budget: current_request_budget(instance_id),
       profile: endpoint.profile,
       instance_id: instance_id,
       connection: nil,
@@ -859,6 +861,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
+  def handle_info(:instance_config_updated, state),
+    do: {:noreply, %{state | request_budget: current_request_budget(state.instance_id)}}
+
   def handle_info({:stream_ingress, token, message}, state) do
     Ingress.consume(token, fn -> handle_info(message, state) end)
   end
@@ -2576,11 +2581,24 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     ArgumentError -> :cancelled
   end
 
+  defp current_request_budget(instance_id) do
+    case Catalog.get_instance(instance_id) do
+      {:ok, config} -> Map.get(config, :request_budget_handle)
+      _ -> nil
+    end
+  end
+
   defp cast_send(state, send_key, deadline_us, cancel_latch, frame) do
-    ws_client().cast(
-      state.connection,
-      {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
-    )
+    message =
+      case state.request_budget do
+        nil ->
+          {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
+
+        bucket ->
+          {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame, bucket}
+      end
+
+    ws_client().cast(state.connection, message)
   catch
     :exit, _reason -> {:error, :connection_down}
   end

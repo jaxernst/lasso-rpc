@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A provider can declare `request_budget` (`requests_per_second` and an optional `burst`) to cap everything Lasso sends it from each node: client requests, retries, fallbacks, subscriptions and background head and identity checks, across every profile that uses that upstream. When the budget is spent, requests move to another provider without counting against the spent one, and background checks wait for their next tick. If every eligible provider is spent, the client gets `-32005` with `data.retry_after_ms`. Provider details show the budget and admitted/refused totals per upstream. Previously a provider with a hard request quota needed a separate egress limiter in front of Lasso. See [outbound request budget](docs/CONFIGURATION.md#outbound-request-budget).
+
+
 ### Fixed
 
 - Stop repeatedly routing to refused HTTP connections and restore recovered endpoints within seconds, including subscription backfill during circuit probation.
