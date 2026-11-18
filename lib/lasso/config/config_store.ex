@@ -2311,6 +2311,8 @@ defmodule Lasso.Config.ConfigStore do
     })
   end
 
+  defp normalize_provider_config(%Provider{} = provider), do: provider
+
   defp normalize_provider_config(attrs) when is_map(attrs) do
     sharing_mode =
       case Map.get(attrs, :sharing_mode) || Map.get(attrs, "sharing_mode") do

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Runtime provider additions and partial updates now use the profile YAML provider schema, preserving observation settings, request budgets and capabilities with the same defaults and validation. Unknown keys return an error instead of being silently discarded.
+
 - Stop repeatedly routing to refused HTTP connections and restore recovered endpoints within seconds, including subscription backfill during circuit probation.
 
 - Sole-provider WebSocket subscriptions wait for reconnect within the recovery deadline when a disconnect invalidates an in-flight replacement, instead of terminating as though the provider was removed.

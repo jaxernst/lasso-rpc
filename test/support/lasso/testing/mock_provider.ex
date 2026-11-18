@@ -172,7 +172,6 @@ defmodule Lasso.Testing.MockProvider do
           id: provider_id,
           name: "Mock Provider #{provider_id}",
           url: url,
-          type: "test",
           priority: Map.get(spec, :priority, 100)
         }
 

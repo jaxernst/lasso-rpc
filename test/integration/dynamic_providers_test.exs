@@ -13,14 +13,14 @@ defmodule Lasso.Integration.DynamicProvidersTest do
     %{
       id: "cloudflare_test",
       name: "Cloudflare Eth Test",
-      url: "https://cloudflare-eth.com",
-      ws_url: "wss://cloudflare-eth.com/ws",
+      url: "http://127.0.0.1:1",
+      ws_url: "ws://127.0.0.1:1/ws",
       priority: 50
     },
     %{
       id: "ankr_test",
       name: "Ankr Test",
-      url: "https://rpc.ankr.com/eth",
+      url: "http://127.0.0.1:2",
       priority: 60
     }
   ]
@@ -318,7 +318,7 @@ defmodule Lasso.Integration.DynamicProvidersTest do
         name: "Missing ID"
       }
 
-      assert {:error, {:missing_required_fields, _fields}} =
+      assert {:error, {:invalid_profile_config, "providers.id", "required field"}} =
                Providers.add_provider(@test_chain, invalid_config)
 
       # Invalid URL format

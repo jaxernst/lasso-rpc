@@ -7,18 +7,14 @@ defmodule Lasso.Providers do
   """
 
   require Logger
-  alias Lasso.Config.{ConfigStore, ConfigValidator}
+  alias Lasso.Config.ConfigStore
   alias Lasso.Providers.{Catalog, InstanceState}
   alias Lasso.RPC.{ChainSupervisor, TransportRegistry}
 
   @default_profile Lasso.Config.ProfileValidator.default_profile()
 
   @type provider_config :: %{
-          id: String.t(),
-          name: String.t(),
-          url: String.t(),
-          ws_url: String.t() | nil,
-          priority: integer()
+          optional(atom() | String.t()) => term()
         }
 
   @type provider_summary :: %{
@@ -32,6 +28,12 @@ defmodule Lasso.Providers do
 
   @type chain_identifier :: pos_integer() | String.t()
 
+  @doc """
+  Adds a provider using the profile YAML provider schema, defaults and validation.
+  Keys may be atoms or strings, including nested settings. Unknown keys return
+  an error. `name` defaults to `id`; either `url` or `ws_url` is required.
+  Schema validation always runs, including with `validate: false`.
+  """
   @spec add_provider(chain_identifier(), map(), keyword()) :: {:ok, String.t()} | {:error, term()}
   def add_provider(chain_name, provider_attrs, opts \\ []) do
     add_provider(@default_profile, chain_name, provider_attrs, opts)
@@ -41,17 +43,15 @@ defmodule Lasso.Providers do
           {:ok, String.t()} | {:error, term()}
   def add_provider(profile, chain_identifier, provider_attrs, opts) do
     persist? = Keyword.get(opts, :persist, false)
-    validate? = Keyword.get(opts, :validate, true)
     start_ws = Keyword.get(opts, :start_ws, :auto)
 
-    provider_config = normalize_provider_config(provider_attrs)
-    provider_id = Map.get(provider_config, :id)
+    provider_id = Map.get(provider_attrs, :id, Map.get(provider_attrs, "id"))
 
     result =
-      with {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
+      with {:ok, provider_config} <- normalize_provider_config(provider_attrs),
+           {:ok, chain_id} <- resolve_chain_id(profile, chain_identifier) do
         with_provider_lifecycle(chain_id, fn ->
-          with :ok <- maybe_validate(provider_config, validate?),
-               :ok <- ensure_chain_started(profile, chain_id),
+          with :ok <- ensure_chain_started(profile, chain_id),
                :ok <- check_not_duplicate(profile, chain_id, provider_id),
                :ok <- ConfigStore.register_provider_runtime(profile, chain_id, provider_config) do
             finish_provider_add(profile, chain_id, provider_config, start_ws, persist?)
@@ -145,6 +145,10 @@ defmodule Lasso.Providers do
     end
   end
 
+  @doc """
+  Merges a partial provider update and validates it with the profile YAML schema.
+  Omitted settings are preserved; unknown keys return an error before removal.
+  """
   @spec update_provider(chain_identifier(), String.t(), map(), keyword()) ::
           :ok | {:error, term()}
   def update_provider(chain_name, provider_id, updates, opts \\ []) do
@@ -157,8 +161,7 @@ defmodule Lasso.Providers do
     persist? = Keyword.get(opts, :persist, false)
 
     with {:ok, existing} <- get_provider(profile, chain_name, provider_id),
-         updated_config = Map.merge(existing, normalize_provider_updates(updates)),
-         :ok <- maybe_validate(updated_config, true),
+         {:ok, updated_config} <- normalize_provider_updates(existing, updates),
          {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
          :ok <- close_provider_channels_before_update(profile, chain_id, provider_id),
          :ok <- remove_for_update(profile, chain_name, provider_id),
@@ -195,12 +198,14 @@ defmodule Lasso.Providers do
   end
 
   defp replace_removed_provider(profile, chain_name, existing, updated, persist?) do
-    case add_provider(profile, chain_name, updated, persist: persist?) do
+    case add_provider(profile, chain_name, stored_provider_attrs(updated), persist: persist?) do
       {:ok, _provider_id} ->
         :ok
 
       {:error, _reason} = error ->
-        _ = add_provider(profile, chain_name, existing, persist: false)
+        _ =
+          add_provider(profile, chain_name, stored_provider_attrs(existing), persist: false)
+
         error
     end
   end
@@ -317,65 +322,47 @@ defmodule Lasso.Providers do
   end
 
   defp normalize_provider_config(attrs) when is_map(attrs) do
-    %{
-      id: attr(attrs, :id),
-      name: attr(attrs, :name),
-      url: attr(attrs, :url),
-      ws_url: attr(attrs, :ws_url),
-      priority: attr(attrs, :priority, 100),
-      capabilities: attr(attrs, :capabilities),
-      subscribe_new_heads: attr(attrs, :subscribe_new_heads),
-      archival: attr(attrs, :archival, true),
-      sharing_mode: attr(attrs, :sharing_mode, :auto),
-      api_key: attr(attrs, :api_key),
-      credentials: attr(attrs, :credentials),
-      headers: attr(attrs, :headers),
-      auth_headers: attr(attrs, :auth_headers),
-      __mock__: attr(attrs, :__mock__)
-    }
+    data = stringify(attrs)
+    {mock, data} = Map.pop(data, "__mock__")
+
+    path =
+      if is_binary(data["id"]),
+        do: "providers." <> Lasso.URLMask.mask_in_string(data["id"]),
+        else: "providers"
+
+    Lasso.Config.FileSchema.validate_provider_entry!(data, path)
+
+    provider = Lasso.Config.Backend.File.parse_provider(data)
+    {:ok, Map.put(provider, :__mock__, mock)}
+  rescue
+    error in RuntimeError -> {:error, {:invalid_provider_config, Exception.message(error)}}
+  catch
+    {:invalid_profile_config, _, _} = error -> {:error, error}
   end
 
-  defp normalize_provider_updates(attrs) when is_map(attrs) do
-    attrs
+  defp normalize_provider_updates(existing, updates) do
+    existing
+    |> stored_provider_attrs()
+    |> stringify()
+    |> Map.merge(stringify(updates))
     |> normalize_provider_config()
-    |> Map.filter(fn {key, _value} ->
-      Map.has_key?(attrs, key) or Map.has_key?(attrs, Atom.to_string(key))
-    end)
   end
 
-  defp attr(attrs, key, default \\ nil) do
-    case Map.fetch(attrs, key) do
-      {:ok, value} -> value
-      :error -> Map.get(attrs, Atom.to_string(key), default)
-    end
-  end
+  defp stored_provider_attrs(%_{} = provider),
+    do: provider |> Map.from_struct() |> stored_provider_attrs()
 
-  defp maybe_validate(provider_config, true) do
-    with :ok <- validate_required_fields(provider_config),
-         :ok <- ConfigValidator.validate_provider_url(provider_config.url),
-         :ok <- Lasso.Providers.ProviderHeaders.validate(provider_config) do
-      maybe_validate_ws_url(provider_config.ws_url)
-    end
-  end
+  defp stored_provider_attrs(provider),
+    do: Map.reject(provider, fn {_key, value} -> is_nil(value) end)
 
-  defp maybe_validate(_provider_config, false), do: :ok
+  defp stringify(map) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {to_string(key), stringify(value)} end)
 
-  defp validate_required_fields(config) do
-    required = [:id, :name, :url]
-    missing = Enum.filter(required, fn field -> is_nil(Map.get(config, field)) end)
+  defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)
 
-    if Enum.empty?(missing) do
-      :ok
-    else
-      {:error, {:missing_required_fields, missing}}
-    end
-  end
+  defp stringify(value) when is_atom(value) and value not in [nil, true, false],
+    do: Atom.to_string(value)
 
-  defp maybe_validate_ws_url(nil), do: :ok
-
-  defp maybe_validate_ws_url(ws_url) when is_binary(ws_url) do
-    ConfigValidator.validate_provider_url(ws_url)
-  end
+  defp stringify(value), do: value
 
   defp check_not_duplicate(profile, chain_name, provider_id) do
     case get_provider(profile, chain_name, provider_id) do

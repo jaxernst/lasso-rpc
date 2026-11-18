@@ -147,27 +147,35 @@ defmodule Lasso.Config.FileSchema do
 
       Enum.each(Enum.with_index(providers, 1), fn {provider, index} ->
         provider_path = provider_path(path <> ".providers", provider, index)
-        require_keys!(provider, ["id"], provider_path)
-
-        unless provider["url"] || provider["ws_url"],
-          do:
-            invalid!(
-              provider_path <> ".url",
-              "expected url or ws_url endpoint string; found missing"
-            )
-
-        if provider["request_budget"],
-          do:
-            require_keys!(
-              provider["request_budget"],
-              ["requests_per_second"],
-              provider_path <> ".request_budget"
-            )
-
-        validate_headers!(provider, provider_path)
+        validate_provider_entry!(provider, provider_path)
       end)
     end)
 
+    :ok
+  end
+
+  @doc false
+  @spec validate_provider_entry!(map(), String.t()) :: :ok
+  def validate_provider_entry!(provider, path) do
+    validate!(provider, @provider, path)
+    require_keys!(provider, ["id"], path)
+
+    unless provider["url"] || provider["ws_url"],
+      do:
+        invalid!(
+          path <> ".url",
+          "expected url or ws_url endpoint string; found missing"
+        )
+
+    if provider["request_budget"],
+      do:
+        require_keys!(
+          provider["request_budget"],
+          ["requests_per_second"],
+          path <> ".request_budget"
+        )
+
+    validate_headers!(provider, path)
     :ok
   end
 

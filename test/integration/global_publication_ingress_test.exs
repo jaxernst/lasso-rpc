@@ -26,7 +26,7 @@ defmodule Lasso.Integration.GlobalPublicationIngressTest do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(Repo)
     Ecto.Adapters.SQL.Sandbox.mode(Repo, {:shared, self()})
     slug = "public"
-    provider_id = String.duplicate("節", 64)
+    provider_id = String.duplicate("rpc", 64)
     key = {slug, @anvil_chain_id}
 
     on_exit(fn ->
