@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- HTTP 429 responses retain only bounded quota code, message and retry hints. Retry-After headers take precedence over body hints; delays are capped at ten minutes and unrelated error data is discarded.
+
 ## [0.8.3] - 2026-11-18
 
 ### Fixed

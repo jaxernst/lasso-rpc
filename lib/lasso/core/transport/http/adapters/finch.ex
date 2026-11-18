@@ -497,12 +497,13 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   end
 
   defp handle_request_outcome(
-         {{:returned, {:ok, %Finch.Response{status: status, body: body}}}, _state, _healthy?},
+         {{:returned, {:ok, %Finch.Response{status: status, body: body, headers: headers}}},
+          _state, _healthy?},
          context,
          lease,
          io_duration_us
        ) do
-    case handle_response(status, body) do
+    case handle_response(status, body) |> with_retry_after(headers) do
       {:error, reason} = error ->
         emit_http_error(context, reason, io_duration_us)
 
@@ -617,11 +618,52 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   defp transport_message(reason) when is_atom(reason), do: "Connection error: #{reason}"
   defp transport_message(_reason), do: "Connection error"
 
+  defp bounded_error_message(message) do
+    prefix = binary_part(message, 0, min(byte_size(message), 1_000))
+
+    case :unicode.characters_to_binary(prefix, :utf8, :utf8) do
+      bytes when is_binary(bytes) -> :binary.copy(bytes)
+      {_status, bytes, _rest} -> :binary.copy(bytes)
+    end
+  end
+
+  defp with_retry_after({:error, {:rate_limit, payload}}, headers) do
+    delay =
+      Enum.find_value(headers, fn {name, value} ->
+        if String.downcase(name) == "retry-after" do
+          case Integer.parse(value) do
+            {seconds, ""} when seconds >= 0 -> min(seconds * 1_000, 600_000)
+            _ -> nil
+          end
+        end
+      end)
+
+    payload = if is_integer(delay), do: Map.put(payload, :retry_after_ms, delay), else: payload
+    {:error, {:rate_limit, payload}}
+  end
+
+  defp with_retry_after(result, _headers), do: result
+
   defp handle_response(429, body) do
     payload =
       case UpstreamResponse.parse_unary(body) do
-        {:ok, %UpstreamResponse.Validated{kind: :error}} -> %{status: 429, body: body}
-        _other -> %{status: 429}
+        {:ok, %UpstreamResponse.Validated{kind: :error} = error} ->
+          payload = %{
+            status: 429,
+            code: error.error_code,
+            message: bounded_error_message(error.error_message)
+          }
+
+          case error.error_data do
+            %{"retry_after_ms" => delay} when is_integer(delay) and delay >= 0 ->
+              Map.put(payload, :retry_after_ms, min(delay, 600_000))
+
+            _ ->
+              payload
+          end
+
+        _other ->
+          %{status: 429}
       end
 
     {:error, {:rate_limit, payload}}

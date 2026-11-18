@@ -31,11 +31,15 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
                    error: %{
                      code: opts[:code],
                      message:
-                       if(opts[:code] == -32_005,
-                         do: "monthly quota exceeded",
-                         else: "Invalid request"
-                       ),
-                     data: if(opts[:code] == -32_005, do: %{retry_after_ms: 3_600_000}, else: nil)
+                       cond do
+                         opts[:code] == -32_099 -> String.duplicate("é", 1000)
+                         opts[:code] == -32_005 -> "monthly quota exceeded"
+                         true -> "Invalid request"
+                       end,
+                     data: %{
+                       retry_after_ms: 3_600_000,
+                       discarded: String.duplicate("secret", 1000)
+                     }
                    }
                  }}
 
@@ -44,6 +48,7 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
         end
 
       reply = Map.merge(payload, %{jsonrpc: "2.0", id: request["id"]})
+      conn = if opts[:code] == -32_098, do: put_resp_header(conn, "retry-after", "60"), else: conn
       send_resp(conn, status, Jason.encode!(reply))
     end
   end
@@ -64,7 +69,12 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
            )
 
   for {method, params, status, code, failover?} <-
-        @cases ++ [{"eth_getBalance", @read_params, 429, -32_005, true}] do
+        @cases ++
+          [
+            {"eth_getBalance", @read_params, 429, -32_005, true},
+            {"eth_getBalance", @read_params, 429, -32_099, false},
+            {"eth_getBalance", @read_params, 429, -32_098, true}
+          ] do
     test "#{method} HTTP #{status} code #{code} failover=#{failover?}" do
       chain = 700_000_000 + System.unique_integer([:positive, :monotonic])
       previous = Application.get_env(:lasso, :http_client)
@@ -83,7 +93,12 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
           providers: []
         })
 
-      for {name, status, priority} <- [{"refused", unquote(status), 1}, {"healthy", 200, 2}] do
+      providers =
+        if unquote(code) == -32_099,
+          do: [{"refused", 429, 1}],
+          else: [{"refused", unquote(status), 1}, {"healthy", 200, 2}]
+
+      for {name, status, priority} <- providers do
         ref = {__MODULE__, chain, name}
 
         {:ok, _} =
@@ -133,13 +148,28 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
       else
         assert %{"id" => 1, "error" => error} = body
         if unquote(status) in [200, 400], do: assert(error["code"] == -32_600)
+
+        if unquote(code) == -32_099 do
+          assert byte_size(error["message"]) <= 1000
+          assert String.valid?(error["message"])
+          refute Map.has_key?(error["data"] || %{}, "discarded")
+        end
+
         refute_receive {:called, "healthy"}
       end
 
       if unquote(code) == -32_005 do
         instance_id = Providers.Catalog.lookup_instance_id("public", chain, "refused")
         evidence = Providers.InstanceState.read_rate_limit(instance_id, :http)
-        assert evidence.remaining_ms > 3_500_000
+        assert evidence.remaining_ms > 590_000
+        assert evidence.remaining_ms <= 600_000
+      end
+
+      if unquote(code) == -32_098 do
+        instance_id = Providers.Catalog.lookup_instance_id("public", chain, "refused")
+        evidence = Providers.InstanceState.read_rate_limit(instance_id, :http)
+        assert evidence.remaining_ms > 55_000
+        assert evidence.remaining_ms <= 60_000
       end
 
       refute_receive {:called, _provider}

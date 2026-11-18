@@ -83,15 +83,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   end
 
   def normalize({:rate_limit, %{status: 429} = payload}, opts) do
-    {message, data, original_code} =
-      case extract_nested_error(payload, -32_005, "Rate limited by provider") do
-        {:json_rpc, code, message, data} -> {message, data, code}
-        {:raw, code, message} -> {message, public_transport_data(payload), code}
-      end
-
-    JError.new(-32_005, message,
-      data: add_retry_after(data, payload),
-      original_code: original_code,
+    JError.new(-32_005, Map.get(payload, :message, "Rate limited by provider"),
+      data: add_retry_after(nil, payload),
+      original_code: Map.get(payload, :code, -32_005),
       provider_id: Keyword.get(opts, :provider_id),
       source: Keyword.get(opts, :context, :transport),
       transport: Keyword.get(opts, :transport),
@@ -619,6 +613,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   # This handles both standard Retry-After headers and provider-specific message formats
   defp extract_retry_after(error_data) when is_map(error_data) do
     cond do
+      is_integer(error_data[:retry_after_ms]) and error_data[:retry_after_ms] >= 0 ->
+        min(error_data[:retry_after_ms], 600_000)
+
       # Standard Retry-After header (atom key)
       Map.has_key?(error_data, :retry_after) ->
         parse_retry_after_value(error_data[:retry_after])
