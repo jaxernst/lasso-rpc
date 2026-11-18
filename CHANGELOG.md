@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-17
+
+### Security
+
+- Update Plug to 1.20.4 to address EEF-CVE-2026-120287, where the multipart `:length` limit did not count part and header framing.
+- `mix hex.audit` still ignores EEF-CVE-2026-115701 (Cowboy) and EEF-CVE-2026-113431 (Cowlib) until a Hex release fixes them. Keep public nodes behind a reverse proxy that speaks HTTP/1.1 to Lasso; see [deployment](docs/DEPLOYMENT.md).
+
+### Fixed
+
+- An HTTP 429, 401 or 403 from an upstream now fails a read over to another provider even when its body is a JSON-RPC invalid-request or parse error. Previously Lasso could return it to the client as a bad request while a healthy provider went unused. Every HTTP 429 counts as a rate limit, and the body's quota wording and any retry-after hint stay with the error, so a quota refusal still keeps its longer cooldown.
+- A refused connection, failed DNS lookup or connect timeout now counts as a network failure against that provider's HTTP circuit, and the request fails over. Previously these counted as local pool pressure, so an unreachable endpoint could keep taking fallback attempts without its circuit opening. Local pool exhaustion still doesn't count against the provider.
+- After a provider explicitly refuses a method, Lasso tries one route from an independent provider before more routes from the one that refused. Previously a read could spend its whole three-dispatch budget on routes from the refusing provider. Routes on unrecognized hosts are not treated as independent, and the next ordinary route stays within the budget.
+- Subscriptions survive a brief upstream WebSocket disconnect. Recovery keeps retrying within its 30-second deadline, so a returning original provider or a sole upstream can resume the subscription; previously the client could be closed within milliseconds. Permanent failures and the deadline still close the client with `1011`.
+- Refusing one incoming subscription frame under node-local ingress pressure now invalidates only that subscription, which recovers through the continuity path. Previously it closed the shared upstream WebSocket, failing unrelated pending requests and disconnecting every subscription on it.
+- Lasso reads the `id`, `result` and `error` of a JSON-RPC response only at its top level. An upstream error whose `data` contained its own `id` could be matched to the wrong request.
+- Provider URLs with credentials (`https://user:password@host/rpc`, `wss://user:password@host/ws`) authenticate with HTTP Basic on HTTP requests, WebSocket handshakes and discovery. Previously credentialed HTTP URLs failed and credentialed WebSocket URLs were rejected. Credentials no longer appear in discovery output or inspected state. See [configuration](docs/CONFIGURATION.md#environment-variable-substitution).
+- `mix lasso.probe` works on a standalone node. It refused its own HTTP requests and reported zero supported methods.
+- `/api/health` reports `cluster.enabled` from configured clustering (expected peers or libcluster topologies) or connected peers. A standalone node no longer reports clustering because a topology snapshot exists or Erlang distribution is on.
+- The dashboard method row labels average latency `avg` instead of `p50`, and the browser no longer logs an unknown-hook error on every dashboard load.
+
+### Changed
+
+- Dashboard call counts, routing share, success rate, latency percentiles, RPS and per-method figures count client requests only. Lasso's own head polls, health probes and discovery no longer appear as provider traffic. Block height, lag and circuit state are unchanged.
+- `deployment/compose.release.yml` in a source checkout defaults to the current release image instead of v0.4.5. The `compose.yml` attached to each release already named its own image.
+
+### Added
+
+- Container publication runs an upgrade check from the previous published release on both native architectures: it upgrades from that release's image, rolls back and recovers forward, and attaches the evidence to the release. A missing or unreadable previous-release record fails publication. See [releasing](docs/RELEASING.md#block-continuity-qualification).
+
+### Documentation
+
+- Migration describes transaction sends with transaction providers (up to three sends, one provider at a time, within the deadline) and points to `/rpc/priority/:chain`.
+- Configuration states that unsupported methods fall back to the unsupported providers when no provider supports a method, that `max_block_age` has no effect on `eth_getLogs`, and how to run `check-config` and `reload` from source.
+- Testing states that `--include integration` also runs tests that carry an excluded tag.
+- The stale `.claude/` directory is removed.
+
+### Compatibility
+
+- One configuration change can be needed. A provider that puts credentials in its `url` or `ws_url` and also sets an Authorization header through `headers`, `auth_headers` or `api_key` now fails validation at startup or reload. Keep one of the two.
+- Scripts that read `cluster.enabled` from `/api/health` on a standalone node with Erlang distribution on now see `false`.
+- No storage changes. Upgrading from v0.8.1 needs only the new image or release.
+
 ## [0.8.1] - 2026-11-17
 
 ### Fixed
@@ -483,7 +525,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.0...v0.7.1
