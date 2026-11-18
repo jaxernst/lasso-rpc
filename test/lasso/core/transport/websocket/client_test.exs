@@ -84,6 +84,32 @@ defmodule Lasso.RPC.Transport.WebSocket.ClientTest do
     stop_server(server)
   end
 
+  test "preserves a close frame received in the same batch as a ping" do
+    server = start_server(self())
+
+    assert {:ok, client} =
+             Client.start_link(
+               "ws://closing.example.test:#{server.port}/rpc",
+               Handler,
+               %{owner: self()},
+               owner: self(),
+               resolver: fn _host -> {:ok, [{127, 0, 0, 1}]} end
+             )
+
+    assert_receive :connected
+    assert_receive {:handshake, _request}
+    monitor = Process.monitor(client)
+    :ok = :sys.suspend(client)
+    send(server.pid, {:send_ping_close, 1_011, "continuity exhausted"})
+    assert_receive :server_closed
+    Process.sleep(20)
+    :ok = :sys.resume(client)
+
+    assert_receive {:disconnected, %{reason: {:remote, 1_011, "continuity exhausted"}}}, 1_000
+    assert_receive {:DOWN, ^monitor, :process, ^client, :normal}, 1_000
+    stop_server(server)
+  end
+
   test "fails closed when the resolver rejects any answer set" do
     server = start_server(self())
 
@@ -267,6 +293,16 @@ defmodule Lasso.RPC.Transport.WebSocket.ClientTest do
         :ok = :gen_tcp.send(socket, server_frame(0x8, <<code::16, reason::binary>>))
         send(owner, {:client_frame, receive_client_frame(socket)})
         server_loop(socket, owner)
+
+      {:send_ping_close, code, reason} ->
+        :ok =
+          :gen_tcp.send(socket, [
+            server_frame(0x9, ""),
+            server_frame(0x8, <<code::16, reason::binary>>)
+          ])
+
+        :gen_tcp.close(socket)
+        send(owner, :server_closed)
 
       {:send_text, payload} ->
         :ok = :gen_tcp.send(socket, server_frame(0x1, payload))

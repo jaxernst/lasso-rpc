@@ -565,7 +565,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinatorTest do
       new_state = %{state | failover_status: :backfilling, failover_context: fake_context}
       :sys.replace_state(pid, fn _ -> new_state end)
 
-      send(pid, {:backfill_result, owner_id, self(), :ok})
+      send(pid, {:backfill_result, owner_id, self(), {:ok, 102}})
       Process.sleep(50)
 
       # Verify events were processed in order
