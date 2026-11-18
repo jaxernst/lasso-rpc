@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `eth_getLogs` preserves range-narrowing advice and the smallest advertised block cap when later attempts time out or are rate-limited, including dispatch and deadline exhaustion.
+- `eth_getLogs` preserves range-narrowing advice and the smallest operator-configured block cap among refusing providers when later attempts time out or are rate-limited, including dispatch and deadline exhaustion. Numeric caps come only from configuration, never from upstream error wording.
 
 ## [0.8.3] - 2026-11-18
 

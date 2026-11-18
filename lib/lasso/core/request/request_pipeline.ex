@@ -1888,6 +1888,7 @@ defmodule Lasso.RPC.RequestPipeline do
       begin_claim_audit(outcome, channel, rest_channels, ctx, caller_guard)
     else
       case LogRangeLimit.translate(ctx.method, reason,
+             capabilities: channel.provider_capabilities,
              provider_id: channel.provider_id,
              transport: channel.transport
            ) do

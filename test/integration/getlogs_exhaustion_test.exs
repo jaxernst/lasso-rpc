@@ -10,15 +10,20 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
     :ok
   end
 
-  for {label, failures} <- [
-        {"deadline", [10_000, :always_timeout]},
-        {"rate limit", [10_000, :rate_limit]},
-        {"dispatch budget", [10_000, :rate_limit, :rate_limit]},
-        {"smaller then larger cap", [10_000, 20_000, :rate_limit]},
-        {"larger then smaller cap", [10_000, 5_000, :rate_limit]},
-        {"uncapped refusal", [10_000, :uncapped, :rate_limit]},
-        {"no advertised cap", [:uncapped, :rate_limit]},
-        {"result count", [:result_limit, :rate_limit]}
+  for {label, failures, expected_cap} <- [
+        {"deadline", [10_000, :always_timeout], nil},
+        {"rate limit", [10_000, :rate_limit], nil},
+        {"dispatch budget", [10_000, :rate_limit, :rate_limit], nil},
+        {"smaller then larger stated number", [10_000, 20_000, :rate_limit], nil},
+        {"larger then smaller stated number", [10_000, 5_000, :rate_limit], nil},
+        {"uncapped refusal", [10_000, :uncapped, :rate_limit], nil},
+        {"no advertised cap", [:uncapped, :rate_limit], nil},
+        {"result count", [:result_limit, :rate_limit], nil},
+        {"configured cap", [{:configured, 100_000}, :rate_limit], 100_000},
+        {"smaller configured cap first",
+         [{:configured, 100_000}, {:configured, 200_000}, :rate_limit], 100_000},
+        {"smaller configured cap last",
+         [{:configured, 200_000}, {:configured, 100_000}, :rate_limit], 100_000}
       ] do
     test "HTTP retains range advice after #{label}", %{chain: chain} do
       failures = unquote(Macro.escape(failures))
@@ -32,6 +37,7 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
             id: "reader_#{index}",
             priority: index,
             background_observations: false,
+            capabilities: capabilities(failure),
             behavior:
               {:conditional,
                fn method, params, state ->
@@ -68,12 +74,16 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
       assert error["code"] == -32_005
       assert error["data"]["action"] == "reduce_block_range"
 
-      caps = Enum.filter(failures, &is_integer/1)
-      assert error["data"]["max_block_range"] == if(caps == [], do: nil, else: Enum.min(caps))
+      assert error["data"]["max_block_range"] == unquote(expected_cap)
       refute Map.has_key?(error["data"], "retry_after_ms")
       for index <- 1..length(failures), do: assert_receive({:attempt, ^index, "eth_getLogs"})
     end
   end
+
+  defp capabilities({:configured, cap}), do: %{limits: %{max_block_range: cap}}
+  defp capabilities(_failure), do: %{}
+
+  defp behavior({:configured, _cap}), do: behavior(:uncapped)
 
   defp behavior(10_000),
     do: {:error, JError.new(-32_000, "range too large, max 10,000 blocks")}

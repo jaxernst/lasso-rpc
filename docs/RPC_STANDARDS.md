@@ -45,12 +45,13 @@ including later timeouts or rate limits. Narrow the range before retrying; the
 unchanged request is not retriable. A later rate limit's retry delay is not
 attached to this range error: waiting alone does not resolve the range refusal.
 
-When a refusal explicitly advertises a maximum number of blocks,
-`data.max_block_range` carries the smallest observed cap. A larger cap only
-fits the upstream that advertised it. Result counts are not block caps; without
-an explicit block cap, the response gives narrowing advice without a number.
-A cap describes an observed span limit, not a guarantee that every filter or
-upstream will serve that range. A successful fallback still returns its result.
+When a refusing provider has an operator-configured
+`capabilities.limits.max_block_range`, `data.max_block_range` carries the smallest
+such configured cap among this request's refusals. Without that configuration,
+the response gives narrowing advice without a number. Provider error wording,
+including numbers about retained history or result counts, never supplies a cap.
+A configured cap is a span limit, not a guarantee that every filter or upstream
+will serve that range. A successful fallback still returns its result.
 
 ## Transaction sends
 
