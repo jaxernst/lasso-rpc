@@ -68,18 +68,23 @@ defmodule Lasso.Integration.WebSocketMessageHandlingTest do
     # Clean up WebSocket connection
     ws_key = {:ws_conn_instance, resolve_instance_id(endpoint)}
 
-    case GenServer.whereis({:via, Registry, {Lasso.Registry, ws_key}}) do
-      nil -> :ok
-      pid when is_pid(pid) -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
-    end
+    stop_registered({:via, Registry, {Lasso.Registry, ws_key}})
 
     # Clean up circuit breaker
     cb_id = "#{resolve_instance_id(endpoint)}:ws"
 
-    case GenServer.whereis({:via, Registry, {Lasso.Registry, {:circuit_breaker, cb_id}}}) do
+    stop_registered({:via, Registry, {Lasso.Registry, {:circuit_breaker, cb_id}}})
+  end
+
+  # Processes started with start_link exit with the test process, so one can
+  # die between lookup and stop.
+  defp stop_registered(name) do
+    case GenServer.whereis(name) do
       nil -> :ok
-      pid when is_pid(pid) -> if Process.alive?(pid), do: GenServer.stop(pid, :normal)
+      pid -> GenServer.stop(pid, :normal)
     end
+  catch
+    :exit, _ -> :ok
   end
 
   defp resolve_instance_id(endpoint) do
