@@ -163,6 +163,65 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
     assert {"x-tenant", "tenant-a"} in channel.request_config.lasso_finch_template.headers
   end
 
+  test "connection classification preserves error returns and never changes send certainty" do
+    for reason <- [
+          :timeout,
+          :econnrefused,
+          :econnreset,
+          :closed,
+          :nxdomain,
+          :emfile,
+          :enfile,
+          :eaddrnotavail,
+          :enobufs,
+          :system_limit
+        ],
+        state <- [:not_started, :started, :confirmed] do
+      error = %Finch.TransportError{reason: reason}
+
+      returned =
+        FinchClient.request(%{url: "http://example.invalid"}, "eth_sendRawTransaction", [],
+          request_fun: fn _, _, _ -> {:error, error} end
+        )
+
+      context = attempt_context()
+
+      assert ^returned =
+               FinchClient.request(%{url: "http://example.invalid"}, "eth_sendRawTransaction", [],
+                 attempt_dispatch: context,
+                 request_fun: fn request, _, _ ->
+                   if state != :not_started,
+                     do: :telemetry.execute([:finch, :send, :start], %{}, %{request: request})
+
+                   if state == :confirmed,
+                     do: :telemetry.execute([:finch, :send, :stop], %{}, %{request: request})
+
+                   {:error, error}
+                 end
+               )
+
+      snapshot = AttemptProtocol.close(context)
+      assert {:ok, terminal} = AttemptProtocol.take_terminal_candidate(context)
+
+      if state == :not_started do
+        assert snapshot.certainty == :not_dispatched
+
+        expected =
+          if reason in [:timeout, :econnrefused, :econnreset, :closed, :nxdomain],
+            do: :connect_failure,
+            else: :local
+
+        assert terminal.kind == :predispatch_failure
+        assert terminal.reason == expected
+      else
+        assert terminal.kind == :transport_failure
+
+        assert terminal.certainty ==
+                 if(state == :confirmed, do: :dispatched, else: :indeterminate)
+      end
+    end
+  end
+
   test "predispatch Finch failure is proven only while the tracker remains authoritative" do
     context = attempt_context()
 
@@ -180,7 +239,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
     assert %{certainty: :not_dispatched} = AttemptProtocol.close(context)
 
-    assert {:ok, %{kind: :predispatch_failure, reason: :pool_unavailable}} =
+    assert {:ok, %{kind: :predispatch_failure, reason: :connect_failure}} =
              AttemptProtocol.take_terminal_candidate(context)
   end
 

@@ -29,7 +29,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
   require Logger
 
   alias Lasso.Config.MonitoringDefaults
-  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Discovery.ErrorClassifier
   alias Lasso.Providers.{Catalog, ChainIdentity, InstanceState, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
@@ -383,7 +382,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
           :ok ->
             ChainIdentity.record(observation, :verified)
             write_probe_success(instance_id)
-            CircuitBreaker.signal_recovery_cast({instance_id, :http})
             {instance_id, :success}
 
           {:rate_limited, reason} ->
@@ -502,8 +500,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
          last_error: reason
        })}
     )
-
-    CircuitBreaker.record_failure({instance_id, :http}, reason)
   end
 
   defp write_probe_auth_failure(instance_id, status) do

@@ -4,7 +4,9 @@ defmodule Lasso.Core.Support.GapFiller do
   """
 
   alias Lasso.Core.Request.ExecutionScope
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.JSONRPC.Quantity
+  alias Lasso.Providers.Catalog
   alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
 
   defmodule Plan do
@@ -172,14 +174,35 @@ defmodule Lasso.Core.Support.GapFiller do
         {:ok, result, _ctx} ->
           {:ok, result}
 
-        {:error, reason, _ctx} ->
-          {:error, Response.Capacity.discard(reason, :backfill_consumed)}
+        {:error, reason, ctx} ->
+          reason = Response.Capacity.discard(reason, :backfill_consumed)
+
+          if retry_admission?(plan, ctx) do
+            Process.sleep(min(timeout_ms, 100))
+            request(plan, method, params)
+          else
+            {:error, reason}
+          end
 
         other ->
           {:error, {:unexpected_request_result, other}}
       end
     end
   end
+
+  # A busy probation lease is temporary; a failed probation must still allow fallback.
+  defp retry_admission?(plan, %{terminal_reason: :circuit_open, execution_envelope: envelope}) do
+    instance_id = Catalog.lookup_instance_id(plan.profile, plan.chain_id, plan.provider_id)
+
+    with 0 <- envelope.dispatch_count,
+         {:ok, %{state: state}} <- Snapshot.lookup({instance_id, :http}) do
+      state in [:half_open, :closed]
+    else
+      _ -> false
+    end
+  end
+
+  defp retry_admission?(_plan, _ctx), do: false
 
   defp remaining_timeout_ms(deadline_us) do
     case div(deadline_us - System.monotonic_time(:microsecond), 1_000) do
