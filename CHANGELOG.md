@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Dashboard cluster coverage now shows responding nodes out of expected nodes, keeping missing configured nodes in the total and traffic summaries incomplete until every expected node reports. Without `:expected_cluster_nodes`, the total remains the connected node count.
+
 ## [0.8.4] - 2026-11-18
 
 ### Fixed
