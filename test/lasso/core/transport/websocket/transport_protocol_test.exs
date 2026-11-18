@@ -1165,6 +1165,7 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
   @tag pending_limit: 1
   test "queued cancellation expiry kills only its stuck connection generation",
        context do
+    ws_monitor = Process.monitor(context.ws_pid)
     :sys.suspend(context.ws_pid)
     on_exit(fn -> resume_if_alive(context.ws_pid) end)
 
@@ -1204,7 +1205,6 @@ defmodule Lasso.RPC.Transport.WebSocket.TransportProtocolTest do
 
     {transport_id, pending} = only_transport_pending(context.connection_pid)
     cleanup_expiry_us = expire_send_cleanup(context.connection_pid, transport_id, pending)
-    ws_monitor = Process.monitor(context.ws_pid)
 
     send(
       context.connection_pid,

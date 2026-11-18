@@ -93,11 +93,17 @@ defmodule Lasso.SubscriptionReconnectTest do
 
         assert :ok = ConfigStore.register_provider_runtime("public", chain, config)
         assert :ok = Lasso.RPC.ChainSupervisor.ensure_provider("public", chain, config)
+        instance = Lasso.Providers.Catalog.lookup_instance_id("public", chain, fleet.name)
+
+        Lasso.Test.Eventually.assert_eventually(fn ->
+          status = Lasso.Core.Streaming.InstanceSubscriptionManager.get_status(instance)
+          match?(%{status: :connected}, status.connection_state)
+        end)
       end
 
       wire =
         Rpc.wire!(
-          "ws://127.0.0.1:#{System.get_env("PORT", "4002")}/ws/rpc/profile/public/priority/#{chain}"
+          "ws://127.0.0.1:#{LassoWeb.Endpoint.config(:http)[:port]}/ws/rpc/profile/public/priority/#{chain}"
         )
 
       on_exit(fn ->
@@ -145,10 +151,11 @@ defmodule Lasso.SubscriptionReconnectTest do
 
       if scenario == :exhausted do
         ref = wire.reference
-        assert_receive {:rpc_disconnect, ^ref, %{reason: {:remote, 1011, _}}}, 31_000
+        assert_receive {:rpc_disconnect, ^ref, disconnect}, 31_000
         elapsed = System.monotonic_time(:millisecond) - started
         assert elapsed >= 29_000
         assert elapsed < 31_500
+        assert %{reason: {:remote, 1011, _}} = disconnect
       else
         target = if scenario == :replacement, do: b, else: a
         # A retry must keep the public socket alive while neither route is ready.

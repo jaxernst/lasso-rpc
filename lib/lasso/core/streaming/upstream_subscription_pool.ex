@@ -939,6 +939,10 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
             entry.instance_id == instance_id ->
               entry.primary_provider_id
 
+            # The manager can publish before the replacement worker replies.
+            entry.resubscribe_instance_id == instance_id ->
+              entry.resubscribe_provider_id
+
             Map.get(entry, :transitioning_from_instance_id) == instance_id ->
               entry.transitioning_from
 
