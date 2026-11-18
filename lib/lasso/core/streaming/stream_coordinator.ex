@@ -1885,7 +1885,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp continuity_limit(_state, _reason), do: 0
 
   defp handle_resubscribe_failure(state, reason)
-       when reason in [:not_connected, :connection_unknown] do
+       when reason in [
+              :not_connected,
+              :connection_unknown,
+              :provider_disconnected,
+              :connection_replaced
+            ] do
     Process.send_after(self(), {:retry_replacement, state.recovery_deadline_us}, 100)
     {:noreply, discard_attempt_events(state)}
   end

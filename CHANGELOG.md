@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sole-provider WebSocket subscriptions wait for reconnect within the recovery deadline when a disconnect invalidates an in-flight replacement, instead of terminating as though the provider was removed.
+
 - `eth_getLogs` refusals for exactly one block (equal resolved `fromBlock` and `toBlock`, or a `blockHash` query) no longer tell clients to narrow the range. Lasso tries other providers and returns a truthful `-32006` capability refusal without upstream narrowing messages or advice data if none serves the request, so missing retained history cannot trap a client in repeated narrowing.
 - Dashboard cluster coverage now shows responding nodes out of expected nodes, keeping missing configured nodes in the total and traffic summaries incomplete until every expected node reports. Without `:expected_cluster_nodes`, the total remains the connected node count.
 

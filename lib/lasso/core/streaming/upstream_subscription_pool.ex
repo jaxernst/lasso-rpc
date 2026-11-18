@@ -1351,7 +1351,8 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
                 acc,
                 entry.resubscribe_provider_id,
                 instance_id,
-                subscription_key
+                subscription_key,
+                reason
               )
 
             true ->
@@ -1464,7 +1465,13 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
     end)
   end
 
-  defp invalidate_resubscribe_attempts(state, provider_id, instance_id, only_key \\ :all) do
+  defp invalidate_resubscribe_attempts(
+         state,
+         provider_id,
+         instance_id,
+         only_key \\ :all,
+         reason \\ :provider_removed
+       ) do
     Enum.reduce(state.keys, state, fn {key, entry}, acc ->
       if (only_key == :all or entry.subscription_key == only_key) and
            entry.resubscribe_provider_id == provider_id and
@@ -1473,7 +1480,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPool do
         Process.demonitor(entry.resubscribe_ref, [:flush])
         Process.exit(entry.resubscribe_pid, :kill)
         InstanceSubscriptionManager.release_subscription(instance_id, entry.subscription_key)
-        send(entry.resubscribe_coordinator_pid, {:subscription_failed, :provider_removed})
+        send(entry.resubscribe_coordinator_pid, {:subscription_failed, reason})
         updated = clear_resubscribe_attempt(entry)
         next = %{acc | keys: Map.put(acc.keys, key, updated)}
         release_unused_registration(next, instance_id, entry.subscription_key)
