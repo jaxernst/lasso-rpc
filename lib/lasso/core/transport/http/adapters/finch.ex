@@ -497,12 +497,13 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   end
 
   defp handle_request_outcome(
-         {{:returned, {:ok, %Finch.Response{status: status, body: body}}}, _state, _healthy?},
+         {{:returned, {:ok, %Finch.Response{status: status, body: body, headers: headers}}},
+          _state, _healthy?},
          context,
          lease,
          io_duration_us
        ) do
-    case handle_response(status, body) do
+    case handle_response(status, body, headers) do
       {:error, reason} = error ->
         emit_http_error(context, reason, io_duration_us)
 
@@ -617,19 +618,47 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   defp transport_message(reason) when is_atom(reason), do: "Connection error: #{reason}"
   defp transport_message(_reason), do: "Connection error"
 
-  defp handle_response(429, body) do
-    payload =
+  defp bounded_error_message(message) do
+    prefix = binary_part(message, 0, min(byte_size(message), 1_000))
+
+    case :unicode.characters_to_binary(prefix, :utf8, :utf8) do
+      bytes when is_binary(bytes) -> :binary.copy(bytes)
+      {_status, bytes, _rest} -> :binary.copy(bytes)
+    end
+  end
+
+  defp handle_response(429, body, headers) do
+    error =
       case UpstreamResponse.parse_unary(body) do
-        {:ok, %UpstreamResponse.Validated{kind: :error}} -> %{status: 429, body: body}
-        _other -> %{status: 429}
+        {:ok, %UpstreamResponse.Validated{kind: :error} = error} -> error
+        _other -> nil
+      end
+
+    payload =
+      case error do
+        nil ->
+          %{status: 429}
+
+        error ->
+          %{
+            status: 429,
+            code: error.error_code,
+            message: bounded_error_message(error.error_message)
+          }
+      end
+
+    payload =
+      case ErrorNormalizer.retry_after_ms(headers, error) do
+        nil -> payload
+        delay -> Map.put(payload, :retry_after_ms, delay)
       end
 
     {:error, {:rate_limit, payload}}
   end
 
-  defp handle_response(status, body) when status in 200..299, do: {:ok, {:raw, body}}
+  defp handle_response(status, body, _headers) when status in 200..299, do: {:ok, {:raw, body}}
 
-  defp handle_response(status, body) do
+  defp handle_response(status, body, _headers) do
     case UpstreamResponse.parse_unary(body) do
       {:ok, %UpstreamResponse.Validated{kind: :error}} ->
         {:ok, {:raw, body}}

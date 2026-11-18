@@ -83,15 +83,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   end
 
   def normalize({:rate_limit, %{status: 429} = payload}, opts) do
-    {message, data, original_code} =
-      case extract_nested_error(payload, -32_005, "Rate limited by provider") do
-        {:json_rpc, code, message, data} -> {message, data, code}
-        {:raw, code, message} -> {message, public_transport_data(payload), code}
-      end
-
-    JError.new(-32_005, message,
-      data: add_retry_after(data, payload),
-      original_code: original_code,
+    JError.new(-32_005, Map.get(payload, :message, "Rate limited by provider"),
+      data: add_retry_after(nil, payload),
+      original_code: Map.get(payload, :code, -32_005),
       provider_id: Keyword.get(opts, :provider_id),
       source: Keyword.get(opts, :context, :transport),
       transport: Keyword.get(opts, :transport),
@@ -611,6 +605,52 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  @doc """
+  Resolves a bounded HTTP cooldown, evaluating headers before decoded body hints.
+
+  A positive header delay returns without parsing body hints. Otherwise integer data
+  milliseconds precede whole data seconds, then message delays. Missing hints
+  return nil so callers retain their default cooldown. No body data is retained.
+  """
+  @spec retry_after_ms([{String.t(), String.t()}] | nil, map() | nil) ::
+          non_neg_integer() | nil
+  def retry_after_ms(headers, error) do
+    headers =
+      for {name, value} <- headers || [],
+          is_binary(name) and is_binary(value),
+          do: {String.downcase(name), value}
+
+    case Lasso.Discovery.ErrorClassifier.parse_retry_after(headers, nil) do
+      delay when is_integer(delay) and delay > 0 -> bounded_retry_after(delay)
+      _ -> body_retry_after(error)
+    end
+  end
+
+  defp body_retry_after(%{error_data: data, error_message: message}) do
+    milliseconds = if is_map(data), do: data["retry_after_ms"]
+    seconds = if is_map(data), do: data["retry_after"]
+
+    bounded_retry_after(milliseconds) ||
+      body_retry_after_seconds(seconds) ||
+      parse_retry_from_message(message)
+  end
+
+  defp body_retry_after(_error), do: nil
+
+  defp body_retry_after_seconds(seconds) when is_integer(seconds) and seconds >= 0,
+    do: seconds_to_ms(seconds)
+
+  defp body_retry_after_seconds(value) when is_binary(value) do
+    value |> bounded_digits(600) |> seconds_to_ms()
+  end
+
+  defp body_retry_after_seconds(_value), do: nil
+
+  defp bounded_retry_after(delay) when is_integer(delay) and delay >= 0,
+    do: min(delay, 600_000)
+
+  defp bounded_retry_after(_delay), do: nil
+
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
@@ -619,6 +659,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   # This handles both standard Retry-After headers and provider-specific message formats
   defp extract_retry_after(error_data) when is_map(error_data) do
     cond do
+      is_integer(error_data[:retry_after_ms]) and error_data[:retry_after_ms] >= 0 ->
+        min(error_data[:retry_after_ms], 600_000)
+
       # Standard Retry-After header (atom key)
       Map.has_key?(error_data, :retry_after) ->
         parse_retry_after_value(error_data[:retry_after])
@@ -642,12 +685,12 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   defp extract_retry_after(_), do: nil
 
   # Parse retry-after value from header (seconds → milliseconds)
-  defp parse_retry_after_value(value) when is_integer(value), do: value * 1000
+  defp parse_retry_after_value(value) when is_integer(value), do: seconds_to_ms(value)
 
   defp parse_retry_after_value(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {seconds, _} -> seconds * 1000
-      :error -> nil
+    case Regex.run(~r/\A[+-]?\d+/, value) do
+      [digits] -> digits |> bounded_digits(600) |> seconds_to_ms()
+      nil -> nil
     end
   end
 
@@ -668,35 +711,50 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
   defp websocket_retry_after_data(_headers), do: nil
 
-  # Extract retry-after from provider-specific error messages
-  # Examples: "Try again in 60 seconds", "Try again in 5 minutes"
+  defp seconds_to_ms(seconds) when is_number(seconds) and seconds >= 0,
+    do: trunc(min(seconds, 600) * 1_000)
+
+  defp seconds_to_ms(_seconds), do: nil
+
+  defp bounded_digits(value, cap) do
+    case Regex.run(~r/\A([+-]?)([0-9]+)\z/, value, capture: :all_but_first) do
+      [sign, digits] ->
+        significant = String.trim_leading(digits, "0")
+
+        cond do
+          significant == "" -> 0
+          sign == "-" -> nil
+          byte_size(significant) > byte_size(Integer.to_string(cap)) -> cap
+          true -> min(String.to_integer(significant), cap)
+        end
+
+      nil ->
+        nil
+    end
+  end
+
+  # Shared by decoded HTTP errors and legacy raw-body normalization.
   defp parse_retry_from_message(message) when is_binary(message) do
     cond do
-      # Match "X seconds" pattern (supports decimal seconds like "3.2 seconds")
-      match = Regex.run(~r/try again in (\d+(?:\.\d+)?) second/i, message) ->
-        case match do
-          [_, seconds_str] ->
-            case Float.parse(seconds_str) do
-              {seconds, _} -> trunc(seconds * 1000)
-              :error -> nil
-            end
+      match =
+          Regex.run(~r/try again in (\d+)(?:\.(\d+))? second/i, message, capture: :all_but_first) ->
+        [whole | fraction] = match
+        seconds = bounded_digits(whole, 600)
 
-          _ ->
-            nil
-        end
+        milliseconds =
+          case fraction do
+            [] ->
+              0
 
-      # Match "X minutes" pattern
+            [digits] ->
+              digits |> String.slice(0, 3) |> String.pad_trailing(3, "0") |> bounded_digits(999)
+          end
+
+        min(seconds_to_ms(seconds) + milliseconds, 600_000)
+
       match = Regex.run(~r/try again in (\d+) minute/i, message) ->
-        case match do
-          [_, minutes_str] ->
-            case Integer.parse(minutes_str) do
-              {minutes, _} -> minutes * 60 * 1000
-              :error -> nil
-            end
-
-          _ ->
-            nil
-        end
+        [_, value] = match
+        bounded_digits(value, 10) * 60_000
 
       true ->
         nil
