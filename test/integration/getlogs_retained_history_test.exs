@@ -25,21 +25,39 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
       assert_receive {:refused, "pruned_reader"}
     end
 
-    test "HTTP gives no range advice when all providers refuse #{label}", %{chain: chain} do
-      observer = self()
-      caps = unquote(Macro.escape(capabilities))
+    for {exhaustion, provider_count} <- [{"candidate", 2}, {"dispatch", 3}],
+        {variant, data} <- [
+          {"message only", nil},
+          {"advice data", %{action: "reduce_block_range", reason: "log_range_too_large"}}
+        ] do
+      test "HTTP normalizes #{label} refusal at #{exhaustion} exhaustion with #{variant}", %{
+        chain: chain
+      } do
+        observer = self()
+        caps = unquote(Macro.escape(capabilities))
+        count = unquote(provider_count)
 
-      setup_providers([
-        refusing_provider("pruned_reader", 1, caps, observer),
-        refusing_provider("other_reader", 2, caps, observer)
-      ])
+        refusal =
+          JError.new(
+            -32_000,
+            "query returned more than 10000 results; reduce the block range",
+            data: unquote(Macro.escape(data))
+          )
 
-      error = request(chain, unquote(Macro.escape(filter)))["error"]
-      assert is_map(error)
-      refute get_in(error, ["data", "action"]) == "reduce_block_range", inspect(error)
-      refute get_in(error, ["data", "reason"]) == "log_range_too_large", inspect(error)
-      assert_receive {:refused, "pruned_reader"}
-      assert_receive {:refused, "other_reader"}
+        setup_providers(
+          for index <- 1..count do
+            refusing_provider("reader_#{index}", index, caps, observer, refusal)
+          end
+        )
+
+        response = request(chain, unquote(Macro.escape(filter)))
+        assert_capability_failure(response)
+
+        for index <- 1..count do
+          id = "reader_#{index}"
+          assert_receive {:refused, ^id}
+        end
+      end
     end
   end
 
@@ -67,7 +85,7 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
     assert error["data"]["action"] == "reduce_block_range"
   end
 
-  defp refusing_provider(id, priority, capabilities, observer) do
+  defp refusing_provider(id, priority, capabilities, observer, refusal \\ retention_error()) do
     %{
       id: id,
       priority: priority,
@@ -78,13 +96,27 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
          fn "eth_getLogs", _, _ ->
            send(observer, {:refused, id})
 
-           {:error,
-            JError.new(
-              -32_000,
-              "requested range is too large: max 128 blocks of history retained; older blocks are pruned"
-            )}
+           {:error, refusal}
          end}
     }
+  end
+
+  defp retention_error do
+    JError.new(
+      -32_000,
+      "requested range is too large: max 128 blocks of history retained; older blocks are pruned"
+    )
+  end
+
+  defp assert_capability_failure(response) do
+    assert response["error"]["code"] == -32_006
+
+    assert response["error"]["message"] ==
+             "This provider cannot serve eth_getLogs for this block; history may not be retained"
+
+    refute Map.has_key?(response["error"], "data")
+    refute Jason.encode!(response) =~ "reduce_block_range"
+    refute Jason.encode!(response) =~ "reduce the block range"
   end
 
   defp request(chain, filter) do

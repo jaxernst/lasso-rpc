@@ -43,7 +43,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   ]
 
   @spec translate(String.t(), term(), keyword()) ::
-          {:ok, JError.t()} | :not_range_limit | :capability_refusal
+          {:ok, JError.t()} | :not_range_limit | {:capability_refusal, JError.t()}
   def translate(method, reason, opts \\ [])
 
   def translate("eth_getLogs", reason, opts) do
@@ -52,7 +52,18 @@ defmodule Lasso.Core.Support.LogRangeLimit do
     cond do
       not local_response_too_large?(error) and provider_range_limit?(error) and
           within_known_span?(opts) ->
-        :capability_refusal
+        {:capability_refusal,
+         JError.new(
+           -32_006,
+           "This provider cannot serve eth_getLogs for this block; history may not be retained",
+           category: :capability_violation,
+           retriable?: true,
+           breaker_penalty?: false,
+           provider_id: error.provider_id || Keyword.get(opts, :provider_id),
+           source: :lasso,
+           transport: error.transport || Keyword.get(opts, :transport),
+           capacity_lease: error.capacity_lease
+         )}
 
       local_response_too_large?(error) or provider_range_limit?(error) ->
         {:ok,

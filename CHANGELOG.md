@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `eth_getLogs` refusals for exactly one block (equal resolved `fromBlock` and `toBlock`, or a `blockHash` query) no longer tell clients to narrow the range. Lasso tries other providers and reports a capability or availability failure if none serves the request, so missing retained history cannot trap a client in repeated narrowing.
+- `eth_getLogs` refusals for exactly one block (equal resolved `fromBlock` and `toBlock`, or a `blockHash` query) no longer tell clients to narrow the range. Lasso tries other providers and returns a truthful `-32006` capability refusal without upstream narrowing messages or advice data if none serves the request, so missing retained history cannot trap a client in repeated narrowing.
 
 ## [0.8.4] - 2026-11-18
 

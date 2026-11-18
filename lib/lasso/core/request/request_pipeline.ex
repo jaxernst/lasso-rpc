@@ -1913,8 +1913,17 @@ defmodule Lasso.RPC.RequestPipeline do
             handle_owner_terminal(outcome, channel, ctx, range_error)
           end
 
-        refusal when refusal in [:not_range_limit, :capability_refusal] ->
-          if refusal == :capability_refusal or outcome.projection.fallback_eligible do
+        {:capability_refusal, error} ->
+          handle_owner_fallback(
+            %{outcome | result: {:error, error}},
+            channel,
+            rest_channels,
+            ctx,
+            caller_guard
+          )
+
+        :not_range_limit ->
+          if outcome.projection.fallback_eligible do
             handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
           else
             handle_owner_terminal(outcome, channel, ctx)
