@@ -97,7 +97,7 @@ defmodule Lasso.SubscriptionReconnectTest do
 
       wire =
         Rpc.wire!(
-          "ws://127.0.0.1:#{System.get_env("PORT", "4002")}/ws/rpc/profile/public/priority/#{chain}"
+          "ws://127.0.0.1:#{LassoWeb.Endpoint.config(:http)[:port]}/ws/rpc/profile/public/priority/#{chain}"
         )
 
       on_exit(fn ->
@@ -154,6 +154,7 @@ defmodule Lasso.SubscriptionReconnectTest do
         # A retry must keep the public socket alive while neither route is ready.
         ref = wire.reference
         refute_receive {:rpc_disconnect, ^ref, _}, 250
+        reconnected_at = System.monotonic_time(:millisecond)
         assert :ok = Fleet.release(target, :reconnect, {:answer, true})
         target_pid = target.pid
 
@@ -163,6 +164,7 @@ defmodule Lasso.SubscriptionReconnectTest do
 
         assert_head!(wire, subscription, 101)
         assert_head!(wire, subscription, 102)
+        assert System.monotonic_time(:millisecond) - reconnected_at < 1_000
         Fleet.notify(replacement, header(103))
         assert_head!(wire, subscription, 103)
 

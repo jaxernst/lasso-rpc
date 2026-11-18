@@ -178,6 +178,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       recovery_timeout_ms: Keyword.get(opts, :recovery_timeout_ms, @default_recovery_timeout_ms),
       recovery_deadline_us: nil,
       recovery_started_at_ms: nil,
+      replacement_connection_watch: false,
+      replacement_wait: :attempting,
       recovery_attempts: 0
     }
 
@@ -285,10 +287,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   @impl true
-  def handle_info({:retry_replacement, deadline}, state) do
-    if state.failover_status == :switching and state.recovery_deadline_us == deadline and
-         recovery_remaining_ms(deadline) > 0 do
-      retry_replacement(state)
+  def handle_info({:ws_connected, provider_id, _connection_id}, state) do
+    if state.failover_status == :switching and
+         recovery_remaining_ms(state.recovery_deadline_us) > 0 and
+         replacement_candidate?(state, provider_id) do
+      # The pool result can arrive after connection-up; retain that wakeup.
+      case state.replacement_wait do
+        :waiting -> retry_replacement(state)
+        _ -> {:noreply, %{state | replacement_wait: :wake_pending}}
+      end
     else
       {:noreply, state}
     end
@@ -1017,6 +1024,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       to_provider_id: new_provider_id
     })
 
+    # Subscribe before attempting so readiness cannot change in an unobserved window.
+    state = watch_replacement_connections(state)
+
     state.replacement_requester.(
       state.profile,
       state.chain_id,
@@ -1037,6 +1047,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp start_backfill_after_replacement(state, provider_id, _upstream_id) do
+    state = unwatch_replacement_connections(state)
     context = state.failover_context
     owner_id = make_ref()
     coordinator_pid = self()
@@ -1780,8 +1791,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   defp handle_resubscribe_failure(state, reason)
        when reason in [:not_connected, :connection_unknown] do
-    Process.send_after(self(), {:retry_replacement, state.recovery_deadline_us}, 100)
-    {:noreply, state}
+    case state.replacement_wait do
+      :wake_pending -> retry_replacement(state)
+      _ -> {:noreply, %{state | replacement_wait: :waiting}}
+    end
   end
 
   defp handle_resubscribe_failure(state, %Lasso.JSONRPC.Error{
@@ -1852,7 +1865,38 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  defp watch_replacement_connections(state) do
+    unless state.replacement_connection_watch do
+      :ok =
+        Lasso.Core.Streaming.InstanceEventBus.subscribe(
+          Lasso.Topics.ws_connection(state.profile, state.chain_id)
+        )
+    end
+
+    %{state | replacement_connection_watch: true, replacement_wait: :attempting}
+  end
+
+  defp unwatch_replacement_connections(state) do
+    if state.replacement_connection_watch do
+      :ok =
+        Phoenix.PubSub.unsubscribe(
+          Lasso.PubSub,
+          Lasso.Topics.ws_connection(state.profile, state.chain_id)
+        )
+    end
+
+    %{state | replacement_connection_watch: false, replacement_wait: :attempting}
+  end
+
+  defp replacement_candidate?(state, provider_id) do
+    proposal = state.failover_context.new_provider_id
+
+    provider_id == proposal or
+      pick_next_provider(state, [proposal], include_half_open: false) == {:ok, provider_id}
+  end
+
   defp retry_replacement(state) do
+    state = %{state | replacement_wait: :attempting}
     proposal = state.failover_context.new_provider_id
 
     case pick_next_provider(state, [proposal], include_half_open: false) do
@@ -1960,6 +2004,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp enter_degraded_mode(state, budget) do
+    state = unwatch_replacement_connections(state)
     cancel_backfill_owner(state)
     ContinuityBudget.release_owner(state.continuity_budget)
 
