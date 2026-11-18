@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Startup and reload reject previously accepted `capabilities.limits.block_age_methods` entries without a readable block number parameter, such as `eth_getLogs`, with an actionable error directing log queries to `max_block_range`.
 
+### Fixed
+
+- `eth_getLogs` preserves range-narrowing advice and the smallest operator-configured block cap among refusing providers when later attempts time out or are rate-limited, including dispatch and deadline exhaustion. Numeric caps come only from configuration, never from upstream error wording.
+
 ## [0.8.3] - 2026-11-18
 
 ### Fixed

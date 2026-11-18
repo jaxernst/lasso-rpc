@@ -326,7 +326,7 @@ The `websocket_url` mirrors the HTTP request path — for example, a request to
 | `-32602` | Invalid params (unsupported chain, missing chain_id) |
 | `-32603` | Internal error |
 | `-32000` | Server error (for example, upstream rate limiting or exhausted routing) |
-| `-32005` | A local response-size/framing limit, or a known `eth_getLogs` range/result limit. The latter returns `data.reason: "log_range_too_large"` and `data.action: "reduce_block_range"`; retry with a narrower range. These limits do not penalize upstream reliability. |
+| `-32005` | A local response-size/framing limit, or a known `eth_getLogs` range/result limit. The latter returns `data.reason: "log_range_too_large"` and `data.action: "reduce_block_range"`; retry with a narrower range. Exhaustion preserves this advice across later timeouts and rate limits, without their retry delays. `data.max_block_range`, when present, is the smallest operator-configured block cap among refusing providers, never a number parsed from upstream wording; see [log range exhaustion](RPC_STANDARDS.md#log-range-exhaustion). These limits do not penalize upstream reliability. |
 | `-32008` | Local transport capacity unavailable before dispatch; eligible routes may be retried |
 
 ### Upstream rate limits
