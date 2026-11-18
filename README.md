@@ -239,7 +239,7 @@ upstream costs:
 
 | Background request | Rate per upstream, per node |
 |--------------------|-----------------------------|
-| `newHeads` notification, when the provider has a `ws_url` | One per block (pushed; no outbound request token) |
+| `newHeads` notification, when the provider has a `ws_url` | One per block, pushed by the provider; it does not spend a `request_budget` |
 | `eth_blockNumber` | One per 12 s, or one per 36 s while its feed is current |
 | `eth_chainId` | One per 12 s |
 
