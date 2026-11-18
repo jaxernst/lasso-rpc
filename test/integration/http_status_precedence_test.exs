@@ -236,6 +236,8 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
   end
 
   for {label, message, data, header, lower, upper} <- [
+        {"malformed seconds suffix", "Rate limited", %{retry_after: "120ms"}, nil, 25_000,
+         30_000},
         {"message seconds", "Rate limit. Try again in 120 seconds", %{}, nil, 115_000, 120_000},
         {"data seconds", "Rate limited", %{retry_after: 120}, nil, 115_000, 120_000},
         {"HTTP date", "Rate limited", %{retry_after_ms: 600_000}, :future, 115_000, 120_000}

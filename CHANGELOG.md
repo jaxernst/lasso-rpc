@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- HTTP 429 responses retain only bounded quota code, message and retry hints. Retry-After headers take precedence over body hints; delays are capped at ten minutes and unrelated error data is discarded.
+- HTTP 429 responses retain only bounded quota code, message and retry hints. Routing and head polling use Retry-After headers before body hints; delays are capped at ten minutes and unrelated error data is discarded. Body seconds accept only whole nonnegative integers, not numeric prefixes such as `120ms`. Method and limits discovery probes still omit cooldown hints.
 
 ### Changed
+
+- A valid past Retry-After HTTP-date now overrides body hints with zero delay. The probe coordinator consequently keeps its 60-second fallback instead of applying a body hint (previously a 120-second body hint yielded 120 seconds).
 
 - Startup and reload reject previously accepted `capabilities.limits.block_age_methods` entries without a readable block number parameter, such as `eth_getLogs`, with an actionable error directing log queries to `max_block_range`.
 

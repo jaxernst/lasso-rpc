@@ -614,11 +614,24 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   @spec retry_after_from_body(term(), String.t()) :: non_neg_integer() | nil
   def retry_after_from_body(data, message) do
     milliseconds = if is_map(data), do: data["retry_after_ms"]
+    seconds = if is_map(data), do: data["retry_after"]
 
     bounded_retry_after(milliseconds) ||
-      bounded_retry_after(extract_retry_after(data)) ||
+      body_retry_after_seconds(seconds) ||
       bounded_retry_after(parse_retry_from_message(message))
   end
+
+  defp body_retry_after_seconds(seconds) when is_integer(seconds) and seconds >= 0,
+    do: bounded_retry_after(parse_retry_after_value(seconds))
+
+  defp body_retry_after_seconds(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {seconds, ""} -> body_retry_after_seconds(seconds)
+      _ -> nil
+    end
+  end
+
+  defp body_retry_after_seconds(_value), do: nil
 
   defp bounded_retry_after(delay) when is_integer(delay) and delay >= 0,
     do: min(delay, 600_000)
