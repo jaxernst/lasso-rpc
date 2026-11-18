@@ -1,6 +1,7 @@
 defmodule LassoWeb.DashboardCoverageIntegrationTest do
   use ExUnit.Case, async: false
 
+  import Lasso.Test.Eventually, only: [assert_eventually: 2]
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
@@ -49,12 +50,12 @@ defmodule LassoWeb.DashboardCoverageIntegrationTest do
     assert_receive {:dashboard_batch, %{cluster: %{responding: 1, expected: 3}}}, 1_000
 
     {:ok, view, _html} = live(build_conn(), "/dashboard/public")
-    assert has_element?(view, "div.fixed", "1/3 cluster nodes reporting")
+    assert_rendered_coverage(view, "1/3 cluster nodes reporting")
 
     Application.put_env(:lasso, :expected_cluster_nodes, 4)
     refresh_topology()
     assert_receive {:dashboard_batch, %{cluster: %{responding: 1, expected: 4}}}, 1_000
-    assert has_element?(view, "div.fixed", "1/4 cluster nodes reporting")
+    assert_rendered_coverage(view, "1/4 cluster nodes reporting")
   end
 
   test "without configured expectations the total remains connected nodes" do
@@ -73,6 +74,21 @@ defmodule LassoWeb.DashboardCoverageIntegrationTest do
 
     assert coverage.total == connected
     assert TrafficCounters.cluster_windows("public", [:profile]).coverage.total == connected
+  end
+
+  defp assert_rendered_coverage(view, text) do
+    assert_eventually(
+      fn ->
+        view
+        |> render()
+        |> LazyHTML.from_fragment()
+        |> LazyHTML.query("div.fixed")
+        |> LazyHTML.text()
+        |> String.contains?(text)
+      end,
+      timeout: 2_000,
+      message: "Expected rendered dashboard coverage to contain #{inspect(text)}"
+    )
   end
 
   defp refresh_topology do
