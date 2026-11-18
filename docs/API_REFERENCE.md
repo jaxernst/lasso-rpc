@@ -326,13 +326,20 @@ The `websocket_url` mirrors the HTTP request path — for example, a request to
 | `-32602` | Invalid params (unsupported chain, missing chain_id) |
 | `-32603` | Internal error |
 | `-32000` | Server error (for example, upstream rate limiting or exhausted routing) |
-| `-32005` | A local response-size/framing limit, or a known `eth_getLogs` range/result limit. The latter returns `data.reason: "log_range_too_large"` and `data.action: "reduce_block_range"`; retry with a narrower range. Exhaustion preserves this advice across later timeouts and rate limits, without their retry delays. `data.max_block_range`, when present, is the smallest operator-configured block cap among refusing providers, never a number parsed from upstream wording; see [log range exhaustion](RPC_STANDARDS.md#log-range-exhaustion). These limits do not penalize upstream reliability. |
+| `-32005` | All eligible routes exhausted their configured outbound request budgets (`data.reason: "upstream_request_budget_exhausted"`, `data.retry_after_ms` gives the earliest refill), a local response-size/framing limit, or a known `eth_getLogs` range/result limit. The latter returns `data.reason: "log_range_too_large"` and `data.action: "reduce_block_range"`; retry with a narrower range. Exhaustion preserves this advice across later timeouts and rate limits, without their retry delays. `data.max_block_range`, when present, is the smallest operator-configured block cap among refusing providers, never a number parsed from upstream wording; see [log range exhaustion](RPC_STANDARDS.md#log-range-exhaustion). These limits do not penalize upstream reliability. |
 | `-32008` | Local transport capacity unavailable before dispatch; eligible routes may be retried |
+
+With `include_meta=body` or WebSocket metadata enabled, `budget_refusals` lists
+locally refused routes (`provider_id`, `transport`, `reason`, `retry_after_ms`).
+These routes sent no request and are separate from `attempted_channels`.
+A successful fallback still identifies the serving provider.
 
 ### Upstream rate limits
 
 RPC Core has no built-in client authentication or incoming per-client quotas.
-Provider rate limits can cause cooldowns, failover, or an RPC error. Configure
+Provider rate limits can cause cooldowns, failover, or an RPC error. Provider
+[`request_budget`](CONFIGURATION.md#outbound-request-budget) caps outbound work
+on each node before dispatch; local budget refusals do not create cooldowns. Configure
 incoming admission at your reverse proxy. Profile `rps_limit` controls the
 dashboard tester maximum; `burst_limit` is metadata, not ingress enforcement.
 

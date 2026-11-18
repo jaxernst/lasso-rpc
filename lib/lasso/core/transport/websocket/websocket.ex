@@ -595,6 +595,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
     Response.Capacity.retain(response, lease, owner, wire_bytes)
   end
 
+  defp send_error_certainty({:upstream_request_budget_exhausted, _}), do: :not_dispatched
   defp send_error_certainty(:deadline), do: :not_dispatched
   defp send_error_certainty(:owner_down), do: :not_dispatched
   defp send_error_certainty(:cancelled), do: :not_dispatched
@@ -627,6 +628,9 @@ defmodule Lasso.RPC.Transports.WebSocket do
         })
     end
   end
+
+  defp normalize_ws_error({:upstream_request_budget_exhausted, _} = reason, provider_id),
+    do: ErrorNormalizer.normalize(reason, provider_id: provider_id, transport: :ws)
 
   defp normalize_ws_error(:capacity, provider_id) do
     JError.new(-32_008, "WebSocket transport admission unavailable",

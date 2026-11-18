@@ -167,9 +167,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     Process.flag(:trap_exit, true)
 
     instance_id = endpoint_instance_id(endpoint)
+    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_config_updated(instance_id))
 
     state = %{
       endpoint: endpoint,
+      request_budget: current_request_budget(instance_id),
       profile: endpoint.profile,
       instance_id: instance_id,
       connection: nil,
@@ -323,10 +325,22 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           {:ok, Response.Success.t()} | {:error, JError.t()}
   def request(target, method, params, timeout_ms \\ 30_000, request_id \\ nil)
 
-  def request(instance_id, method, params, timeout_ms, request_id) when is_binary(instance_id) do
+  def request(instance_id, method, params, timeout_ms, request_id),
+    do: request(instance_id, method, params, timeout_ms, request_id, :client)
+
+  @spec request(
+          String.t(),
+          String.t(),
+          list() | map() | nil,
+          non_neg_integer(),
+          String.t() | nil,
+          :client | :system
+        ) :: {:ok, Response.Success.t()} | {:error, JError.t()}
+  def request(instance_id, method, params, timeout_ms, request_id, origin)
+      when is_binary(instance_id) do
     GenServer.call(
       via_instance_name(instance_id),
-      {:request, method, params, timeout_ms, request_id},
+      {:request, method, params, timeout_ms, request_id, origin},
       timeout_ms + 2_000
     )
   catch
@@ -479,8 +493,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
+  def handle_call({:request, method, params, timeout_ms, id}, from, state),
+    do: handle_call({:request, method, params, timeout_ms, id, :client}, from, state)
+
   def handle_call(
-        {:request, method, params, timeout_ms, provided_id},
+        {:request, method, params, timeout_ms, provided_id, origin},
         from,
         %{connected: true} = state
       ) do
@@ -506,7 +523,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           from,
           method,
           params,
-          request_id,
+          {request_id, origin},
           timeout_ms,
           state
         )
@@ -523,7 +540,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   def handle_call(
-        {:request, _method, _params, _timeout_ms, _request_id},
+        {:request, _method, _params, _timeout_ms, _request_id, _origin},
         _from,
         %{connected: false} = state
       ) do
@@ -765,7 +782,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
          from,
          method,
          params,
-         request_id,
+         {request_id, origin},
          timeout_ms,
          state
        ) do
@@ -802,6 +819,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           timer: timer,
           sent_at: sent_at,
           method: method,
+          request_origin: origin,
           timeout_ms: timeout_ms,
           token: token,
           generation: state.connection_id,
@@ -859,6 +877,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
+  def handle_info(:instance_config_updated, state),
+    do: {:noreply, %{state | request_budget: current_request_budget(state.instance_id)}}
+
   def handle_info({:stream_ingress, token, message}, state) do
     Ingress.consume(token, fn -> handle_info(message, state) end)
   end
@@ -2576,11 +2597,32 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     ArgumentError -> :cancelled
   end
 
+  defp current_request_budget(instance_id) do
+    case Catalog.get_instance(instance_id) do
+      {:ok, config} -> Map.get(config, :request_budget_handle)
+      _ -> nil
+    end
+  end
+
   defp cast_send(state, send_key, deadline_us, cancel_latch, frame) do
-    ws_client().cast(
-      state.connection,
-      {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
-    )
+    message =
+      case state.request_budget do
+        nil ->
+          {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
+
+        bucket ->
+          origin =
+            case send_key do
+              {:control, _} -> :system
+              {:legacy, id, _} -> state.pending_requests[id].request_origin
+              _ -> :client
+            end
+
+          {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame, bucket,
+           origin}
+      end
+
+    ws_client().cast(state.connection, message)
   catch
     :exit, _reason -> {:error, :connection_down}
   end

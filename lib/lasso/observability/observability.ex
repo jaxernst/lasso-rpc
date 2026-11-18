@@ -34,6 +34,7 @@ defmodule Lasso.RPC.Observability do
       selected_provider: ctx.selected_provider,
       executed_channel: ctx.executed_channel,
       attempted_channels: ctx.attempted_channels,
+      budget_refusals: ctx.budget_refusals,
       selection_latency_ms: ctx.selection_latency_ms,
       upstream_latency_ms: ctx.upstream_latency_ms,
       end_to_end_latency_ms: ctx.end_to_end_latency_ms,

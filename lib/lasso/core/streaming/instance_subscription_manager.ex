@@ -495,7 +495,13 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
   end
 
   defp create_new_subscription(state, sub_key, connection_id, timeout_ms) do
-    case create_upstream_subscription(state.instance_id, sub_key, timeout_ms) do
+    origin =
+      if sub_key == {:newHeads} and
+           Lasso.Providers.ObservationPolicy.effective(state.instance_id, state.chain_id, true).subscribe_new_heads,
+         do: :system,
+         else: :client
+
+    case create_upstream_subscription(state.instance_id, sub_key, timeout_ms, origin) do
       {:ok, upstream_id} ->
         now = System.monotonic_time(:millisecond)
 
@@ -556,10 +562,10 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
     end
   end
 
-  defp create_upstream_subscription(instance_id, sub_key, timeout_ms) do
+  defp create_upstream_subscription(instance_id, sub_key, timeout_ms, origin) do
     params = subscription_params(sub_key)
 
-    case Connection.request(instance_id, "eth_subscribe", params, timeout_ms) do
+    case Connection.request(instance_id, "eth_subscribe", params, timeout_ms, nil, origin) do
       {:ok, %Response.Success{} = response} ->
         Response.Success.decode_result(response)
 
@@ -573,7 +579,7 @@ defmodule Lasso.Core.Streaming.InstanceSubscriptionManager do
 
   defp teardown_upstream_subscription(instance_id, sub_key, upstream_id) do
     Task.start(fn ->
-      case Connection.request(instance_id, "eth_unsubscribe", [upstream_id], 5_000) do
+      case Connection.request(instance_id, "eth_unsubscribe", [upstream_id], 5_000, nil, :system) do
         {:ok, _} ->
           Logger.info("Tore down upstream subscription",
             instance_id: instance_id,

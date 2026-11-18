@@ -9,7 +9,8 @@ defmodule Lasso.Operator.Commands do
   def check_config(profiles_dir \\ nil) do
     with {:ok, dir} <- resolve_profiles_dir(profiles_dir),
          {:ok, specs} <- FileBackend.validate_all(dir),
-         :ok <- ConfigStore.validate_profile_specs(specs) do
+         :ok <- ConfigStore.validate_profile_specs(specs),
+         :ok <- Lasso.Providers.Catalog.validate_profile_batch(specs) do
       {:ok, length(specs)}
     end
   end

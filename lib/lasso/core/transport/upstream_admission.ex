@@ -45,6 +45,96 @@ defmodule Lasso.Core.Transport.UpstreamAdmission do
           | :response_byte_capacity
           | :unknown_lease
 
+  @type budget_config :: %{requests_per_second: pos_integer(), burst: pos_integer()}
+  @type budget :: %{
+          config: budget_config(),
+          identity: String.t(),
+          counters: :atomics.atomics_ref()
+        }
+
+  @spec normalize_budget(term()) :: budget_config() | nil
+  def normalize_budget(nil), do: nil
+
+  def normalize_budget(value) when is_map(value) do
+    rate = Map.get(value, :requests_per_second, Map.get(value, "requests_per_second"))
+    burst = Map.get(value, :burst, Map.get(value, "burst", rate))
+
+    unless Enum.all?(
+             Map.keys(value),
+             &(&1 in [:requests_per_second, :burst, "requests_per_second", "burst"])
+           ) and
+             is_integer(rate) and rate > 0 and is_integer(burst) and burst > 0 do
+      raise ArgumentError, "request_budget requires positive requests_per_second and burst"
+    end
+
+    %{requests_per_second: rate, burst: burst}
+  end
+
+  def normalize_budget(_), do: raise(ArgumentError, "request_budget must be a mapping")
+
+  @spec new_budget(budget_config(), String.t()) :: budget()
+  def new_budget(config, identity) do
+    counters = :atomics.new(5, signed: true)
+    :atomics.put(counters, 1, System.monotonic_time(:microsecond))
+    %{config: config, identity: identity, counters: counters}
+  end
+
+  # No-budget admission performs no clock read, lookup, or atomic operation.
+  @spec admit_budget(budget() | nil, :client | :system, :http | :ws) ::
+          :ok | {:error, {:upstream_request_budget_exhausted, pos_integer()}}
+  def admit_budget(nil, _origin, _transport), do: :ok
+
+  def admit_budget(bucket, origin, transport) do
+    result = debit_budget(bucket)
+    event = if result == :ok, do: :accepted, else: :rejected
+    index = if origin == :client, do: 2, else: 4
+    :atomics.add(bucket.counters, if(result == :ok, do: index, else: index + 1), 1)
+
+    :telemetry.execute([:lasso, :upstream_admission, event], %{count: 1}, %{
+      upstream_instance_id: bucket.identity,
+      reason: :upstream_request_budget,
+      request_origin: origin,
+      transport: transport
+    })
+
+    result
+  end
+
+  @spec budget_stats(budget() | nil) :: map() | nil
+  def budget_stats(nil), do: nil
+
+  def budget_stats(bucket) do
+    Map.merge(bucket.config, %{
+      admitted_client: :atomics.get(bucket.counters, 2),
+      refused_client: :atomics.get(bucket.counters, 3),
+      admitted_background: :atomics.get(bucket.counters, 4),
+      refused_background: :atomics.get(bucket.counters, 5)
+    })
+  end
+
+  defp debit_budget(bucket) do
+    now = System.monotonic_time(:microsecond)
+    previous = :atomics.get(bucket.counters, 1)
+
+    interval =
+      max(
+        1,
+        div(1_000_000 + bucket.config.requests_per_second - 1, bucket.config.requests_per_second)
+      )
+
+    next = max(previous, now) + interval
+    excess = next - now - bucket.config.burst * interval
+
+    if excess > 0 do
+      {:error, {:upstream_request_budget_exhausted, div(excess + 999, 1_000)}}
+    else
+      case :atomics.compare_exchange(bucket.counters, 1, previous, next) do
+        :ok -> :ok
+        _changed -> debit_budget(bucket)
+      end
+    end
+  end
+
   @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
     %{

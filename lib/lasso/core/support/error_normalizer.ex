@@ -138,6 +138,17 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  def normalize({:upstream_request_budget_exhausted, retry_after_ms}, opts) do
+    JError.new(-32_005, "Upstream request budget exhausted",
+      data: %{reason: :upstream_request_budget_exhausted, retry_after_ms: retry_after_ms},
+      provider_id: Keyword.get(opts, :provider_id),
+      transport: Keyword.get(opts, :transport),
+      category: :local_capacity_rejection,
+      retriable?: true,
+      breaker_penalty?: false
+    )
+  end
+
   def normalize({:local_capacity_rejection, reason}, opts) do
     provider_id = Keyword.get(opts, :provider_id)
     context = Keyword.get(opts, :context, :transport)

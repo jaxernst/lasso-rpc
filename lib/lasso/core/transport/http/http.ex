@@ -96,6 +96,12 @@ defmodule Lasso.RPC.Transports.HTTP do
     )
   end
 
+  @spec request_prepared(channel(), PreparedRequest.t(), timeout(), keyword()) :: term()
+  def request_prepared(channel, prepared, timeout, opts) do
+    origin = Keyword.get(opts, :request_origin, :client)
+    request_prepared(Map.put(channel, :request_origin, origin), prepared, timeout)
+  end
+
   defp perform_request(
          %{provider_id: provider_id, config: provider_config} = channel,
          upstream_id,
@@ -115,6 +121,7 @@ defmodule Lasso.RPC.Transports.HTTP do
              timeout: timeout,
              deadline_us: deadline_us,
              upstream_instance_id: Map.get(channel, :instance_id),
+             request_origin: Map.get(channel, :request_origin, :client),
              attempt_dispatch: dispatch_context
            ) do
         {:ok, {:raw, raw_bytes}} ->

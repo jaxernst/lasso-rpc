@@ -152,6 +152,7 @@ defmodule Lasso.Providers.Catalog.Owner do
         table: new_table,
         generation: generation,
         routing_plans: plans,
+        request_budgets: Catalog.request_budgets(new_table),
         request_aggregates: aggregates,
         head_scopes_by_instance: heads
       }

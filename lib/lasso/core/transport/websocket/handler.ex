@@ -56,8 +56,15 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   @spec handle_cast(term(), map()) ::
           {:ok, map()}
           | {:reply, Mint.WebSocket.frame() | Mint.WebSocket.shorthand_frame(), map()}
+  def handle_cast({:send_if_live, generation, send_key, deadline_us, cancel_latch, frame}, state),
+    do:
+      handle_cast(
+        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame, nil, :client},
+        state
+      )
+
   def handle_cast(
-        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame},
+        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame, bucket, origin},
         state
       ) do
     decided_at_us = System.monotonic_time(:microsecond)
@@ -73,7 +80,13 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
           {:rejected, :deadline}
 
         true ->
-          accept_send(cancel_latch)
+          with :accepted <- accept_send(cancel_latch),
+               :ok <- admit_frame(frame, bucket, origin) do
+            :accepted
+          else
+            {:error, reason} -> {:rejected, reason}
+            other -> other
+          end
       end
 
     send(
@@ -155,6 +168,11 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
        validated_at}
     )
   end
+
+  defp admit_frame({:text, _}, bucket, origin),
+    do: Lasso.Core.Transport.UpstreamAdmission.admit_budget(bucket, origin, :ws)
+
+  defp admit_frame(_frame, _bucket, _origin), do: :ok
 
   defp accept_send(cancel_latch) do
     case :atomics.compare_exchange(cancel_latch, 1, 0, 2) do

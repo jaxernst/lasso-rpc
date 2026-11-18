@@ -100,6 +100,50 @@ defmodule Lasso.Providers.Catalog do
     end
   end
 
+  @doc false
+  @spec request_budgets(:ets.tid()) :: map()
+  def request_budgets(table) do
+    table
+    |> :ets.match_object({{:request_budget, :_}, :_})
+    |> Map.new(fn {{:request_budget, identity}, bucket} -> {identity, bucket} end)
+  end
+
+  defp populate_budgets(table, profiles) do
+    alias Lasso.Core.Transport.UpstreamAdmission
+
+    budgets =
+      for {_profile, chains} <- profiles,
+          {chain_id, chain} <- chains,
+          provider <- chain.providers,
+          config = UpstreamAdmission.normalize_budget(provider.request_budget),
+          not is_nil(config),
+          reduce: %{} do
+        acc ->
+          identity = InstanceId.derive(chain_id, provider)
+
+          case Map.fetch(acc, identity) do
+            {:ok, ^config} ->
+              acc
+
+            {:ok, _other} ->
+              raise ArgumentError, "conflicting request_budget for upstream #{identity}"
+
+            :error ->
+              Map.put(acc, identity, config)
+          end
+      end
+
+    Enum.each(budgets, fn {identity, config} ->
+      bucket =
+        case Map.get((snapshot() || %{})[:request_budgets] || %{}, identity) do
+          %{config: ^config} = existing -> existing
+          _ -> UpstreamAdmission.new_budget(config, identity)
+        end
+
+      :ets.insert(table, {{:request_budget, identity}, bucket})
+    end)
+  end
+
   defp configured_profiles do
     Map.new(ConfigStore.list_profiles(), fn profile ->
       chains =
@@ -113,6 +157,8 @@ defmodule Lasso.Providers.Catalog do
   end
 
   defp populate_profiles(new_table, generation, profiles) do
+    populate_budgets(new_table, profiles)
+
     chain_instances_acc =
       Enum.reduce(profiles, %{}, fn {profile, chains}, acc ->
         Enum.reduce(chains, acc, fn {chain_id, config}, chain_acc ->
@@ -569,6 +615,11 @@ defmodule Lasso.Providers.Catalog do
           ),
         mock?: provider.__mock__ == true,
         identity_config: identity_config,
+        request_budget_handle:
+          case :ets.lookup(ets_table, {:request_budget, InstanceId.derive(chain_id, provider)}) do
+            [{_, bucket}] -> bucket
+            [] -> nil
+          end,
         canonical_config: %{
           id: provider.id,
           name: provider.name,

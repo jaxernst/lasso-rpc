@@ -35,6 +35,17 @@ provider implements them.
 Responses with `include_meta` report the class and how it was chosen; see
 [observability metadata](API_REFERENCE.md#observability-metadata).
 
+## Outbound quota exhaustion
+
+An operator can configure a per-upstream, per-node outbound
+[`request_budget`](CONFIGURATION.md#outbound-request-budget). A refusal sends
+nothing, leaves upstream health/circuits/cooldowns unchanged, and permits another
+eligible route even for methods that cannot replay after dispatch. Transaction
+provider restrictions still apply. If every eligible route is budget-refused,
+return `-32005` with `data.reason: "upstream_request_budget_exhausted"` and
+`data.retry_after_ms` for the earliest refill. Mixed failures follow ordinary
+exhaustion rules; existing `eth_getLogs` range advice retains precedence.
+
 ## Log range exhaustion
 
 When an `eth_getLogs` request encounters an upstream range or result-size refusal

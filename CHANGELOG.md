@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Provider `request_budget` YAML caps combined outbound HTTP/WebSocket client attempts and background observations per physical upstream per node, shared across profiles. Spent budgets fall back without provider-health penalties; quota exhaustion returns `-32005` with retry advice. Provider details expose the configured rate/burst and client/background admission counts.
+
+
 ### Fixed
 
 - Stop repeatedly routing to refused HTTP connections and restore recovered endpoints within seconds, including subscription backfill during circuit probation.
