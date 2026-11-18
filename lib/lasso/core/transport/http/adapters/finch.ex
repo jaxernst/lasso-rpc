@@ -631,9 +631,12 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     delay =
       Enum.find_value(headers, fn {name, value} ->
         if String.downcase(name) == "retry-after" do
-          case Integer.parse(value) do
-            {seconds, ""} when seconds >= 0 -> min(seconds * 1_000, 600_000)
-            _ -> nil
+          case Lasso.Discovery.ErrorClassifier.parse_retry_after(
+                 [{"retry-after", value}],
+                 nil
+               ) do
+            delay when is_integer(delay) -> min(delay, 600_000)
+            nil -> nil
           end
         end
       end)
@@ -654,12 +657,9 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
             message: bounded_error_message(error.error_message)
           }
 
-          case error.error_data do
-            %{"retry_after_ms" => delay} when is_integer(delay) and delay >= 0 ->
-              Map.put(payload, :retry_after_ms, min(delay, 600_000))
-
-            _ ->
-              payload
+          case ErrorNormalizer.retry_after_from_body(error.error_data, error.error_message) do
+            nil -> payload
+            delay -> Map.put(payload, :retry_after_ms, delay)
           end
 
         _other ->

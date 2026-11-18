@@ -173,7 +173,7 @@ defmodule Lasso.Discovery.ErrorClassifier do
         dt = DateTime.from_naive!(naive, "Etc/UTC")
         now = DateTime.utc_now()
         ms = DateTime.diff(dt, now, :millisecond)
-        if ms > 0, do: ms, else: nil
+        max(ms, 0)
 
       _ ->
         nil

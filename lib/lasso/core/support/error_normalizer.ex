@@ -605,6 +605,26 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
+  @doc """
+  Extracts a bounded cooldown from JSON-RPC error data or its message.
+
+  Nonnegative integer milliseconds take precedence over seconds in data, then
+  message delays in seconds or minutes. The original data is not retained.
+  """
+  @spec retry_after_from_body(term(), String.t()) :: non_neg_integer() | nil
+  def retry_after_from_body(data, message) do
+    milliseconds = if is_map(data), do: data["retry_after_ms"]
+
+    bounded_retry_after(milliseconds) ||
+      bounded_retry_after(extract_retry_after(data)) ||
+      bounded_retry_after(parse_retry_from_message(message))
+  end
+
+  defp bounded_retry_after(delay) when is_integer(delay) and delay >= 0,
+    do: min(delay, 600_000)
+
+  defp bounded_retry_after(_delay), do: nil
+
   # ===========================================================================
   # Private Helpers
   # ===========================================================================
