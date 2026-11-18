@@ -58,7 +58,9 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
           put_resp_header(conn, name, value)
         end)
 
-      send_resp(conn, status, Jason.encode!(reply))
+      body = Jason.encode!(reply)
+      body = if opts[:escape], do: String.replace(body, "Try", "\\u0054ry"), else: body
+      send_resp(conn, status, body)
     end
   end
 
@@ -236,6 +238,10 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
   end
 
   for {label, message, data, header, lower, upper} <- [
+        {"huge message with header", "Try again in " <> String.duplicate("9", 307) <> " seconds",
+         %{}, "60", 55_000, 60_000},
+        {"huge message without header",
+         "Try again in " <> String.duplicate("9", 307) <> " seconds", %{}, nil, 595_000, 600_000},
         {"malformed seconds suffix", "Rate limited", %{retry_after: "120ms"}, nil, 25_000,
          30_000},
         {"message seconds", "Rate limit. Try again in 120 seconds", %{}, nil, 115_000, 120_000},
@@ -257,7 +263,7 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
 
           [{"retry-after", date}]
         else
-          []
+          if is_binary(unquote(header)), do: [{"retry-after", unquote(header)}], else: []
         end
 
       ref = {__MODULE__, make_ref()}
@@ -270,6 +276,7 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
             name: "refused",
             status: 429,
             code: -32_005,
+            escape: String.starts_with?(unquote(label), "huge message"),
             message: unquote(message),
             data: unquote(Macro.escape(data)),
             headers: headers,

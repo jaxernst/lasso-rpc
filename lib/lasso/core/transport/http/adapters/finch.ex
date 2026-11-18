@@ -503,7 +503,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
          lease,
          io_duration_us
        ) do
-    case handle_response(status, body) |> with_retry_after(headers) do
+    case handle_response(status, body, headers) do
       {:error, reason} = error ->
         emit_http_error(context, reason, io_duration_us)
 
@@ -627,51 +627,38 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     end
   end
 
-  defp with_retry_after({:error, {:rate_limit, payload}}, headers) do
-    delay =
-      Enum.find_value(headers, fn {name, value} ->
-        if String.downcase(name) == "retry-after" do
-          case Lasso.Discovery.ErrorClassifier.parse_retry_after(
-                 [{"retry-after", value}],
-                 nil
-               ) do
-            delay when is_integer(delay) -> min(delay, 600_000)
-            nil -> nil
-          end
-        end
-      end)
-
-    payload = if is_integer(delay), do: Map.put(payload, :retry_after_ms, delay), else: payload
-    {:error, {:rate_limit, payload}}
-  end
-
-  defp with_retry_after(result, _headers), do: result
-
-  defp handle_response(429, body) do
-    payload =
+  defp handle_response(429, body, headers) do
+    error =
       case UpstreamResponse.parse_unary(body) do
-        {:ok, %UpstreamResponse.Validated{kind: :error} = error} ->
-          payload = %{
+        {:ok, %UpstreamResponse.Validated{kind: :error} = error} -> error
+        _other -> nil
+      end
+
+    payload =
+      case error do
+        nil ->
+          %{status: 429}
+
+        error ->
+          %{
             status: 429,
             code: error.error_code,
             message: bounded_error_message(error.error_message)
           }
+      end
 
-          case ErrorNormalizer.retry_after_from_body(error.error_data, error.error_message) do
-            nil -> payload
-            delay -> Map.put(payload, :retry_after_ms, delay)
-          end
-
-        _other ->
-          %{status: 429}
+    payload =
+      case ErrorNormalizer.retry_after_ms(headers, error) do
+        nil -> payload
+        delay -> Map.put(payload, :retry_after_ms, delay)
       end
 
     {:error, {:rate_limit, payload}}
   end
 
-  defp handle_response(status, body) when status in 200..299, do: {:ok, {:raw, body}}
+  defp handle_response(status, body, _headers) when status in 200..299, do: {:ok, {:raw, body}}
 
-  defp handle_response(status, body) do
+  defp handle_response(status, body, _headers) do
     case UpstreamResponse.parse_unary(body) do
       {:ok, %UpstreamResponse.Validated{kind: :error}} ->
         {:ok, {:raw, body}}

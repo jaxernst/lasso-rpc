@@ -15,6 +15,7 @@ defmodule Lasso.Discovery.ErrorClassifier do
   alias Lasso.Core.Support.ErrorClassification
 
   @rate_limit_codes [-32_005]
+  @max_probe_retry_after_ms 2_147_483_647
 
   @type error_type ::
           :block_range
@@ -159,8 +160,12 @@ defmodule Lasso.Discovery.ErrorClassifier do
 
   defp parse_retry_after_value(value) do
     case Integer.parse(value) do
-      {seconds, ""} when seconds >= 0 -> seconds * 1_000
-      _ -> parse_http_date_retry_after(value)
+      {seconds, ""} when seconds >= 0 ->
+        (min(seconds, div(@max_probe_retry_after_ms, 1_000) + 1) * 1_000)
+        |> min(@max_probe_retry_after_ms)
+
+      _ ->
+        parse_http_date_retry_after(value)
     end
   end
 
@@ -188,7 +193,10 @@ defmodule Lasso.Discovery.ErrorClassifier do
   defp from_body(body) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, %{"retry_after" => seconds}} when is_number(seconds) and seconds >= 0 ->
-        round(seconds * 1_000)
+        round(
+          (min(seconds, div(@max_probe_retry_after_ms, 1_000) + 1) * 1_000)
+          |> min(@max_probe_retry_after_ms)
+        )
 
       _ ->
         nil

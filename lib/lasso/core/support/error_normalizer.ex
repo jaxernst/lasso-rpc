@@ -606,23 +606,37 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   end
 
   @doc """
-  Extracts a bounded cooldown from JSON-RPC error data or its message.
+  Resolves a bounded HTTP cooldown, evaluating headers before decoded body hints.
 
-  Nonnegative integer milliseconds take precedence over seconds in data, then
-  message delays in seconds or minutes. The original data is not retained.
+  A valid header returns without parsing body hints. Otherwise integer data
+  milliseconds precede whole data seconds, then message delays. Missing hints
+  return nil so callers retain their default cooldown. No body data is retained.
   """
-  @spec retry_after_from_body(term(), String.t()) :: non_neg_integer() | nil
-  def retry_after_from_body(data, message) do
+  @spec retry_after_ms([{String.t(), String.t()}] | nil, map() | nil) ::
+          non_neg_integer() | nil
+  def retry_after_ms(headers, error) do
+    headers =
+      for {name, value} <- headers || [],
+          is_binary(name) and is_binary(value),
+          do: {String.downcase(name), value}
+
+    bounded_retry_after(Lasso.Discovery.ErrorClassifier.parse_retry_after(headers, nil)) ||
+      body_retry_after(error)
+  end
+
+  defp body_retry_after(%{error_data: data, error_message: message}) do
     milliseconds = if is_map(data), do: data["retry_after_ms"]
     seconds = if is_map(data), do: data["retry_after"]
 
     bounded_retry_after(milliseconds) ||
       body_retry_after_seconds(seconds) ||
-      bounded_retry_after(parse_retry_from_message(message))
+      parse_retry_from_message(message)
   end
 
+  defp body_retry_after(_error), do: nil
+
   defp body_retry_after_seconds(seconds) when is_integer(seconds) and seconds >= 0,
-    do: bounded_retry_after(parse_retry_after_value(seconds))
+    do: seconds_to_ms(seconds)
 
   defp body_retry_after_seconds(value) when is_binary(value) do
     case Integer.parse(value) do
@@ -672,11 +686,11 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   defp extract_retry_after(_), do: nil
 
   # Parse retry-after value from header (seconds → milliseconds)
-  defp parse_retry_after_value(value) when is_integer(value), do: value * 1000
+  defp parse_retry_after_value(value) when is_integer(value), do: seconds_to_ms(value)
 
   defp parse_retry_after_value(value) when is_binary(value) do
     case Integer.parse(value) do
-      {seconds, _} -> seconds * 1000
+      {seconds, _} -> seconds_to_ms(seconds)
       :error -> nil
     end
   end
@@ -698,35 +712,32 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
 
   defp websocket_retry_after_data(_headers), do: nil
 
-  # Extract retry-after from provider-specific error messages
-  # Examples: "Try again in 60 seconds", "Try again in 5 minutes"
+  defp seconds_to_ms(seconds) when is_number(seconds) and seconds >= 0,
+    do: trunc(min(seconds, 600) * 1_000)
+
+  defp seconds_to_ms(_seconds), do: nil
+
+  # Shared by decoded HTTP errors and legacy raw-body normalization.
   defp parse_retry_from_message(message) when is_binary(message) do
     cond do
-      # Match "X seconds" pattern (supports decimal seconds like "3.2 seconds")
       match = Regex.run(~r/try again in (\d+(?:\.\d+)?) second/i, message) ->
-        case match do
-          [_, seconds_str] ->
-            case Float.parse(seconds_str) do
-              {seconds, _} -> trunc(seconds * 1000)
-              :error -> nil
-            end
+        [_, value] = match
+
+        case Integer.parse(value) do
+          {seconds, _} when seconds >= 600 ->
+            600_000
 
           _ ->
-            nil
+            case Float.parse(value) do
+              {seconds, _} -> seconds_to_ms(seconds)
+              :error -> nil
+            end
         end
 
-      # Match "X minutes" pattern
       match = Regex.run(~r/try again in (\d+) minute/i, message) ->
-        case match do
-          [_, minutes_str] ->
-            case Integer.parse(minutes_str) do
-              {minutes, _} -> minutes * 60 * 1000
-              :error -> nil
-            end
-
-          _ ->
-            nil
-        end
+        [_, value] = match
+        {minutes, ""} = Integer.parse(value)
+        seconds_to_ms(min(minutes, 10) * 60)
 
       true ->
         nil
