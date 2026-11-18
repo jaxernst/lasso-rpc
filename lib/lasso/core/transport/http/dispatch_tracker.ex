@@ -376,7 +376,6 @@ defmodule Lasso.Core.Transport.HTTP.DispatchTracker do
   defp schedule_audit(:infinity), do: :ok
   defp schedule_audit(interval_ms), do: Process.send_after(self(), :audit, interval_ms)
 
-  defp promote_state(:not_started, :not_started), do: :not_started
   defp promote_state(:confirmed, _state), do: :confirmed
   defp promote_state(_state, :confirmed), do: :confirmed
   defp promote_state(:started, _state), do: :started

@@ -488,7 +488,6 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
         predispatch_reason: [
           :encode,
           :request_build,
-          :connect_failure,
           :pool_unavailable,
           :not_connected,
           :invalid_frame,
