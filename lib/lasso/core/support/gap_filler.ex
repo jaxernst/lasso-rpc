@@ -192,7 +192,12 @@ defmodule Lasso.Core.Support.GapFiller do
          execution_envelope: %{dispatch_count: 0}
        }) do
     instance_id = Catalog.lookup_instance_id(plan.profile, plan.chain_id, plan.provider_id)
-    match?({:ok, %{opened_by_category: :connect_failure}}, Snapshot.lookup({instance_id, :http}))
+
+    case Snapshot.lookup({instance_id, :http}) do
+      {:ok, %{opened_by_category: :connect_failure}} -> true
+      {:ok, %{state: :closed}} -> true
+      _ -> false
+    end
   end
 
   defp connection_admission?(_plan, _ctx), do: false

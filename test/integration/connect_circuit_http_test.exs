@@ -1,8 +1,11 @@
 defmodule Lasso.ConnectCircuitHTTPTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
+  alias Lasso.Core.Support.GapFiller
   alias Lasso.Providers
   alias Lasso.Providers.Catalog
   alias Lasso.Test.Eventually
@@ -138,6 +141,52 @@ defmodule Lasso.ConnectCircuitHTTPTest do
     Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :closed end)
     assert System.monotonic_time(:millisecond) - started < 6_000
     assert rpc(ctx.chain)["result"] == "a"
+  end
+
+  test "backfill retains an admission refusal when a head poll closes the circuit before reread",
+       ctx do
+    assert rpc(ctx.chain)["result"] == "a"
+    :ok = Plug.Cowboy.shutdown(ctx.a.ref)
+    for _ <- 1..3, do: assert(rpc(ctx.chain)["result"] == "b")
+    breaker = breaker(ctx)
+    Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :half_open end)
+    {:ok, _} = Plug.Cowboy.http(Upstream, ctx.a.opts, ref: ctx.a.ref, port: ctx.a.port)
+    Agent.update(ctx.hold, fn _ -> true end)
+    instance = elem(breaker, 0)
+
+    {:ok, poll} =
+      HttpStrategy.start(ctx.chain, instance, initial_delay_ms: 0, poll_interval_ms: 60_000)
+
+    assert_receive {:http_strategy, :poll, ^instance, generation}, 1_000
+    {:ok, poll} = HttpStrategy.handle_message({:poll, generation}, poll)
+    assert_receive {:upstream, "a", "eth_blockNumber", held}, 2_000
+
+    requester = fn scope, chain, method, params, opts ->
+      result = Lasso.RPC.RequestPipeline.execute_owned(scope, chain, method, params, opts)
+
+      if match?(
+           {:error, _,
+            %{terminal_reason: :circuit_open, execution_envelope: %{dispatch_count: 0}}},
+           result
+         ) do
+        send(held, :release)
+        Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :closed end)
+        assert {:ok, %{state: :closed, opened_by_category: nil}} = Snapshot.lookup(breaker)
+      end
+
+      result
+    end
+
+    plan = GapFiller.Plan.new("public", ctx.chain, ctx.a.id, self(), 30_000, requester: requester)
+
+    try do
+      assert {:error, {:connection_admission, _}} = GapFiller.ensure_blocks(plan, 1, 3)
+      assert {:ok, blocks} = GapFiller.ensure_blocks(plan, 1, 3)
+      assert Enum.map(blocks, & &1["number"]) == ["0x1", "0x2", "0x3"]
+      assert System.monotonic_time(:microsecond) < plan.deadline_us
+    after
+      HttpStrategy.stop(poll)
+    end
   end
 
   defp breaker(ctx), do: {Catalog.lookup_instance_id("public", ctx.chain, ctx.a.id), :http}
