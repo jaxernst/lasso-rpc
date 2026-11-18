@@ -848,9 +848,15 @@ defmodule Lasso.Config.ConfigStore do
     with {:ok, chain_config} <- get_chain(profile_id, chain_id),
          provider_config <- normalize_provider_config(provider_attrs),
          :ok <- validate_provider_not_exists(chain_config, provider_config.id),
-         :ok <- ProviderHeaders.validate(provider_config),
          updated_chain <- add_provider_to_chain(chain_config, provider_config),
-         :ok <- ChainConfig.validate_no_unresolved_placeholders(updated_chain) do
+         :ok <- ChainConfig.validate_no_unresolved_placeholders(updated_chain),
+         :ok <-
+           Lasso.Config.FileSchema.validate_provider(
+             provider_config,
+             profile_id,
+             chain_id,
+             length(chain_config.providers) + 1
+           ) do
       update_chain_in_profile(profile_id, chain_id, updated_chain)
 
       Logger.debug(

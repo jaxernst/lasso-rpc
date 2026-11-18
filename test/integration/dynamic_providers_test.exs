@@ -150,8 +150,11 @@ defmodule Lasso.Integration.DynamicProvidersTest do
             %{auth_headers: %{"x-tenant" => "safe\r\nx-injected: true"}},
             %{api_key: "secret\nX-Injected: true"}
           ] do
-        assert {:error, :invalid_provider_headers} =
+        assert {:error, {:invalid_profile_config, path, reason}} =
                  Providers.add_provider(@test_chain, Map.merge(config, unsafe), validate: false)
+
+        assert path =~ "providers.#{test_id}"
+        assert reason =~ "expected"
 
         assert {:error, :not_found} =
                  Lasso.Config.ConfigStore.get_provider("public", @test_chain, test_id)

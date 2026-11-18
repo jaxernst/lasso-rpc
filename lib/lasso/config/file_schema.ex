@@ -144,12 +144,18 @@ defmodule Lasso.Config.FileSchema do
       ids = Enum.map(providers, & &1["id"])
       if length(ids) != length(Enum.uniq(ids)), do: invalid!(path, "duplicate provider IDs")
 
-      Enum.each(providers, fn provider ->
-        provider_path = path <> ".providers.#{provider["id"]}"
+      Enum.each(Enum.with_index(providers, 1), fn {provider, index} ->
+        provider_path = provider_path(path <> ".providers", provider, index)
         require_keys!(provider, ["id"], provider_path)
 
         unless provider["url"] || provider["ws_url"],
-          do: invalid!(provider_path, "requires url or ws_url")
+          do:
+            invalid!(
+              provider_path <> ".url",
+              "expected url or ws_url endpoint string; found missing"
+            )
+
+        validate_headers!(provider, provider_path)
       end)
     end)
 
@@ -159,17 +165,27 @@ defmodule Lasso.Config.FileSchema do
   defp validate!(value, schema, path) when is_map(schema) and is_map(value) do
     Enum.each(value, fn {key, field} ->
       case Map.fetch(schema, key) do
-        {:ok, type} -> validate!(field, type, path <> ".#{key}")
-        :error -> invalid!(path <> ".#{key}", "unsupported field")
+        {:ok, type} ->
+          validate!(field, type, path <> ".#{key}")
+
+        :error ->
+          invalid!(
+            path <> ".#{key}",
+            "unsupported field; expected one of #{Enum.join(Enum.sort(Map.keys(schema)), ", ")}"
+          )
       end
     end)
   end
 
   defp validate!(value, {:list, type}, path) when is_list(value),
-    do: Enum.each(value, &validate!(&1, type, path))
+    do:
+      Enum.each(Enum.with_index(value, 1), fn {item, index} ->
+        validate!(item, type, provider_path(path, item, index))
+      end)
 
   defp validate!(value, {:enum, values}, path) do
-    unless value in values, do: invalid!(path, "unsupported value")
+    unless value in values,
+      do: invalid!(path, "expected one of #{inspect(values)}; found #{found(value)}")
   end
 
   defp validate!(value, :positive, _) when is_integer(value) and value > 0, do: :ok
@@ -225,11 +241,65 @@ defmodule Lasso.Config.FileSchema do
   defp validate!(value, :headers, path) when is_map(value) do
     Enum.each(value, fn {key, field} ->
       validate!(key, :string, path)
-      validate!(field, :secret, path <> ".#{key}")
+      validate!(field, :secret, path)
     end)
   end
 
-  defp validate!(_value, _type, path), do: invalid!(path, "invalid value type or range")
+  defp validate!(value, type, path),
+    do: invalid!(path, "expected #{expected(type)}; found #{found(value)}")
+
+  @doc false
+  @spec validate_provider(map(), String.t(), term(), pos_integer()) :: :ok | {:error, term()}
+  def validate_provider(provider, profile, chain, index) do
+    data = Map.new(Map.to_list(provider), fn {key, value} -> {to_string(key), value} end)
+    data = data |> Map.take(Map.keys(@provider)) |> Map.reject(fn {_, v} -> is_nil(v) end)
+    path = provider_path("profile.#{profile}.chains.#{chain}.providers", data, index)
+    validate!(Map.take(data, ["id", "url", "ws_url", "priority"]), @provider, path)
+    require_keys!(data, ["id"], path)
+
+    unless data["url"] || data["ws_url"],
+      do: invalid!(path <> ".url", "expected url or ws_url endpoint string; found missing")
+
+    validate_headers!(data, path)
+    :ok
+  catch
+    {:invalid_profile_config, _, _} = error -> {:error, error}
+  end
+
+  defp validate_headers!(provider, path) do
+    case Lasso.Providers.ProviderHeaders.validation_detail(provider) do
+      :ok ->
+        :ok
+
+      {_reason, field, expected, actual} ->
+        invalid!(path <> ".#{field}", "expected #{expected}; found #{actual}")
+    end
+  end
+
+  defp provider_path(path, %{"id" => id}, _index) when is_binary(id),
+    do: path <> ".#{Lasso.URLMask.mask_in_string(id)}"
+
+  defp provider_path(path, _item, index), do: path <> "[#{index}]"
+
+  defp expected(:positive), do: "positive integer (> 0)"
+  defp expected(:nonnegative), do: "nonnegative integer (>= 0)"
+  defp expected(:http_url), do: "HTTP URL string (http or https with host)"
+  defp expected(:ws_url), do: "WebSocket URL string (ws or wss with host)"
+  defp expected(:headers), do: "mapping of header names to nonempty strings"
+  defp expected(:secret), do: "nonempty string"
+  defp expected(:slug), do: "URL-safe identifier string"
+  defp expected({:list, _}), do: "list"
+  defp expected(type) when is_map(type), do: "mapping"
+  defp expected(type), do: to_string(type)
+
+  defp found(nil), do: "null"
+  defp found(value) when is_binary(value), do: "string (value withheld)"
+  defp found(value) when is_boolean(value), do: "boolean"
+  defp found(value) when is_integer(value), do: "integer"
+  defp found(value) when is_float(value), do: "float"
+  defp found(value) when is_map(value), do: "mapping"
+  defp found(value) when is_list(value), do: "list"
+  defp found(_value), do: "other type"
 
   defp require_keys!(value, keys, path) do
     Enum.each(keys, fn key ->

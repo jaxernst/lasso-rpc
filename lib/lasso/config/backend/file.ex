@@ -191,7 +191,13 @@ defmodule Lasso.Config.Backend.File do
       {:ok, spec}
     end
   catch
-    {:invalid_profile_config, _, _} = error -> {:error, error}
+    {:invalid_profile_config, field, reason} ->
+      field =
+        if String.starts_with?(field, "chains."),
+          do: "profile.#{Path.basename(path, ".yml")}.#{field}",
+          else: field
+
+      {:error, {:invalid_profile_config, field, reason}}
   end
 
   defp parse_profile_yaml(content) do
