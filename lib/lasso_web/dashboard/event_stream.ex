@@ -85,6 +85,7 @@ defmodule LassoWeb.Dashboard.EventStream do
     # Cluster state (from Topology)
     cluster_state: %{
       connected: 1,
+      expected: 1,
       responding: 1,
       node_ids: [],
       last_update: 0
@@ -435,6 +436,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       ) do
     cluster_state = %{
       connected: coverage.connected,
+      expected: coverage.expected,
       responding: coverage.responding,
       node_ids: node_ids,
       last_update: now()
@@ -451,6 +453,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       when event in [:node_connected, :node_disconnected] do
     cluster_state = %{
       connected: coverage.connected,
+      expected: coverage.expected,
       responding: coverage.responding,
       node_ids: node_ids,
       last_update: now()
@@ -1311,6 +1314,7 @@ defmodule LassoWeb.Dashboard.EventStream do
       coverage when is_map(coverage) ->
         %{
           connected: coverage.connected,
+          expected: coverage.expected,
           responding: coverage.responding,
           node_ids: Topology.get_node_ids(),
           last_update: now()
@@ -1338,9 +1342,9 @@ defmodule LassoWeb.Dashboard.EventStream do
 
   defp default_cluster_state do
     self_node_id = get_self_node_id()
-    %{connected: 1, responding: 1, node_ids: [self_node_id], last_update: now()}
+    %{connected: 1, expected: 1, responding: 1, node_ids: [self_node_id], last_update: now()}
   catch
-    :exit, _ -> %{connected: 1, responding: 1, node_ids: [], last_update: now()}
+    :exit, _ -> %{connected: 1, expected: 1, responding: 1, node_ids: [], last_update: now()}
   end
 
   defp now do

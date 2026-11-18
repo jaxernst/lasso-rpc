@@ -302,7 +302,7 @@ defmodule LassoWeb.Dashboard.MetricsStore do
 
     coverage = %{
       responding: length(valid_results),
-      total: topology_coverage.connected,
+      total: topology_coverage.expected,
       rpc_bad_nodes: bad_nodes,
       duration_ms: duration_ms
     }
@@ -323,7 +323,9 @@ defmodule LassoWeb.Dashboard.MetricsStore do
   defp get_topology_coverage do
     Topology.get_coverage()
   catch
-    :exit, _ -> %{connected: length(Node.list()) + 1, responding: 1}
+    :exit, _ ->
+      connected = length(Node.list()) + 1
+      %{connected: connected, responding: 1, expected: connected}
   end
 
   def aggregate_results(:get_provider_leaderboard, results) do

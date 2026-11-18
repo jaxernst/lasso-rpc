@@ -95,7 +95,7 @@ defmodule LassoWeb.Dashboard.TrafficCounters do
       scopes: merge_node_windows(Enum.map(valid, & &1.scopes), scopes),
       coverage: %{
         responding: length(valid),
-        total: length(nodes),
+        total: expected_nodes(length(nodes)),
         bad_nodes: bad_nodes,
         lossless: Enum.all?(valid, &(&1.last_drop_second < start_second))
       },
@@ -304,6 +304,12 @@ defmodule LassoWeb.Dashboard.TrafficCounters do
       _unavailable ->
         :ok
     end
+  end
+
+  defp expected_nodes(connected) do
+    Lasso.Cluster.Topology.get_coverage().expected
+  catch
+    :exit, _reason -> connected
   end
 
   defp connected_nodes do
