@@ -17,9 +17,10 @@ defmodule Lasso.ConnectCircuitHTTPTest do
     def call(conn, opts) do
       {:ok, bytes, conn} = read_body(conn)
       body = Jason.decode!(bytes)
-      send(opts[:owner], {:upstream, opts[:name], body["method"], self()})
 
       if body["method"] == "eth_blockNumber" and Agent.get(opts[:hold], & &1) do
+        send(opts[:owner], {:held_head_poll, opts[:name], self()})
+
         receive do
           :release -> :ok
         after
@@ -44,7 +45,13 @@ defmodule Lasso.ConnectCircuitHTTPTest do
     hold = start_supervised!({Agent, fn -> false end})
     previous = Application.get_env(:lasso, :http_client)
     Application.put_env(:lasso, :http_client, Lasso.RPC.Transport.HTTP.Client.Finch)
-    :ok = ConfigStore.register_chain_runtime("public", chain, %{providers: [], head_policy: :off})
+
+    :ok =
+      ConfigStore.register_chain_runtime("public", chain, %{
+        providers: [],
+        head_policy: :off,
+        monitoring: %{background_observations: false}
+      })
 
     upstreams =
       for {name, priority} <- [{"a", 1}, {"b", 2}] do
@@ -62,7 +69,6 @@ defmodule Lasso.ConnectCircuitHTTPTest do
                      name: name,
                      priority: priority,
                      url: "http://127.0.0.1:#{port}",
-                     background_observations: false,
                      subscribe_new_heads: false
                    },
                    validate: false
@@ -88,7 +94,7 @@ defmodule Lasso.ConnectCircuitHTTPTest do
 
   test "refused connections stop leading traffic and recover promptly after repeated probation",
        ctx do
-    assert rpc(ctx.chain)["result"] == "a"
+    assert %{"result" => "a"} = rpc(ctx.chain)
     :ok = Plug.Cowboy.shutdown(ctx.a.ref)
     breaker = breaker(ctx)
     owner = self()
@@ -140,12 +146,12 @@ defmodule Lasso.ConnectCircuitHTTPTest do
 
     Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :closed end)
     assert System.monotonic_time(:millisecond) - started < 6_000
-    assert rpc(ctx.chain)["result"] == "a"
+    assert %{"result" => "a"} = rpc(ctx.chain)
   end
 
   test "backfill retains an admission refusal when a head poll closes the circuit before reread",
        ctx do
-    assert rpc(ctx.chain)["result"] == "a"
+    assert %{"result" => "a"} = rpc(ctx.chain)
     :ok = Plug.Cowboy.shutdown(ctx.a.ref)
     for _ <- 1..3, do: assert(rpc(ctx.chain)["result"] == "b")
     breaker = breaker(ctx)
@@ -159,7 +165,7 @@ defmodule Lasso.ConnectCircuitHTTPTest do
 
     assert_receive {:http_strategy, :poll, ^instance, generation}, 1_000
     {:ok, poll} = HttpStrategy.handle_message({:poll, generation}, poll)
-    assert_receive {:upstream, "a", "eth_blockNumber", held}, 2_000
+    assert_receive {:held_head_poll, "a", held}, 2_000
 
     requester = fn scope, chain, method, params, opts ->
       result = Lasso.RPC.RequestPipeline.execute_owned(scope, chain, method, params, opts)
