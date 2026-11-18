@@ -36,7 +36,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       :allow_head_regression,
       :minimum_head,
       :excluded_providers,
-      :plan
+      :plan,
+      admission_retries: []
     ]
 
     @type t :: %__MODULE__{
@@ -48,6 +49,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             allow_head_regression: boolean(),
             minimum_head: non_neg_integer() | nil,
             excluded_providers: [String.t()],
+            admission_retries: [String.t()],
             plan: GapFiller.Plan.t()
           }
   end
@@ -294,9 +296,17 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
   @impl true
   def handle_info({:retry_replacement, deadline}, state) do
-    if state.failover_status == :switching and state.recovery_deadline_us == deadline and
-         recovery_remaining_ms(deadline) > 0 do
-      retry_replacement(state)
+    if state.recovery_deadline_us == deadline and recovery_remaining_ms(deadline) > 0 do
+      case state.failover_status do
+        :switching ->
+          retry_replacement(state)
+
+        :backfilling when is_nil(state.failover_context.backfill_owner_pid) ->
+          start_backfill_after_replacement(state, state.failover_context.new_provider_id, nil)
+
+        _ ->
+          {:noreply, state}
+      end
     else
       {:noreply, state}
     end
@@ -2017,7 +2027,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       reason: inspect(reason)
     )
 
-    case retry_backfill_with_fallback(state) do
+    case retry_backfill_with_fallback(state, reason) do
       {:ok, next_state} ->
         start_backfill_after_replacement(
           next_state,
@@ -2025,22 +2035,44 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           nil
         )
 
+      {:retry, next_state} ->
+        Process.send_after(self(), {:retry_replacement, state.recovery_deadline_us}, 100)
+        {:noreply, next_state}
+
       {:error, :no_http_provider} ->
         handle_resubscribe_failure(state, :backfill_failed)
     end
   end
 
-  defp retry_backfill_with_fallback(state) do
+  defp retry_backfill_with_fallback(state, reason) do
     context = state.failover_context
 
+    retryable? = match?({:connection_admission, _}, reason)
+    previous = context.backfill_context
+    retries = Enum.reject(previous.admission_retries, &(&1 == context.http_provider_id))
+    retries = if retryable?, do: retries ++ [context.http_provider_id], else: retries
+
     excluded =
-      [context.http_provider_id | context.backfill_context.excluded_providers]
-      |> Enum.reject(&is_nil/1)
-      |> Enum.uniq()
+      if retryable?,
+        do: previous.excluded_providers,
+        else: Enum.uniq([context.http_provider_id | previous.excluded_providers])
+
+    selection =
+      select_backfill_retry(
+        state.profile,
+        state.chain_id,
+        context.new_provider_id,
+        Enum.uniq(excluded ++ retries)
+      )
+
+    {selection, delayed?} =
+      case {selection, retries} do
+        {{:error, :no_http_provider}, [provider | _]} -> {{:ok, provider}, true}
+        _ -> {selection, false}
+      end
 
     with remaining_ms when remaining_ms > 0 <- recovery_remaining_ms(state.recovery_deadline_us),
-         {:ok, provider_id} <-
-           select_backfill_retry(state.profile, state.chain_id, context.new_provider_id, excluded) do
+         {:ok, provider_id} <- selection do
       plan =
         GapFiller.Plan.new(
           state.profile,
@@ -2054,7 +2086,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       backfill_context = %{
         context.backfill_context
-        | excluded_providers: [provider_id | excluded],
+        | excluded_providers: excluded,
+          admission_retries: retries,
           plan: plan
       }
 
@@ -2083,7 +2116,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             provider_id: provider_id
           )
 
-          {:ok, %{state | failover_context: failover_context}}
+          outcome = if delayed?, do: :retry, else: :ok
+          {outcome, %{state | failover_context: failover_context}}
 
         {:error, _reason} ->
           {:error, :no_http_provider}

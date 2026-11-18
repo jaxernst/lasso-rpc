@@ -1813,7 +1813,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       half_open_inflight: state.inflight_count,
       control_health: control_health,
       failure_count: state.failure_count,
-      needs_success?: state.failure_count > 0
+      needs_success?: state.failure_count > 0,
+      opened_by_category: state.opened_by_category
     }
 
     snapshot_write_barrier(:before)

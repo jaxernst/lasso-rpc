@@ -1,9 +1,8 @@
 defmodule Lasso.ConnectCircuitHTTPTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
-  alias Lasso.Core.Support.{CircuitBreaker, GapFiller}
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Providers
   alias Lasso.Providers.Catalog
   alias Lasso.Test.Eventually
@@ -123,7 +122,7 @@ defmodule Lasso.ConnectCircuitHTTPTest do
         timeout: 5_000
       )
 
-      assert rpc(ctx.chain, ctx.a.id)["error"]
+      assert rpc(ctx.chain)["result"] == "b"
       Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :open end)
       assert CircuitBreaker.get_recovery_time_remaining(breaker) <= div(expected * 105, 100)
       assert CircuitBreaker.get_recovery_time_remaining(breaker) > expected - 500
@@ -132,49 +131,13 @@ defmodule Lasso.ConnectCircuitHTTPTest do
     {:ok, _} = Plug.Cowboy.http(Upstream, ctx.a.opts, ref: ctx.a.ref, port: ctx.a.port)
     started = System.monotonic_time(:millisecond)
 
-    Eventually.assert_eventually(fn -> rpc(ctx.chain, ctx.a.id)["result"] == "a" end,
+    Eventually.assert_eventually(fn -> rpc(ctx.chain)["result"] == "a" end,
       timeout: 6_000
     )
 
     Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :closed end)
     assert System.monotonic_time(:millisecond) - started < 6_000
     assert rpc(ctx.chain)["result"] == "a"
-  end
-
-  test "backfill retries probation occupied by a real head poll within its recovery deadline",
-       ctx do
-    assert rpc(ctx.chain)["result"] == "a"
-    :ok = Plug.Cowboy.shutdown(ctx.a.ref)
-    for _ <- 1..3, do: assert(rpc(ctx.chain)["result"] == "b")
-    breaker = breaker(ctx)
-    Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :half_open end)
-    {:ok, _} = Plug.Cowboy.http(Upstream, ctx.a.opts, ref: ctx.a.ref, port: ctx.a.port)
-    Agent.update(ctx.hold, fn _ -> true end)
-
-    instance = elem(breaker, 0)
-
-    {:ok, poll} =
-      HttpStrategy.start(ctx.chain, instance, poll_interval_ms: 60_000, initial_delay_ms: 0)
-
-    assert_receive {:http_strategy, :poll, ^instance, generation}, 1_000
-    {:ok, poll} = HttpStrategy.handle_message({:poll, generation}, poll)
-    assert_receive {:upstream, "a", "eth_blockNumber", held}, 2_000
-    assert CircuitBreaker.get_state(breaker).state == :half_open
-
-    expired = GapFiller.Plan.new("public", ctx.chain, ctx.a.id, self(), 150)
-    assert {:error, :deadline_exhausted} = GapFiller.ensure_blocks(expired, 1, 3)
-
-    plan = GapFiller.Plan.new("public", ctx.chain, ctx.a.id, self(), 30_000)
-    backfill = Task.async(fn -> GapFiller.ensure_blocks(plan, 1, 3) end)
-    # A busy lease must not send a competing request or finish as an error.
-    assert Task.yield(backfill, 250) == nil
-    refute_receive {:upstream, "a", "eth_getBlockByNumber", _}, 0
-    send(held, :release)
-    assert {:ok, blocks} = Task.await(backfill, 5_000)
-    assert Enum.map(blocks, & &1["number"]) == ["0x1", "0x2", "0x3"]
-    assert System.monotonic_time(:microsecond) < plan.deadline_us
-    Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :closed end)
-    HttpStrategy.stop(poll)
   end
 
   defp breaker(ctx), do: {Catalog.lookup_instance_id("public", ctx.chain, ctx.a.id), :http}
