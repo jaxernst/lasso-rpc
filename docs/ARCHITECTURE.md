@@ -8,7 +8,7 @@ Domain terms are defined in [CONTEXT.md](../CONTEXT.md).
 
 ### Core Capabilities
 
-- **Multi-profile isolation**: Independent routing configurations per profile with isolated metrics and circuit breakers
+- **Multi-profile isolation**: Independent routing configuration and metrics per profile; profiles that reference the same upstream share its health and circuit breakers
 - **Transport-agnostic routing**: Unified pipeline routes across HTTP and WebSocket based on real-time performance
 - **Provider orchestration**: Pluggable selection strategies (`:fastest`, `:balanced_fast`, `:load_balanced`, `:priority`)
 - **WebSocket subscription management**: Intelligent multiplexing with automatic failover and gap-filling
@@ -129,7 +129,7 @@ Each `(profile, chain)` pair owns its routing configuration and profile metrics.
 
 ## OTP Supervision Architecture
 
-The supervision tree is profile-scoped for complete isolation:
+The supervision tree is profile-scoped. Upstream instances, with their health, circuit breakers and transports, are shared by every profile that references them:
 
 ```
 Lasso.Application
