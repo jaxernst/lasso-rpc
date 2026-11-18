@@ -16,7 +16,7 @@ defmodule Lasso.Test.Harness.Tenant do
 
     try do
       assert :ok = Lasso.Diagnostics.reload_profiles()
-      origin = "http://127.0.0.1:#{System.fetch_env!("PORT")}"
+      origin = "http://127.0.0.1:#{LassoWeb.Endpoint.config(:http)[:port]}"
 
       tenant = %{
         file: file,
