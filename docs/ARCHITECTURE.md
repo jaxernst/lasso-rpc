@@ -399,7 +399,7 @@ WSConnection (upstream provider)
      ↓
 StreamCoordinator (per-subscription key)
      ↓
-├─→ GapFiller (HTTP backfill)
+├─→ Backfill → GapFiller (HTTP backfill)
 └─→ ClientSubscriptionRegistry (fan-out)
 ```
 
@@ -413,7 +413,7 @@ On provider failure mid-stream:
 
 1. StreamCoordinator detects failure
 2. Computes gap: `last_seen_block` to current head
-3. GapFiller backfills missed blocks via HTTP
+3. Backfill reconciles missed blocks and logs via GapFiller HTTP requests
 4. Injects backfilled events into stream
 5. Subscribes to new provider
 
