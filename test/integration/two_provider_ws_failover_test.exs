@@ -103,6 +103,15 @@ defmodule Lasso.TwoProviderWsFailoverTest do
 
       assert :ok = ConfigStore.register_provider_runtime("public", chain, config)
       assert :ok = Lasso.RPC.ChainSupervisor.ensure_provider("public", chain, config)
+
+      if config.ws_url do
+        instance = Lasso.Providers.Catalog.lookup_instance_id("public", chain, fleet.name)
+
+        Lasso.Test.Eventually.assert_eventually(fn ->
+          status = Lasso.Core.Streaming.InstanceSubscriptionManager.get_status(instance)
+          match?(%{status: :connected}, status.connection_state)
+        end)
+      end
     end
 
     if context[:transactions] do
@@ -127,7 +136,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
       Fleet.script(b, "eth_blockNumber", [], action)
     end
 
-    port = System.get_env("PORT", "4002")
+    port = LassoWeb.Endpoint.config(:http)[:port]
     wire = Rpc.wire!("ws://127.0.0.1:#{port}/ws/rpc/profile/public/priority/#{chain}")
 
     on_exit(fn ->
@@ -191,8 +200,24 @@ defmodule Lasso.TwoProviderWsFailoverTest do
 
       assert Map.take(next, fields) == Map.take(initial, fields)
       assert Enum.any?(next.failover_history, &(&1.provider_id == a.name))
-      :ok = Fleet.release(http, :third_subscription, {:answer, "third-sub"})
-      Fleet.notify(%{third | action: {:answer, "third-sub"}}, header(103))
+      # Hold the replacement result while its first live event overtakes it.
+      pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via("public", chain)
+      entry = :sys.get_state(pool).keys[{:newHeads}]
+      owner = entry.resubscribe_pid
+      true = :erlang.suspend_process(owner)
+
+      try do
+        :ok = Fleet.release(http, :third_subscription, {:answer, "third-sub"})
+        Fleet.notify(%{third | action: {:answer, "third-sub"}}, header(103))
+
+        Lasso.Test.Eventually.assert_eventually(fn ->
+          state = :sys.get_state(coordinator)
+          state.failover_status == :switching and state.failover_context.event_buffer_count == 1
+        end)
+      after
+        true = :erlang.resume_process(owner)
+      end
+
       assert_head!(wire, subscription, 103)
       Rpc.close!(wire)
     else
