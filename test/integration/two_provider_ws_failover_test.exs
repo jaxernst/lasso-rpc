@@ -28,6 +28,11 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     assert_continuity(context)
   end
 
+  @tag rejected_logs: true, third_replacement: true
+  test "rejected pending replacement logs never reach the winning stream", context do
+    assert_continuity(context)
+  end
+
   defp assert_continuity(%{chain: chain} = context) do
     original_http = Application.get_env(:lasso, :http_client)
     original_ws = Application.get_env(:lasso, :ws_client_module)
@@ -63,6 +68,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     for fleet <- fleets do
       Fleet.script(fleet, "eth_chainId", [], {:answer, hex(chain)})
       Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(102)})
+      Fleet.script(fleet, "eth_getLogs", [], {:answer, [log(101), log(102)]})
 
       Fleet.script(
         fleet,
@@ -144,7 +150,8 @@ defmodule Lasso.TwoProviderWsFailoverTest do
       assert_receive {:DOWN, ^monitor, :process, _, _}, 5_000
     end)
 
-    Rpc.send!(wire, "eth_subscribe", ["newHeads"])
+    params = if context[:rejected_logs], do: ["logs", %{}], else: ["newHeads"]
+    Rpc.send!(wire, "eth_subscribe", params)
     a_pid = a.pid
 
     assert_receive {:fleet, ^a_pid,
@@ -154,86 +161,157 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     assert %{"result" => subscription} = frame!(wire)
     assert is_binary(subscription)
 
-    Fleet.notify(source, header(100))
-    assert_head!(wire, subscription, 100)
+    if context[:rejected_logs] do
+      rejected_logs(chain, a, b, List.last(fleets), source, wire, subscription)
+    else
+      Fleet.notify(source, header(100))
+      assert_head!(wire, subscription, 100)
 
-    http = Enum.at(fleets, 2, b)
+      http = Enum.at(fleets, 2, b)
 
-    if context[:third_replacement],
-      do: Fleet.script(http, "eth_subscribe", [], {:hold, :third_subscription})
+      if context[:third_replacement],
+        do: Fleet.script(http, "eth_subscribe", [], {:hold, :third_subscription})
 
-    if context[:refused_replacement],
-      do: Fleet.script(http, "eth_blockNumber", [{:hold, :replay_head}], {:answer, hex(102)})
-
-    Fleet.stop(a)
-
-    b_pid = b.pid
-
-    assert_receive {:fleet, ^b_pid,
-                    %{transport: :ws, request: %{"method" => "eth_subscribe"}} = replacement},
-                   5_000
-
-    initial =
       if context[:refused_replacement],
-        do: refuse_replacement_during_replay(chain, b, http, replacement)
+        do: Fleet.script(http, "eth_blockNumber", [{:hold, :replay_head}], {:answer, hex(102)})
 
-    assert_head!(wire, subscription, 101)
-    assert_head!(wire, subscription, 102)
+      Fleet.stop(a)
 
-    if context[:third_replacement] do
-      third_pid = http.pid
+      b_pid = b.pid
 
-      assert_receive {:fleet, ^third_pid,
-                      %{transport: :ws, request: %{"method" => "eth_subscribe"}} = third},
+      assert_receive {:fleet, ^b_pid,
+                      %{transport: :ws, request: %{"method" => "eth_subscribe"}} = replacement},
                      5_000
 
-      coordinator = Lasso.Core.Streaming.StreamCoordinator.via("public", chain, {:newHeads})
-      next = :sys.get_state(coordinator)
+      initial =
+        if context[:refused_replacement],
+          do: refuse_replacement_during_replay(chain, b, http, replacement)
 
-      fields = [
-        :recovery_deadline_us,
-        :recovery_started_at_ms,
-        :recovery_attempts,
-        :max_backfill_blocks,
-        :backfill_timeout
-      ]
+      assert_head!(wire, subscription, 101)
+      assert_head!(wire, subscription, 102)
 
-      assert Map.take(next, fields) == Map.take(initial, fields)
-      assert Enum.any?(next.failover_history, &(&1.provider_id == a.name))
-      # Hold the replacement result while its first live event overtakes it.
-      pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via("public", chain)
-      entry = :sys.get_state(pool).keys[{:newHeads}]
-      owner = entry.resubscribe_pid
-      true = :erlang.suspend_process(owner)
+      if context[:third_replacement] do
+        third_pid = http.pid
 
-      try do
-        :ok = Fleet.release(http, :third_subscription, {:answer, "third-sub"})
-        Fleet.notify(%{third | action: {:answer, "third-sub"}}, header(103))
+        assert_receive {:fleet, ^third_pid,
+                        %{transport: :ws, request: %{"method" => "eth_subscribe"}} = third},
+                       5_000
 
-        Lasso.Test.Eventually.assert_eventually(fn ->
-          state = :sys.get_state(coordinator)
-          state.failover_status == :switching and state.failover_context.event_buffer_count == 1
-        end)
-      after
-        true = :erlang.resume_process(owner)
-      end
+        coordinator = Lasso.Core.Streaming.StreamCoordinator.via("public", chain, {:newHeads})
+        next = :sys.get_state(coordinator)
 
-      assert_head!(wire, subscription, 103)
-      Rpc.close!(wire)
-    else
-      if context[:refused_replacement] do
-        ref = wire.reference
-        assert_receive {:rpc_disconnect, ^ref, %{reason: {:remote, 1011, _reason}}}, 5_000
-      else
-        Fleet.notify(replacement, header(103))
+        fields = [
+          :recovery_deadline_us,
+          :recovery_started_at_ms,
+          :recovery_attempts,
+          :max_backfill_blocks,
+          :backfill_timeout
+        ]
+
+        assert Map.take(next, fields) == Map.take(initial, fields)
+        assert Enum.any?(next.failover_history, &(&1.provider_id == a.name))
+        # Hold the replacement result while its first live event overtakes it.
+        pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via("public", chain)
+        entry = :sys.get_state(pool).keys[{:newHeads}]
+        owner = entry.resubscribe_pid
+        true = :erlang.suspend_process(owner)
+
+        try do
+          :ok = Fleet.release(http, :third_subscription, {:answer, "third-sub"})
+          Fleet.notify(%{third | action: {:answer, "third-sub"}}, header(103))
+
+          Lasso.Test.Eventually.assert_eventually(fn ->
+            state = :sys.get_state(coordinator)
+            state.failover_status == :switching and state.failover_context.event_buffer_count == 1
+          end)
+        after
+          true = :erlang.resume_process(owner)
+        end
+
         assert_head!(wire, subscription, 103)
-        Rpc.send!(wire, "eth_unsubscribe", [subscription], 2)
-        assert %{"id" => 2, "result" => true} = frame!(wire)
         Rpc.close!(wire)
-        refute_received {:rpc_disconnect, _, _}
-        refute_received {:rpc_frame, _, {:close, _, _}}
+      else
+        if context[:refused_replacement] do
+          ref = wire.reference
+          assert_receive {:rpc_disconnect, ^ref, %{reason: {:remote, 1011, _reason}}}, 5_000
+        else
+          Fleet.notify(replacement, header(103))
+          assert_head!(wire, subscription, 103)
+          Rpc.send!(wire, "eth_unsubscribe", [subscription], 2)
+          assert %{"id" => 2, "result" => true} = frame!(wire)
+          Rpc.close!(wire)
+          refute_received {:rpc_disconnect, _, _}
+          refute_received {:rpc_frame, _, {:close, _, _}}
+        end
       end
     end
+  end
+
+  defp rejected_logs(chain, a, b, c, source, wire, subscription) do
+    Fleet.notify(source, log(100))
+    assert_log!(wire, subscription, 100)
+    Fleet.script(b, "eth_subscribe", [], {:hold, :pending_logs})
+    Fleet.stop(a)
+    b_pid = b.pid
+
+    assert_receive {:fleet, ^b_pid, %{request: %{"method" => "eth_subscribe"}} = pending},
+                   5_000
+
+    pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via("public", chain)
+    key = {:logs, %{}}
+    owner = :sys.get_state(pool).keys[key].resubscribe_pid
+    true = :erlang.suspend_process(owner)
+    monitor = Process.monitor(owner)
+
+    try do
+      :ok = Fleet.release(b, :pending_logs, {:answer, "pending-logs"})
+      rejected = Map.put(log(101), "blockHash", "0x" <> String.duplicate("f", 64))
+      Fleet.notify(%{pending | action: {:answer, "pending-logs"}}, rejected)
+      coordinator = Lasso.Core.Streaming.StreamCoordinator.via("public", chain, key)
+
+      Lasso.Test.Eventually.assert_eventually(fn ->
+        state = :sys.get_state(coordinator)
+        state.failover_status == :switching and state.failover_context.event_buffer_count == 1
+      end)
+
+      # Reject the accepted subscription before its worker can commit the route.
+      Fleet.stop(b)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 5_000
+    after
+      if Process.alive?(owner), do: :erlang.resume_process(owner)
+    end
+
+    c_pid = c.pid
+
+    assert_receive {:fleet, ^c_pid, %{request: %{"method" => "eth_subscribe"}} = winner},
+                   5_000
+
+    assert_log!(wire, subscription, 101)
+    assert_log!(wire, subscription, 102)
+    Fleet.notify(winner, log(103))
+    assert_log!(wire, subscription, 103)
+    ref = wire.reference
+    refute_receive {:rpc_frame, ^ref, _}, 100
+    Rpc.close!(wire)
+  end
+
+  defp assert_log!(wire, subscription, height) do
+    assert %{"params" => %{"subscription" => ^subscription, "result" => result}} = frame!(wire)
+    assert result == log(height)
+  end
+
+  defp log(height) do
+    %{
+      "blockNumber" => hex(height),
+      "blockHash" => header(height)["hash"],
+      "transactionHash" => header(height + 1000)["hash"],
+      "transactionIndex" => "0x0",
+      "logIndex" => "0x0",
+      "removed" => false,
+      "address" => "0x" <> String.duplicate("1", 40),
+      "topics" => [],
+      "data" => "0x"
+    }
   end
 
   defp refuse_replacement_during_replay(chain, fleet, http, replacement) do

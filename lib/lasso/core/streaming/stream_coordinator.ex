@@ -1781,7 +1781,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   defp handle_resubscribe_failure(state, reason)
        when reason in [:not_connected, :connection_unknown] do
     Process.send_after(self(), {:retry_replacement, state.recovery_deadline_us}, 100)
-    {:noreply, state}
+    {:noreply, discard_attempt_events(state)}
   end
 
   defp handle_resubscribe_failure(state, %Lasso.JSONRPC.Error{
@@ -1827,11 +1827,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             key: inspect(state.key)
           )
 
-          # Preserve event buffer from failed attempt when cascading
-          # This prevents losing buffered events during multi-provider failover
-          preserved_buffer = state.failover_context.event_buffer
+          preserved_buffer = recovery_seed(state.failover_context)
 
-          # Reset to active and re-initiate, but pass preserved buffer
           reset_state = %{state | failover_status: :active, failover_context: nil}
 
           initiate_failover_with_buffer(
@@ -1852,6 +1849,26 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
+  # Live events prepend; the tail is the seed from before this replacement attempt.
+  defp recovery_seed(context) do
+    Enum.take(context.event_buffer, -context.initial_live_event_count)
+  end
+
+  defp discard_attempt_events(state) do
+    context = state.failover_context
+    seed = recovery_seed(context)
+
+    %{
+      state
+      | failover_context: %{
+          context
+          | event_buffer: seed,
+            event_buffer_count: length(seed),
+            event_buffer_bytes: event_buffer_bytes(seed)
+        }
+    }
+  end
+
   defp retry_replacement(state) do
     proposal = state.failover_context.new_provider_id
 
@@ -1863,10 +1880,12 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           reset,
           proposal,
           provider_id,
-          state.failover_context.event_buffer
+          recovery_seed(state.failover_context)
         )
 
       {:error, :no_providers} ->
+        state = discard_attempt_events(state)
+
         if recovery_remaining_ms(state.recovery_deadline_us) > 0 do
           state.replacement_requester.(state.profile, state.chain_id, state.key, proposal, self())
         end
