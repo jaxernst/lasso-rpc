@@ -2,10 +2,11 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
   use Lasso.Test.LassoIntegrationCase
   alias Lasso.JSONRPC.Error, as: JError
 
-  for {label, to_block, capabilities} <- [
-        {"one block", "0x1", %{}},
-        {"below configured cap", "0x10", %{limits: %{max_block_range: 128}}},
-        {"at configured cap", "0x81", %{limits: %{max_block_range: 128}}}
+  for {label, filter, capabilities} <- [
+        {"one block", %{fromBlock: "0x1", toBlock: "0x1"}, %{}},
+        {"one block with configured cap", %{fromBlock: "0x1", toBlock: "0x1"},
+         %{limits: %{max_block_range: 128}}},
+        {"blockHash", %{blockHash: "0x" <> String.duplicate("1", 64)}, %{}}
       ] do
     test "HTTP serves #{label} from a fallback after a retention refusal", %{chain: chain} do
       observer = self()
@@ -20,7 +21,7 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
         }
       ])
 
-      assert request(chain, unquote(to_block))["result"] == []
+      assert request(chain, unquote(Macro.escape(filter)))["result"] == []
       assert_receive {:refused, "pruned_reader"}
     end
 
@@ -33,7 +34,7 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
         refusing_provider("other_reader", 2, caps, observer)
       ])
 
-      error = request(chain, unquote(to_block))["error"]
+      error = request(chain, unquote(Macro.escape(filter)))["error"]
       assert is_map(error)
       refute get_in(error, ["data", "action"]) == "reduce_block_range", inspect(error)
       refute get_in(error, ["data", "reason"]) == "log_range_too_large", inspect(error)
@@ -44,7 +45,7 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
 
   test "HTTP preserves advice for a real multi-block refusal", %{chain: chain} do
     setup_providers([refusing_provider("limited_reader", 1, %{}, self())])
-    error = request(chain, "0x100")["error"]
+    error = request(chain, %{fromBlock: "0x1", toBlock: "0x100"})["error"]
     assert error["code"] == -32_005
     assert error["data"]["action"] == "reduce_block_range"
   end
@@ -69,7 +70,7 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
     }
   end
 
-  defp request(chain, to_block) do
+  defp request(chain, filter) do
     {:ok, _} = Application.ensure_all_started(:inets)
     port = LassoWeb.Endpoint.config(:http)[:port]
     url = String.to_charlist("http://127.0.0.1:#{port}/rpc/priority/#{chain}")
@@ -79,7 +80,7 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
         jsonrpc: "2.0",
         id: 1,
         method: "eth_getLogs",
-        params: [%{fromBlock: "0x1", toBlock: to_block}]
+        params: [filter]
       })
 
     assert {:ok, {{_, 200, _}, _, response}} =

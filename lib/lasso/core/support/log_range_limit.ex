@@ -99,7 +99,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
 
         case AdapterHelpers.compute_block_range(from, to, context) do
           {:ok, span} ->
-            span <= 1 or within_configured_cap?(span, Keyword.get(opts, :capabilities))
+            span <= 1
 
           :error ->
             false
@@ -109,12 +109,6 @@ defmodule Lasso.Core.Support.LogRangeLimit do
         false
     end
   end
-
-  defp within_configured_cap?(span, %{limits: %{max_block_range: cap}})
-       when is_integer(cap) and cap > 0,
-       do: span <= cap
-
-  defp within_configured_cap?(_span, _capabilities), do: false
 
   defp range_advice(%{limits: %{max_block_range: cap}}) when is_integer(cap) and cap > 0,
     do: Map.put(range_advice(nil), :max_block_range, cap)

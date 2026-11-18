@@ -22,7 +22,14 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
         {"larger then smaller stated number", [10_000, 5_000, :rate_limit], nil},
         {"uncapped refusal", [10_000, :uncapped, :rate_limit], nil},
         {"no advertised cap", [:uncapped, :rate_limit], nil},
-        {"result count", [:result_limit, :rate_limit], nil}
+        {"result count", [:result_limit, :rate_limit], nil},
+        {"result count within configured cap",
+         [{:configured_result, 2000}, {:configured_result, 2000}], 2000},
+        {"configured cap", [{:configured, 100_000}, :rate_limit], 100_000},
+        {"smaller configured cap first",
+         [{:configured, 100_000}, {:configured, 200_000}, :rate_limit], 100_000},
+        {"smaller configured cap last",
+         [{:configured, 200_000}, {:configured, 100_000}, :rate_limit], 100_000}
       ] do
     test "HTTP retains range advice after #{label}", %{chain: chain} do
       failures = unquote(Macro.escape(failures))
@@ -36,6 +43,7 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
             id: "reader_#{index}",
             priority: index,
             background_observations: false,
+            capabilities: capabilities(failure),
             behavior:
               {:conditional,
                fn method, params, state ->
@@ -61,7 +69,7 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
         Jason.encode!(%{
           jsonrpc: "2.0",
           method: "eth_getLogs",
-          params: [%{fromBlock: "0x1000000", toBlock: "0x1010000"}],
+          params: query_params(failures),
           id: 1
         })
 
@@ -77,6 +85,20 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
       for index <- 1..length(failures), do: assert_receive({:attempt, ^index, "eth_getLogs"})
     end
   end
+
+  defp query_params([{:configured_result, _cap} | _]),
+    do: [%{fromBlock: "0x1", toBlock: "0x64"}]
+
+  defp query_params(_failures),
+    do: [%{fromBlock: "0x1000000", toBlock: "0x1010000"}]
+
+  defp capabilities({:configured_result, cap}), do: %{limits: %{max_block_range: cap}}
+  defp capabilities({:configured, cap}), do: %{limits: %{max_block_range: cap}}
+  defp capabilities(_failure), do: %{}
+
+  defp behavior({:configured_result, _cap}), do: behavior(:result_limit)
+
+  defp behavior({:configured, _cap}), do: behavior(:uncapped)
 
   defp behavior(10_000),
     do: {:error, JError.new(-32_000, "range too large, max 10,000 blocks")}

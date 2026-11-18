@@ -46,11 +46,10 @@ unchanged request is not retriable. A later rate limit's retry delay is not
 attached to this range error: waiting alone does not resolve the range refusal.
 
 A refusal is treated as a per-provider capability failure when the known request
-span is one block or less, or is at or below that provider's operator-configured
-`capabilities.limits.max_block_range`. Narrowing cannot resolve those refusals
-(for example, missing retained history). Lasso tries the remaining providers and
+span is one block or less (including a `blockHash` query). Narrowing cannot
+resolve those refusals (for example, missing retained history). Lasso tries the remaining providers and
 these refusals do not contribute range advice at exhaustion. Unknown spans and
-spans above those bounds retain the range-refusal behavior described above.
+spans above that bound retain the range-refusal behavior described above.
 Lasso's local response-size cap still returns range advice immediately.
 
 When a range-refusing provider has an operator-configured
