@@ -325,22 +325,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           {:ok, Response.Success.t()} | {:error, JError.t()}
   def request(target, method, params, timeout_ms \\ 30_000, request_id \\ nil)
 
-  def request(instance_id, method, params, timeout_ms, request_id),
-    do: request(instance_id, method, params, timeout_ms, request_id, :client)
-
-  @spec request(
-          String.t(),
-          String.t(),
-          list() | map() | nil,
-          non_neg_integer(),
-          String.t() | nil,
-          :client | :system
-        ) :: {:ok, Response.Success.t()} | {:error, JError.t()}
-  def request(instance_id, method, params, timeout_ms, request_id, origin)
-      when is_binary(instance_id) do
+  def request(instance_id, method, params, timeout_ms, request_id) when is_binary(instance_id) do
     GenServer.call(
       via_instance_name(instance_id),
-      {:request, method, params, timeout_ms, request_id, origin},
+      {:request, method, params, timeout_ms, request_id},
       timeout_ms + 2_000
     )
   catch
@@ -493,11 +481,8 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
-  def handle_call({:request, method, params, timeout_ms, id}, from, state),
-    do: handle_call({:request, method, params, timeout_ms, id, :client}, from, state)
-
   def handle_call(
-        {:request, method, params, timeout_ms, provided_id, origin},
+        {:request, method, params, timeout_ms, provided_id},
         from,
         %{connected: true} = state
       ) do
@@ -523,7 +508,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           from,
           method,
           params,
-          {request_id, origin},
+          request_id,
           timeout_ms,
           state
         )
@@ -540,7 +525,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   def handle_call(
-        {:request, _method, _params, _timeout_ms, _request_id, _origin},
+        {:request, _method, _params, _timeout_ms, _request_id},
         _from,
         %{connected: false} = state
       ) do
@@ -782,7 +767,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
          from,
          method,
          params,
-         {request_id, origin},
+         request_id,
          timeout_ms,
          state
        ) do
@@ -819,7 +804,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           timer: timer,
           sent_at: sent_at,
           method: method,
-          request_origin: origin,
           timeout_ms: timeout_ms,
           token: token,
           generation: state.connection_id,
@@ -2614,7 +2598,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           origin =
             case send_key do
               {:control, _} -> :system
-              {:legacy, id, _} -> state.pending_requests[id].request_origin
+              {:legacy, _, _} -> subscription_request_origin(state, frame)
               _ -> :client
             end
 
@@ -2625,6 +2609,25 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     ws_client().cast(state.connection, message)
   catch
     :exit, _reason -> {:error, :connection_down}
+  end
+
+  defp subscription_request_origin(state, {:text, encoded}) do
+    case Jason.decode(encoded) do
+      {:ok, %{"method" => "eth_subscribe", "params" => ["newHeads"]}} ->
+        if Lasso.Providers.ObservationPolicy.effective(
+             state.instance_id,
+             state.endpoint.chain_id,
+             true
+           ).subscribe_new_heads,
+           do: :system,
+           else: :client
+
+      {:ok, %{"method" => "eth_unsubscribe"}} ->
+        :system
+
+      _ ->
+        :client
+    end
   end
 
   defp enqueue_control_send(state, kind, frame, timeout_ms) do
