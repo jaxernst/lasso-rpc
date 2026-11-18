@@ -249,6 +249,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       state.failover_status in [:switching, :backfilling] and
           failed_id == state.failover_context.new_provider_id ->
+        unless Map.has_key?(state.failover_context, :route_loss) do
+          :telemetry.execute([:lasso, :subs, :recovery, :route_lost], %{count: 1}, %{
+            chain_id: state.chain_id,
+            recovery_kind: Map.get(state.failover_context, :recovery_kind, :failover)
+          })
+        end
+
         context = Map.put(state.failover_context, :route_loss, {failed_id, proposed_new_id})
         {:noreply, %{state | failover_context: context}}
 
@@ -1554,20 +1561,35 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     recovery_kind = Map.get(state.failover_context, :recovery_kind, :failover)
 
     case drain_event_buffer(state) do
-      {:ok, %{failover_context: %{route_loss: {_failed, _proposed}}} = new_state} ->
-        :telemetry.execute([:lasso, :subs, :recovery, :route_lost], %{count: 1}, %{
-          chain_id: state.chain_id,
-          recovery_kind: recovery_kind
-        })
-
+      {:ok, %{failover_context: %{route_loss: {failed, proposed}}} = new_state} ->
         context = %{
           new_state.failover_context
-          | event_buffer: [],
+          | continuity_marker: continuity_marker(new_state.state, new_state.key),
+            continuity_snapshot: StreamState.continuity_snapshot(new_state.state),
+            event_buffer: [],
             event_buffer_bytes: 0,
-            event_buffer_count: 0
+            event_buffer_count: 0,
+            initial_live_event_count: 0,
+            replay_buffer: [],
+            replay_buffer_bytes: 0,
+            replay_buffer_count: 0
         }
 
-        handle_resubscribe_failure(%{new_state | failover_context: context}, :route_lost)
+        context = Map.delete(context, :route_loss)
+
+        if is_binary(proposed) and proposed != failed do
+          initiate_failover_with_buffer(
+            %{new_state | failover_status: :active, failover_context: nil},
+            failed,
+            proposed,
+            []
+          )
+        else
+          context =
+            if is_binary(proposed), do: %{context | new_provider_id: proposed}, else: context
+
+          handle_resubscribe_failure(%{new_state | failover_context: context}, :route_lost)
+        end
 
       {:ok, new_state} ->
         Logger.info("WebSocket continuity recovery complete",
@@ -1922,6 +1944,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             preserved_buffer
           )
 
+        {:error, :no_providers} when reason == :route_lost ->
+          Process.send_after(self(), {:retry_replacement, state.recovery_deadline_us}, 100)
+          {:noreply, %{state | failover_status: :switching}}
+
         {:error, :no_providers} ->
           Logger.error("No more providers available",
             chain_id: state.chain_id,
@@ -2210,17 +2236,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp pick_failover_http_provider(profile, chain_id, preferred, excluded) do
-    case Selection.policy(Selection.capture(profile, chain_id)) do
-      nil ->
-        case pick_best_http_provider(profile, chain_id, Enum.uniq([preferred | excluded])) do
-          {:ok, provider_id} ->
-            {:ok, provider_id}
+    case pick_best_http_provider(profile, chain_id, Enum.uniq([preferred | excluded])) do
+      {:ok, provider_id} ->
+        {:ok, provider_id}
 
-          {:error, :no_http_provider} ->
-            pick_backfill_http_provider(profile, chain_id, preferred, excluded)
-        end
-
-      _policy ->
+      {:error, :no_http_provider} ->
         pick_backfill_http_provider(profile, chain_id, preferred, excluded)
     end
   end
