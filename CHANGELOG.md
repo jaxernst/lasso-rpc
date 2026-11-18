@@ -7,16 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-18
+
 ### Fixed
 
-- `eth_getLogs` preserves range-narrowing advice and the smallest operator-configured block cap among refusing providers when later attempts time out or are rate-limited, including dispatch and deadline exhaustion. Numeric caps come only from configuration, never from upstream error wording.
-- HTTP 429 responses retain only bounded quota code, message and retry hints. Routing and head polling resolve positive Retry-After delays before parsing body hints; delays are capped at ten minutes and unrelated error data is discarded. Body seconds accept only whole nonnegative integers, not numeric prefixes such as `120ms`. Huge message delays are capped before conversion, including shared raw-body parsing, so they cannot overflow and lose the cooldown. Method and limits discovery probes still omit cooldown hints.
-- A route lost during subscription replay can return within the original recovery deadline. Recovery consumes the handled loss, refreshes delivered replay state, and honors a retained replacement. HTTP replay prefers an eligible independent source under every selection policy before falling back to the replacement.
+- When one provider refuses an `eth_getLogs` range as too large and the remaining attempts time out or are rate-limited, the client receives the range error (`-32005`, `data.reason: "log_range_too_large"`, `data.action: "reduce_block_range"`) instead of whichever timeout or rate limit came last. Previously the advice could be lost, so a client kept retrying a range no provider would serve. When refusing providers set `capabilities.limits.max_block_range`, `data.max_block_range` reports the smallest of those caps. Lasso no longer reads a number from provider error text, which could report a history-retention limit as a range cap.
+- HTTP 429 responses honor the wait the provider asks for. A `Retry-After` header, in seconds or as an HTTP date, takes precedence; otherwise Lasso uses `data.retry_after_ms`, then `data.retry_after` in whole seconds, then a delay in the message such as `Try again in 120 seconds`. Previously the header was ignored, so a provider that asked for two minutes got traffic back after the 30-second default. Every delay is capped at ten minutes, however large the value. Lasso keeps the 429's code and up to 1,000 bytes of its message and discards the rest of the error body.
+- When the only upstream behind a subscription disconnects while Lasso replays missed blocks and returns within the 30-second recovery deadline, the subscription continues and delivers later heads. Previously the client was closed with `1011` even though the provider came back. Replay also tries an independent HTTP source before the replacement provider's own endpoint on chains with `transactions` routing, as it already did on every other chain.
 
 ### Changed
 
-- Zero or past Retry-After values are ignored in favor of body hints or the existing default cooldown. Routing and head-polling cooldown consumers remain unchanged.
-- Startup and reload reject previously accepted `capabilities.limits.block_age_methods` entries without a readable block number parameter, such as `eth_getLogs`, with an actionable error directing log queries to `max_block_range`.
+- A zero or past `Retry-After` value is ignored in favor of the body hint or the default cooldown, so it can't send traffic straight back to a provider that is refusing it.
+- Startup and reload reject `capabilities.limits.block_age_methods` entries whose method has no block number parameter Lasso can read, such as `eth_getLogs`. The error says to remove the entry and to limit log queries with `max_block_range` instead. Such an entry used to load and never apply; now the profile fails to load.
+
+### Documentation
+
+- `fastest` measures latency per kind of request (basic reads, state, logs, trace, transactions, subscriptions) and transport, not per method. `round-robin` is an alias of `load-balanced`, which randomizes provider order per request, and responses report it as `load_balanced`.
+- Profiles that reference the same upstream share its health and circuit breakers.
+
+### Compatibility
+
+- No storage changes. Upgrading from v0.8.3 needs only the new image or release.
+- Profiles listing a method without a readable block number in `block_age_methods` must drop that entry before upgrading.
 
 ## [0.8.3] - 2026-11-18
 
@@ -552,7 +564,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.0...v0.8.1
