@@ -584,7 +584,7 @@ defmodule Lasso.Discovery.Probes.Limits do
   defp make_request(url, method, params, timeout) do
     case Response.request_decoded(%{url: url}, method, params, timeout: timeout) do
       {:error, {:rate_limit, payload}} ->
-        {:rate_limited, try_decode_body(Map.get(payload, :body, ""))}
+        {:rate_limited, payload}
 
       {:error, {:server_error, payload}} ->
         {:server_error, Map.get(payload, :status, :unavailable)}
@@ -594,13 +594,6 @@ defmodule Lasso.Discovery.Probes.Limits do
     end
   rescue
     e -> {:error, e}
-  end
-
-  defp try_decode_body(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} -> decoded
-      _ -> body
-    end
   end
 
   defp maybe_signal_throttle(on_throttle) when is_function(on_throttle, 1) do

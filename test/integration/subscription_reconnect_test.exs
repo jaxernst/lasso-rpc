@@ -125,6 +125,18 @@ defmodule Lasso.SubscriptionReconnectTest do
                      5_000
 
       assert %{"result" => subscription} = frame!(wire)
+      key = {:newHeads}
+
+      coordinator =
+        GenServer.whereis(Lasso.Core.Streaming.StreamCoordinator.via("public", chain, key))
+
+      assert is_pid(coordinator)
+
+      on_exit(fn ->
+        monitor = Process.monitor(coordinator)
+        assert_receive {:DOWN, ^monitor, :process, ^coordinator, _}, 5_000
+      end)
+
       Fleet.notify(source, header(100))
       assert_head!(wire, subscription, 100)
 

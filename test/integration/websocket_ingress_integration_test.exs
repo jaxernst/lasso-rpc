@@ -66,14 +66,13 @@ defmodule Lasso.Integration.WebSocketIngressTest do
       end)
 
     on_exit(fn ->
-      if Process.alive?(owner), do: Process.exit(owner, :kill)
+      stop_owner(owner)
       Ingress.audit()
     end)
 
     monitor = Process.monitor(owner)
     state = %{parent: owner, connection_generation: make_ref()}
     frame = ~s({"jsonrpc":"2.0","id":1,"result":"0x1"})
-    before = Ingress.stats()
 
     for _ <- 1..128 do
       assert {:ok, ^state} = Handler.handle_frame({:text, frame}, state)
@@ -86,14 +85,14 @@ defmodule Lasso.Integration.WebSocketIngressTest do
     end)
 
     assert {:message_queue_len, 129} = Process.info(owner, :message_queue_len)
-    assert Ingress.stats().messages == before.messages + 128
+    assert ingress_messages(owner) == 128
 
     send(owner, :drain)
     assert {:ok, ^state} = Task.await(blocked)
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
     assert :ok = Ingress.audit()
-    assert Ingress.stats().messages == before.messages
+    assert ingress_messages(owner) == 0
   end
 
   test "instance fanout reports overload instead of filling a stalled consumer mailbox" do
@@ -109,12 +108,15 @@ defmodule Lasso.Integration.WebSocketIngressTest do
       end)
 
     on_exit(fn ->
-      if Process.alive?(consumer), do: Process.exit(consumer, :kill)
+      stop_owner(consumer)
       Ingress.audit()
     end)
 
+    unrelated = spawn(fn -> receive do: (:stop -> :ok) end)
+    on_exit(fn -> stop_owner(unrelated) end)
+    assert :ok = Ingress.send(unrelated, :unrelated_event)
+
     assert_receive :registered
-    before = Ingress.stats()
     event = {:instance_subscription_event, instance_id, key, %{"number" => "0x1"}, 1}
 
     for _ <- 1..128 do
@@ -125,13 +127,15 @@ defmodule Lasso.Integration.WebSocketIngressTest do
              InstanceSubscriptionRegistry.dispatch(instance_id, key, event)
 
     assert {:message_queue_len, 128} = Process.info(consumer, :message_queue_len)
-    assert Ingress.stats().messages == before.messages + 128
+    assert ingress_messages(consumer) == 128
+
+    stop_owner(unrelated)
 
     monitor = Process.monitor(consumer)
     Process.exit(consumer, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^consumer, :killed}
     assert :ok = Ingress.audit()
-    assert Ingress.stats().messages == before.messages
+    assert ingress_messages(consumer) == 0
   end
 
   test "the public coordinator entrypoint bounds a paused coordinator mailbox" do
@@ -147,7 +151,6 @@ defmodule Lasso.Integration.WebSocketIngressTest do
       if Process.alive?(pid), do: :sys.resume(pid)
     end)
 
-    before = Ingress.stats()
     payload = %{"hash" => "0x1", "number" => "0x1"}
 
     for _ <- 1..128 do
@@ -159,11 +162,11 @@ defmodule Lasso.Integration.WebSocketIngressTest do
              StreamCoordinator.upstream_event(profile, 1, key, "upstream", nil, payload, 1)
 
     assert {:message_queue_len, 128} = Process.info(pid, :message_queue_len)
-    assert Ingress.stats().messages == before.messages + 128
+    assert ingress_messages(pid) == 128
 
     :ok = :sys.resume(pid)
     :sys.get_state(pid)
-    assert Ingress.stats().messages == before.messages
+    assert ingress_messages(pid) == 0
   end
 
   test "client fanout saturation terminates continuity without advancing the stream marker" do
@@ -177,7 +180,6 @@ defmodule Lasso.Integration.WebSocketIngressTest do
     initial_stream = :sys.get_state(coordinator).state
     :ok = :sys.suspend(registry)
     on_exit(fn -> if Process.alive?(registry), do: :sys.resume(registry) end)
-    before = Ingress.stats()
     payload = %{"hash" => "0x1", "number" => "0x1"}
 
     for _ <- 1..128 do
@@ -192,10 +194,25 @@ defmodule Lasso.Integration.WebSocketIngressTest do
     state = :sys.get_state(coordinator)
     assert state.failover_status == :degraded
     assert state.state == initial_stream
-    assert Ingress.stats().messages == before.messages + 128
+    assert ingress_messages(registry) == 128
 
     :ok = :sys.resume(registry)
     :sys.get_state(registry)
-    assert Ingress.stats().messages == before.messages
+    assert ingress_messages(registry) == 0
+  end
+
+  defp ingress_messages(owner) do
+    for {shard, _bytes, entries} <- :ets.tab2list(:lasso_stream_ingress),
+        is_integer(shard),
+        {_reference, {^owner, _charge}} <- entries,
+        reduce: 0 do
+      count -> count + 1
+    end
+  end
+
+  defp stop_owner(owner) do
+    monitor = Process.monitor(owner)
+    if Process.alive?(owner), do: Process.exit(owner, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 5_000
   end
 end

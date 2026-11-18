@@ -160,6 +160,18 @@ defmodule Lasso.TwoProviderWsFailoverTest do
                    5_000
 
     assert %{"result" => subscription} = frame!(wire)
+    key = if(context[:rejected_logs], do: {:logs, %{}}, else: {:newHeads})
+
+    coordinator =
+      GenServer.whereis(Lasso.Core.Streaming.StreamCoordinator.via("public", chain, key))
+
+    assert is_pid(coordinator)
+
+    on_exit(fn ->
+      monitor = Process.monitor(coordinator)
+      assert_receive {:DOWN, ^monitor, :process, ^coordinator, _}, 5_000
+    end)
+
     assert is_binary(subscription)
 
     if context[:rejected_logs] do

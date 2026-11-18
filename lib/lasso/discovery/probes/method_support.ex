@@ -484,16 +484,10 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
       # land as `:unsupported` instead of an opaque `:unknown` with
       # `error: "client_error"`.
       #
-      {:error, {:rate_limit, %{body: body}}} ->
-        case decode_jsonrpc_error(body) do
-          {:ok, error_obj} ->
-            error_obj
-            |> classify_jsonrpc_error(duration, capabilities)
-            |> Map.merge(%{status: :unknown, error_type: :rate_limit})
-
-          :no_jsonrpc ->
-            %{status: :unknown, duration_ms: duration, error: "rate_limit", error_code: 429}
-        end
+      {:error, {:rate_limit, %{code: code, message: message}}} ->
+        %{"code" => code, "message" => message}
+        |> classify_jsonrpc_error(duration, capabilities)
+        |> Map.merge(%{status: :unknown, error_type: :rate_limit})
 
       {:error, {:rate_limit, _payload}} ->
         %{status: :unknown, duration_ms: duration, error: "rate_limit", error_code: 429}
