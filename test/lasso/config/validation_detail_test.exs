@@ -53,6 +53,44 @@ defmodule Lasso.Config.ValidationDetailTest do
     end
   end
 
+  test "block age methods require a readable block number", %{tmp_dir: dir} do
+    for method <- ["eth_getLogs", "eth_call"] do
+      File.write!(Path.join(dir, "public.yml"), """
+      ---
+      name: Public
+      slug: public
+      ---
+      chains:
+        local:
+          chain_id: 31337
+          providers:
+            - id: primary
+              url: https://rpc.example.test
+              capabilities:
+                limits:
+                  max_block_age: 1000
+                  block_age_methods: [#{method}]
+      """)
+
+      case method do
+        "eth_getLogs" ->
+          assert {:error, {_, {:invalid_profile_config, path, reason}}} =
+                   Commands.check_config(dir)
+
+          assert path ==
+                   "profile.public.chains.local.providers.primary.capabilities.limits.block_age_methods[1]"
+
+          assert reason =~ "eth_getLogs"
+          assert reason =~ "max_block_age"
+          assert reason =~ "remove it from block_age_methods"
+          assert reason =~ "max_block_range for log queries"
+
+        "eth_call" ->
+          assert {:ok, _} = Commands.check_config(dir)
+      end
+    end
+  end
+
   test "unknown strategy identifies the chain and supported fields", %{tmp_dir: dir} do
     File.write!(
       Path.join(dir, "public.yml"),

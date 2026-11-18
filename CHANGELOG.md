@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Runtime provider registration reports header and field errors found during registration as `{:invalid_profile_config, field, message}` instead of `:invalid_provider_headers`.
 - No storage changes. Upgrading from v0.8.2 needs only the new image or release.
 
+### Changed
+
+- Startup and reload reject previously accepted `capabilities.limits.block_age_methods` entries without a readable block number parameter, such as `eth_getLogs`, with an actionable error directing log queries to `max_block_range`.
+
 ## [0.8.2] - 2026-11-17
 
 ### Security

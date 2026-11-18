@@ -36,7 +36,7 @@ defmodule Lasso.Config.FileSchema do
     "limits" => %{
       "max_block_range" => :nonnegative,
       "max_block_age" => :nonnegative,
-      "block_age_methods" => {:list, :string}
+      "block_age_methods" => {:list, :block_age_method}
     },
     "error_rules" =>
       {:list,
@@ -207,6 +207,18 @@ defmodule Lasso.Config.FileSchema do
   defp validate!(value, :integer, _) when is_integer(value), do: :ok
   defp validate!(value, :boolean, _) when is_boolean(value), do: :ok
   defp validate!(value, :string, _) when is_binary(value) and byte_size(value) > 0, do: :ok
+
+  defp validate!(value, :block_age_method, path) do
+    validate!(value, :string, path)
+
+    if is_nil(Lasso.JSONRPC.BlockSelector.position(value)),
+      do:
+        invalid!(
+          path,
+          "#{value} has no readable block number parameter for max_block_age; " <>
+            "remove it from block_age_methods; use max_block_range for log queries"
+        )
+  end
 
   defp validate!(value, :strings, path) when is_list(value),
     do: validate!(value, {:list, :string}, path)

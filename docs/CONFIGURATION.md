@@ -316,7 +316,7 @@ When `capabilities` is omitted, defaults to permissive (only `local_only` method
 Unsupported methods and categories keep a provider out of a request while
 another provider supports the method. When none does, Lasso tries the
 unsupported providers as a last resort instead of refusing the request. `max_block_age` reads the request's block number parameter, so
-it has no effect on `eth_getLogs`; use `max_block_range` for log queries.
+it has no effect on `eth_getLogs`; use `max_block_range` for log queries. Startup and reload now reject `block_age_methods` entries without a readable block number parameter, including previously accepted `eth_getLogs` entries.
 
 ## Read Exploration Policy
 
