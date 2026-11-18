@@ -550,6 +550,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   @doc "Method refusal evidence shared by cursor and materialized-list admission."
+  @spec method_refusal(map(), String.t(), term()) :: map() | nil
   def method_refusal(channel, method, partition) do
     scope =
       ProviderKnowledge.capability_scope(channel, channel.capabilities, method)
@@ -564,6 +565,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   @doc "Whether live method evidence excludes this route."
+  @spec method_refused?(term(), map(), String.t(), map()) :: boolean()
   def method_refused?(descriptor, plan, method, context) do
     scope = effect_scope(descriptor, plan, method, context)
 

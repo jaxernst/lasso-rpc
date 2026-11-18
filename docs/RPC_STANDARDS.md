@@ -35,6 +35,24 @@ provider implements them.
 Responses with `include_meta` report the class and how it was chosen; see
 [observability metadata](API_REFERENCE.md#observability-metadata).
 
+## Log range exhaustion
+
+When an `eth_getLogs` request encounters an upstream range or result-size refusal
+and no upstream completes it, exhaustion returns `-32005` with
+`data.reason: "log_range_too_large"` and `data.action: "reduce_block_range"`.
+This applies to provider, dispatch, candidate-admission and deadline exhaustion,
+including later timeouts or rate limits. Narrow the range before retrying; the
+unchanged request is not retriable. A later rate limit's retry delay is not
+attached to this range error: waiting alone does not resolve the range refusal.
+
+When a refusing provider has an operator-configured
+`capabilities.limits.max_block_range`, `data.max_block_range` carries the smallest
+such configured cap among this request's refusals. Without that configuration,
+the response gives narrowing advice without a number. Provider error wording,
+including numbers about retained history or result counts, never supplies a cap.
+A configured cap is a span limit, not a guarantee that every filter or upstream
+will serve that range. A successful fallback still returns its result.
+
 ## Transaction sends
 
 Without a chain [`transactions`](CONFIGURATION.md#transaction-providers) block, a
