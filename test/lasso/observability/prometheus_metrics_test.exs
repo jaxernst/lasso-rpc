@@ -126,7 +126,7 @@ defmodule Lasso.Observability.PrometheusMetricsTest do
     assert body =~ ~s(le="+Inf"} 1000)
     assert body =~ ~s(le="0.01"} 1000)
     assert value(body, "lasso_rpc_request_duration_seconds_sum") == 10.0
-    assert PrometheusMetrics.stats().series == 1
+    assert [_one_row] = Regex.scan(~r/^lasso_rpc_request_duration_seconds_count\{/m, body)
   end
 
   test "unknown methods and reason strings fold into bounded labels without raw identifiers" do
