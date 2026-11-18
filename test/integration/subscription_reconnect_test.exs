@@ -4,7 +4,7 @@ defmodule Lasso.SubscriptionReconnectTest do
   @moduletag feature: ["core-websocket-4"]
 
   alias Lasso.Config.ConfigStore
-  alias Lasso.Test.Harness.{Fleet, Rpc}
+  alias Lasso.Test.Harness.{Fleet, Rpc, Settle}
 
   test "replacement reconnects before the original deadline", context do
     reconnect(context, :replacement)
@@ -16,6 +16,10 @@ defmodule Lasso.SubscriptionReconnectTest do
 
   test "sole upstream reconnects without losing the client", context do
     reconnect(context, :sole)
+  end
+
+  test "a route lost during replay can return without replaying delivered heads", context do
+    reconnect(context, :repair_returning)
   end
 
   @tag timeout: 45_000
@@ -37,7 +41,9 @@ defmodule Lasso.SubscriptionReconnectTest do
     a = Fleet.start!(self(), "reconnect-a-#{chain}")
 
     fleets =
-      if scenario == :sole, do: [a], else: [a, Fleet.start!(self(), "reconnect-b-#{chain}")]
+      if scenario in [:sole, :repair_returning],
+        do: [a],
+        else: [a, Fleet.start!(self(), "reconnect-b-#{chain}")]
 
     on_exit(fn ->
       for fleet <- fleets do
@@ -126,7 +132,27 @@ defmodule Lasso.SubscriptionReconnectTest do
       # Break only the upstream socket; HTTP remains available for canonical replay.
       started = System.monotonic_time(:millisecond)
 
-      if scenario != :sole do
+      completed = Settle.listen([:lasso, :subs, :failover, :completed])
+      repaired = Settle.listen([:lasso, :subs, :reorg_repair, :completed])
+      lost = Settle.listen([:lasso, :subs, :recovery, :route_lost])
+
+      if scenario == :repair_returning do
+        Fleet.script(
+          a,
+          "eth_getBlockByNumber",
+          [{:hold, :repair}],
+          {:respond,
+           fn request ->
+             {:answer,
+              header(String.to_integer(String.trim_leading(hd(request["params"]), "0x"), 16))}
+           end}
+        )
+
+        Fleet.notify(source, header(102))
+        assert_receive {:fleet, ^a_pid, %{action: {:hold, :repair}}}, 5_000
+      end
+
+      if scenario not in [:sole, :repair_returning] do
         b_pid = b.pid
         assert_receive {:fleet, ^b_pid, %{request: %{"method" => "fixture_connected"}}}, 5_000
         Fleet.script(b, "eth_subscribe", [{:hold, :proposal}])
@@ -149,6 +175,13 @@ defmodule Lasso.SubscriptionReconnectTest do
                       %{request: %{"method" => "fixture_upgrade"}, action: {:hold, :reconnect}}},
                      5_000
 
+      if scenario == :repair_returning do
+        Settle.event(lost, &(&1.chain_id == chain))
+        Fleet.release(a, :repair, {:answer, header(100)})
+        assert_head!(wire, subscription, 101)
+        assert_head!(wire, subscription, 102)
+      end
+
       if scenario == :exhausted do
         ref = wire.reference
         assert_receive {:rpc_disconnect, ^ref, disconnect}, 31_000
@@ -168,10 +201,17 @@ defmodule Lasso.SubscriptionReconnectTest do
                         %{transport: :ws, request: %{"method" => "eth_subscribe"}} = replacement},
                        5_000
 
-        assert_head!(wire, subscription, 101)
-        assert_head!(wire, subscription, 102)
+        unless scenario == :repair_returning do
+          assert_head!(wire, subscription, 101)
+          assert_head!(wire, subscription, 102)
+        end
+
+        completion = if scenario == :repair_returning, do: repaired, else: completed
+        Settle.event(completion, &(&1.chain_id == chain))
+
         Fleet.notify(replacement, header(103))
         assert_head!(wire, subscription, 103)
+        refute_receive {:rpc_frame, ^ref, _}, 100
 
         assert Enum.any?(Enum.flat_map(fleets, &Fleet.drain/1), fn call ->
                  call.transport == :http and call.request["method"] == "eth_getBlockByNumber" and
@@ -189,6 +229,7 @@ defmodule Lasso.SubscriptionReconnectTest do
         Fleet.script(fleet, "fixture_upgrade", [], {:answer, true})
         Fleet.release(fleet, :reconnect, {:answer, true})
         Fleet.release(fleet, :proposal, {:disconnect, 1011})
+        Fleet.release(fleet, :repair, {:answer, header(100)})
       end
     end
   end

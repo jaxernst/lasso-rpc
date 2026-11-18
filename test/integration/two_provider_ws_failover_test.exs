@@ -14,7 +14,7 @@ defmodule Lasso.TwoProviderWsFailoverTest do
   end
 
   @tag refused_replacement: true
-  test "replacement ingress refusal during replay closes with continuity failure", context do
+  test "replacement ingress refusal during replay retries the returning route", context do
     assert_continuity(context)
   end
 
@@ -24,7 +24,8 @@ defmodule Lasso.TwoProviderWsFailoverTest do
   end
 
   @tag stalled_replacement: true, transactions: true
-  test "transaction policy retries replay through an eligible HTTP read provider", context do
+  test "transaction policy prefers independent HTTP replay before replacement fallback",
+       context do
     assert_continuity(context)
   end
 
@@ -190,6 +191,16 @@ defmodule Lasso.TwoProviderWsFailoverTest do
       assert_head!(wire, subscription, 101)
       assert_head!(wire, subscription, 102)
 
+      if context[:transactions] do
+        refute Enum.any?(Fleet.drain(b), fn call ->
+                 call.transport == :http and call.request["method"] == "eth_blockNumber"
+               end)
+
+        assert Enum.any?(Fleet.drain(http), fn call ->
+                 call.transport == :http and call.request["method"] == "eth_blockNumber"
+               end)
+      end
+
       if context[:third_replacement] do
         third_pid = http.pid
 
@@ -233,8 +244,13 @@ defmodule Lasso.TwoProviderWsFailoverTest do
         Rpc.close!(wire)
       else
         if context[:refused_replacement] do
-          ref = wire.reference
-          assert_receive {:rpc_disconnect, ^ref, %{reason: {:remote, 1011, _reason}}}, 5_000
+          assert_receive {:fleet, ^b_pid,
+                          %{transport: :ws, request: %{"method" => "eth_subscribe"}}},
+                         5_000
+
+          Fleet.script(b, "eth_blockNumber", [], {:answer, hex(103)})
+          assert_head!(wire, subscription, 103)
+          Rpc.close!(wire)
         else
           Fleet.notify(replacement, header(103))
           assert_head!(wire, subscription, 103)

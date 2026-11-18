@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A route lost during subscription replay can return within the original recovery deadline. Recovery consumes the handled loss, refreshes delivered replay state, and honors a retained replacement. HTTP replay prefers an eligible independent source under every selection policy before falling back to the replacement.
+
 ## [0.8.3] - 2026-11-18
 
 ### Fixed
