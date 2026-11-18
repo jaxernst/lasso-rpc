@@ -1888,6 +1888,8 @@ defmodule Lasso.RPC.RequestPipeline do
       begin_claim_audit(outcome, channel, rest_channels, ctx, caller_guard)
     else
       case LogRangeLimit.translate(ctx.method, reason,
+             params: ctx.params,
+             context: %{profile: channel.profile, chain_id: ctx.chain_id},
              capabilities: channel.provider_capabilities,
              provider_id: channel.provider_id,
              transport: channel.transport
@@ -1911,8 +1913,8 @@ defmodule Lasso.RPC.RequestPipeline do
             handle_owner_terminal(outcome, channel, ctx, range_error)
           end
 
-        :not_range_limit ->
-          if outcome.projection.fallback_eligible do
+        refusal when refusal in [:not_range_limit, :capability_refusal] ->
+          if refusal == :capability_refusal or outcome.projection.fallback_eligible do
             handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
           else
             handle_owner_terminal(outcome, channel, ctx)
