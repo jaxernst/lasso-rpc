@@ -39,10 +39,6 @@ defmodule Lasso.RPC.ExecutionProjector do
     )
   end
 
-  def project(%AttemptTerminal.PredispatchFailure{reason: :connect_failure}, 1),
-    do:
-      projection(true, :try_next_candidate, :failure, :reliability_failure, :predispatch_failure)
-
   def project(%AttemptTerminal.PredispatchFailure{}, 1),
     do: projection(true, :try_next_candidate, :none, :neutral, :predispatch_failure)
 

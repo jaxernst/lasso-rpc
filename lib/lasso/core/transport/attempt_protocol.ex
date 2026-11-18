@@ -432,7 +432,7 @@ defmodule Lasso.Core.Transport.AttemptProtocol do
     do: ErrorResolution.application_category(category)
 
   defp predispatch_reason(reason)
-       when reason in [:connect_failure, :pool_unavailable, :not_connected, :invalid_frame],
+       when reason in [:pool_unavailable, :not_connected, :invalid_frame],
        do: reason
 
   defp predispatch_reason(:encode_error), do: :encode

@@ -180,7 +180,7 @@ defmodule Lasso.RPC.Transport.HTTP.FinchDispatchTest do
 
     assert %{certainty: :not_dispatched} = AttemptProtocol.close(context)
 
-    assert {:ok, %{kind: :predispatch_failure, reason: :connect_failure}} =
+    assert {:ok, %{kind: :predispatch_failure, reason: :pool_unavailable}} =
              AttemptProtocol.take_terminal_candidate(context)
   end
 

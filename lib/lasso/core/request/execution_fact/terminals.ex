@@ -77,15 +77,7 @@ defmodule Lasso.RPC.AttemptTerminal.PredispatchFailure do
   @moduledoc false
   alias Lasso.RPC.{AttemptIdentity, ExecutionFact}
 
-  @reasons [
-    :encode,
-    :request_build,
-    :connect_failure,
-    :pool_unavailable,
-    :not_connected,
-    :invalid_frame,
-    :local
-  ]
+  @reasons [:encode, :request_build, :pool_unavailable, :not_connected, :invalid_frame, :local]
   @enforce_keys [:identity, :reason, :elapsed_us]
   defstruct @enforce_keys
 
