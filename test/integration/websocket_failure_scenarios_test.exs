@@ -26,10 +26,11 @@ defmodule Lasso.Integration.WebSocketFailureScenarioTest do
 
   setup do
     # Configure test to use MockWSClient
+    original_ws_client = Application.fetch_env!(:lasso, :ws_client_module)
     Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
     on_exit(fn ->
-      Application.delete_env(:lasso, :ws_client_module)
+      Application.put_env(:lasso, :ws_client_module, original_ws_client)
     end)
 
     :ok

@@ -44,6 +44,7 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
       priority: 10
     }
 
+    original_ws_client = Application.fetch_env!(:lasso, :ws_client_module)
     Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
     if created_secondary_profile? do
@@ -104,7 +105,7 @@ defmodule Lasso.Providers.SharedWSRuntimeTest do
         :ets.insert(:lasso_config_store, {{:profile_list}, profile_list})
       end
 
-      Application.delete_env(:lasso, :ws_client_module)
+      Application.put_env(:lasso, :ws_client_module, original_ws_client)
       Catalog.build_from_config()
     end)
 

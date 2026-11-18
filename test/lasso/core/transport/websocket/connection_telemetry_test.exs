@@ -15,6 +15,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
 
   setup do
     # Configure test to use MockWSClient
+    original_ws_client = Application.fetch_env!(:lasso, :ws_client_module)
     Application.put_env(:lasso, :ws_client_module, TestSupport.MockWSClient)
 
     endpoint = %Endpoint{
@@ -42,7 +43,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection.TelemetryTest do
       # Clean up circuit breaker
       cleanup_circuit_breaker(endpoint.chain_id, endpoint.id)
       # Clean up application config
-      Application.delete_env(:lasso, :ws_client_module)
+      Application.put_env(:lasso, :ws_client_module, original_ws_client)
       Application.delete_env(:lasso, :ws_client_opts)
     end)
 
