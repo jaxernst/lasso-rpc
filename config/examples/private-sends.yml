@@ -1,10 +1,10 @@
+---
 # Example only: copy into config/profiles and choose a profile slug.
 # Relay operators and their downstream builders remain trusted recipients.
 # Flashbots fast shares with registered builders and searcher TEEs; MEV Blocker
 # fast includes auction searchers and does not promise revert protection.
 # Hash acceptance does not prove inclusion. Keep wallet rebroadcast policies aligned.
 # These URLs serve Ethereum mainnet; rediscover testnet support before use.
----
 name: Private sends
 slug: private-sends
 ---
