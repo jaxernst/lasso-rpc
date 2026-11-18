@@ -63,12 +63,12 @@ jobs:
       - name: Check formatting
         run: mix format --check-formatted
 
-      - name: Run tests
-        run: mix test
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      - name: Run tests
+        run: mix test
 
       - name: Run shared Core harness
         run: scripts/verify-harness
