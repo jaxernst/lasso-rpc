@@ -43,6 +43,23 @@ defmodule Lasso.Integration.GetLogsRetainedHistoryTest do
     end
   end
 
+  test "HTTP preserves range advice when every provider refuses a two-block query", %{
+    chain: chain
+  } do
+    observer = self()
+
+    setup_providers([
+      refusing_provider("pruned_reader", 1, %{}, observer),
+      refusing_provider("other_reader", 2, %{}, observer)
+    ])
+
+    error = request(chain, %{fromBlock: "0x1", toBlock: "0x2"})["error"]
+    assert error["code"] == -32_005
+    assert error["data"]["action"] == "reduce_block_range"
+    assert_receive {:refused, "pruned_reader"}
+    assert_receive {:refused, "other_reader"}
+  end
+
   test "HTTP preserves advice for a real multi-block refusal", %{chain: chain} do
     setup_providers([refusing_provider("limited_reader", 1, %{}, self())])
     error = request(chain, %{fromBlock: "0x1", toBlock: "0x100"})["error"]

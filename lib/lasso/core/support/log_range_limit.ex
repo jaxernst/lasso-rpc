@@ -99,7 +99,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
 
         case AdapterHelpers.compute_block_range(from, to, context) do
           {:ok, span} ->
-            span <= 1
+            span == 0
 
           :error ->
             false

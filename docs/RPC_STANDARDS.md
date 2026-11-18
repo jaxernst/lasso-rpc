@@ -45,11 +45,13 @@ including later timeouts or rate limits. Narrow the range before retrying; the
 unchanged request is not retriable. A later rate limit's retry delay is not
 attached to this range error: waiting alone does not resolve the range refusal.
 
-A refusal is treated as a per-provider capability failure when the known request
-span is one block or less (including a `blockHash` query). Narrowing cannot
-resolve those refusals (for example, missing retained history). Lasso tries the remaining providers and
-these refusals do not contribute range advice at exhaustion. Unknown spans and
-spans above that bound retain the range-refusal behavior described above.
+A refusal is treated as a per-provider capability failure when the request
+selects exactly one block: the resolved `fromBlock` and `toBlock` are equal, or
+the filter specifies `blockHash`. Narrowing cannot resolve those refusals (for
+example, missing retained history). Lasso tries the remaining providers and
+these refusals do not contribute range advice at exhaustion. A query from block
+N through N+1 selects two blocks and can still be narrowed. Multi-block queries
+and unknown spans retain the range-refusal behavior described above.
 Lasso's local response-size cap still returns range advice immediately.
 
 When a range-refusing provider has an operator-configured
