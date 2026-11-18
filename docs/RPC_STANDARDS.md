@@ -45,7 +45,21 @@ including later timeouts or rate limits. Narrow the range before retrying; the
 unchanged request is not retriable. A later rate limit's retry delay is not
 attached to this range error: waiting alone does not resolve the range refusal.
 
-When a refusing provider has an operator-configured
+A refusal is treated as a per-provider capability failure when the request
+selects exactly one block: the resolved `fromBlock` and `toBlock` are equal, or
+the filter specifies `blockHash`. Narrowing cannot resolve those refusals (for
+example, missing retained history). Lasso tries the remaining providers and
+these refusals do not contribute range advice at exhaustion. If every reached
+provider refuses, candidate or dispatch exhaustion returns `-32006`
+(`capability_violation`) with the message "This provider cannot serve eth_getLogs
+for this block; history may not be retained" and no advice data. Upstream
+narrowing instructions are not forwarded for these one-block refusals.
+A query from block
+N through N+1 selects two blocks and can still be narrowed. Multi-block queries
+and unknown spans retain the range-refusal behavior described above.
+Lasso's local response-size cap still returns range advice immediately.
+
+When a range-refusing provider has an operator-configured
 `capabilities.limits.max_block_range`, `data.max_block_range` carries the smallest
 such configured cap among this request's refusals. Without that configuration,
 the response gives narrowing advice without a number. Provider error wording,
