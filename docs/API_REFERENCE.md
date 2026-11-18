@@ -32,6 +32,8 @@ POST /rpc/priority/:chain
 POST /rpc/round-robin/:chain
 ```
 
+`round-robin` is an alias of `load-balanced`: it randomizes provider order per request rather than rotating strictly, and response metadata reports the strategy as `load_balanced`. See [load balanced](ROUTING.md#load-balanced-default).
+
 ### Provider Override
 
 ```

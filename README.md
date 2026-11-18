@@ -12,7 +12,7 @@
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 
 Lasso wrangles your nodes and RPC providers into one fast, resilient, observable
-JSON-RPC endpoint. It measures every upstream by method and transport, sends each
+JSON-RPC endpoint. It measures every upstream by kind of request and transport, sends each
 request to the provider best able to serve it, and routes around outages, rate
 limits, and lagging nodes before your users notice. WebSocket subscriptions
 survive provider failures, and every routing decision is visible.
@@ -50,8 +50,9 @@ and you scale by adding providers instead of replatforming.
   rotation and reads fail over to the next healthy one. Recovered providers are
   eased back in.
 - **Uneven performance.** A provider can be fast for `eth_call` and slow for
-  `eth_getLogs`. Lasso tracks latency per provider, method, and transport, and
-  `fastest` sends each call to the quickest provider for that method.
+  `eth_getLogs`. Lasso tracks latency per provider, transport, and kind of request
+  (basic reads, state, logs, trace, transactions, subscriptions), and `fastest`
+  sends each call to the quickest provider for its kind.
 - **Mixed fleets.** Declare which providers are pruned, cap log ranges, or skip
   `debug` and `trace`, and Lasso routes each request only where it can be served.
 - **Dropped WebSockets.** Matching `newHeads` and `logs` subscriptions share one
