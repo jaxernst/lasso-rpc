@@ -23,6 +23,8 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
         {"uncapped refusal", [10_000, :uncapped, :rate_limit], nil},
         {"no advertised cap", [:uncapped, :rate_limit], nil},
         {"result count", [:result_limit, :rate_limit], nil},
+        {"result count within configured cap",
+         [{:configured_result, 2000}, {:configured_result, 2000}], 2000},
         {"configured cap", [{:configured, 100_000}, :rate_limit], 100_000},
         {"smaller configured cap first",
          [{:configured, 100_000}, {:configured, 200_000}, :rate_limit], 100_000},
@@ -67,7 +69,7 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
         Jason.encode!(%{
           jsonrpc: "2.0",
           method: "eth_getLogs",
-          params: [%{fromBlock: "0x1000000", toBlock: "0x1010000"}],
+          params: query_params(failures),
           id: 1
         })
 
@@ -84,8 +86,17 @@ defmodule Lasso.Integration.GetLogsExhaustionTest do
     end
   end
 
+  defp query_params([{:configured_result, _cap} | _]),
+    do: [%{fromBlock: "0x1", toBlock: "0x64"}]
+
+  defp query_params(_failures),
+    do: [%{fromBlock: "0x1000000", toBlock: "0x1010000"}]
+
+  defp capabilities({:configured_result, cap}), do: %{limits: %{max_block_range: cap}}
   defp capabilities({:configured, cap}), do: %{limits: %{max_block_range: cap}}
   defp capabilities(_failure), do: %{}
+
+  defp behavior({:configured_result, _cap}), do: behavior(:result_limit)
 
   defp behavior({:configured, _cap}), do: behavior(:uncapped)
 

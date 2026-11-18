@@ -11,6 +11,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
 
   alias Lasso.Core.Support.ErrorClassification
   alias Lasso.JSONRPC.Error, as: JError
+  alias Lasso.RPC.Providers.AdapterHelpers
 
   @message "eth_getLogs result exceeds a range or size limit; reduce the block range"
   @provider_categories [:capability_violation, :invalid_params, :client_error]
@@ -41,25 +42,43 @@ defmodule Lasso.Core.Support.LogRangeLimit do
     "abi: cannot marshal"
   ]
 
-  @spec translate(String.t(), term(), keyword()) :: {:ok, JError.t()} | :not_range_limit
+  @spec translate(String.t(), term(), keyword()) ::
+          {:ok, JError.t()} | :not_range_limit | {:capability_refusal, JError.t()}
   def translate(method, reason, opts \\ [])
 
   def translate("eth_getLogs", reason, opts) do
     error = JError.from(reason, opts)
 
-    if local_response_too_large?(error) or provider_range_limit?(error) do
-      {:ok,
-       JError.new(-32_005, @message,
-         data: range_advice(Keyword.get(opts, :capabilities)),
-         category: :log_range_limit,
-         retriable?: false,
-         breaker_penalty?: false,
-         provider_id: error.provider_id || Keyword.get(opts, :provider_id),
-         source: error.source,
-         transport: error.transport || Keyword.get(opts, :transport)
-       )}
-    else
-      :not_range_limit
+    cond do
+      not local_response_too_large?(error) and provider_range_limit?(error) and
+          within_known_span?(opts) ->
+        {:capability_refusal,
+         JError.new(
+           -32_006,
+           "This provider cannot serve eth_getLogs for this block; history may not be retained",
+           category: :capability_violation,
+           retriable?: true,
+           breaker_penalty?: false,
+           provider_id: error.provider_id || Keyword.get(opts, :provider_id),
+           source: :lasso,
+           transport: error.transport || Keyword.get(opts, :transport),
+           capacity_lease: error.capacity_lease
+         )}
+
+      local_response_too_large?(error) or provider_range_limit?(error) ->
+        {:ok,
+         JError.new(-32_005, @message,
+           data: range_advice(Keyword.get(opts, :capabilities)),
+           category: :log_range_limit,
+           retriable?: false,
+           breaker_penalty?: false,
+           provider_id: error.provider_id || Keyword.get(opts, :provider_id),
+           source: error.source,
+           transport: error.transport || Keyword.get(opts, :transport)
+         )}
+
+      true ->
+        :not_range_limit
     end
   end
 
@@ -74,6 +93,31 @@ defmodule Lasso.Core.Support.LogRangeLimit do
       {nil, cap} when is_integer(cap) -> error
       {old, cap} when is_integer(cap) and cap < old -> error
       _ -> previous
+    end
+  end
+
+  # Use the same span calculation as configured provider admission. Error text
+  # cannot turn retained history (or another capability) into a request span cap.
+  defp within_known_span?(opts) do
+    case Keyword.get(opts, :params) do
+      [%{"blockHash" => _hash}] ->
+        true
+
+      [filter] when is_map(filter) ->
+        from = Map.get(filter, "fromBlock", "latest")
+        to = Map.get(filter, "toBlock", "latest")
+        context = Keyword.get(opts, :context, %{})
+
+        case AdapterHelpers.compute_block_range(from, to, context) do
+          {:ok, span} ->
+            span == 0
+
+          :error ->
+            false
+        end
+
+      _ ->
+        false
     end
   end
 

@@ -1884,40 +1884,53 @@ defmodule Lasso.RPC.RequestPipeline do
     mode = ClaimAudit.mode(profile)
     eligibility = if mode == :on, do: ClaimAudit.assess(outcome, ctx), else: :disabled
 
-    if mode == :on and eligibility == :eligible_claim do
-      begin_claim_audit(outcome, channel, rest_channels, ctx, caller_guard)
-    else
-      case LogRangeLimit.translate(ctx.method, reason,
-             capabilities: channel.provider_capabilities,
-             provider_id: channel.provider_id,
-             transport: channel.transport
-           ) do
-        {:ok, range_error} ->
-          if LogRangeLimit.upstream_limit?(reason) do
-            ctx = %{
-              ctx
-              | log_range_error: LogRangeLimit.keep_advice(ctx.log_range_error, range_error)
-            }
+    translation =
+      LogRangeLimit.translate(ctx.method, reason,
+        params: ctx.params,
+        context: %{profile: channel.profile, chain_id: ctx.chain_id},
+        capabilities: channel.provider_capabilities,
+        provider_id: channel.provider_id,
+        transport: channel.transport
+      )
 
-            handle_owner_fallback(
-              outcome,
-              channel,
-              rest_channels,
-              ctx,
-              caller_guard,
-              :log_range_limit
-            )
-          else
-            handle_owner_terminal(outcome, channel, ctx, range_error)
-          end
+    case {translation, eligibility} do
+      {{:capability_refusal, error}, _eligibility} ->
+        handle_owner_fallback(
+          %{outcome | result: {:error, error}},
+          channel,
+          rest_channels,
+          ctx,
+          caller_guard
+        )
 
-        :not_range_limit ->
-          if outcome.projection.fallback_eligible do
-            handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
-          else
-            handle_owner_terminal(outcome, channel, ctx)
-          end
-      end
+      {_translation, :eligible_claim} ->
+        begin_claim_audit(outcome, channel, rest_channels, ctx, caller_guard)
+
+      {{:ok, range_error}, _eligibility} ->
+        if LogRangeLimit.upstream_limit?(reason) do
+          ctx = %{
+            ctx
+            | log_range_error: LogRangeLimit.keep_advice(ctx.log_range_error, range_error)
+          }
+
+          handle_owner_fallback(
+            outcome,
+            channel,
+            rest_channels,
+            ctx,
+            caller_guard,
+            :log_range_limit
+          )
+        else
+          handle_owner_terminal(outcome, channel, ctx, range_error)
+        end
+
+      {:not_range_limit, _eligibility} ->
+        if outcome.projection.fallback_eligible do
+          handle_owner_fallback(outcome, channel, rest_channels, ctx, caller_guard)
+        else
+          handle_owner_terminal(outcome, channel, ctx)
+        end
     end
   end
 
