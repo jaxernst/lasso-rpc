@@ -608,7 +608,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
   @doc """
   Resolves a bounded HTTP cooldown, evaluating headers before decoded body hints.
 
-  A valid header returns without parsing body hints. Otherwise integer data
+  A positive header delay returns without parsing body hints. Otherwise integer data
   milliseconds precede whole data seconds, then message delays. Missing hints
   return nil so callers retain their default cooldown. No body data is retained.
   """
@@ -620,8 +620,10 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
           is_binary(name) and is_binary(value),
           do: {String.downcase(name), value}
 
-    bounded_retry_after(Lasso.Discovery.ErrorClassifier.parse_retry_after(headers, nil)) ||
-      body_retry_after(error)
+    case Lasso.Discovery.ErrorClassifier.parse_retry_after(headers, nil) do
+      delay when is_integer(delay) and delay > 0 -> bounded_retry_after(delay)
+      _ -> body_retry_after(error)
+    end
   end
 
   defp body_retry_after(%{error_data: data, error_message: message}) do
