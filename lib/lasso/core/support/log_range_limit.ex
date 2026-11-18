@@ -50,7 +50,7 @@ defmodule Lasso.Core.Support.LogRangeLimit do
     if local_response_too_large?(error) or provider_range_limit?(error) do
       {:ok,
        JError.new(-32_005, @message,
-         data: %{reason: :log_range_too_large, action: :reduce_block_range},
+         data: range_advice(error.message),
          category: :log_range_limit,
          retriable?: false,
          breaker_penalty?: false,
@@ -64,6 +64,36 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   end
 
   def translate(_method, _reason, _opts), do: :not_range_limit
+
+  @doc "Keeps the smallest advertised block cap, or uncapped narrowing advice."
+  @spec keep_advice(JError.t() | nil, JError.t()) :: JError.t()
+  def keep_advice(nil, error), do: error
+
+  def keep_advice(previous, error) do
+    case {Map.get(previous.data, :max_block_range), Map.get(error.data, :max_block_range)} do
+      {nil, cap} when is_integer(cap) -> error
+      {old, cap} when is_integer(cap) and cap < old -> error
+      _ -> previous
+    end
+  end
+
+  defp range_advice(message) do
+    data = %{reason: :log_range_too_large, action: :reduce_block_range}
+
+    # Only an explicit block count is advice about span; result counts are not.
+    case Regex.run(
+           ~r/\bmax(?:imum)?(?: block range)?(?: is| of|:)?\s+([0-9][0-9,]*) blocks?\b/i,
+           String.slice(message, 0, 4_096),
+           capture: :all_but_first
+         ) do
+      [number] ->
+        cap = number |> String.replace(",", "") |> String.to_integer()
+        if cap > 0, do: Map.put(data, :max_block_range, cap), else: data
+
+      nil ->
+        data
+    end
+  end
 
   @doc "Whether a translated limit belongs to the upstream rather than to Lasso's response cap."
   @spec upstream_limit?(term(), keyword()) :: boolean()

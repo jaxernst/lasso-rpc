@@ -1081,7 +1081,13 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
-  defp exhaustion_error(%RequestContext{shared_capacity_denials: count}) when count > 0 do
+  defp exhaustion_error(ctx) do
+    {reason, error} = ordinary_exhaustion_error(ctx)
+    {reason, exhaustion_advice(ctx, error)}
+  end
+
+  defp ordinary_exhaustion_error(%RequestContext{shared_capacity_denials: count})
+       when count > 0 do
     {
       :shared_public_capacity_exhausted,
       JError.new(-32_005, "Shared public fallback capacity exhausted",
@@ -1093,7 +1099,7 @@ defmodule Lasso.RPC.RequestPipeline do
     }
   end
 
-  defp exhaustion_error(
+  defp ordinary_exhaustion_error(
          %{
            execution_envelope: %{
              execution_safety: :replay_safe,
@@ -1105,13 +1111,10 @@ defmodule Lasso.RPC.RequestPipeline do
        when count >= limit,
        do: {:providers_exhausted, dispatch_exhaustion_error(ctx)}
 
-  defp exhaustion_error(%RequestContext{log_range_error: %JError{} = error}),
+  defp ordinary_exhaustion_error(%{head_policy: %{last_error: %JError{} = error}}),
     do: {:providers_exhausted, error}
 
-  defp exhaustion_error(%{head_policy: %{last_error: %JError{} = error}}),
-    do: {:providers_exhausted, error}
-
-  defp exhaustion_error(ctx) do
+  defp ordinary_exhaustion_error(ctx) do
     {
       :providers_exhausted,
       JError.new(-32_000, "No available upstream completed the request within the routing policy",
@@ -1890,7 +1893,10 @@ defmodule Lasso.RPC.RequestPipeline do
            ) do
         {:ok, range_error} ->
           if LogRangeLimit.upstream_limit?(reason) do
-            ctx = %{ctx | log_range_error: range_error}
+            ctx = %{
+              ctx
+              | log_range_error: LogRangeLimit.keep_advice(ctx.log_range_error, range_error)
+            }
 
             handle_owner_fallback(
               outcome,
@@ -2699,7 +2705,7 @@ defmodule Lasso.RPC.RequestPipeline do
         })
 
       {:error, :deadline_exhausted} ->
-        finalize_selected_error(bounded_error(:deadline_exhausted), %{
+        finalize_selected_error(exhaustion_advice(ctx, bounded_error(:deadline_exhausted)), %{
           ctx
           | terminal_reason: :deadline_exhausted,
             public_response_attempt: nil
@@ -2773,7 +2779,7 @@ defmodule Lasso.RPC.RequestPipeline do
       Exhaustion.log_failure(ctx, [], reason)
     end
 
-    finalize_error(bounded_error(reason), %{ctx | terminal_reason: reason})
+    finalize_error(exhaustion_advice(ctx, bounded_error(reason)), %{ctx | terminal_reason: reason})
   end
 
   defp bounded_error(reason) do
@@ -2797,16 +2803,29 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
-  defp dispatch_exhaustion_error(%{head_policy: %{last_error: %JError{} = error}}),
+  defp exhaustion_advice(
+         %RequestContext{method: "eth_getLogs", log_range_error: %JError{} = error},
+         _fallback
+       ),
+       do: error
+
+  defp exhaustion_advice(_ctx, fallback), do: fallback
+
+  defp dispatch_exhaustion_error(ctx),
+    do: exhaustion_advice(ctx, ordinary_dispatch_exhaustion_error(ctx))
+
+  defp ordinary_dispatch_exhaustion_error(%{head_policy: %{last_error: %JError{} = error}}),
     do: %{error | retriable?: false}
 
-  defp dispatch_exhaustion_error(%RequestContext{last_attempt_error: %JError{} = error} = ctx) do
+  defp ordinary_dispatch_exhaustion_error(
+         %RequestContext{last_attempt_error: %JError{} = error} = ctx
+       ) do
     if error.category == :method_not_found and not rejection_is_answer?(ctx),
       do: bounded_error(:dispatch_budget_exhausted),
       else: %{error | retriable?: false}
   end
 
-  defp dispatch_exhaustion_error(%RequestContext{attempted_channels: [_ | _] = attempts}) do
+  defp ordinary_dispatch_exhaustion_error(%RequestContext{attempted_channels: [_ | _] = attempts}) do
     %{channel: channel, category: category, code: code} = List.last(attempts)
 
     JError.new(code || -32_000, "Request dispatch budget exhausted",
@@ -2817,7 +2836,7 @@ defmodule Lasso.RPC.RequestPipeline do
     )
   end
 
-  defp dispatch_exhaustion_error(_ctx), do: bounded_error(:dispatch_budget_exhausted)
+  defp ordinary_dispatch_exhaustion_error(_ctx), do: bounded_error(:dispatch_budget_exhausted)
 
   defp finalize_request_terminal({status, value, %RequestContext{} = ctx})
        when status in [:ok, :error] do
