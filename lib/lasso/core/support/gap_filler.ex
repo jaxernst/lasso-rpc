@@ -4,7 +4,9 @@ defmodule Lasso.Core.Support.GapFiller do
   """
 
   alias Lasso.Core.Request.ExecutionScope
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.JSONRPC.Quantity
+  alias Lasso.Providers.Catalog
   alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
 
   defmodule Plan do
@@ -172,14 +174,33 @@ defmodule Lasso.Core.Support.GapFiller do
         {:ok, result, _ctx} ->
           {:ok, result}
 
-        {:error, reason, _ctx} ->
-          {:error, Response.Capacity.discard(reason, :backfill_consumed)}
+        {:error, reason, ctx} ->
+          reason = Response.Capacity.discard(reason, :backfill_consumed)
+
+          if connection_admission?(plan, ctx),
+            do: {:error, {:connection_admission, reason}},
+            else: {:error, reason}
 
         other ->
           {:error, {:unexpected_request_result, other}}
       end
     end
   end
+
+  defp connection_admission?(plan, %{
+         terminal_reason: :circuit_open,
+         execution_envelope: %{dispatch_count: 0}
+       }) do
+    instance_id = Catalog.lookup_instance_id(plan.profile, plan.chain_id, plan.provider_id)
+
+    case Snapshot.lookup({instance_id, :http}) do
+      {:ok, %{opened_by_category: :connect_failure}} -> true
+      {:ok, %{state: :closed}} -> true
+      _ -> false
+    end
+  end
+
+  defp connection_admission?(_plan, _ctx), do: false
 
   defp remaining_timeout_ms(deadline_us) do
     case div(deadline_us - System.monotonic_time(:microsecond), 1_000) do

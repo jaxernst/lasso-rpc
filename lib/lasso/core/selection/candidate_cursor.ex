@@ -21,6 +21,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.MethodConstraints
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Observations.HeadSnapshot
   alias Lasso.Providers.{CandidateListing, Catalog, InstanceState}
 
@@ -734,7 +735,13 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
          ) do
       %{circuit_state: circuit_state, rate_limited: rate_limited} = candidate ->
         with {:ok, channel} <- channel(cursor, candidate, transport),
-             tier when tier in 1..4 <- tier(circuit_state, rate_limited, transport) do
+             tier when tier in 1..4 <-
+               candidate_tier(
+                 candidate.instance_id,
+                 transport,
+                 Map.fetch!(circuit_state, transport),
+                 Map.fetch!(rate_limited, transport)
+               ) do
           {:ok, channel, tier, AdapterFilter.method_supported?(channel, cursor.method)}
         else
           {:error, error} ->
@@ -780,7 +787,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       )
 
     with true <- gate_allowed?(cursor.filters, circuit_state, rate_limited?),
-         tier when tier in 1..4 <- tier(circuit_state, rate_limited?),
+         tier when tier in 1..4 <-
+           candidate_tier(candidate.instance_id, transport, circuit_state, rate_limited?),
          {:ok, channel} <- channel(cursor, candidate, transport) do
       {:ok, channel, tier, AdapterFilter.method_supported?(channel, cursor.method)}
     else
@@ -846,11 +854,18 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     )
   end
 
-  defp tier(circuit_state, rate_limited, transport) do
-    case {Map.fetch!(circuit_state, transport), Map.fetch!(rate_limited, transport)} do
-      {state, limited?} -> tier(state, limited?)
+  defp candidate_tier(instance_id, :http, :half_open, false) do
+    case Snapshot.lookup({instance_id, :http}) do
+      {:ok,
+       %{opened_by_category: :connect_failure, control_health: :healthy, half_open_inflight: 0}} ->
+        1
+
+      _ ->
+        2
     end
   end
+
+  defp candidate_tier(_instance_id, _transport, state, limited?), do: tier(state, limited?)
 
   defp tier(:closed, false), do: 1
   defp tier(:half_open, false), do: 2

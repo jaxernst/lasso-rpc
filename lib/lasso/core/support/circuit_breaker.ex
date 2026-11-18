@@ -573,6 +573,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     default_category_thresholds = %{
       server_error: 5,
       network_error: 3,
+      connect_failure: 3,
       timeout: 2,
       auth_error: 3
     }
@@ -582,6 +583,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       |> Map.merge(default_category_thresholds, fn _k, v1, _v2 -> v1 end)
 
     default_category_recovery_timeouts = %{
+      connect_failure: 1_000,
       auth_error: 10_000
     }
 
@@ -1284,6 +1286,9 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   defp canonical_breaker_category(%AttemptTerminal.Response{error_category: :provider_failure}),
     do: :server_error
 
+  defp canonical_breaker_category(%AttemptTerminal.PredispatchFailure{reason: :connect_failure}),
+    do: :connect_failure
+
   defp canonical_breaker_category(%AttemptTerminal.InvalidResponse{}), do: :protocol_error
   defp canonical_breaker_category(%AttemptTerminal.Deadline{}), do: :timeout
 
@@ -1597,7 +1602,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     {:reply, {:ok, result}, new_state}
   end
 
-  defp effective_success_threshold(%{opened_by_category: :rate_limit}), do: 1
+  defp effective_success_threshold(%{opened_by_category: category})
+       when category in [:rate_limit, :connect_failure],
+       do: 1
+
   defp effective_success_threshold(state), do: state.success_threshold
 
   defp handle_failure(error, state) do
@@ -1734,6 +1742,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     )
   end
 
+  defp compute_reopen_delay(state, _error, :connect_failure) do
+    base = Map.fetch!(state.category_recovery_timeouts, :connect_failure)
+    min(base * Integer.pow(2, min(state.consecutive_open_count, 2)), 4_000)
+  end
+
   defp compute_reopen_delay(state, error, error_category) do
     explicit_retry_after =
       if error_category == :rate_limit and is_struct(error, JError) do
@@ -1800,7 +1813,8 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       half_open_inflight: state.inflight_count,
       control_health: control_health,
       failure_count: state.failure_count,
-      needs_success?: state.failure_count > 0
+      needs_success?: state.failure_count > 0,
+      opened_by_category: state.opened_by_category
     }
 
     snapshot_write_barrier(:before)

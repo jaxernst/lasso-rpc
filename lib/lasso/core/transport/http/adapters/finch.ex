@@ -535,6 +535,22 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   end
 
   defp handle_request_outcome(
+         {{:returned, {:error, %Finch.TransportError{reason: reason} = error}}, :not_started,
+          true},
+         %AttemptProtocol.Context{} = context,
+         _lease,
+         _io_duration_us
+       ) do
+    failure =
+      if reason in [:timeout, :econnrefused, :econnreset, :closed, :nxdomain],
+        do: :connect_failure,
+        else: :local
+
+    AttemptProtocol.predispatch_failure(context, failure)
+    normalize_finch_error(error)
+  end
+
+  defp handle_request_outcome(
          {{:returned, {:error, reason}}, dispatch_state, tracker_healthy?},
          context,
          _lease,

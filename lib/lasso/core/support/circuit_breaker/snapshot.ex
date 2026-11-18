@@ -19,7 +19,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.Snapshot do
     :control_health
   ]
   defstruct @enforce_keys ++
-              [failure_count: 0, needs_success?: false]
+              [failure_count: 0, needs_success?: false, opened_by_category: nil]
 
   @type t :: %__MODULE__{
           breaker_id: {String.t(), :http | :ws},
@@ -33,6 +33,7 @@ defmodule Lasso.Core.Support.CircuitBreaker.Snapshot do
           half_open_inflight: non_neg_integer(),
           control_health: control_health(),
           failure_count: non_neg_integer(),
+          opened_by_category: atom() | nil,
           needs_success?: boolean()
         }
 

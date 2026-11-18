@@ -371,6 +371,7 @@ defmodule Lasso.RPC.ExecutionReducer do
        when reason in [
               :encode,
               :request_build,
+              :connect_failure,
               :pool_unavailable,
               :not_connected,
               :invalid_frame,

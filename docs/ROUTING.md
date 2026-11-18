@@ -257,6 +257,8 @@ shares or account for provider capacity.
 
 All strategies are subject to health tiering. The strategy determines the order within each tier, but tier ordering takes precedence.
 
+Exception: a connection-class HTTP circuit in half-open with a free probation lease and no rate limit keeps its ordinary strategy ranking instead of being deferred behind closed circuits.
+
 | Strategy | Within-Tier Behavior | Cross-Tier Impact |
 |----------|---------------------|-------------------|
 | Load Balanced | Randomized; replay-safe fallback gives distinct physical instances a bounded first pass | Health tiers and recovered-head preference dominate |
@@ -264,7 +266,7 @@ All strategies are subject to health tiering. The strategy determines the order 
 | Latency Weighted | Weighted random | Weights apply only within each tier |
 | Priority | Priority-ordered | Priority applies only within each tier |
 
-**Example**: With fastest strategy, if the fastest provider has a half-open circuit, any closed-circuit provider will be tried first, even if it's slower.
+**Example**: With fastest strategy, if the fastest provider has a half-open circuit outside the connection-probation exception above, any closed-circuit provider will be tried first, even if it's slower.
 
 ## Execution and Failover
 

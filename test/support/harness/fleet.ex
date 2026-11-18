@@ -16,6 +16,9 @@ defmodule Lasso.Test.Harness.Fleet do
 
   def stop(f), do: GenServer.stop(f.pid)
 
+  def suspend_listener(f), do: GenServer.call(f.pid, :suspend_listener)
+  def resume_listener(f), do: GenServer.call(f.pid, :resume_listener)
+
   def script(f, method, calls, fallback \\ :default),
     do: GenServer.call(f.pid, {:script, method, calls, fallback})
 
@@ -69,6 +72,23 @@ defmodule Lasso.Test.Harness.Fleet do
 
   @impl true
   def handle_call(:endpoint, _, s), do: {:reply, s.endpoint, s}
+
+  def handle_call(:suspend_listener, _, s) do
+    port = :ranch.get_port(s.ref)
+    opts = :ranch.get_transport_options(s.ref)
+    :ok = :ranch.suspend_listener(s.ref)
+
+    :ok =
+      :ranch.set_transport_options(
+        s.ref,
+        Map.update!(opts, :socket_opts, &Keyword.put(&1, :port, port))
+      )
+
+    {:reply, :ok, s}
+  end
+
+  def handle_call(:resume_listener, _, s),
+    do: {:reply, :ranch.resume_listener(s.ref), s}
 
   def handle_call({:script, method, calls, fallback}, _, s),
     do: {:reply, :ok, put_in(s.scripts[method], {calls, fallback})}

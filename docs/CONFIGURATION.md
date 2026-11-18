@@ -273,6 +273,8 @@ All strategies are subject to health-based tiering after initial ranking. The pi
 
 Open-circuit providers are excluded entirely. Within each tier, the strategy's ranking is preserved; load-balanced replay-safe fallback gives distinct physical instances a first pass before alternate transports, subject to the cursor's candidate bound and explicit recovered-head preference. See [load-balanced semantics](ROUTING.md#load-balanced-default) for limits and tradeoffs.
 
+Exception: a connection-class HTTP circuit in half-open with a free probation lease and no rate limit keeps its ordinary strategy ranking instead of being deferred behind closed circuits.
+
 This ensures healthy providers receive traffic first while allowing recovering providers to gradually reintegrate. See [ROUTING.md](ROUTING.md#health-based-tiering) for detailed behavior and examples.
 
 ### Provider Override

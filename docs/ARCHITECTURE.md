@@ -532,7 +532,7 @@ Per-chain health probe coordinator (one per unique chain):
 - 200ms tick cycle, probes one instance per tick
 - Periodic `eth_chainId` probes (health check + version detection)
 - Exponential backoff on failure (2s base, 30s max, ±20% jitter)
-- Signals recovery to circuit breakers via `CircuitBreaker.signal_recovery_cast/1`
+- Reports chain identity and probe health independently of circuit admission and recovery
 - Writes health status to `:lasso_instance_state` ETS
 
 **Configuration**:
@@ -604,6 +604,16 @@ Per-provider, per-transport circuit breakers.
 - **:open** → **:half_open**: After `recovery_timeout`
 - **:half_open** → **:closed**: After `success_threshold` consecutive successes
 - **:half_open** → **:open**: On any failure
+
+Proven pre-send HTTP connection failures open the circuit after three failures.
+Their cooldown starts at 1 second and doubles on failed probation up to 4 seconds,
+plus jitter. The existing single half-open lease limits probation traffic; one
+successful leased HTTP attempt closes a connection-class circuit. A free
+connection probation lease keeps the route at its normal priority position so
+ordinary requests can recover it even with background observations disabled.
+Other failure classes retain their normal cooldown and success threshold.
+Identity probes update identity and health evidence; they do not open or recover
+circuits. Routed request and head-poll outcomes drive circuit recovery.
 
 ### Configuration
 
