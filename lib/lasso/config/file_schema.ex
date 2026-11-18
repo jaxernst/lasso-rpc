@@ -254,7 +254,7 @@ defmodule Lasso.Config.FileSchema do
     data = Map.new(Map.to_list(provider), fn {key, value} -> {to_string(key), value} end)
     data = data |> Map.take(Map.keys(@provider)) |> Map.reject(fn {_, v} -> is_nil(v) end)
     path = provider_path("profile.#{profile}.chains.#{chain}.providers", data, index)
-    validate!(Map.take(data, ["id", "url", "ws_url", "priority"]), @provider, path)
+    validate!(Map.take(data, ["url", "ws_url", "priority"]), @provider, path)
     require_keys!(data, ["id"], path)
 
     unless data["url"] || data["ws_url"],
