@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Subscription recovery replays canonically through the highest block observed during recovery, including discarded replacement events. A lagging replay source has the remaining recovery budget to catch up; otherwise the client closes with `1011` instead of silently skipping logs or the last observed head.
+## [0.8.3] - 2026-11-18
+
+### Fixed
+
+- When a subscription moves to a replacement provider, that provider's first event reaches the client. Previously it could arrive before Lasso finished switching and be dropped, so the client skipped a head or the logs in it. Events from a replacement attempt that fails are now discarded before the next attempt, so a log that the winning provider's replay doesn't contain, such as one from a fork, no longer reaches the client.
+- Subscription recovery replays through the highest block the stream already saw, including blocks seen only in events from a discarded replacement attempt. Previously recovery could complete below that height, so a `logs` subscription could skip a log and a `newHeads` subscription could miss the last head it saw until another one arrived. When the chosen replay source is behind, Lasso tries another eligible HTTP source that has caught up before waiting on the lagging one, which it re-checks every 100 ms. Every attempt shares the original 30-second recovery deadline. If no source covers the height in time, the client is closed with `1011` instead of skipping blocks.
+- When an upstream WebSocket sends a ping and a close frame in one batch and then drops the connection, Lasso keeps the upstream's close code and reason, such as `1011`. Previously the failed pong write replaced them with a transport error.
+- Provider configuration errors name the profile, chain and provider (by `id`, or by position when there is no `id`), the exact failing field, the expected type or allowed fields, and the type found. Previously an invalid provider reported a generic `invalid value type or range`, an unsupported field didn't list the supported ones, and a header error didn't say which field was wrong. Values, credentials and header names stay out of the message.
+- Providers added at runtime are checked against the same `url`, `ws_url` and `priority` rules as profile files. Previously runtime registration with `validate: false` accepted a provider with no URL or a string priority.
+- Subscription integration tests restore the suite's WebSocket client setting during teardown. Clearing it had crashed shared test runtimes, which made an exhausted subscription close after about one second in CI instead of after its 30-second recovery window.
+
+### Compatibility
+
+- Configuration errors keep the `{:invalid_profile_config, field, message}` shape, but `field` now starts with `profile.<name>.` and names the provider, and `message` states the expected and found types. Scripts that match the old message text need updating.
+- Runtime provider registration reports header and field errors found during registration as `{:invalid_profile_config, field, message}` instead of `:invalid_provider_headers`.
+- No storage changes. Upgrading from v0.8.2 needs only the new image or release.
 
 ## [0.8.2] - 2026-11-17
 
@@ -526,7 +541,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.7.1...v0.8.0
