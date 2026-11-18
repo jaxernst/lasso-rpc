@@ -404,10 +404,7 @@ defmodule LassoWeb.Dashboard.Components.ProviderDetailsPanel do
             <p>Outbound budget (this node): {@request_budget.requests_per_second} requests/s,
               burst {@request_budget.burst}</p>
             <p>
-              Client: {@request_budget.admitted_client} admitted, {@request_budget.refused_client} refused
-            </p>
-            <p>
-              Background: {@request_budget.admitted_background} admitted, {@request_budget.refused_background} refused
+              {@request_budget.admitted} admitted, {@request_budget.refused} refused
             </p>
           </div>
           <.circuit_breaker_section circuit_data={@circuit_data} />

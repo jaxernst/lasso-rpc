@@ -74,26 +74,24 @@ defmodule Lasso.Core.Transport.UpstreamAdmission do
 
   @spec new_budget(budget_config(), String.t()) :: budget()
   def new_budget(config, identity) do
-    counters = :atomics.new(5, signed: true)
+    counters = :atomics.new(3, signed: true)
     :atomics.put(counters, 1, System.monotonic_time(:microsecond))
     %{config: config, identity: identity, counters: counters}
   end
 
   # No-budget admission performs no clock read, lookup, or atomic operation.
-  @spec admit_budget(budget() | nil, :client | :system, :http | :ws) ::
+  @spec admit_budget(budget() | nil, :http | :ws) ::
           :ok | {:error, {:upstream_request_budget_exhausted, pos_integer()}}
-  def admit_budget(nil, _origin, _transport), do: :ok
+  def admit_budget(nil, _transport), do: :ok
 
-  def admit_budget(bucket, origin, transport) do
+  def admit_budget(bucket, transport) do
     result = debit_budget(bucket)
     event = if result == :ok, do: :accepted, else: :rejected
-    index = if origin == :client, do: 2, else: 4
-    :atomics.add(bucket.counters, if(result == :ok, do: index, else: index + 1), 1)
+    :atomics.add(bucket.counters, if(result == :ok, do: 2, else: 3), 1)
 
     :telemetry.execute([:lasso, :upstream_admission, event], %{count: 1}, %{
       upstream_instance_id: bucket.identity,
       reason: :upstream_request_budget,
-      request_origin: origin,
       transport: transport
     })
 
@@ -105,10 +103,8 @@ defmodule Lasso.Core.Transport.UpstreamAdmission do
 
   def budget_stats(bucket) do
     Map.merge(bucket.config, %{
-      admitted_client: :atomics.get(bucket.counters, 2),
-      refused_client: :atomics.get(bucket.counters, 3),
-      admitted_background: :atomics.get(bucket.counters, 4),
-      refused_background: :atomics.get(bucket.counters, 5)
+      admitted: :atomics.get(bucket.counters, 2),
+      refused: :atomics.get(bucket.counters, 3)
     })
   end
 

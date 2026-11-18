@@ -1526,12 +1526,10 @@ defmodule Lasso.RPC.RequestPipeline do
          prepared_request,
          timeout_ms,
          %{request_origin: :system, observation_activity: activity}
-       ) do
+       )
+       when activity in [:head, :diagnostic_head, :diagnostic_identity, :revalidation] do
     fn ->
-      Channel.request(channel, prepared_request, timeout_ms,
-        request_origin: :system,
-        observation_activity: activity
-      )
+      Channel.request(channel, prepared_request, timeout_ms, observation_activity: activity)
     end
   end
 

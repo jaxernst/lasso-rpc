@@ -55,7 +55,7 @@ defmodule Lasso.UpstreamRequestBudgetTest do
     publish(ctx, %{requests_per_second: 1, burst: 20}, true)
 
     assert_receive {:event, [:lasso, :upstream_admission, :accepted], _,
-                    %{request_origin: :system, reason: :upstream_request_budget}},
+                    %{reason: :upstream_request_budget}},
                    2_500
 
     responses =
@@ -73,9 +73,13 @@ defmodule Lasso.UpstreamRequestBudgetTest do
     assert Enum.any?(responses, &(&1["lasso_meta"]["selected_provider"]["id"] == "unlimited"))
     assert Enum.any?(responses, &(&1["lasso_meta"]["budget_refusals"] != []))
 
+    discard_budget_refusals()
+    # With client work finished, subsequent budget refusals come from periodic observations.
     assert_receive {:event, [:lasso, :upstream_admission, :rejected], _,
-                    %{request_origin: :system, reason: :upstream_request_budget}},
+                    %{reason: :upstream_request_budget} = metadata},
                    2_500
+
+    refute Map.has_key?(metadata, :request_origin)
 
     elapsed = System.monotonic_time(:millisecond) - started
     calls = rpc_calls(ctx.limited)
@@ -139,6 +143,15 @@ defmodule Lasso.UpstreamRequestBudgetTest do
     write_profile(ctx, "testnet", %{requests_per_second: 2}, false, true)
     assert {:error, _} = Commands.reload()
     assert rpc("public", "eth_getBalance", "provider/metered/")["error"]["code"] == -32005
+  end
+
+  defp discard_budget_refusals do
+    receive do
+      {:event, [:lasso, :upstream_admission, :rejected], _, %{reason: :upstream_request_budget}} ->
+        discard_budget_refusals()
+    after
+      0 -> :ok
+    end
   end
 
   defp rpc(profile, method, route \\ "priority/") do

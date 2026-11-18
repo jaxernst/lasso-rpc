@@ -2595,39 +2595,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
           {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
 
         bucket ->
-          origin =
-            case send_key do
-              {:control, _} -> :system
-              {:legacy, _, _} -> subscription_request_origin(state, frame)
-              _ -> :client
-            end
-
-          {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame, bucket,
-           origin}
+          {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame, bucket}
       end
 
     ws_client().cast(state.connection, message)
   catch
     :exit, _reason -> {:error, :connection_down}
-  end
-
-  defp subscription_request_origin(state, {:text, encoded}) do
-    case Jason.decode(encoded) do
-      {:ok, %{"method" => "eth_subscribe", "params" => ["newHeads"]}} ->
-        if Lasso.Providers.ObservationPolicy.effective(
-             state.instance_id,
-             state.endpoint.chain_id,
-             true
-           ).subscribe_new_heads,
-           do: :system,
-           else: :client
-
-      {:ok, %{"method" => "eth_unsubscribe"}} ->
-        :system
-
-      _ ->
-        :client
-    end
   end
 
   defp enqueue_control_send(state, kind, frame, timeout_ms) do

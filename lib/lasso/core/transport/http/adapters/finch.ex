@@ -29,7 +29,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     with {:ok, request_options} <- request_options(deadline_us, nil, opts),
          {:ok, lease} <- acquire_admission(request, nil, opts) do
       try do
-        case UpstreamAdmission.admit_budget(Keyword.get(opts, :request_budget), :system, :http) do
+        case UpstreamAdmission.admit_budget(Keyword.get(opts, :request_budget), :http) do
           :ok ->
             request |> stream_request(finch_name, request_options, lease, nil, nil) |> consumer.()
 
@@ -202,7 +202,6 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
              :ok <-
                UpstreamAdmission.admit_budget(
                  Keyword.get(opts, :request_budget),
-                 Keyword.get(opts, :request_origin, :client),
                  :http
                ),
              :ok <- DispatchTracker.open_send(context, tracker_token) do

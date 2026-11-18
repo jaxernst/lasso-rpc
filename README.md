@@ -263,7 +263,8 @@ client requests try another provider and background polls skip the tick without
 penalizing provider health. If every eligible route is spent, Lasso returns
 `-32005` with a retry delay. WebSocket notifications and upgrades do not spend
 tokens. Omit `burst` for one second's allowance, or omit `request_budget` for
-unlimited outbound requests. See [outbound budgets](docs/CONFIGURATION.md#outbound-request-budget)
+unlimited outbound requests. Provider details show admitted/refused totals per
+upstream. See [outbound budgets](docs/CONFIGURATION.md#outbound-request-budget)
 for identity, reload and per-node semantics.
 
 To avoid periodic work entirely, turn background tracking off:

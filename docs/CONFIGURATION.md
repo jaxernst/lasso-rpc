@@ -260,8 +260,8 @@ provider failures. If every eligible route is budget-refused, JSON-RPC returns
 `data.retry_after_ms` for the earliest refill. Mixed failures retain the ordinary
 error rules, including log-range advice. Opt-in `lasso_meta.budget_refusals`
 identifies refused provider/transport routes separately from dispatched attempts.
-Provider details show this node's rate/burst and admitted/refused counts for
-client and background work. Counts reset with a fresh bucket.
+Provider details show this node's rate/burst and admitted/refused totals per
+upstream. Counts reset with a fresh bucket.
 
 ## Environment Variable Substitution
 

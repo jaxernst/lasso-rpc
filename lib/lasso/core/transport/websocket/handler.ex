@@ -59,12 +59,12 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
   def handle_cast({:send_if_live, generation, send_key, deadline_us, cancel_latch, frame}, state),
     do:
       handle_cast(
-        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame, nil, :client},
+        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame, nil},
         state
       )
 
   def handle_cast(
-        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame, bucket, origin},
+        {:send_if_live, generation, send_key, deadline_us, cancel_latch, frame, bucket},
         state
       ) do
     decided_at_us = System.monotonic_time(:microsecond)
@@ -81,7 +81,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
 
         true ->
           with :accepted <- accept_send(cancel_latch),
-               :ok <- admit_frame(frame, bucket, origin) do
+               :ok <- admit_frame(frame, bucket) do
             :accepted
           else
             {:error, reason} -> {:rejected, reason}
@@ -169,10 +169,10 @@ defmodule Lasso.RPC.Transport.WebSocket.Handler do
     )
   end
 
-  defp admit_frame({:text, _}, bucket, origin),
-    do: Lasso.Core.Transport.UpstreamAdmission.admit_budget(bucket, origin, :ws)
+  defp admit_frame({:text, _}, bucket),
+    do: Lasso.Core.Transport.UpstreamAdmission.admit_budget(bucket, :ws)
 
-  defp admit_frame(_frame, _bucket, _origin), do: :ok
+  defp admit_frame(_frame, _bucket), do: :ok
 
   defp accept_send(cancel_latch) do
     case :atomics.compare_exchange(cancel_latch, 1, 0, 2) do
