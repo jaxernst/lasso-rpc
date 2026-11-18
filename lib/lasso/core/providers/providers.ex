@@ -159,7 +159,8 @@ defmodule Lasso.Providers do
   @spec update_provider(String.t(), chain_identifier(), String.t(), map(), keyword()) ::
           :ok | {:error, term()}
   def update_provider(profile, chain_name, provider_id, updates, _opts) do
-    with {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
+    with {:ok, updates} <- prepare_provider_updates(updates),
+         {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
          :ok <-
            ConfigStore.update_provider_runtime(profile, chain_id, provider_id, fn existing ->
              normalize_provider_updates(existing, updates)
@@ -306,11 +307,20 @@ defmodule Lasso.Providers do
     {:invalid_profile_config, _, _} = error -> {:error, error}
   end
 
+  defp prepare_provider_updates(%Lasso.Config.ChainConfig.Provider{} = updates),
+    do: updates |> stored_provider_attrs() |> prepare_provider_updates()
+
+  defp prepare_provider_updates(%_{} = updates),
+    do: updates |> Map.from_struct() |> prepare_provider_updates()
+
+  defp prepare_provider_updates(updates) when is_map(updates), do: {:ok, stringify(updates)}
+  defp prepare_provider_updates(_updates), do: {:error, :invalid_provider_updates}
+
   defp normalize_provider_updates(existing, updates) do
     existing
     |> stored_provider_attrs()
     |> stringify()
-    |> Map.merge(stringify(updates))
+    |> Map.merge(updates)
     |> Lasso.Config.FileSchema.delete_nil_provider_fields()
     |> normalize_provider_config()
   end
@@ -320,6 +330,8 @@ defmodule Lasso.Providers do
 
   defp stored_provider_attrs(provider),
     do: Map.reject(provider, fn {_key, value} -> is_nil(value) end)
+
+  defp stringify(%_{} = value), do: value |> Map.from_struct() |> stringify()
 
   defp stringify(map) when is_map(map),
     do: Map.new(map, fn {key, value} -> {to_string(key), stringify(value)} end)

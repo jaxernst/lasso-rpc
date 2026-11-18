@@ -134,6 +134,33 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
     assert_ready()
   end
 
+  test "provider struct round trips and invalid patches preserve the configuration owner", ctx do
+    assert :ok = apply_provider(ctx, :runtime, "public", provider(ctx, "round-trip"))
+    owner = Process.whereis(ConfigStore)
+    assert {:ok, provider} = Providers.get_provider(@chain, "round-trip")
+    assert :ok = Providers.update_provider(@chain, "round-trip", %{provider | priority: 5})
+    assert {:ok, %{priority: 5}} = Providers.get_provider(@chain, "round-trip")
+    before = snapshot()
+
+    for bad <- [nil, [], "invalid"] do
+      assert {:error, :invalid_provider_updates} =
+               Providers.update_provider(@chain, "round-trip", bad)
+
+      assert Process.whereis(ConfigStore) == owner
+    end
+
+    assert {:error, _} = Providers.update_provider(@chain, "round-trip", %URI{})
+
+    assert {:error, _} =
+             Providers.update_provider(@chain, "round-trip", %{
+               request_budget: %URI{path: "invalid"}
+             })
+
+    assert Process.whereis(ConfigStore) == owner
+    assert snapshot() == before
+    assert_ready()
+  end
+
   test "concurrent partial updates preserve both accepted changes", ctx do
     assert :ok = apply_provider(ctx, :runtime, "public", provider(ctx, "race"))
     owner = Process.whereis(ConfigStore)
