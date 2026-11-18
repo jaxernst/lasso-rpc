@@ -243,6 +243,9 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
 
       :ok = wait_until_key_active(chain_id, {:newHeads})
       [{manager_pid, _}] = Registry.lookup(Lasso.Registry, {:instance_sub_manager, instance_id})
+      # Let the pool start replacement before the manager delivers its disconnect invalidation.
+      :ok = :sys.suspend(manager_pid)
+      on_exit(fn -> if Process.alive?(manager_pid), do: :sys.resume(manager_pid) end)
       send(manager_pid, {:ws_disconnected, instance_id, %{reason: :recovery_test}})
       set_ws_status(profile, chain_id, provider, :disconnected)
       :ets.delete(:transport_channel_cache, {profile, chain_id, provider, :ws})
@@ -257,6 +260,12 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolTest do
           reason: :recovery_test
         }
       )
+
+      assert TestHelper.eventually(fn ->
+               is_pid(get_pool_state(chain_id).keys[{:newHeads}].resubscribe_pid)
+             end)
+
+      :ok = :sys.resume(manager_pid)
 
       refute_receive {:subscription_terminated, ^subscription_id, :continuity_exhausted}, 250
 
