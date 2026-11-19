@@ -1562,7 +1562,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   end
 
   defp handle_backfill_failure(state, reason) do
-    Logger.error("Backfill task failed",
+    Logger.warning("Backfill task failed",
       chain_id: state.chain_id,
       key: inspect(state.key),
       provider_id: state.failover_context.http_provider_id,

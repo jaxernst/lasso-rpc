@@ -92,7 +92,6 @@ defmodule Lasso.Core.Streaming.Backfill do
       {:regressed, _last_seen, observed_head} when ctx.allow_head_regression ->
         backfill_canonical_blocks(
           ctx,
-          key,
           snapshot,
           observed_head,
           observed_head,
@@ -111,7 +110,7 @@ defmodule Lasso.Core.Streaming.Backfill do
         {:error, :head_regressed}
 
       {:range, from_n, to_n} ->
-        backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
+        backfill_canonical_blocks(ctx, snapshot, from_n, to_n, owner_id,
           allow_observation_boundary: ctx.allow_head_regression
         )
 
@@ -123,7 +122,7 @@ defmodule Lasso.Core.Streaming.Backfill do
 
         if ctx.continuity_policy == :best_effort,
           do:
-            backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id,
+            backfill_canonical_blocks(ctx, snapshot, from_n, to_n, owner_id,
               allow_observation_boundary: ctx.allow_head_regression
             ),
           else: {:error, :gap_exceeded}
@@ -157,7 +156,7 @@ defmodule Lasso.Core.Streaming.Backfill do
     end
   end
 
-  defp backfill_canonical_blocks(ctx, key, snapshot, from_n, to_n, owner_id, opts) do
+  defp backfill_canonical_blocks(ctx, snapshot, from_n, to_n, owner_id, opts) do
     history = Map.get(snapshot, :head_history, %{})
     allow_observation_boundary = Keyword.fetch!(opts, :allow_observation_boundary)
 
@@ -179,14 +178,6 @@ defmodule Lasso.Core.Streaming.Backfill do
       with :ok <- validate_canonical_branch(blocks) do
         emit_backfill_events(ctx.plan, owner_id, ctx.plan.provider_id, blocks)
       end
-    else
-      {:error, reason} ->
-        Logger.error("Block ancestry reconciliation failed: #{inspect(reason)}",
-          chain_id: ctx.chain_id,
-          key: inspect(key)
-        )
-
-        {:error, reason}
     end
   end
 
@@ -387,7 +378,7 @@ defmodule Lasso.Core.Streaming.Backfill do
           {:error, :head_regressed}
 
         {:range, from_n, to_n} ->
-          backfill_log_range(ctx, key, filter, snapshot, from_n, to_n, owner_id)
+          backfill_log_range(ctx, filter, snapshot, from_n, to_n, owner_id)
 
         {:exceeded, from_n, to_n} ->
           Logger.warning("Gap exceeds max_backfill_blocks: #{from_n}-#{to_n}",
@@ -397,7 +388,7 @@ defmodule Lasso.Core.Streaming.Backfill do
 
           if ctx.continuity_policy == :strict_abort,
             do: {:error, :gap_exceeded},
-            else: backfill_log_range(ctx, key, filter, snapshot, from_n, to_n, owner_id)
+            else: backfill_log_range(ctx, filter, snapshot, from_n, to_n, owner_id)
       end
     end
   end
@@ -405,7 +396,7 @@ defmodule Lasso.Core.Streaming.Backfill do
   defp ensure_history_complete(%{history_overflowed: true}), do: {:error, :history_overflow}
   defp ensure_history_complete(_snapshot), do: :ok
 
-  defp backfill_log_range(ctx, key, filter, snapshot, from_n, to_n, owner_id) do
+  defp backfill_log_range(ctx, filter, snapshot, from_n, to_n, owner_id) do
     provider_id = ctx.plan.provider_id
     retained_logs = Map.get(snapshot, :logs, [])
 
@@ -414,14 +405,6 @@ defmodule Lasso.Core.Streaming.Backfill do
          {:ok, logs} <- GapFiller.ensure_logs(ctx.plan, filter, replay_from, to_n) do
       removals = Enum.map(orphaned_logs, &Map.put(&1, "removed", true))
       emit_backfill_events(ctx.plan, owner_id, provider_id, removals ++ logs)
-    else
-      {:error, reason} ->
-        Logger.error("Log backfill failed: #{inspect(reason)}",
-          chain_id: ctx.chain_id,
-          key: inspect(key)
-        )
-
-        {:error, reason}
     end
   end
 
