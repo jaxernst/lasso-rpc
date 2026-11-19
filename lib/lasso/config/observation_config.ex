@@ -104,9 +104,36 @@ defmodule Lasso.Config.ObservationConfig do
 
   def default_freshness(_), do: 30_000
 
-  @doc "Resolves a single reference before ownership or sharing policy is applied."
+  @doc """
+  Resolves a single reference before standby placement or sharing is applied.
+
+  `heads` names the provider's role in background head observation. `live`
+  holds a `newHeads` subscription with HTTP polling as its backup, `standby`
+  polls over HTTP and subscribes only when the chain has no fresh live feed,
+  `passive` only polls, and `off` neither polls nor subscribes. Without it,
+  the resolved `subscribe_new_heads` preference selects `live` or `passive`.
+  """
   @spec resolve(map(), map() | nil) :: map()
   def resolve(chain, provider) do
+    policy = legacy_policy(chain, provider)
+    heads = value(provider, :heads, if(policy.subscribe_new_heads, do: "live", else: "passive"))
+
+    Map.merge(policy, %{
+      heads: heads,
+      http_heads_interval_ms: head_interval(heads, policy.http_heads_interval_ms),
+      http_backup_interval_ms: head_interval(heads, policy.http_backup_interval_ms),
+      subscribe_new_heads: heads == "live"
+    })
+  end
+
+  @spec validate_heads(term()) :: :ok | {:error, :invalid_heads}
+  def validate_heads(mode) when mode in [nil, "live", "standby", "passive", "off"], do: :ok
+  def validate_heads(_), do: {:error, :invalid_heads}
+
+  defp head_interval("off", _), do: 0
+  defp head_interval(_, interval), do: interval
+
+  defp legacy_policy(chain, provider) do
     monitoring = get(chain, :monitoring, %{}) || %{}
     raw_overrides = get(provider, :observation_overrides)
 

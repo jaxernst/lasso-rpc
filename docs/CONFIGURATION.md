@@ -210,6 +210,7 @@ providers:
 | `ws_url` | string | No | WebSocket RPC endpoint URL. Required for subscriptions |
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
+| `heads` | string | No | This provider's role in Lasso's own head tracking: `live`, `standby`, `passive` or `off` (see Head feeds below). Overrides `subscribe_new_heads` for background observation only |
 | `request_budget` | map | No | Per-node outbound JSON-RPC token bucket: positive integer `requests_per_second`, optional positive integer `burst` (defaults to the rate). Shared by HTTP, WebSocket, client attempts and background work; omitted means unlimited unless another reference to the same upstream declares a budget |
 | `background_observations` | boolean | No | `false` removes this provider reference's periodic identity checks, block-height polls, and `newHeads` demand (default: true). Shared upstreams may still observe for another enabled reference; client requests and subscriptions remain available |
 | `observation_overrides` | map | No | Sparse per-provider overrides for `background_observations`, `subscribe_new_heads`, and the HTTP head, backup, and chain-identity intervals |
@@ -222,6 +223,32 @@ providers:
 *At least one of `url` or `ws_url` is required. WebSocket-only providers are supported; omit `url` rather than setting it to null in YAML.
 
 `observation_overrides` is sparse: an omitted field keeps the provider's legacy preference, then the chain setting. An explicit override wins. The chain-wide `background_observations: false` switch still disables periodic work for that chain reference.
+
+### Head feeds
+
+By default every provider with a `ws_url` holds its own `newHeads` subscription. When upstream subscriptions are metered, `heads` keeps one feed open and holds the rest in reserve:
+
+```yaml
+providers:
+  - id: primary
+    url: "https://primary.example"
+    ws_url: "wss://primary.example"
+    heads: live
+  - id: backup
+    priority: 2
+    url: "https://backup.example"
+    ws_url: "wss://backup.example"
+    heads: standby
+```
+
+| Value | Head tracking |
+|-------|---------------|
+| `live` | Holds a `newHeads` subscription; HTTP head polling drops to the backup interval while the feed is fresh |
+| `standby` | Polls heads over HTTP. With a `ws_url`, subscribes only while no `live` provider on the chain has delivered a feed head within `evidence_freshness_ms`. A standby whose subscription fails sits out one freshness window so the next standby can take over |
+| `passive` | Polls heads over HTTP and never subscribes |
+| `off` | Neither polls heads nor subscribes; chain-identity checks continue |
+
+Without `heads`, the resolved `subscribe_new_heads` preference selects `live` or `passive`. Each node elects its standby feed locally. At most one standby subscribes per chain: the one already delivering fresh heads, then the lowest `priority`, then the provider id. A newly started node waits one freshness window for its live feed's first head before electing a standby. Once live heads are fresh again the standby releases its feed, and the upstream subscription closes after the 60 second teardown grace period. `heads` covers Lasso's own observation only. Client `eth_subscribe` requests still route to every provider that accepts them.
 
 ### Outbound request budget
 

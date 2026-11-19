@@ -53,6 +53,7 @@ defmodule Lasso.Config.FileSchema do
     "url" => :http_url,
     "ws_url" => :ws_url,
     "subscribe_new_heads" => :boolean,
+    "heads" => {:enum, ["live", "standby", "passive", "off"]},
     "background_observations" => :boolean,
     "block_poll_interval_ms" => :observation_positive,
     "chain_identity_interval_ms" => :observation_positive,

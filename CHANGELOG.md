@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A provider can declare `heads: live`, `standby`, `passive` or `off` to set its role in Lasso's own head tracking. With one `live` provider and the rest `standby`, a chain holds a single upstream `newHeads` subscription instead of one per WebSocket provider. A standby subscribes only while no live feed has delivered a head within `evidence_freshness_ms`, and releases the feed once live heads return. If the first standby's subscription fails, the next one takes over. Previously the only way to drop a provider's background subscription was `subscribe_new_heads: false`, which also removed the provider from client `eth_subscribe newHeads` routing and left no failover feed. Client subscriptions still route to every provider that accepts them. See [head feeds](docs/CONFIGURATION.md#head-feeds).
+
 ### Changed
 
 - The bundled `public` profile serves Robinhood Chain (chain ID 4663), and its Base providers are the keyless endpoints that passed two live qualification passes. Each provider declares the log range and request budget it sustained, providers that refused log queries are kept out of `eth_getLogs`, and only endpoints that served account state at genesis in both passes take historical reads. Base no longer lists endpoints that failed qualification or that their operator documents as not for production. See the [qualification evidence](docs/evidence/public-template/).
