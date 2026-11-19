@@ -182,18 +182,14 @@ chains:
           limits:
             max_block_range: 98
 
-      - id: "base_publicnode"
-        name: "PublicNode Base"
+      - id: "base_pocket"
+        name: "Pocket Base"
         priority: 3
-        url: "https://base-rpc.publicnode.com"
-        ws_url: "wss://base-rpc.publicnode.com"
-        subscribe_new_heads: false
-        archival: false
-        capabilities:
-          unsupported_categories: [debug, trace, txpool, filters]
-          unsupported_methods: ["eth_protocolVersion"]
-          limits:
-            max_block_range: 42496
+        url: "https://base.api.pocket.network"
+        archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
 
   arbitrum:
     chain_id: 42161

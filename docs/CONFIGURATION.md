@@ -414,7 +414,7 @@ chains:
 
 #### Chainstack
 
-[`config/examples/chainstack.yml`](../config/examples/chainstack.yml) is a profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum, with dRPC, PublicNode, and thirdweb fallbacks. It uses one [multichain auth token](https://docs.chainstack.com/docs/multichain-api) for every chain, so a single credential covers the whole profile:
+[`config/examples/chainstack.yml`](../config/examples/chainstack.yml) is a profile template for Chainstack Global Nodes on Ethereum, Base, and Arbitrum, with dRPC, PublicNode, Pocket, and thirdweb fallbacks. It uses one [multichain auth token](https://docs.chainstack.com/docs/multichain-api) for every chain, so a single credential covers the whole profile:
 
 1. In the Chainstack console, create a multichain endpoint and attach a Global Node for each chain you keep. Nodes that are not attached answer `401`.
 2. Set `CHAINSTACK_MULTICHAIN_TOKEN` to the endpoint's `mt_` token.
