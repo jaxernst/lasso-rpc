@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The bundled `public` profile serves Robinhood Chain (chain ID 4663), and its Base providers are the keyless endpoints that passed two live qualification passes. Each provider declares the log range and request budget it sustained, providers that refused log queries are kept out of `eth_getLogs`, and only endpoints that served account state at genesis in both passes take historical reads. Base no longer lists endpoints that failed qualification or that their operator documents as not for production. See the [qualification evidence](docs/evidence/public-template/).
 - The bundled `public` profile serves Optimism (chain ID 10), Unichain (130) and World Chain (480) from keyless endpoints that passed two live qualification passes, with the same per-provider log ranges, request budgets and history rules as Base. Each chain keeps an archival provider with no declared log range for historical `eth_getLogs`. World Chain has two primary keyless routes.
 
+### Removed
+
+- `LASSO_COWBOY_TELEMETRY_ENABLED` is gone. Cowboy per-request telemetry was already on by default and now always is; setting the variable has no effect.
+- The unused provider-knowledge template shadow path is gone: the `:provider_knowledge_template_observer`, `:provider_knowledge_template_outcomes`, `:provider_knowledge_template_catalog`, `:provider_knowledge_classifier_mode`, `:provider_knowledge_request_fault_mode` and `:provider_knowledge_eval_sample_enabled` application settings, the `[:lasso, :provider_knowledge, :classifier_shadow]` telemetry event, the `classifier_shadow_since_boot` census field, and the `:provider_messages` and `:provider_outcomes` projection lanes. All were off or inert in Core, so routing is unchanged; setting any of these settings now has no effect.
+
 ## [0.8.5] - 2026-11-19
 
 ### Added
