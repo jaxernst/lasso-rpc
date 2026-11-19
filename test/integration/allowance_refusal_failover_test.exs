@@ -24,7 +24,7 @@ defmodule Lasso.AllowanceRefusalFailoverTest do
 
           conn
           |> put_resp_header("retry-after", "60")
-          |> send_resp(402, opts[:body])
+          |> send_resp(402, refusal_body(opts[:body], request))
 
         {"eth_getBalance", name} ->
           send(opts[:observer], {:called, name})
@@ -34,6 +34,16 @@ defmodule Lasso.AllowanceRefusalFailoverTest do
           reply(conn, 200, request, %{result: "0x100"})
       end
     end
+
+    defp refusal_body(:envelope, request) do
+      Jason.encode!(%{
+        jsonrpc: "2.0",
+        id: request["id"],
+        error: %{code: 402, message: "Payment Required", details: "daily credit limit reached"}
+      })
+    end
+
+    defp refusal_body(body, _request), do: body
 
     defp reply(conn, status, request, payload),
       do:
@@ -45,7 +55,8 @@ defmodule Lasso.AllowanceRefusalFailoverTest do
   end
 
   for {label, body} <- [
-        {"JSON error body",
+        {"JSON-RPC error envelope", :envelope},
+        {"bare JSON error body",
          ~s({"code":402,"message":"Payment Required","details":"daily credit limit reached"})},
         {"plain text body", "Payment Required"}
       ] do

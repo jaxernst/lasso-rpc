@@ -21,6 +21,7 @@ defmodule Lasso.Integration.DiscoverySafeProbeTest do
         case opts[:mode] do
           :auth -> {401, "Unauthorized", -32_000}
           :quota -> {402, "Payment required: credits exhausted", -32_000}
+          :quota_402_envelope -> {402, "Payment Required", 402}
           :typed_quota -> {200, "monthly quota exceeded", 30}
           :rate_limit -> {429, "Too many requests", -32_000}
           :quota_429 -> {429, "monthly quota exceeded", -32_005}
@@ -87,6 +88,7 @@ defmodule Lasso.Integration.DiscoverySafeProbeTest do
           auth: :auth_required,
           quota: :quota_exhausted,
           typed_quota: :quota_exhausted,
+          quota_402_envelope: :quota_exhausted,
           quota_429: :quota_exhausted
         ] do
       url = start_upstream(mode)
