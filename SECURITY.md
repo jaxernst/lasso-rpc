@@ -8,7 +8,7 @@ We support the latest published release with security updates. Upgrade older ver
 
 **Please do not open public GitHub issues for security vulnerabilities.**
 
-To report a security vulnerability, please email: **jaxernst@gmail.com**
+To report a security vulnerability, please email: **security@lasso.sh**
 
 What to include in your report:
 
@@ -107,5 +107,5 @@ Subscribe to security advisories:
 
 ## Contact
 
-For security concerns: jaxernst@gmail.com
+For security concerns: security@lasso.sh
 For general questions: Open a GitHub issue
