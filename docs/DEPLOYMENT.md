@@ -117,8 +117,8 @@ services:
 
 Edit the YAML in `profiles/`, retaining a valid `public.yml`. Additional profiles
 need matching filenames and frontmatter slugs: a profile with `slug: my-app` must
-be saved as `my-app.yml`. Lasso reads only files ending in `.yml` and skips any
-other file, such as `my-app.yaml`, without a message. See [Configuration](CONFIGURATION.md)
+be saved as `my-app.yml`. Lasso loads a profile only from a file named
+`<slug>.yml`; a file under any other name, such as `my-app.yaml`, is not loaded. See [Configuration](CONFIGURATION.md)
 for supported settings. Files must be readable by UID 10001 and directories
 traversable by that UID; host directories used for writable history must also be
 writable by UID 10001. Keep credential values in `.env` and reference them as

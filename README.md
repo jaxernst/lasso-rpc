@@ -420,7 +420,8 @@ To run an exported profile, finish the [Quick Start](#quick-start), then:
    provider URL or header value it stands for.
 2. Set up [host-mounted profiles](docs/DEPLOYMENT.md#custom-profiles-and-credentials)
    and save the export in `profiles/` as `<slug>.yml`, using the `slug` from its
-   frontmatter. Lasso reads only `.yml` files and skips other names without a message.
+   frontmatter. Lasso loads a profile only from a file named `<slug>.yml`; a file
+   under any other name, such as `<slug>.yaml`, is not loaded.
 3. Run `docker compose up -d --force-recreate --wait`, then
    `docker compose exec -T lasso /app/bin/lasso check-config` and confirm the
    profile count includes yours.
