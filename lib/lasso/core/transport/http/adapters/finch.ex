@@ -658,7 +658,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     end
   end
 
-  defp handle_response(429, body, headers) do
+  # A spent plan allowance (HTTP 402) is a capacity answer like 429, not an upstream fault.
+  defp handle_response(status, body, headers) when status in [402, 429] do
     error =
       case UpstreamResponse.parse_unary(body) do
         {:ok, %UpstreamResponse.Validated{kind: :error} = error} -> error
@@ -668,11 +669,11 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     payload =
       case error do
         nil ->
-          %{status: 429}
+          %{status: status}
 
         error ->
           %{
-            status: 429,
+            status: status,
             code: error.error_code,
             message: bounded_error_message(error.error_message)
           }

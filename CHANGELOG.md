@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An upstream that answers HTTP 402 because its plan allowance is spent is treated like HTTP 429: Lasso tries the next provider, keeps any `Retry-After` hint as that provider's cooldown, and no longer counts the refusal toward the provider's circuit breaker. Previously each 402 counted as a provider failure, so a keyed upstream whose daily allowance ran out could open its circuit for every method. When every provider refuses, the client gets `-32005` with no upstream body bytes.
+
 ### Changed
 
 - The bundled `public` profile serves Robinhood Chain (chain ID 4663), and its Base providers are the keyless endpoints that passed two live qualification passes. Each provider declares the log range and request budget it sustained, providers that refused log queries are kept out of `eth_getLogs`, and only endpoints that served account state at genesis in both passes take historical reads. Base no longer lists endpoints that failed qualification or that their operator documents as not for production. See the [qualification evidence](docs/evidence/public-template/).

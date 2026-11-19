@@ -484,6 +484,10 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
       # land as `:unsupported` instead of an opaque `:unknown` with
       # `error: "client_error"`.
       #
+      # HTTP 402 reports a spent allowance whatever the body says.
+      {:error, {:rate_limit, %{status: 402}}} ->
+        %{status: :unknown, duration_ms: duration, error: "rate_limit", error_code: 402}
+
       {:error, {:rate_limit, %{code: code, message: message}}} ->
         %{"code" => code, "message" => message}
         |> classify_jsonrpc_error(duration, capabilities)
