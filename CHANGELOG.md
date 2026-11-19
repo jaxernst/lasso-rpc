@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - An upstream that answers HTTP 402 because its plan allowance is spent is treated like HTTP 429: Lasso tries the next provider, keeps any `Retry-After` hint as that provider's cooldown, and no longer counts the refusal toward the provider's circuit breaker. Previously each 402 counted as a provider failure, so a keyed upstream whose daily allowance ran out could open its circuit for every method. When every provider refuses, the client gets `-32005` with no upstream body bytes.
+- A gateway that refuses a method with HTTP 406 and a non-JSON-RPC body (RFC 9110 15.5.7, before its RPC handler runs) no longer counts as a provider failure. Lasso tries the next provider for that request and leaves the refusing provider's circuit closed, so its other methods keep serving. Previously five refusals of one method opened the circuit for every method. When no provider serves the request, the client gets a `-32006` capability refusal with no upstream body bytes. Previously a 406 body that was not valid UTF-8 made the client response fail with HTTP 500.
 
 ### Changed
 

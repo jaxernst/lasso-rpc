@@ -250,6 +250,21 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
         # Body is a valid JSON-RPC error envelope — classify normally
         normalized_json_rpc_error(code, message, data, payload, opts)
 
+      {:raw, _code, _message} when payload.status == 406 ->
+        # RFC 9110 15.5.7: a gateway refusing a representation before its RPC
+        # handler makes no claim about the method or the provider's health.
+        JError.new(-32_006, "Provider refused the request (HTTP 406)",
+          data: public_transport_data(payload),
+          provider_id: provider_id,
+          source: context,
+          transport: transport,
+          category: :capability_violation,
+          retriable?: true,
+          breaker_penalty?: false,
+          original_code: -32_003,
+          http_status: 406
+        )
+
       {:raw, _code, _message} ->
         # Body is NOT a JSON-RPC error envelope (e.g. gateway/proxy/CDN rejection).
         # A compliant JSON-RPC provider would return errors in JSON-RPC format.

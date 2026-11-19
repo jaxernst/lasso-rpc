@@ -728,6 +728,14 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
           Map.reject(attrs, fn {_key, value} -> is_nil(value) end)
         )
 
+      {:client_error, %{status: 406}} ->
+        AttemptProtocol.terminal(context, :response, %{
+          response_kind: :error,
+          error_code: -32_006,
+          error_category: :capability_violation,
+          io_duration_us: io_duration_us
+        })
+
       _other ->
         AttemptProtocol.terminal(context, :transport_failure, %{
           reason: http_status_reason(reason),
