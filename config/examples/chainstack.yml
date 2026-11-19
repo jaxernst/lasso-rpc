@@ -174,18 +174,22 @@ chains:
         ws_url: "wss://base.drpc.org"
         subscribe_new_heads: false
         archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
         capabilities:
           unsupported_methods: ["eth_protocolVersion"]
           limits:
-            max_block_range: 10000
+            max_block_range: 98
 
-      - id: "base_official"
-        name: "Base Official"
+      - id: "base_pocket"
+        name: "Pocket Base"
         priority: 3
-        url: "https://mainnet.base.org"
+        url: "https://base.api.pocket.network"
         archival: true
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
+        request_budget:
+          requests_per_second: 5
+          burst: 5
 
   arbitrum:
     chain_id: 42161

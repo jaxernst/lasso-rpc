@@ -215,47 +215,193 @@ chains:
       color: "#0052FF"
       size: lg
 
+    # archival: true marks endpoints that served account state at genesis in
+    # both qualification passes; false marks endpoints with pruned history.
     providers:
-      - id: "base_llamarpc"
-        name: "LlamaRPC Base"
-        priority: 2
-        url: "https://base.llamarpc.com"
-        archival: true
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
-          limits:
-            max_block_range: 1000
-
-      - id: "base_official"
-        name: "Base Official"
-        priority: 3
-        url: "https://mainnet.base.org"
-        archival: true
-        capabilities:
-          unsupported_methods: ["eth_protocolVersion"]
-
       - id: "base_publicnode"
         name: "PublicNode Base"
-        priority: 4
-        url: "https://base.publicnode.com"
-        ws_url: "wss://base.publicnode.com"
+        priority: 2
+        url: "https://base-rpc.publicnode.com"
+        ws_url: "wss://base-rpc.publicnode.com"
         subscribe_new_heads: false
-        archival: true
+        archival: false
         capabilities:
           unsupported_categories: [debug, trace, txpool, filters]
           unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 42496
+
+      - id: "base_bloxroute"
+        name: "bloXroute Base"
+        priority: 3
+        url: "https://base.rpc.blxrbdn.com"
+        archival: false
+        capabilities:
+          limits:
+            max_block_range: 65536
+
+      - id: "base_tenderly"
+        name: "Tenderly Base"
+        priority: 4
+        url: "https://base.gateway.tenderly.co"
+        archival: true
+        capabilities:
+          limits:
+            max_block_range: 976
+
+      - id: "base_sentio"
+        name: "Sentio Base"
+        priority: 5
+        url: "https://base.rpc.sentio.xyz"
+        archival: true
+        capabilities:
+          # Raw transaction submissions did not return a valid response.
+          unsupported_methods: ["eth_sendRawTransaction"]
+          limits:
+            max_block_range: 256
+
+      # Served every log span we measured, so no range limit is declared.
+      - id: "base_pocket"
+        name: "Pocket Base"
+        priority: 6
+        url: "https://base.api.pocket.network"
+        archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
 
       - id: "base_drpc"
         name: "dRPC Base"
-        priority: 5
+        priority: 7
         url: "https://base.drpc.org"
         ws_url: "wss://base.drpc.org"
         subscribe_new_heads: false
         archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
         capabilities:
           unsupported_methods: ["eth_protocolVersion"]
           limits:
-            max_block_range: 10000
+            max_block_range: 98
+
+      - id: "base_blockreq"
+        name: "BlockReq Base"
+        priority: 8
+        url: "https://base-rpc.blockreq.com/v1/rpc/public"
+        archival: false
+        request_budget:
+          requests_per_second: 5
+          burst: 5
+        capabilities:
+          limits:
+            max_block_range: 256
+
+      - id: "base_thirdweb"
+        name: "thirdweb Base"
+        priority: 9
+        url: "https://base.rpc.thirdweb.com"
+        archival: true
+        request_budget:
+          requests_per_second: 2
+          burst: 2
+        capabilities:
+          limits:
+            max_block_range: 256
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # ROBINHOOD CHAIN (L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  robinhood:
+    chain_id: 4663
+    name: "Robinhood Chain"
+    block_time_ms: 100
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 50
+
+    selection:
+      max_lag_blocks: 20 # ~2 s at 100 ms blocks
+      archival_threshold: 128 # ~13 s at 100 ms blocks
+
+    websocket:
+      subscribe_new_heads: false
+      new_heads_timeout_ms: 15000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#CCFF00"
+      size: md
+
+    # archival: true marks endpoints that served account state at genesis in
+    # both qualification passes; false marks endpoints with pruned history.
+    providers:
+      - id: "robinhood_globalstake"
+        name: "GlobalStake Robinhood"
+        priority: 2
+        url: "https://rpc-robinhood.globalstake.io"
+        archival: false
+        capabilities:
+          limits:
+            max_block_range: 4096
+
+      - id: "robinhood_drpc"
+        name: "dRPC Robinhood"
+        priority: 3
+        url: "https://robinhood.drpc.org"
+        archival: true
+        capabilities:
+          limits:
+            max_block_range: 98
+
+      - id: "robinhood_publicnode"
+        name: "PublicNode Robinhood"
+        priority: 4
+        url: "https://robinhood-rpc.publicnode.com"
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          # Log queries require a personal token on this endpoint.
+          unsupported_methods: ["eth_getLogs"]
+
+      - id: "robinhood_pocket"
+        name: "Pocket Robinhood"
+        priority: 5
+        url: "https://robinhood.api.pocket.network"
+        archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
+        capabilities:
+          limits:
+            max_block_range: 4096
+
+      - id: "robinhood_bloxroute"
+        name: "bloXroute Robinhood"
+        priority: 6
+        url: "https://robinhood.rpc.blxrbdn.com"
+        archival: false
+        request_budget:
+          requests_per_second: 5
+          burst: 5
+        capabilities:
+          # This endpoint does not serve log queries.
+          unsupported_methods: ["eth_getLogs"]
+
+      - id: "robinhood_blockmachine"
+        name: "BlockMachine Robinhood"
+        priority: 7
+        url: "https://rpc-robinhood.blockmachine.io"
+        archival: false
+        request_budget:
+          requests_per_second: 2
+          burst: 2
+        capabilities:
+          limits:
+            max_block_range: 3136
 
   # ──────────────────────────────────────────────────────────────────────────
   # ARBITRUM ONE (L2)

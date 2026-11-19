@@ -21,8 +21,9 @@ Point your client at a Lasso URL instead of a provider's. No SDK, no client
 library, no application changes.
 
 Self-hosted, Apache-2.0, and built on Elixir/OTP. The bundled public pool covers
-Ethereum, Base, and Arbitrum (mainnet and Sepolia) with no API keys, so you can
-try it in one command. Add any EVM chain and your own providers in YAML.
+Ethereum, Base, Arbitrum, and Robinhood Chain, plus the Ethereum, Base, and
+Arbitrum Sepolia testnets, with no API keys, so you can try it in one command. Add
+any EVM chain and your own providers in YAML.
 
 [Quick Start](#quick-start) · [Use it from your app](#use-it-from-your-app) ·
 [Configuration](#configuration) · [Endpoints](#endpoints) ·
