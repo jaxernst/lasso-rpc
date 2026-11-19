@@ -9,7 +9,8 @@
 //     --out comparison.json
 //
 // Each endpoint is LABEL=URL, where URL is a literal or env:NAME. Output and the
-// samples file name endpoints by label and host only; URLs never appear.
+// samples file name endpoints by label and host only, and record errors by kind
+// only: no URL, response text or exception message is ever written.
 //
 // Comparison (default): every round sends one call to every endpoint at once.
 //   --calls 200     rounds
@@ -48,15 +49,8 @@ const MAX_LIMIT_RATE = 50;
 const MAX_LIMIT_SECONDS = 60;
 const STOP_AFTER = 3;
 
-const secrets = new Set();
-const scrub = (text) => {
-  let out = String(text);
-  for (const s of secrets) out = out.split(s).join("<redacted>");
-  return out;
-};
-
 function fail(message) {
-  console.error(scrub(message));
+  console.error(message);
   process.exit(1);
 }
 
@@ -75,12 +69,6 @@ function parseEndpoint(spec, kind) {
   } catch {
     fail(`The URL for ${label} is not a valid URL.`);
   }
-  secrets.add(url);
-  const keyLike = (v) => v.length >= 16 || (v.length >= 10 && /\d/.test(v));
-  for (const part of parsed.pathname.split("/")) if (keyLike(part)) secrets.add(part);
-  for (const value of parsed.searchParams.values()) if (keyLike(value)) secrets.add(value);
-  if (parsed.username) secrets.add(parsed.username);
-  if (parsed.password) secrets.add(parsed.password);
   if (kind === "lasso" && !parsed.searchParams.has("include_meta")) parsed.searchParams.set("include_meta", "body");
   return { label, kind, host: parsed.host, url: parsed.toString() };
 }
@@ -148,30 +136,32 @@ async function rpc(endpoint, method, params) {
     try {
       json = JSON.parse(text);
     } catch {}
-    return { ms, status: res.status, json, text };
+    return { ms, status: res.status, json };
   } catch (err) {
     const ms = performance.now() - started;
-    if (err.name === "AbortError") return { ms, error: { kind: "timeout", detail: `no answer in ${opts.timeout} ms` } };
-    const cause = err.cause || err;
-    return { ms, error: { kind: "network", detail: scrub(`${cause.code || cause.name}: ${cause.message}`).slice(0, 120) } };
+    if (err.name === "AbortError") return { ms, error: "timeout" };
+    const code = (err.cause || err).code;
+    return { ms, error: typeof code === "string" && /^[A-Z0-9_]+$/.test(code) ? `network ${code}` : "network" };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
 function classify(r) {
   if (r.error) return r.error;
-  const err = r.json?.error;
-  const message = scrub(err ? `${err.code}: ${err.message}` : String(r.text).replace(/\s+/g, " ")).slice(0, 120);
-  if (r.status === 429 || err?.code === 429 || err?.code === -32029 || (err && RATE_LIMIT_TEXT.test(err.message)))
-    return { kind: "rate limit", detail: `HTTP ${r.status} ${message}` };
-  if (err) return { kind: `rpc ${err.code}`, detail: message };
-  if (r.status < 200 || r.status >= 300) return { kind: `http ${r.status}`, detail: message };
-  if (!r.json || !("result" in r.json)) return { kind: "bad response", detail: message };
+  const body = r.json !== null && typeof r.json === "object" && !Array.isArray(r.json) ? r.json : null;
+  const err = body?.error;
+  const code = Number.isInteger(err?.code) ? err.code : "unknown";
+  if (r.status === 429 || code === 429 || code === -32029 || RATE_LIMIT_TEXT.test(String(err?.message ?? ""))) return "rate limit";
+  if (err) return `rpc ${code}`;
+  if (r.status < 200 || r.status >= 300) return `http ${r.status}`;
+  if (!body || !("result" in body)) return "bad response";
   return null;
 }
 
 function metaOf(r) {
   const m = r.json?.lasso_meta;
-  if (!m) return null;
+  if (m === null || typeof m !== "object") return null;
   const sends = m.dispatches ?? (Array.isArray(m.attempted_channels) ? m.attempted_channels.length : null);
   const round = (v) => (typeof v === "number" ? Math.round(v * 10) / 10 : null);
   return {
@@ -179,7 +169,7 @@ function metaOf(r) {
     sends,
     strategy: m.strategy ?? null,
     upstreamMs: round(m.upstream_latency_ms),
-    insideMs: round(m.lasso_overhead_ms),
+    routingMs: round(m.lasso_overhead_ms),
   };
 }
 
@@ -187,7 +177,7 @@ async function call(endpoint, method, params, extra = {}) {
   const r = await rpc(endpoint, method, params);
   const error = classify(r);
   const sample = { endpoint: endpoint.label, method, ...extra, ms: Math.round(r.ms * 10) / 10, ok: !error };
-  if (error) Object.assign(sample, { error: error.kind, detail: error.detail });
+  if (error) sample.error = error;
   if (endpoint.kind === "lasso") sample.meta = metaOf(r);
   return { sample, result: error ? undefined : r.json.result };
 }
@@ -198,13 +188,15 @@ const lassos = opts.endpoints.filter((e) => e.kind === "lasso");
 async function setup() {
   const chainIds = await Promise.all(opts.endpoints.map((e) => call(e, "eth_chainId", [])));
   const ids = new Map(chainIds.map((c, i) => [opts.endpoints[i].label, c.result]));
-  for (const [label, id] of ids) if (id === undefined) fail(`${label} did not answer eth_chainId: ${chainIds.find((c) => c.sample.endpoint === label).sample.detail}`);
+  const quantity = (v) => typeof v === "string" && /^0x[0-9a-f]+$/i.test(v);
+  for (const c of chainIds)
+    if (!quantity(c.result)) fail(`${c.sample.endpoint} did not answer eth_chainId: ${c.sample.error ?? "bad response"}.`);
   const distinct = new Set([...ids.values()].map((id) => BigInt(id)));
   if (distinct.size > 1) fail(`Endpoints report different chains: ${[...ids].map(([l, id]) => `${l} ${BigInt(id)}`).join(", ")}.`);
   const chainId = Number([...distinct][0]);
 
   const heads = (await Promise.all(providers.map((p) => call(p, "eth_blockNumber", []))))
-    .filter((c) => c.result)
+    .filter((c) => quantity(c.result))
     .map((c) => Number(BigInt(c.result)));
   if (!heads.length) fail("No provider answered eth_blockNumber.");
   const source = providers[0];
@@ -315,11 +307,11 @@ function costLine(samples, lasso, directs) {
 
 function reportedTime(samples) {
   const answered = samples.filter((s) => s.ok && s.meta);
-  const inside = answered.map((s) => s.meta.insideMs).filter((v) => v != null);
+  const routing = answered.map((s) => s.meta.routingMs).filter((v) => v != null);
   const upstream = answered.map((s) => s.meta.upstreamMs).filter((v) => v != null);
-  if (!inside.length && !upstream.length) return "lasso_meta reported no timing";
+  if (!routing.length && !upstream.length) return "lasso_meta reported no timing";
   const pair = (xs) => `p50 ${fmt(percentile(xs, 50))} ms, p90 ${fmt(percentile(xs, 90))} ms`;
-  return `inside Lasso ${pair(inside)}; waiting on the upstream ${pair(upstream)}`;
+  return `routing apart from upstream waits ${pair(routing)}; waiting on the upstream ${pair(upstream)}`;
 }
 
 function methodTable(samples, endpoints, methods) {
@@ -359,7 +351,7 @@ async function compare(chain) {
     lines.push(
       ...routingLines(samples, lasso),
       costLine(samples, lasso, providers),
-      `${lasso.label} time reported by Lasso for the same calls: ${reportedTime(samples.filter((s) => s.endpoint === lasso.label))}`,
+      `${lasso.label} routing time reported by Lasso for the same calls: ${reportedTime(samples.filter((s) => s.endpoint === lasso.label))}`,
       ""
     );
     incomplete.push(...metaGaps(samples.filter((s) => s.endpoint === lasso.label), lasso));
@@ -449,7 +441,7 @@ async function rateLimit(chain) {
   const once = ms((s) => s.meta?.sends === 1);
   const more = ms((s) => s.meta?.sends > 1);
   lines.push(
-    `Phase 2, ${target.label} kept over its limit: ${keep.length} calls, ${refused(keep)} refusals.`,
+    `Phase 2, ${target.label} directly: ${keep.length} calls, ${refused(keep)} refusals.`,
     ...burstLines(`Phase 2, through ${lasso.label} (${lasso.host})`, profile, both.planned, both.method),
     `  stopped: ${both.stopped ?? "no, ran the full duration"}`
   );
@@ -458,10 +450,11 @@ async function rateLimit(chain) {
       `  upstream sends: ${sends.reduce((a, b) => a + b, 0)} for ${sends.length} calls, ${sends.filter((n) => n > 1).length} calls sent more than once`,
       `  answered by: ${listCounts(profile.filter((s) => s.ok).map((s) => s.meta?.provider ?? "unnamed"))}`,
       `  strategy reported by Lasso: ${listCounts(profile.filter((s) => s.meta).map((s) => s.meta.strategy ?? "unreported"))}`,
-      `  time reported by Lasso: ${reportedTime(profile)}`,
+      `  routing time reported by Lasso: ${reportedTime(profile)}`,
       `  p50 latency: ${fmt(percentile(once, 50))} ms for calls sent once (${once.length}), ${fmt(percentile(more, 50))} ms for calls sent more than once (${more.length})`
     );
   const incomplete = metaGaps(profile, lasso);
+  if (!refused(keep)) incomplete.push(`${target.label} refused nothing in phase 2, so it was not over its limit while the profile was measured`);
   if (!profile.length) incomplete.push(`no calls reached ${lasso.label}`);
   return { lines, samples: [...direct.samples, ...both.samples], incomplete };
 }
@@ -483,11 +476,11 @@ async function main() {
     complete: !run.incomplete.length,
     incomplete: run.incomplete,
   };
-  writeFileSync(opts.out, scrub(JSON.stringify({ manifest, samples: run.samples }, null, 1)) + "\n");
+  writeFileSync(opts.out, JSON.stringify({ manifest, samples: run.samples }, null, 1) + "\n");
   run.lines.push(`Samples: ${opts.out}`);
   run.lines.push(run.incomplete.length ? `Result: incomplete. ${run.incomplete.join("; ")}.` : "Result: complete.");
-  console.log(scrub(run.lines.join("\n")));
+  console.log(run.lines.join("\n"));
   if (run.incomplete.length) process.exit(1);
 }
 
-main().catch((e) => fail(e.stack || e.message));
+main().catch((e) => fail(`Unexpected ${e.name}\n${String(e.stack).split("\n").slice(1).join("\n")}`));

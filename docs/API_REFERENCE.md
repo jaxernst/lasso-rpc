@@ -212,9 +212,11 @@ Response body includes a `lasso_meta` field:
 }
 ```
 
+Timing is measured through the end of routing, before the response is encoded.
 `upstream_latency_ms` is the time spent waiting on providers,
-`end_to_end_latency_ms` is the time from receiving the request to responding,
-and `lasso_overhead_ms` is the difference: time spent inside Lasso.
+`end_to_end_latency_ms` is the time from receiving the request until routing
+finishes, and `lasso_overhead_ms` is the difference: routing time not spent
+waiting on providers.
 
 ### WebSocket Metadata
 

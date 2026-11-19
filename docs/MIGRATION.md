@@ -211,26 +211,29 @@ lasso strategy reported by Lasso: <strategy> <count>
 lasso answered by: <provider-id> <count>, <provider-id> <count>
 lasso upstream sends per call: 1 send: <count>, 2 sends: <count> (total <n> for <n> calls)
 lasso latency against the best direct provider (<label>, lowest p50): p50 <+ms> ms, p90 <+ms> ms, p99 <+ms> ms
-lasso time reported by Lasso for the same calls: inside Lasso p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
+lasso routing time reported by Lasso for the same calls: routing apart from upstream waits p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
 
 Samples: comparison.json
 Result: complete.
 ```
 
-Errors are counted by kind: `timeout`, `network`, `rate limit`, `http <status>`,
-`rpc <code>` and `bad response`. The script adds `include_meta=body` to the
+Errors are counted by kind: `timeout`, `network <code>` (a system error code
+such as `ECONNREFUSED`), `rate limit`, `http <status>`, `rpc <code>` and
+`bad response`. The script adds `include_meta=body` to the
 Lasso URL and reads the strategy that routed each call, the answering
-provider, the number of upstream sends and Lasso's own timing from
+provider, the number of upstream sends and Lasso's routing time from
 `lasso_meta`. The metadata names the provider that answered, not one that
 refused. Latency is measured from the machine running the script, so it
 includes the network path to each endpoint.
 
 The difference against a direct provider includes everything between the
 script and Lasso. Measure a release build, such as the published image, not a
-development server, which adds time to every request. Compare the difference
-with the time Lasso reports, inside Lasso and waiting on the upstream, to see
-where the time goes. If `lasso_meta` carries no timing, that line says so and
-the run is still complete.
+development server, which adds time to every request. Lasso's reported time
+covers routing: from receiving the request until routing finishes, split into
+time waiting on the upstream and the rest. The remainder of the difference is
+the path between the script and Lasso plus Lasso's handling of the response.
+If `lasso_meta` carries no timing, that line says so and the run is still
+complete.
 
 #### Rate limit
 
@@ -248,11 +251,10 @@ node scripts/measure_profile.mjs \
 
 Phase 1 sends `eth_getLogs` to `provider-1` directly at 20 calls per second for
 20 seconds and counts its refusals: HTTP 429 or a JSON-RPC rate-limit error.
-Phase 2 keeps sending to `provider-1` directly at the same rate, so it stays
+Phase 2 keeps sending to `provider-1` directly at the same rate, to hold it
 over its limit, and sends the same calls through the profile at the same rate.
 Phase 2 stops early once the caller sees 3 errors through the profile, or once
-3 calls need three upstream sends, which means the other providers are refusing
-too. Each phase sends at most 400 calls per endpoint; through the profile, each
+3 calls through the profile need three upstream sends. Each phase sends at most 400 calls per endpoint; through the profile, each
 call can reach at most three providers. The script caps `--limit-rate` at 50
 and `--limit-seconds` at 60.
 
@@ -266,7 +268,7 @@ Phase 1, provider-1 alone (<host>): <n> of 400 planned eth_getLogs calls
   latency of answered calls: p50 <ms> ms, p90 <ms> ms, p99 <ms> ms
   refusals (HTTP 429 or a rate-limit error): <count>
 
-Phase 2, provider-1 kept over its limit: <n> calls, <count> refusals.
+Phase 2, provider-1 directly: <n> calls, <count> refusals.
 Phase 2, through lasso (<host>): <n> of 400 planned eth_getLogs calls
   answered <n>, errors: <kind> <count>
   latency of answered calls: p50 <ms> ms, p90 <ms> ms, p99 <ms> ms
@@ -274,7 +276,7 @@ Phase 2, through lasso (<host>): <n> of 400 planned eth_getLogs calls
   upstream sends: <n> for <n> calls, <count> calls sent more than once
   answered by: <provider-id> <count>, <provider-id> <count>
   strategy reported by Lasso: <strategy> <count>
-  time reported by Lasso: inside Lasso p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
+  routing time reported by Lasso: routing apart from upstream waits p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
   p50 latency: <ms> ms for calls sent once (<n>), <ms> ms for calls sent more than once (<n>)
 Samples: rate-limit.json
 Result: complete.
@@ -289,21 +291,23 @@ A run is complete when its last line is `Result: complete.` and it exits with
 status 0. A run that stopped early in phase 2 is complete. Otherwise the last
 line is `Result: incomplete.` followed by the reasons, and the exit status is 1:
 an endpoint answered no calls, Lasso responses lacked the answering provider or
-send count, or the rate-limit target refused nothing. A setup failure, such as
-an endpoint that does not answer `eth_chainId`, prints the reason and exits
-with status 1 before any calls are measured.
+send count, or the rate-limit target refused nothing in phase 1 or in phase 2.
+A setup failure, such as an endpoint that does not answer `eth_chainId`, prints
+the reason and the error kind and exits with status 1 before any calls are
+measured.
 
 The samples file is JSON written to the `--out` path in the current directory,
 complete or not. `manifest` holds the mode, chain ID, pinned block, endpoints
 by label and host, settings and completeness. `samples` holds one entry per
 call: endpoint label, method, round or phase, latency in `ms`, `ok`, the error
-kind and detail, and for Lasso calls `meta.strategy`, `meta.provider`, `meta.sends`,
-`meta.insideMs` and `meta.upstreamMs`. Every
-line of the output can be recomputed from it.
+kind, and for Lasso calls `meta.strategy`, `meta.provider`, `meta.sends`,
+`meta.routingMs` and `meta.upstreamMs`. Every line of the output can be
+recomputed from it.
 
-Neither the output nor the samples file contains an endpoint URL. Endpoints
-appear by label and host, and key-like URL path segments and query values are
-replaced with `<redacted>` in error text.
+Neither the output nor the samples file contains anything derived from an
+endpoint URL except its host, or any text an endpoint returned apart from the
+strategy and provider identifiers in `lasso_meta`. Errors are recorded by kind
+only, so keys in URLs cannot reach either file.
 
 ## Canary and rollback
 
