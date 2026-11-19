@@ -484,6 +484,258 @@ chains:
         subscribe_new_heads: false
 
   # ──────────────────────────────────────────────────────────────────────────
+  # OPTIMISM (L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  optimism:
+    chain_id: 10
+    name: "Optimism"
+    block_time_ms: 2000
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 5 # ~10 s at 2 s blocks
+      archival_threshold: 750 # ~25 min at 2 s blocks
+
+    websocket:
+      subscribe_new_heads: false
+      new_heads_timeout_ms: 20000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#FF0421"
+      size: lg
+
+    # archival: true marks endpoints that served account state at genesis in
+    # both qualification passes; false marks endpoints with pruned history.
+    providers:
+      - id: "optimism_publicnode"
+        name: "PublicNode Optimism"
+        priority: 2
+        url: "https://optimism-rpc.publicnode.com"
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          limits:
+            max_block_range: 4096
+
+      # Served every log span we measured, so no range limit is declared.
+      - id: "optimism_tenderly"
+        name: "Tenderly Optimism"
+        priority: 3
+        url: "https://optimism.gateway.tenderly.co"
+        archival: true
+
+      - id: "optimism_sentio"
+        name: "Sentio Optimism"
+        priority: 4
+        url: "https://optimism.rpc.sentio.xyz"
+        archival: true
+        capabilities:
+          # Raw transaction submissions did not return a valid response.
+          unsupported_methods: ["eth_sendRawTransaction"]
+          limits:
+            max_block_range: 256
+
+      - id: "optimism_drpc"
+        name: "dRPC Optimism"
+        priority: 5
+        url: "https://optimism.drpc.org"
+        archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
+        capabilities:
+          limits:
+            max_block_range: 98
+
+      # Served every log span we measured, so no range limit is declared.
+      - id: "optimism_pocket"
+        name: "Pocket Optimism"
+        priority: 6
+        url: "https://op.api.pocket.network"
+        archival: false
+        request_budget:
+          requests_per_second: 5
+          burst: 5
+
+      - id: "optimism_thirdweb"
+        name: "thirdweb Optimism"
+        priority: 7
+        url: "https://10.rpc.thirdweb.com"
+        archival: true
+        request_budget:
+          requests_per_second: 2
+          burst: 2
+        capabilities:
+          limits:
+            max_block_range: 256
+
+      # Recent-blocks fallback within its published request budget.
+      - id: "optimism_blockvectra"
+        name: "BlockVectra Optimism"
+        priority: 8
+        url: "https://api.blockvectra.com/v1/op_mainnet/public"
+        archival: false
+        request_budget:
+          requests_per_second: 3
+          burst: 3
+        capabilities:
+          # This endpoint does not serve log or block receipt queries.
+          unsupported_methods: ["eth_getLogs", "eth_getBlockReceipts"]
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # UNICHAIN (L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  unichain:
+    chain_id: 130
+    name: "Unichain"
+    block_time_ms: 1000
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 10
+
+    selection:
+      max_lag_blocks: 10 # ~10 s at 1 s blocks
+      archival_threshold: 1500 # ~25 min at 1 s blocks
+
+    websocket:
+      subscribe_new_heads: false
+      new_heads_timeout_ms: 15000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#F50DB4"
+      size: md
+
+    # archival: true marks endpoints that served account state at genesis in
+    # both qualification passes; false marks endpoints with pruned history.
+    providers:
+      - id: "unichain_publicnode"
+        name: "PublicNode Unichain"
+        priority: 2
+        url: "https://unichain-rpc.publicnode.com"
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          limits:
+            max_block_range: 4096
+
+      # Served every log span we measured, so no range limit is declared.
+      - id: "unichain_tenderly"
+        name: "Tenderly Unichain"
+        priority: 3
+        url: "https://unichain.gateway.tenderly.co"
+        archival: true
+
+      - id: "unichain_sentio"
+        name: "Sentio Unichain"
+        priority: 4
+        url: "https://unichain-mainnet.rpc.sentio.xyz"
+        archival: true
+        capabilities:
+          # Raw transaction submissions did not return a valid response.
+          unsupported_methods: ["eth_sendRawTransaction"]
+          limits:
+            max_block_range: 256
+
+      - id: "unichain_blockreq"
+        name: "BlockReq Unichain"
+        priority: 5
+        url: "https://unichain-rpc.blockreq.com/v1/rpc/public"
+        archival: false
+        request_budget:
+          requests_per_second: 5
+          burst: 5
+        capabilities:
+          limits:
+            max_block_range: 736
+
+      # Recent-blocks fallback within its published request budget.
+      - id: "unichain_blockvectra"
+        name: "BlockVectra Unichain"
+        priority: 6
+        url: "https://api.blockvectra.com/v1/unichain_mainnet/public"
+        archival: false
+        request_budget:
+          requests_per_second: 3
+          burst: 3
+        capabilities:
+          # This endpoint does not serve log or block receipt queries.
+          unsupported_methods: ["eth_getLogs", "eth_getBlockReceipts"]
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # WORLD CHAIN (L2)
+  # ──────────────────────────────────────────────────────────────────────────
+  world:
+    chain_id: 480
+    name: "World Chain"
+    block_time_ms: 2000
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 5
+
+    selection:
+      max_lag_blocks: 5 # ~10 s at 2 s blocks
+      archival_threshold: 750 # ~25 min at 2 s blocks
+
+    websocket:
+      subscribe_new_heads: false
+      new_heads_timeout_ms: 20000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#3FDBED"
+      size: md
+
+    # archival: true marks endpoints that served account state at genesis in
+    # both qualification passes; false marks endpoints with pruned history.
+    providers:
+      - id: "world_alchemy"
+        name: "Alchemy World Chain"
+        priority: 2
+        url: "https://worldchain-mainnet.g.alchemy.com/public"
+        archival: true
+        capabilities:
+          # Block receipt queries are refused on this endpoint.
+          unsupported_methods: ["eth_getBlockReceipts"]
+          limits:
+            max_block_range: 98
+
+      # Served every log span we measured, so no range limit is declared.
+      - id: "world_quicknode"
+        name: "QuickNode World Chain"
+        priority: 3
+        url: "https://sparkling-autumn-dinghy.worldchain-mainnet.quiknode.pro"
+        archival: true
+        request_budget:
+          requests_per_second: 1
+          burst: 1
+
+      # Recent-blocks fallback within its published request budget.
+      - id: "world_blockvectra"
+        name: "BlockVectra World Chain"
+        priority: 4
+        url: "https://api.blockvectra.com/v1/world_mainnet/public"
+        archival: false
+        request_budget:
+          requests_per_second: 3
+          burst: 3
+        capabilities:
+          # This endpoint does not serve log or block receipt queries.
+          unsupported_methods: ["eth_getLogs", "eth_getBlockReceipts"]
+
+  # ──────────────────────────────────────────────────────────────────────────
   # ETHEREUM SEPOLIA (Testnet)
   # ──────────────────────────────────────────────────────────────────────────
   ethereum-sepolia:

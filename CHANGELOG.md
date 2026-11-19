@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The bundled `public` profile serves Robinhood Chain (chain ID 4663), and its Base providers are the keyless endpoints that passed two live qualification passes. Each provider declares the log range and request budget it sustained, providers that refused log queries are kept out of `eth_getLogs`, and only endpoints that served account state at genesis in both passes take historical reads. Base no longer lists endpoints that failed qualification or that their operator documents as not for production. See the [qualification evidence](docs/evidence/public-template/).
+- The bundled `public` profile serves Optimism (chain ID 10), Unichain (130) and World Chain (480) from keyless endpoints that passed two live qualification passes, with the same per-provider log ranges, request budgets and history rules as Base. Each chain keeps an archival provider with no declared log range for historical `eth_getLogs`. World Chain has two primary keyless routes.
 
 ## [0.8.5] - 2026-11-19
 
