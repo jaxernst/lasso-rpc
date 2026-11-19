@@ -82,8 +82,8 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
     )
   end
 
-  def normalize({:rate_limit, %{status: 429} = payload}, opts) do
-    JError.new(-32_005, Map.get(payload, :message, "Rate limited by provider"),
+  def normalize({:rate_limit, %{status: status} = payload}, opts) when status in [402, 429] do
+    JError.new(-32_005, Map.get(payload, :message, rate_limit_message(status)),
       data: add_retry_after(nil, payload),
       original_code: Map.get(payload, :code, -32_005),
       provider_id: Keyword.get(opts, :provider_id),
@@ -92,7 +92,7 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
       category: :rate_limit,
       retriable?: true,
       breaker_penalty?: false,
-      http_status: 429
+      http_status: status
     )
   end
 
@@ -785,6 +785,9 @@ defmodule Lasso.Core.Support.ErrorNormalizer do
         Map.put(base, :retry_after_ms, retry_ms)
     end
   end
+
+  defp rate_limit_message(402), do: "Provider plan allowance exhausted"
+  defp rate_limit_message(_status), do: "Rate limited by provider"
 
   defp public_transport_data(payload) when is_map(payload) do
     payload

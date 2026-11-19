@@ -489,8 +489,13 @@ defmodule Lasso.Discovery.Probes.MethodSupport do
         |> classify_jsonrpc_error(duration, capabilities)
         |> Map.merge(%{status: :unknown, error_type: :rate_limit})
 
-      {:error, {:rate_limit, _payload}} ->
-        %{status: :unknown, duration_ms: duration, error: "rate_limit", error_code: 429}
+      {:error, {:rate_limit, payload}} ->
+        %{
+          status: :unknown,
+          duration_ms: duration,
+          error: "rate_limit",
+          error_code: Map.get(payload, :status, 429)
+        }
 
       {:error, {:client_error, %{body: body} = payload}} ->
         case decode_jsonrpc_error(body) do
