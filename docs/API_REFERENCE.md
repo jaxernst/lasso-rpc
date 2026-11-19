@@ -204,11 +204,17 @@ Response body includes a `lasso_meta` field:
     "strategy": "fastest",
     "selected_provider": {"id": "ethereum_llamarpc"},
     "upstream_latency_ms": 45,
+    "end_to_end_latency_ms": 48,
+    "lasso_overhead_ms": 3,
     "retries": 0,
     "circuit_breaker_state": "closed"
   }
 }
 ```
+
+`upstream_latency_ms` is the time spent waiting on providers,
+`end_to_end_latency_ms` is the time from receiving the request to responding,
+and `lasso_overhead_ms` is the difference: time spent inside Lasso.
 
 ### WebSocket Metadata
 

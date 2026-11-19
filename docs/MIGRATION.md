@@ -207,9 +207,11 @@ p50 ms by method  lasso  provider-1  provider-2
 eth_blockNumber    <ms>        <ms>        <ms>
 ...
 
+lasso strategy reported by Lasso: <strategy> <count>
 lasso answered by: <provider-id> <count>, <provider-id> <count>
 lasso upstream sends per call: 1 send: <count>, 2 sends: <count> (total <n> for <n> calls)
 lasso latency against the best direct provider (<label>, lowest p50): p50 <+ms> ms, p90 <+ms> ms, p99 <+ms> ms
+lasso time reported by Lasso for the same calls: inside Lasso p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
 
 Samples: comparison.json
 Result: complete.
@@ -217,10 +219,18 @@ Result: complete.
 
 Errors are counted by kind: `timeout`, `network`, `rate limit`, `http <status>`,
 `rpc <code>` and `bad response`. The script adds `include_meta=body` to the
-Lasso URL and reads the answering provider and the number of upstream sends
-from `lasso_meta`. The metadata names the provider that answered, not one that
+Lasso URL and reads the strategy that routed each call, the answering
+provider, the number of upstream sends and Lasso's own timing from
+`lasso_meta`. The metadata names the provider that answered, not one that
 refused. Latency is measured from the machine running the script, so it
 includes the network path to each endpoint.
+
+The difference against a direct provider includes everything between the
+script and Lasso. Measure a release build, such as the published image, not a
+development server, which adds time to every request. Compare the difference
+with the time Lasso reports, inside Lasso and waiting on the upstream, to see
+where the time goes. If `lasso_meta` carries no timing, that line says so and
+the run is still complete.
 
 #### Rate limit
 
@@ -263,6 +273,8 @@ Phase 2, through lasso (<host>): <n> of 400 planned eth_getLogs calls
   stopped: <reason, or "no, ran the full duration">
   upstream sends: <n> for <n> calls, <count> calls sent more than once
   answered by: <provider-id> <count>, <provider-id> <count>
+  strategy reported by Lasso: <strategy> <count>
+  time reported by Lasso: inside Lasso p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
   p50 latency: <ms> ms for calls sent once (<n>), <ms> ms for calls sent more than once (<n>)
 Samples: rate-limit.json
 Result: complete.
@@ -285,7 +297,8 @@ The samples file is JSON written to the `--out` path in the current directory,
 complete or not. `manifest` holds the mode, chain ID, pinned block, endpoints
 by label and host, settings and completeness. `samples` holds one entry per
 call: endpoint label, method, round or phase, latency in `ms`, `ok`, the error
-kind and detail, and for Lasso calls `meta.provider` and `meta.sends`. Every
+kind and detail, and for Lasso calls `meta.strategy`, `meta.provider`, `meta.sends`,
+`meta.insideMs` and `meta.upstreamMs`. Every
 line of the output can be recomputed from it.
 
 Neither the output nor the samples file contains an endpoint URL. Endpoints

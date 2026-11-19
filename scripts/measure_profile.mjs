@@ -31,6 +31,17 @@ if (Number(process.versions.node.split(".")[0]) < 18) {
   process.exit(1);
 }
 
+const USAGE = `Usage:
+  node scripts/measure_profile.mjs \\
+    --lasso lasso=env:LASSO_URL \\
+    --provider provider-1=env:PROVIDER_1_URL \\
+    --provider provider-2=env:PROVIDER_2_URL \\
+    --out comparison.json
+
+Add --rate-limit provider-1 --limit-rate 20 --limit-seconds 20 to drive one
+provider past its limit. Setup, flags and output: docs/MIGRATION.md,
+"Measure a profile against its own providers".`;
+
 const PIN_DEPTH = 16;
 const LOG_RANGE = 10;
 const MAX_LIMIT_RATE = 50;
@@ -86,6 +97,10 @@ function parseArgs(argv) {
     limitSeconds: 20,
   };
   const numbers = { "--calls": "calls", "--rate": "rate", "--timeout": "timeout", "--limit-rate": "limitRate", "--limit-seconds": "limitSeconds" };
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
   for (let i = 2; i < argv.length; i++) {
     const flag = argv[i];
     const value = argv[++i];
@@ -158,7 +173,14 @@ function metaOf(r) {
   const m = r.json?.lasso_meta;
   if (!m) return null;
   const sends = m.dispatches ?? (Array.isArray(m.attempted_channels) ? m.attempted_channels.length : null);
-  return { provider: m.selected_provider?.id ?? null, sends, strategy: m.strategy ?? null };
+  const round = (v) => (typeof v === "number" ? Math.round(v * 10) / 10 : null);
+  return {
+    provider: m.selected_provider?.id ?? null,
+    sends,
+    strategy: m.strategy ?? null,
+    upstreamMs: round(m.upstream_latency_ms),
+    insideMs: round(m.lasso_overhead_ms),
+  };
 }
 
 async function call(endpoint, method, params, extra = {}) {
@@ -269,6 +291,7 @@ function routingLines(samples, lasso) {
   if (!withMeta.length) return [`${lasso.label}: responses carried no lasso_meta, so the answering provider and upstream sends are unknown.`];
   const lines = [];
   if (withMeta.length < mine.length) lines.push(`${lasso.label}: ${mine.length - withMeta.length} of ${mine.length} responses carried no lasso_meta.`);
+  lines.push(`${lasso.label} strategy reported by Lasso: ${listCounts(withMeta.map((s) => s.meta.strategy ?? "unreported"))}`);
   lines.push(`${lasso.label} answered by: ${listCounts(withMeta.filter((s) => s.ok).map((s) => s.meta.provider ?? "unnamed"))}`);
   const sends = withMeta.map((s) => s.meta.sends).filter((v) => v != null);
   if (sends.length) {
@@ -288,6 +311,15 @@ function costLine(samples, lasso, directs) {
   if (!best || !mine.length) return `${lasso.label} latency against the best direct provider: n/a`;
   const diff = (p) => percentile(mine, p) - percentile(best.ms, p);
   return `${lasso.label} latency against the best direct provider (${best.d.label}, lowest p50): p50 ${signed(diff(50))} ms, p90 ${signed(diff(90))} ms, p99 ${signed(diff(99))} ms`;
+}
+
+function reportedTime(samples) {
+  const answered = samples.filter((s) => s.ok && s.meta);
+  const inside = answered.map((s) => s.meta.insideMs).filter((v) => v != null);
+  const upstream = answered.map((s) => s.meta.upstreamMs).filter((v) => v != null);
+  if (!inside.length && !upstream.length) return "lasso_meta reported no timing";
+  const pair = (xs) => `p50 ${fmt(percentile(xs, 50))} ms, p90 ${fmt(percentile(xs, 90))} ms`;
+  return `inside Lasso ${pair(inside)}; waiting on the upstream ${pair(upstream)}`;
 }
 
 function methodTable(samples, endpoints, methods) {
@@ -324,7 +356,12 @@ async function compare(chain) {
   ];
   const incomplete = [];
   for (const lasso of lassos) {
-    lines.push(...routingLines(samples, lasso), costLine(samples, lasso, providers), "");
+    lines.push(
+      ...routingLines(samples, lasso),
+      costLine(samples, lasso, providers),
+      `${lasso.label} time reported by Lasso for the same calls: ${reportedTime(samples.filter((s) => s.endpoint === lasso.label))}`,
+      ""
+    );
     incomplete.push(...metaGaps(samples.filter((s) => s.endpoint === lasso.label), lasso));
   }
   for (const e of opts.endpoints)
@@ -420,6 +457,8 @@ async function rateLimit(chain) {
     lines.push(
       `  upstream sends: ${sends.reduce((a, b) => a + b, 0)} for ${sends.length} calls, ${sends.filter((n) => n > 1).length} calls sent more than once`,
       `  answered by: ${listCounts(profile.filter((s) => s.ok).map((s) => s.meta?.provider ?? "unnamed"))}`,
+      `  strategy reported by Lasso: ${listCounts(profile.filter((s) => s.meta).map((s) => s.meta.strategy ?? "unreported"))}`,
+      `  time reported by Lasso: ${reportedTime(profile)}`,
       `  p50 latency: ${fmt(percentile(once, 50))} ms for calls sent once (${once.length}), ${fmt(percentile(more, 50))} ms for calls sent more than once (${more.length})`
     );
   const incomplete = metaGaps(profile, lasso);
