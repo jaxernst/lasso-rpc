@@ -405,7 +405,14 @@ height to fork-aware checks on headers, logs, and responses.
 
 Prefer a managed deployment? [Lasso Cloud](https://lasso.sh) runs this engine
 with hosted providers, API keys, and usage analytics. See the
-[Cloud docs](https://docs.lasso.sh/cloud/adoption).
+[Cloud docs](https://docs.lasso.sh/cloud/adoption). Its
+[status page](https://lasso-rpc-status.checkly-status-page.com/) shows live
+status and 90 days of uptime from an external monitor.
+
+Leaving Cloud means running this repository. A Cloud Custom profile exports as
+a Core YAML profile with provider URLs replaced by environment references, so
+the same providers and routing settings start here with your own secrets. Your
+app keeps standard JSON-RPC and changes only its RPC URL.
 
 ## Contributing
 
