@@ -174,18 +174,26 @@ chains:
         ws_url: "wss://base.drpc.org"
         subscribe_new_heads: false
         archival: true
+        request_budget:
+          requests_per_second: 5
+          burst: 5
         capabilities:
           unsupported_methods: ["eth_protocolVersion"]
           limits:
-            max_block_range: 10000
+            max_block_range: 98
 
-      - id: "base_official"
-        name: "Base Official"
+      - id: "base_publicnode"
+        name: "PublicNode Base"
         priority: 3
-        url: "https://mainnet.base.org"
-        archival: true
+        url: "https://base-rpc.publicnode.com"
+        ws_url: "wss://base-rpc.publicnode.com"
+        subscribe_new_heads: false
+        archival: false
         capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
           unsupported_methods: ["eth_protocolVersion"]
+          limits:
+            max_block_range: 42496
 
   arbitrum:
     chain_id: 42161
