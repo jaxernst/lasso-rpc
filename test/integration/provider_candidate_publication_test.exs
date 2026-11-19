@@ -94,6 +94,47 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
       assert_ready()
     end
 
+    test "#{mode}: unknown capability categories reject without allocating atoms or restarting the owner",
+         ctx do
+      mode = Map.fetch!(%{mode: unquote(mode)}, :mode)
+
+      config =
+        provider(ctx, "categories")
+        |> Map.put(:capabilities, %{
+          unsupported_categories: ["local_only"],
+          error_rules: [%{code: -32001, category: "timeout"}]
+        })
+
+      assert :ok = apply_provider(ctx, mode, "public", config)
+      assert {:ok, accepted} = Providers.get_provider(@chain, "categories")
+      assert accepted.capabilities.unsupported_categories == [:local_only]
+      assert hd(accepted.capabilities.error_rules).category == :timeout
+      owner = Process.whereis(ConfigStore)
+      before = snapshot()
+      unknown = "unregistered-category-#{System.unique_integer([:positive])}"
+      assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end
+
+      for name <- [unknown, String.duplicate("x", 256)],
+          caps <- [
+            %{unsupported_categories: [name]},
+            %{error_rules: [%{code: -32001, category: name}]}
+          ] do
+        result =
+          if mode == :runtime do
+            Providers.update_provider(@chain, "categories", %{capabilities: caps})
+          else
+            apply_provider(ctx, mode, "public", Map.put(config, :capabilities, caps))
+          end
+
+        assert {:error, _} = result
+        assert Process.whereis(ConfigStore) == owner
+        assert snapshot() == before
+      end
+
+      assert_raise ArgumentError, fn -> String.to_existing_atom(unknown) end
+      assert_ready()
+    end
+
     test "#{mode}: an already connected WebSocket adopts a new shared budget", ctx do
       mode = Map.fetch!(%{mode: unquote(mode)}, :mode)
       first = provider(ctx, "first")
@@ -134,34 +175,22 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
     assert_ready()
   end
 
-  test "provider struct round trips and invalid patches preserve the configuration owner", ctx do
-    assert :ok = apply_provider(ctx, :runtime, "public", provider(ctx, "round-trip"))
+  test "struct and non-map patches reject without changing the configuration owner", ctx do
+    assert :ok = apply_provider(ctx, :runtime, "public", provider(ctx, "patch"))
     owner = Process.whereis(ConfigStore)
-    assert {:ok, provider} = Providers.get_provider(@chain, "round-trip")
-    assert :ok = Providers.update_provider(@chain, "round-trip", %{provider | priority: 5})
-    assert {:ok, %{priority: 5}} = Providers.get_provider(@chain, "round-trip")
+    assert {:ok, provider} = Providers.get_provider(@chain, "patch")
     before = snapshot()
 
-    for bad <- [nil, [], "invalid"] do
-      assert {:error, :invalid_provider_updates} =
-               Providers.update_provider(@chain, "round-trip", bad)
-
+    for bad <- [nil, [], "invalid", %URI{}, %{provider | ws_url: nil}] do
+      assert {:error, :invalid_provider_updates} = Providers.update_provider(@chain, "patch", bad)
       assert Process.whereis(ConfigStore) == owner
     end
 
-    assert {:error, _} = Providers.update_provider(@chain, "round-trip", %URI{})
-
-    assert {:error, _} =
-             Providers.update_provider(@chain, "round-trip", %{
-               request_budget: %URI{path: "invalid"}
-             })
-
-    assert Process.whereis(ConfigStore) == owner
     assert snapshot() == before
     assert_ready()
   end
 
-  test "concurrent partial updates preserve both accepted changes", ctx do
+  test "concurrent partial updates reject stale replacements", ctx do
     assert :ok = apply_provider(ctx, :runtime, "public", provider(ctx, "race"))
     owner = Process.whereis(ConfigStore)
     :ok = :sys.suspend(owner)
@@ -180,10 +209,10 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
     :ok = :sys.resume(owner)
 
     assert Task.await(first, 15_000) == :ok
-    assert Task.await(second, 15_000) == :ok
+    assert Task.await(second, 15_000) == {:error, :provider_changed}
     assert {:ok, updated} = Providers.get_provider(@chain, "race")
     assert updated.request_budget == %{requests_per_second: 1, burst: 2}
-    assert updated.priority == 17
+    assert updated.priority == 100
     assert_ready()
   end
 
@@ -195,7 +224,7 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
 
     queued =
       Enum.count(messages, fn
-        {:"$gen_call", _, {:update_provider_runtime, _, _, _, _}} -> true
+        {:"$gen_call", _, {:update_provider_runtime, _, _, _, _, _}} -> true
         _ -> false
       end)
 

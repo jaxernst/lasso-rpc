@@ -40,6 +40,7 @@ defmodule Lasso.Config.Backend.File do
   require Logger
 
   alias Lasso.Config.{ChainConfig, FileSchema, ProfileId}
+  alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Providers.Capabilities
 
   @type state :: %{
@@ -374,15 +375,30 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp safe_to_atom(k) when is_atom(k), do: k
-  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-  defp safe_to_atom(k) when is_binary(k), do: String.to_atom(k)
+  defp safe_to_atom(k) when is_binary(k), do: String.to_existing_atom(k)
 
   defp maybe_atomize_list(map, key) do
     case Map.get(map, key) do
-      nil -> map
-      list when is_list(list) -> Map.put(map, key, Enum.map(list, &safe_to_atom/1))
-      _ -> map
+      nil ->
+        map
+
+      list when is_list(list) ->
+        Map.put(
+          map,
+          key,
+          Enum.map(list, &parse_category!(&1, Map.keys(MethodRegistry.categories())))
+        )
+
+      _ ->
+        map
     end
+  end
+
+  defp parse_category!(name, categories) do
+    Enum.find(categories, &(Atom.to_string(&1) == name)) ||
+      throw(
+        {:invalid_profile_config, "provider.capabilities.category", "unknown capability category"}
+      )
   end
 
   defp maybe_stringify_list(map, key) do
@@ -411,8 +427,11 @@ defmodule Lasso.Config.Backend.File do
         |> atomize_keys()
         |> then(fn r ->
           case Map.get(r, :category) do
-            cat when is_binary(cat) -> Map.put(r, :category, safe_to_atom(cat))
-            _ -> r
+            cat when is_binary(cat) ->
+              Map.put(r, :category, parse_category!(cat, Capabilities.error_categories()))
+
+            _ ->
+              r
           end
         end)
       end)

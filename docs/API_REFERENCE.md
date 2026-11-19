@@ -451,7 +451,10 @@ Lasso.Providers.add_provider(1, %{
 
 `name` defaults to `id`; either an HTTP `url` or a `ws_url` is required.
 `update_provider(chain, id, updates)` merges partial updates before validation,
-preserving omitted settings. Explicit `nil` deletes an optional setting, such as
+preserving omitted settings. Patches must be plain maps; structs return
+`{:error, :invalid_provider_updates}`. The caller parses the merged replacement,
+and publication returns `{:error, :provider_changed}` if the stored provider has
+changed in the meantime. Explicit `nil` deletes an optional setting, such as
 `%{ws_url: nil}` when an HTTP endpoint remains; removing every endpoint is rejected.
 Both functions reject unknown keys, including nested keys, and validate the full
 candidate catalog (including shared upstream budget conflicts) before publication.

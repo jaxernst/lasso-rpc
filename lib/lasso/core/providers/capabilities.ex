@@ -40,6 +40,10 @@ defmodule Lasso.RPC.Providers.Capabilities do
     :user_error
   ]
 
+  @doc false
+  @spec error_categories() :: [atom()]
+  def error_categories, do: @valid_error_categories
+
   @doc """
   Returns permissive default capabilities (everything supported except local_only).
   """

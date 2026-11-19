@@ -148,6 +148,7 @@ defmodule Lasso.Providers do
   @doc """
   Merges a partial provider update and validates it with the profile YAML schema.
   Omitted settings are preserved; explicit nil values delete optional settings.
+  Patches must be plain maps. Stale replacements return `{:error, :provider_changed}`.
   Invalid candidates return an error before publication.
   """
   @spec update_provider(chain_identifier(), String.t(), map(), keyword()) ::
@@ -159,12 +160,11 @@ defmodule Lasso.Providers do
   @spec update_provider(String.t(), chain_identifier(), String.t(), map(), keyword()) ::
           :ok | {:error, term()}
   def update_provider(profile, chain_name, provider_id, updates, _opts) do
-    with {:ok, updates} <- prepare_provider_updates(updates),
-         {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
+    with {:ok, chain_id} <- resolve_chain_id(profile, chain_name),
+         {:ok, existing} <- get_provider(profile, chain_id, provider_id),
+         {:ok, updated} <- normalize_provider_updates(existing, updates),
          :ok <-
-           ConfigStore.update_provider_runtime(profile, chain_id, provider_id, fn existing ->
-             normalize_provider_updates(existing, updates)
-           end) do
+           ConfigStore.update_provider_runtime(profile, chain_id, provider_id, existing, updated) do
       Logger.info("Successfully updated provider #{provider_id} in #{chain_name}")
       :ok
     else
@@ -307,31 +307,23 @@ defmodule Lasso.Providers do
     {:invalid_profile_config, _, _} = error -> {:error, error}
   end
 
-  defp prepare_provider_updates(%Lasso.Config.ChainConfig.Provider{} = updates),
-    do: updates |> stored_provider_attrs() |> prepare_provider_updates()
-
-  defp prepare_provider_updates(%_{} = updates),
-    do: updates |> Map.from_struct() |> prepare_provider_updates()
-
-  defp prepare_provider_updates(updates) when is_map(updates), do: {:ok, stringify(updates)}
-  defp prepare_provider_updates(_updates), do: {:error, :invalid_provider_updates}
-
-  defp normalize_provider_updates(existing, updates) do
+  defp normalize_provider_updates(existing, updates)
+       when is_map(updates) and not is_struct(updates) do
     existing
     |> stored_provider_attrs()
     |> stringify()
-    |> Map.merge(updates)
+    |> Map.merge(stringify(updates))
     |> Lasso.Config.FileSchema.delete_nil_provider_fields()
     |> normalize_provider_config()
   end
+
+  defp normalize_provider_updates(_existing, _updates), do: {:error, :invalid_provider_updates}
 
   defp stored_provider_attrs(%_{} = provider),
     do: provider |> Map.from_struct() |> stored_provider_attrs()
 
   defp stored_provider_attrs(provider),
     do: Map.reject(provider, fn {_key, value} -> is_nil(value) end)
-
-  defp stringify(%_{} = value), do: value |> Map.from_struct() |> stringify()
 
   defp stringify(map) when is_map(map),
     do: Map.new(map, fn {key, value} -> {to_string(key), stringify(value)} end)
