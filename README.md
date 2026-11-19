@@ -406,7 +406,7 @@ height to fork-aware checks on headers, logs, and responses.
 Prefer a managed deployment? [Lasso Cloud](https://lasso.sh) runs this engine
 with hosted providers, API keys, and usage analytics. See the
 [Cloud docs](https://docs.lasso.sh/cloud/adoption). Its
-[status page](https://lasso-rpc-status.checkly-status-page.com/) shows live
+[status page](https://status.lasso.sh/) shows live
 status and 90 days of uptime from an external monitor.
 
 Leaving Cloud means running this repository. A Cloud Custom profile exports as
