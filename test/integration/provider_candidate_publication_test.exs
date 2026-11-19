@@ -186,6 +186,7 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
       assert Process.whereis(ConfigStore) == owner
     end
 
+    assert {:error, _} = Providers.update_provider(@chain, "patch", %{request_budget: %URI{}})
     assert snapshot() == before
     assert_ready()
   end

@@ -325,7 +325,7 @@ defmodule Lasso.Providers do
   defp stored_provider_attrs(provider),
     do: Map.reject(provider, fn {_key, value} -> is_nil(value) end)
 
-  defp stringify(map) when is_map(map),
+  defp stringify(map) when is_map(map) and not is_struct(map),
     do: Map.new(map, fn {key, value} -> {to_string(key), stringify(value)} end)
 
   defp stringify(list) when is_list(list), do: Enum.map(list, &stringify/1)

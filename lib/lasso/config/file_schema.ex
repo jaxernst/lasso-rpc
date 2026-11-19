@@ -185,7 +185,8 @@ defmodule Lasso.Config.FileSchema do
     :ok
   end
 
-  defp validate!(value, schema, path) when is_map(schema) and is_map(value) do
+  defp validate!(value, schema, path)
+       when is_map(schema) and is_map(value) and not is_struct(value) do
     Enum.each(value, fn {key, field} ->
       case Map.fetch(schema, key) do
         {:ok, type} ->
