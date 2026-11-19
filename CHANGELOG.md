@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Runtime provider additions and partial updates now share profile YAML parsing and validate the full candidate catalog before publication, preserving provider settings and rejecting unknown fields, unsupported category names, and conflicting budgets without disrupting the active configuration. Updates accept plain map patches, apply explicit nil deletions, and reject stale replacements with `:provider_changed`; WebSocket-only providers load safely and live WebSocket sends use the current shared budget.
+
 - Stop repeatedly routing to refused HTTP connections and restore recovered endpoints within seconds, including subscription backfill during circuit probation.
 
 - Sole-provider WebSocket subscriptions wait for reconnect within the recovery deadline when a disconnect invalidates an in-flight replacement, instead of terminating as though the provider was removed.

@@ -40,6 +40,7 @@ defmodule Lasso.Config.Backend.File do
   require Logger
 
   alias Lasso.Config.{ChainConfig, FileSchema, ProfileId}
+  alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Providers.Capabilities
 
   @type state :: %{
@@ -295,34 +296,36 @@ defmodule Lasso.Config.Backend.File do
     }
   end
 
-  defp parse_providers(providers_data) do
-    Enum.map(providers_data, fn provider_data ->
-      provider = %ChainConfig.Provider{
-        id: provider_data["id"],
-        name: provider_data["name"] || provider_data["id"],
-        priority: provider_data["priority"] || 100,
-        url: ChainConfig.substitute_env_vars(provider_data["url"]),
-        ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
-        capabilities: parse_capabilities(provider_data["capabilities"]),
-        subscribe_new_heads: parse_subscribe_new_heads(provider_data["subscribe_new_heads"]),
-        request_budget:
-          Lasso.Core.Transport.UpstreamAdmission.normalize_budget(provider_data["request_budget"]),
-        background_observations:
-          parse_background_observations(provider_data["background_observations"]),
-        observation_overrides: provider_data["observation_overrides"],
-        chain_identity_interval_ms: provider_data["chain_identity_interval_ms"],
-        block_poll_interval_ms: provider_data["block_poll_interval_ms"],
-        archival: parse_archival(provider_data["archival"]),
-        sharing_mode: parse_sharing_mode(provider_data["sharing_mode"]),
-        api_key: ChainConfig.substitute_env_vars(provider_data["api_key"]),
-        credentials: provider_data["credentials"],
-        headers: substitute_headers(provider_data["headers"]),
-        auth_headers: substitute_headers(provider_data["auth_headers"])
-      }
+  defp parse_providers(providers_data), do: Enum.map(providers_data, &parse_provider/1)
 
-      Capabilities.validate!(provider.id, provider.capabilities)
-      provider
-    end)
+  @doc false
+  @spec parse_provider(map()) :: ChainConfig.Provider.t()
+  def parse_provider(provider_data) do
+    provider = %ChainConfig.Provider{
+      id: provider_data["id"],
+      name: provider_data["name"] || provider_data["id"],
+      priority: provider_data["priority"] || 100,
+      url: ChainConfig.substitute_env_vars(provider_data["url"]),
+      ws_url: ChainConfig.substitute_env_vars(provider_data["ws_url"]),
+      capabilities: parse_capabilities(provider_data["capabilities"]),
+      subscribe_new_heads: parse_subscribe_new_heads(provider_data["subscribe_new_heads"]),
+      request_budget:
+        Lasso.Core.Transport.UpstreamAdmission.normalize_budget(provider_data["request_budget"]),
+      background_observations:
+        parse_background_observations(provider_data["background_observations"]),
+      observation_overrides: provider_data["observation_overrides"],
+      chain_identity_interval_ms: provider_data["chain_identity_interval_ms"],
+      block_poll_interval_ms: provider_data["block_poll_interval_ms"],
+      archival: parse_archival(provider_data["archival"]),
+      sharing_mode: parse_sharing_mode(provider_data["sharing_mode"]),
+      api_key: ChainConfig.substitute_env_vars(provider_data["api_key"]),
+      credentials: provider_data["credentials"],
+      headers: substitute_headers(provider_data["headers"]),
+      auth_headers: substitute_headers(provider_data["auth_headers"])
+    }
+
+    Capabilities.validate!(provider.id, provider.capabilities)
+    provider
   end
 
   defp substitute_headers(nil), do: nil
@@ -372,15 +375,32 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp safe_to_atom(k) when is_atom(k), do: k
+  # Keys are bounded: FileSchema rejects unknown capability fields before parsing.
   # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
   defp safe_to_atom(k) when is_binary(k), do: String.to_atom(k)
 
   defp maybe_atomize_list(map, key) do
     case Map.get(map, key) do
-      nil -> map
-      list when is_list(list) -> Map.put(map, key, Enum.map(list, &safe_to_atom/1))
-      _ -> map
+      nil ->
+        map
+
+      list when is_list(list) ->
+        Map.put(
+          map,
+          key,
+          Enum.map(list, &parse_category!(&1, Map.keys(MethodRegistry.categories())))
+        )
+
+      _ ->
+        map
     end
+  end
+
+  defp parse_category!(name, categories) do
+    Enum.find(categories, &(Atom.to_string(&1) == name)) ||
+      throw(
+        {:invalid_profile_config, "provider.capabilities.category", "unknown capability category"}
+      )
   end
 
   defp maybe_stringify_list(map, key) do
@@ -409,8 +429,11 @@ defmodule Lasso.Config.Backend.File do
         |> atomize_keys()
         |> then(fn r ->
           case Map.get(r, :category) do
-            cat when is_binary(cat) -> Map.put(r, :category, safe_to_atom(cat))
-            _ -> r
+            cat when is_binary(cat) ->
+              Map.put(r, :category, parse_category!(cat, Capabilities.error_categories()))
+
+            _ ->
+              r
           end
         end)
       end)

@@ -433,3 +433,34 @@ Opt-in `lasso_meta` on send responses includes `send_policy: {providers: [provid
 When no send could be dispatched, the request returns JSON-RPC `-32000` with `reason: "transaction_providers_unavailable"`, `error_type: "transaction_provider_unavailable"`, `retryable: true` and `upstream_attempts: 0`. `retry_after_ms`, when present, is the soonest circuit recovery among the transaction providers on the requested transport.
 
 When dispatched sends fail and no hash lookup finds the transaction, the request returns the last upstream error, with `send_policy` naming the phase in its data. After an ambiguous outcome, a send classified only by its signed bytes returns `-32000` with the message `Upstream dispatch outcome is indeterminate` instead; `data.upstream_message`, when present, is a shortened copy of the upstream message. A send pin outside the transaction providers returns `-32602` with `pin_outside_transaction_providers`; a read pin to a transaction provider returns `-32602` with `transaction_provider_send_only`.
+
+## Runtime provider management
+
+`Lasso.Providers.add_provider(chain, provider)` accepts the same provider fields,
+defaults and validation as profile YAML, with atom or string keys (including nested
+settings). For example:
+
+```elixir
+Lasso.Providers.add_provider(1, %{
+  id: "local",
+  url: "http://127.0.0.1:8545",
+  background_observations: false,
+  request_budget: %{requests_per_second: 10, burst: 20}
+})
+```
+
+`name` defaults to `id`; either an HTTP `url` or a `ws_url` is required.
+`update_provider(chain, id, updates)` merges partial updates before validation,
+preserving omitted settings. Patches must be plain maps; structs return
+`{:error, :invalid_provider_updates}`. The caller parses the merged replacement,
+and publication returns `{:error, :provider_changed}` if the stored provider has
+changed in the meantime. Explicit `nil` deletes an optional setting, such as
+`%{ws_url: nil}` when an HTTP endpoint remains; removing every endpoint is rejected.
+Both functions reject unknown keys, including nested keys, and validate the full
+candidate catalog (including shared upstream budget conflicts) before publication.
+Invalid input returns `{:error, reason}` without changing the active configuration.
+YAML reload uses the same candidate catalog checks. WebSocket-only providers are
+supported in both paths, and existing WebSocket connections use the current
+published upstream budget on every send.
+Schema validation applies even with `validate: false`. The test adapter's
+`__mock__` marker remains available for mock providers.

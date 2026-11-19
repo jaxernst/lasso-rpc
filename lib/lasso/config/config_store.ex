@@ -39,7 +39,7 @@ defmodule Lasso.Config.ConfigStore do
   alias Lasso.Core.Streaming.InstanceEventBus
   alias Lasso.Core.Support.DynamicSupervisorCall
   alias Lasso.Providers.{Catalog, ProviderHeaders}
-  alias Lasso.RPC.ChainSupervisor
+  alias Lasso.RPC.{ChainSupervisor, TransportRegistry}
 
   @persistent_term_key :lasso_config_store_active
   @pending_cleanup_table :lasso_runtime_provider_cleanup
@@ -566,9 +566,24 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
-  @doc """
-  Unregisters a provider from in-memory configuration for a `profile_id` (runtime only).
-  """
+  @doc "Publishes a validated replacement only if the provider still matches the expected row."
+  @spec update_provider_runtime(
+          profile_id(),
+          pos_integer(),
+          String.t(),
+          Provider.t(),
+          Provider.t()
+        ) ::
+          :ok | {:error, term()}
+  def update_provider_runtime(profile, chain, id, expected, provider) do
+    GenServer.call(
+      __MODULE__,
+      {:update_provider_runtime, profile, chain, id, expected, provider},
+      :infinity
+    )
+  end
+
+  @doc "Unregisters a provider from in-memory configuration (runtime only)."
   @spec unregister_provider_runtime(profile_id(), pos_integer(), String.t()) ::
           :ok | {:error, term()}
   def unregister_provider_runtime(profile_id, chain_id, provider_id)
@@ -856,7 +871,8 @@ defmodule Lasso.Config.ConfigStore do
              profile_id,
              chain_id,
              length(chain_config.providers) + 1
-           ) do
+           ),
+         :ok <- validate_provider_chain_candidate(profile_id, chain_id, updated_chain) do
       update_chain_in_profile(profile_id, chain_id, updated_chain)
 
       Logger.debug(
@@ -869,6 +885,37 @@ defmodule Lasso.Config.ConfigStore do
       {:error, :already_exists} -> {:reply, {:error, :already_exists}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
+  end
+
+  @impl true
+  def handle_call(
+        {:update_provider_runtime, profile, chain_id, id, expected, provider},
+        _from,
+        state
+      ) do
+    reply =
+      with {:ok, chain} <- get_chain(profile, chain_id),
+           true <- Enum.find(chain.providers, &(&1.id == id)) == expected do
+        updated = %{
+          chain
+          | providers:
+              Enum.map(chain.providers, fn existing ->
+                if existing.id == id, do: provider, else: existing
+              end)
+        }
+
+        specs = provider_chain_candidate(profile, chain_id, updated)
+
+        with :ok <- validate_profile_specs(specs),
+             :ok <- close_provider_channels_before_update(profile, chain_id, id) do
+          publish_changed_profiles(Enum.filter(specs, &(&1.profile_id == profile)))
+        end
+      else
+        false -> {:error, :provider_changed}
+        error -> error
+      end
+
+    {:reply, reply, mark_runtime_dirty(state, profile, reply)}
   end
 
   @impl true
@@ -1612,12 +1659,15 @@ defmodule Lasso.Config.ConfigStore do
   @spec validate_profile_specs([map()]) :: :ok | {:error, term()}
   def validate_profile_specs(profile_specs) when is_list(profile_specs) do
     with :ok <- validate_unique_profile_ids(profile_specs) do
-      Enum.reduce_while(profile_specs, :ok, fn spec, :ok ->
-        case validate_profile_spec(spec) do
-          :ok -> {:cont, :ok}
-          {:error, _} = error -> {:halt, error}
-        end
-      end)
+      validation =
+        Enum.reduce_while(profile_specs, :ok, fn spec, :ok ->
+          case validate_profile_spec(spec) do
+            :ok -> {:cont, :ok}
+            {:error, _} = error -> {:halt, error}
+          end
+        end)
+
+      with :ok <- validation, do: validate_catalog_candidate(profile_specs)
     end
   end
 
@@ -1648,6 +1698,12 @@ defmodule Lasso.Config.ConfigStore do
 
       length(ids) != length(Enum.uniq(ids)) ->
         {:error, :duplicate_chain_id}
+
+      Enum.any?(chains, fn {_, chain} ->
+        provider_ids = Enum.map(chain.providers, & &1.id)
+        length(provider_ids) != length(Enum.uniq(provider_ids))
+      end) ->
+        {:error, :duplicate_provider_id}
 
       Enum.any?(chains, fn {_, chain} ->
         not Lasso.RPC.HeadPolicy.valid_mode?(Map.get(chain, :head_policy, "off"))
@@ -1831,7 +1887,7 @@ defmodule Lasso.Config.ConfigStore do
         unlisted: meta.unlisted,
         chains:
           Map.new(chains, fn {chain_id, chain} ->
-            {chain.display_name || Integer.to_string(chain_id), chain}
+            {Integer.to_string(chain_id), chain}
           end)
       }
     end
@@ -2125,6 +2181,41 @@ defmodule Lasso.Config.ConfigStore do
     end
   end
 
+  defp close_provider_channels_before_update(profile, chain_id, provider_id) do
+    results =
+      for transport <- [:http, :ws] do
+        TransportRegistry.close_channel_sync(profile, chain_id, provider_id, transport)
+      end
+
+    Enum.find(results, :ok, &match?({:error, _}, &1))
+  end
+
+  defp validate_catalog_candidate(specs) do
+    Catalog.validate_profiles(
+      Map.new(specs, fn spec ->
+        {spec.profile_id, Map.new(spec.chains, fn {_, chain} -> {chain.chain_id, chain} end)}
+      end)
+    )
+  end
+
+  defp provider_chain_candidate(profile_id, chain_id, chain) do
+    Enum.map(snapshot_profile_specs(), fn
+      %{profile_id: ^profile_id} = spec ->
+        chains =
+          Map.new(spec.chains, fn {key, existing} ->
+            {key, if(existing.chain_id == chain_id, do: chain, else: existing)}
+          end)
+
+        %{spec | chains: chains}
+
+      spec ->
+        spec
+    end)
+  end
+
+  defp validate_provider_chain_candidate(profile_id, chain_id, chain),
+    do: validate_catalog_candidate(provider_chain_candidate(profile_id, chain_id, chain))
+
   defp update_chain_in_profile(profile_id, chain_id, chain_config) do
     table = table()
 
@@ -2311,6 +2402,8 @@ defmodule Lasso.Config.ConfigStore do
     })
   end
 
+  defp normalize_provider_config(%Provider{} = provider), do: provider
+
   defp normalize_provider_config(attrs) when is_map(attrs) do
     sharing_mode =
       case Map.get(attrs, :sharing_mode) || Map.get(attrs, "sharing_mode") do
@@ -2465,8 +2558,8 @@ defmodule Lasso.Config.ConfigStore do
 
     Enum.uniq(removed_provider_ids ++ changed_provider_ids)
     |> Enum.each(fn provider_id ->
-      Lasso.RPC.TransportRegistry.close_channel_sync(profile_id, chain_id, provider_id, :http)
-      Lasso.RPC.TransportRegistry.close_channel_sync(profile_id, chain_id, provider_id, :ws)
+      TransportRegistry.close_channel_sync(profile_id, chain_id, provider_id, :http)
+      TransportRegistry.close_channel_sync(profile_id, chain_id, provider_id, :ws)
     end)
   end
 

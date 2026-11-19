@@ -219,7 +219,7 @@ providers:
 | `headers` | map | No | HTTP request and WebSocket handshake headers, overriding defaults |
 | `auth_headers` | map | No | Headers with precedence over `headers` and `api_key` |
 
-*At least one of `url` or `ws_url` is required.
+*At least one of `url` or `ws_url` is required. WebSocket-only providers are supported; omit `url` rather than setting it to null in YAML.
 
 `observation_overrides` is sparse: an omitted field keeps the provider's legacy preference, then the chain setting. An explicit override wins. The chain-wide `background_observations: false` switch still disables periodic work for that chain reference.
 

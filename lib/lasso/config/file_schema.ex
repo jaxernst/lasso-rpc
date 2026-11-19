@@ -147,31 +147,46 @@ defmodule Lasso.Config.FileSchema do
 
       Enum.each(Enum.with_index(providers, 1), fn {provider, index} ->
         provider_path = provider_path(path <> ".providers", provider, index)
-        require_keys!(provider, ["id"], provider_path)
-
-        unless provider["url"] || provider["ws_url"],
-          do:
-            invalid!(
-              provider_path <> ".url",
-              "expected url or ws_url endpoint string; found missing"
-            )
-
-        if provider["request_budget"],
-          do:
-            require_keys!(
-              provider["request_budget"],
-              ["requests_per_second"],
-              provider_path <> ".request_budget"
-            )
-
-        validate_headers!(provider, provider_path)
+        validate_provider_entry!(provider, provider_path)
       end)
     end)
 
     :ok
   end
 
-  defp validate!(value, schema, path) when is_map(schema) and is_map(value) do
+  @doc false
+  @spec delete_nil_provider_fields(map()) :: map()
+  def delete_nil_provider_fields(attrs) do
+    Map.reject(attrs, fn {key, value} -> is_nil(value) and Map.has_key?(@provider, key) end)
+  end
+
+  @doc false
+  @spec validate_provider_entry!(map(), String.t()) :: :ok
+  def validate_provider_entry!(provider, path) do
+    validate!(provider, @provider, path)
+    require_keys!(provider, ["id"], path)
+
+    unless provider["url"] || provider["ws_url"],
+      do:
+        invalid!(
+          path <> ".url",
+          "expected url or ws_url endpoint string; found missing"
+        )
+
+    if provider["request_budget"],
+      do:
+        require_keys!(
+          provider["request_budget"],
+          ["requests_per_second"],
+          path <> ".request_budget"
+        )
+
+    validate_headers!(provider, path)
+    :ok
+  end
+
+  defp validate!(value, schema, path)
+       when is_map(schema) and is_map(value) and not is_struct(value) do
     Enum.each(value, fn {key, field} ->
       case Map.fetch(schema, key) do
         {:ok, type} ->
@@ -259,7 +274,7 @@ defmodule Lasso.Config.FileSchema do
       do: invalid!(path, "invalid endpoint URL scheme or host")
   end
 
-  defp validate!(value, :headers, path) when is_map(value) do
+  defp validate!(value, :headers, path) when is_map(value) and not is_struct(value) do
     Enum.each(value, fn {key, field} ->
       validate!(key, :string, path)
       validate!(field, :secret, path)

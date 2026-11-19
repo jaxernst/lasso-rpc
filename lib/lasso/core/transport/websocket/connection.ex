@@ -167,11 +167,9 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
     Process.flag(:trap_exit, true)
 
     instance_id = endpoint_instance_id(endpoint)
-    Phoenix.PubSub.subscribe(Lasso.PubSub, Lasso.Topics.instance_config_updated(instance_id))
 
     state = %{
       endpoint: endpoint,
-      request_budget: current_request_budget(instance_id),
       profile: endpoint.profile,
       instance_id: instance_id,
       connection: nil,
@@ -861,9 +859,6 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
   end
 
   @impl true
-  def handle_info(:instance_config_updated, state),
-    do: {:noreply, %{state | request_budget: current_request_budget(state.instance_id)}}
-
   def handle_info({:stream_ingress, token, message}, state) do
     Ingress.consume(token, fn -> handle_info(message, state) end)
   end
@@ -2590,7 +2585,7 @@ defmodule Lasso.RPC.Transport.WebSocket.Connection do
 
   defp cast_send(state, send_key, deadline_us, cancel_latch, frame) do
     message =
-      case state.request_budget do
+      case current_request_budget(state.instance_id) do
         nil ->
           {:send_if_live, state.connection_id, send_key, deadline_us, cancel_latch, frame}
 
