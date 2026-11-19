@@ -31,6 +31,8 @@ defmodule Lasso.Config.Backend.File do
 
   - Load all `*.yml` files in `profiles_dir`
   - Skip files starting with `.` or `_` (backups, templates)
+  - Report `*.yaml` files, which are never loaded, by name in the load log and
+    `lasso check-config`
   - Profile slug must match filename (e.g., `archive.yml` must have `slug: archive`)
   - **Fail-fast**: First invalid file fails entire load
   """
@@ -69,6 +71,8 @@ defmodule Lasso.Config.Backend.File do
 
   @impl true
   def load_all(%{profiles_dir: profiles_dir} = state) do
+    profiles_dir |> unloaded_profile_warnings() |> Enum.each(&Logger.warning/1)
+
     case list_profile_files(profiles_dir) do
       [] ->
         # No profiles found - check if we need to migrate
@@ -96,6 +100,21 @@ defmodule Lasso.Config.Backend.File do
     else
       {:error, {:profiles_dir_missing, profiles_dir}}
     end
+  end
+
+  @doc """
+  Describes each `*.yaml` file in the profiles directory, which is never loaded
+  because profile files must end in `.yml`.
+  """
+  @spec unloaded_profile_warnings(String.t()) :: [String.t()]
+  def unloaded_profile_warnings(profiles_dir) when is_binary(profiles_dir) do
+    profiles_dir
+    |> Path.join("*.yaml")
+    |> Path.wildcard()
+    |> Enum.map(&Path.basename/1)
+    |> Enum.reject(&ignored_name?/1)
+    |> Enum.sort()
+    |> Enum.map(&"#{&1} is not loaded: profile files must end in .yml")
   end
 
   @impl true
@@ -150,12 +169,12 @@ defmodule Lasso.Config.Backend.File do
     profiles_dir
     |> Path.join("*.yml")
     |> Path.wildcard()
-    |> Enum.reject(fn path ->
-      filename = Path.basename(path)
-      String.starts_with?(filename, ".") or String.starts_with?(filename, "_")
-    end)
+    |> Enum.reject(&(&1 |> Path.basename() |> ignored_name?()))
     |> Enum.sort()
   end
+
+  defp ignored_name?(filename),
+    do: String.starts_with?(filename, ".") or String.starts_with?(filename, "_")
 
   defp load_all_profiles(profiles_dir) do
     profiles_dir

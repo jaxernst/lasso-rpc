@@ -30,6 +30,11 @@ defmodule Lasso.Operator.Commands do
     case check_config() do
       {:ok, count} ->
         IO.puts("Configuration valid: #{count} profiles")
+
+        with {:ok, dir} <- resolve_profiles_dir(nil) do
+          dir |> FileBackend.unloaded_profile_warnings() |> Enum.each(&IO.puts("Warning: #{&1}"))
+        end
+
         :ok
 
       {:error, reason} ->

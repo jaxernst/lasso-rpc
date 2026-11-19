@@ -4,6 +4,9 @@ defmodule Lasso.Config.ValidationDetailTest do
   alias Lasso.Config.ConfigStore
   alias Lasso.Operator.Commands
 
+  import ExUnit.CaptureIO
+  import ExUnit.CaptureLog
+
   @moduletag :tmp_dir
 
   test "operator commands and boot loader identify broken fields without credentials", %{
@@ -51,6 +54,44 @@ defmodule Lasso.Config.ValidationDetailTest do
         for secret <- ["password", "private", "token", "secret"], do: refute(message =~ secret)
       end
     end
+  end
+
+  test "check-config and the loader name files that are never loaded", %{tmp_dir: dir} do
+    previous = Application.get_env(:lasso, :backend_config)
+
+    Application.put_env(:lasso, :backend_config,
+      backend: Lasso.Config.Backend.File,
+      config: [profiles_dir: dir]
+    )
+
+    on_exit(fn -> Application.put_env(:lasso, :backend_config, previous) end)
+
+    File.write!(
+      Path.join(dir, "public.yml"),
+      "---\nname: Public\nslug: public\n---\nchains:\n  local:\n    chain_id: 31337\n    providers: []\n"
+    )
+
+    for name <- ["custom-proof-2.core.yaml", ".hidden.yaml", "_template.yaml", "notes.txt"],
+        do: File.write!(Path.join(dir, name), "")
+
+    expected = "custom-proof-2.core.yaml is not loaded: profile files must end in .yml"
+
+    assert capture_io(&Commands.check_config!/0) ==
+             "Configuration valid: 1 profiles\nWarning: #{expected}\n"
+
+    log =
+      capture_log(fn ->
+        assert {:ok, [_]} =
+                 Lasso.Config.Backend.File.load_all(%{
+                   profiles_dir: dir,
+                   legacy_config_path: dir <> "/absent"
+                 })
+      end)
+
+    assert log =~ expected
+    refute log =~ ".hidden"
+    refute log =~ "_template"
+    refute log =~ "notes.txt"
   end
 
   test "block age methods require a readable block number", %{tmp_dir: dir} do
