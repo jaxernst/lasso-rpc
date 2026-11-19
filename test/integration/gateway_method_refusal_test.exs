@@ -70,10 +70,10 @@ defmodule Lasso.GatewayMethodRefusalTest do
 
     for _request <- 1..6 do
       assert %{"id" => 1, "result" => "0x123"} = rpc(chain)
+      assert_receive {:called, "refusing"}
       assert_receive {:called, "healthy"}
     end
 
-    assert_received {:called, "refusing"}
     instance_id = Providers.Catalog.lookup_instance_id("public", chain, "refusing")
     assert %{state: :closed, failure_count: 0} = CircuitBreaker.get_state({instance_id, :http})
   end
@@ -85,6 +85,7 @@ defmodule Lasso.GatewayMethodRefusalTest do
 
     assert %{"id" => 1, "error" => error} = rpc(chain)
     assert_received {:called, "refusing"}
+    assert %{"code" => -32_006, "data" => %{"status" => 406}} = error
     refute Jason.encode!(error) =~ "Not Acceptable"
   end
 
