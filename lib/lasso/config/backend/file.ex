@@ -375,7 +375,9 @@ defmodule Lasso.Config.Backend.File do
   end
 
   defp safe_to_atom(k) when is_atom(k), do: k
-  defp safe_to_atom(k) when is_binary(k), do: String.to_existing_atom(k)
+  # Keys are bounded: FileSchema rejects unknown capability fields before parsing.
+  # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+  defp safe_to_atom(k) when is_binary(k), do: String.to_atom(k)
 
   defp maybe_atomize_list(map, key) do
     case Map.get(map, key) do
