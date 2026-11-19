@@ -116,16 +116,27 @@ services:
 ```
 
 Edit the YAML in `profiles/`, retaining a valid `public.yml`. Additional profiles
-need matching filenames and frontmatter slugs. See [Configuration](CONFIGURATION.md)
+need matching filenames and frontmatter slugs: a profile with `slug: my-app` must
+be saved as `my-app.yml`. Lasso loads a profile only from a file named
+`<slug>.yml`; a file under any other name, such as `my-app.yaml`, is not loaded. See [Configuration](CONFIGURATION.md)
 for supported settings. Files must be readable by UID 10001 and directories
 traversable by that UID; host directories used for writable history must also be
 writable by UID 10001. Keep credential values in `.env` and reference them as
-`${VARIABLE_NAME}` in provider URLs or headers.
+`${VARIABLE_NAME}` in provider URLs or headers. Add the variables to `.env`
+before recreating the container; the container reads `.env` only when it is
+created, and a profile with an unresolved variable is rejected.
 
 Apply mount changes or environment changes:
 
 ```bash
 docker compose up -d --force-recreate --wait
+```
+
+Then confirm the node accepts every file, including new ones. The profile count
+it prints includes each file it read:
+
+```bash
+docker compose exec -T lasso /app/bin/lasso check-config
 ```
 
 In v0.3.5, new profiles can reuse connected WebSocket upstreams after reload.
