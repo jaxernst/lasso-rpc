@@ -7,21 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-19
+
 ### Added
 
-- A provider can declare `request_budget` (`requests_per_second` and an optional `burst`) to cap everything Lasso sends it from each node: client requests, retries, fallbacks, subscriptions and background head and identity checks, across every profile that uses that upstream. When the budget is spent, requests move to another provider without counting against the spent one, and background checks wait for their next tick. If every eligible provider is spent, the client gets `-32005` with `data.retry_after_ms`. Provider details show the budget and admitted/refused totals per upstream. Previously a provider with a hard request quota needed a separate egress limiter in front of Lasso. See [outbound request budget](docs/CONFIGURATION.md#outbound-request-budget).
-
+- A provider can declare `request_budget` (`requests_per_second` and an optional `burst`) to cap what each Lasso node sends that upstream: client requests, retries and fallbacks, subscription calls, and background head and identity checks. Every profile that references the same upstream shares one budget. When the budget is spent, requests move to another eligible provider without counting against the spent one, and background checks skip their turn. If every eligible provider is spent, the client gets `-32005` with `data.reason: "upstream_request_budget_exhausted"` and `data.retry_after_ms` set to the earliest refill. Provider details show the budget and admitted and refused totals. Previously a provider with a hard request quota needed a separate egress limiter in front of Lasso. See [outbound request budget](docs/CONFIGURATION.md#outbound-request-budget).
 
 ### Fixed
 
-- Runtime provider additions and partial updates now share profile YAML parsing and validate the full candidate catalog before publication, preserving provider settings and rejecting unknown fields, unsupported category names, and conflicting budgets without disrupting the active configuration. Updates accept plain map patches, apply explicit nil deletions, and reject stale replacements with `:provider_changed`; WebSocket-only providers load safely and live WebSocket sends use the current shared budget.
+- Providers added or updated at runtime keep every setting a profile file accepts. Previously runtime registration copied a fixed list of fields and silently dropped the rest, such as `background_observations` and the observation intervals. Runtime changes now go through the same parser and schema as profile files, and the whole candidate configuration is validated before anything is published, so an invalid change returns an error and leaves the running configuration untouched.
+- `Lasso.Providers.update_provider/4` keeps omitted settings, and an explicit `nil` removes an optional one. Two updates to the same provider at once can no longer overwrite each other: the second returns `{:error, :provider_changed}`.
+- Providers with only a `ws_url` load and serve. Previously some startup and dashboard paths assumed an HTTP URL.
+- After an HTTP connection failure, Lasso stops routing to the refused endpoint and restores it within seconds of recovery, including subscription replay while the circuit is on probation.
+- When a disconnect cancels an in-flight replacement for a sole-provider WebSocket subscription, the subscription waits for reconnect within its recovery deadline instead of closing as though the provider had been removed.
+- `eth_getLogs` refusals for exactly one block (equal resolved `fromBlock` and `toBlock`, or a `blockHash` query) no longer tell clients to narrow the range. Lasso tries other providers and, if none serves the request, returns a `-32006` capability refusal without narrowing advice, so missing history can't trap a client in repeated narrowing.
+- Dashboard cluster coverage shows responding nodes out of expected nodes. Missing configured nodes stay in the total, and traffic summaries read as incomplete until every expected node reports. Without `:expected_cluster_nodes`, the total is the connected node count.
 
-- Stop repeatedly routing to refused HTTP connections and restore recovered endpoints within seconds, including subscription backfill during circuit probation.
+### Changed
 
-- Sole-provider WebSocket subscriptions wait for reconnect within the recovery deadline when a disconnect invalidates an in-flight replacement, instead of terminating as though the provider was removed.
+- Capability and error-rule category names must be categories Lasso knows. Previously an unknown name loaded and never matched anything; now the profile fails to load with an error naming the field.
 
-- `eth_getLogs` refusals for exactly one block (equal resolved `fromBlock` and `toBlock`, or a `blockHash` query) no longer tell clients to narrow the range. Lasso tries other providers and returns a truthful `-32006` capability refusal without upstream narrowing messages or advice data if none serves the request, so missing retained history cannot trap a client in repeated narrowing.
-- Dashboard cluster coverage now shows responding nodes out of expected nodes, keeping missing configured nodes in the total and traffic summaries incomplete until every expected node reports. Without `:expected_cluster_nodes`, the total remains the connected node count.
+### Compatibility
+
+- No storage changes. Upgrading from v0.8.4 needs only the new image or release.
+- Profiles with unknown `capabilities.unsupported_categories` or `error_rules[].category` names must fix them before upgrading.
+- `Lasso.Providers.update_provider` accepts only plain map patches; a struct returns `{:error, :invalid_provider_updates}`. Code that updates the same provider concurrently should retry on `{:error, :provider_changed}`. `add_provider` and `update_provider` reject fields a profile file would reject, including `credentials`, which was accepted at runtime and never used.
 
 ## [0.8.4] - 2026-11-18
 
@@ -580,7 +590,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.5...HEAD
+[0.8.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.1...v0.8.2
