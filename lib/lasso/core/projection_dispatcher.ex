@@ -14,8 +14,6 @@ defmodule Lasso.Core.ProjectionDispatcher do
   @sink_classes [
     :head_observations,
     :learned_feedback,
-    :provider_messages,
-    :provider_outcomes,
     :diagnostics,
     :analytics,
     :ui,
@@ -29,8 +27,6 @@ defmodule Lasso.Core.ProjectionDispatcher do
   @type sink_class ::
           :head_observations
           | :learned_feedback
-          | :provider_messages
-          | :provider_outcomes
           | :diagnostics
           | :analytics
           | :ui

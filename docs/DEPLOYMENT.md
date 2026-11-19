@@ -484,7 +484,6 @@ The dashboard aggregates data across all nodes for unified observability with re
 | `LASSO_PROFILES_DIR` | No | Profile YAML directory; overrides the data directory | `config/profiles` outside Docker |
 | `LASSO_SNAPSHOTS_DIR` | No | Snapshot directory, selected at runtime | `priv/benchmark_snapshots` outside Docker |
 | `LASSO_VM_METRICS_ENABLED` | No | Set to `true` to enable VM metrics | `false` |
-| `LASSO_COWBOY_TELEMETRY_ENABLED` | No | Set to `false` to disable Cowboy per-request telemetry; Lasso application and dashboard events remain enabled | `true` |
 | `LASSO_OTEL_ENABLED` | No | Enable optional tracing (`true`, `false`, `1`, or `0`); invalid values fail startup. See [Tracing](TRACING.md). | `false` |
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | No | Use a larger short-lived heap while validating completed HTTP upstream responses; benchmark before enabling for latency-bound traffic | `false` |
 | `LASSO_HTTP_POOL_SIZE` | No | Maximum HTTP/1 connections per upstream host and pool | `256` |

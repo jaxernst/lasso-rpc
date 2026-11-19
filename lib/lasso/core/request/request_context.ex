@@ -84,7 +84,6 @@ defmodule Lasso.RPC.RequestContext do
           # accept the range, so it is returned only once none of them did.
           log_range_error: JError.t() | nil,
           claim_audit: Lasso.Core.Support.ClaimAudit.State.t() | nil,
-          template_attempts: [map()],
           shadow_predictions: map(),
           learning_decision: map() | nil,
           block_facts: Lasso.RPC.RequestAnalysis.block_facts(),
@@ -194,7 +193,6 @@ defmodule Lasso.RPC.RequestContext do
             last_attempt_error: nil,
             log_range_error: nil,
             claim_audit: nil,
-            template_attempts: [],
             shadow_predictions: %{},
             learning_decision: nil,
             request_facts: nil,

@@ -14,7 +14,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   @custom_class "u_*"
 
   @type mode :: :off | :shadow | :on
-  @type shadow_mode :: :off | :shadow
 
   @doc "Resolves a serving effect's mode for a profile, falling back to the global mode."
   @spec mode(atom(), String.t()) :: mode()
@@ -28,22 +27,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   @spec response_latency_mode(String.t()) :: mode()
   def response_latency_mode(profile),
     do: resolve(:response_latency, profile, [:off, :shadow, :on], &global_mode/1)
-
-  @doc "Resolves the error-classifier shadow mode for a profile, falling back to the global mode."
-  @spec classifier_mode(String.t()) :: shadow_mode()
-  def classifier_mode(profile) do
-    resolve(:classifier, profile, [:off, :shadow], fn _kind ->
-      Application.get_env(:lasso, :provider_knowledge_classifier_mode, :off)
-    end)
-  end
-
-  @doc "Resolves the request-fault shadow mode for a profile, falling back to the global mode."
-  @spec request_fault_mode(String.t()) :: shadow_mode()
-  def request_fault_mode(profile) do
-    resolve(:request_fault, profile, [:off, :shadow], fn _kind ->
-      Application.get_env(:lasso, :provider_knowledge_request_fault_mode, :off)
-    end)
-  end
 
   defp resolve(kind, profile, allowed, global_fun) do
     override = profile_override(kind, profile)

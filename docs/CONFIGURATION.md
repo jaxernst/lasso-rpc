@@ -495,7 +495,6 @@ Set in `config/runtime.exs` or via environment variables. Application configurat
 | `PHX_HOST` | Hostname for the Phoenix endpoint | `localhost` |
 | `PORT` | HTTP port | `4000` |
 | `SECRET_KEY_BASE` | Phoenix secret key (required in production) | - |
-| `LASSO_COWBOY_TELEMETRY_ENABLED` | Enable Cowboy per-request telemetry (`true`, `false`, `1`, or `0`); disabling it does not disable Lasso application or dashboard events | `true` |
 | `LASSO_OTEL_ENABLED` | Enable optional tracing (`true`, `false`, `1`, or `0`); invalid values fail startup. See [Tracing](TRACING.md). | `false` |
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | Use a larger short-lived heap while validating completed HTTP upstream responses; useful for CPU-bound, high-concurrency deployments | `false` |
 | `LASSO_HTTP_POOL_SIZE` | Maximum HTTP/1 connections per upstream host and pool | `256` |

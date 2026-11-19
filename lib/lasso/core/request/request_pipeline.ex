@@ -55,13 +55,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   alias Lasso.RPC.ProviderKnowledge.Decision, as: LearningDecision
 
-  alias Lasso.RPC.ProviderKnowledge.{
-    ShadowAgreement,
-    Template,
-    TemplateClassification,
-    TemplateObservation,
-    TemplateOutcomeObservation
-  }
+  alias Lasso.RPC.ProviderKnowledge.ShadowAgreement
 
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RequestOptions
@@ -1218,21 +1212,7 @@ defmodule Lasso.RPC.RequestPipeline do
         channel.instance_id
       )
 
-    prepared_template = prepare_template(outcome, ctx, channel)
-
-    ctx =
-      TemplateOutcomeObservation.capture(
-        ctx,
-        channel,
-        outcome.fact,
-        prepared_template,
-        projection,
-        knowledge_dispatch
-      )
-
-    knowledge_options =
-      transaction_evidence_options(channel, ctx, outcome) ++
-        template_options(prepared_template)
+    knowledge_options = transaction_evidence_options(channel, ctx, outcome)
 
     knowledge_options =
       case knowledge_dispatch do
@@ -1253,9 +1233,6 @@ defmodule Lasso.RPC.RequestPipeline do
         qualification,
         knowledge_options
       )
-
-    _template_result = TemplateObservation.record(channel, ctx, outcome, prepared_template)
-    :ok = TemplateClassification.observe(outcome, prepared_template, channel.profile)
 
     ctx =
       ShadowAgreement.observe(
@@ -1896,43 +1873,6 @@ defmodule Lasso.RPC.RequestPipeline do
     do: %{ctx | public_response_attempt: fact}
 
   defp record_public_response_attempt(ctx, _fact), do: ctx
-
-  defp prepare_template(_outcome, %{method: "eth_sendRawTransaction"}, _channel), do: nil
-
-  defp prepare_template(
-         %{fact: %AttemptTerminal.Response{kind: :application_error}, result: result},
-         ctx,
-         channel
-       ) do
-    if TemplateObservation.enabled?(channel.profile) do
-      provider_config = channel.template_provider_config
-
-      case {result, provider_config} do
-        {{:error, %JError{message: message}}, config}
-        when is_binary(message) and is_map(config) ->
-          masked_template(message, ctx.params, provider_config)
-
-        {{:error, %JError{message: message}, _elapsed}, config}
-        when is_binary(message) and is_map(config) ->
-          masked_template(message, ctx.params, provider_config)
-
-        _ ->
-          nil
-      end
-    end
-  end
-
-  defp prepare_template(_outcome, _ctx, _channel), do: nil
-
-  defp masked_template(message, params, provider_config) do
-    case Template.prepare(message, params, provider_config) do
-      {:ok, prepared} -> prepared
-      _ -> nil
-    end
-  end
-
-  defp template_options(%{fingerprint: fingerprint}), do: [template_fingerprint: fingerprint]
-  defp template_options(_), do: []
 
   defp owner_error(%{result: {:error, reason, _io_ms}, fact: fact}),
     do: {reason, fact_latency_ms(fact)}
@@ -2683,7 +2623,6 @@ defmodule Lasso.RPC.RequestPipeline do
        when status in [:ok, :error] do
     :ok = MissingBlock.finish(status, value, ctx)
     :ok = ShadowAgreement.record(ctx)
-    _template_outcomes = TemplateOutcomeObservation.record(status, ctx)
     request_terminal = build_request_terminal(status, value, ctx)
 
     ctx = %{

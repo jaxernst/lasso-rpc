@@ -6,7 +6,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Census do
   alias Lasso.RPC.ProviderKnowledge.Persistence
   alias Lasso.RPC.ProviderKnowledge.ReadModel
   alias Lasso.RPC.ProviderKnowledge.ShadowAgreement
-  alias Lasso.RPC.ProviderKnowledge.TemplateClassification
   alias Lasso.RPC.RoutingEvidence.Workload
 
   @dispatcher Lasso.ExecutionProjectionDispatcher
@@ -35,7 +34,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Census do
       profile: Keyword.get(opts, :profile)
     )
     |> Map.put(:shadow_since_boot, ShadowAgreement.counts())
-    |> Map.put(:classifier_shadow_since_boot, TemplateClassification.counts())
     |> Map.put(:response_latency_read_model, ReadModel.stats(LocalResponseLatency))
   end
 
