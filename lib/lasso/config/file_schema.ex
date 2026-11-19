@@ -274,7 +274,7 @@ defmodule Lasso.Config.FileSchema do
       do: invalid!(path, "invalid endpoint URL scheme or host")
   end
 
-  defp validate!(value, :headers, path) when is_map(value) do
+  defp validate!(value, :headers, path) when is_map(value) and not is_struct(value) do
     Enum.each(value, fn {key, field} ->
       validate!(key, :string, path)
       validate!(field, :secret, path)

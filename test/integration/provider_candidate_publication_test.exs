@@ -186,7 +186,10 @@ defmodule Lasso.Integration.ProviderCandidatePublicationTest do
       assert Process.whereis(ConfigStore) == owner
     end
 
-    assert {:error, _} = Providers.update_provider(@chain, "patch", %{request_budget: %URI{}})
+    for field <- [:request_budget, :headers, :auth_headers] do
+      assert {:error, _} = Providers.update_provider(@chain, "patch", %{field => %URI{}})
+    end
+
     assert snapshot() == before
     assert_ready()
   end
