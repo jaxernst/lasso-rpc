@@ -138,6 +138,175 @@ requests made at different times can legitimately differ. Use response metadata,
 the dashboard, logs, and upstream-attempt metrics to confirm which providers and
 transports actually served the tests.
 
+### Measure a profile against its own providers
+
+`scripts/measure_profile.mjs` sends the same calls, at the same moment, to each
+provider directly and through a Lasso profile that uses those providers. It
+needs Node.js 18 or newer and no packages. Run it from the repository root
+against a profile that is already serving traffic. To serve a profile on Core,
+including one exported from Lasso Cloud, see [Deployment](DEPLOYMENT.md).
+
+Set the profile URL your application would use. Self-hosted Core takes no key:
+
+```bash
+export LASSO_URL='http://localhost:4000/rpc/profile/<slug>/fastest/<chain>'
+```
+
+Lasso Cloud takes the key in the path:
+
+```bash
+export LASSO_URL='https://lasso.sh/rpc/k/<key>/profile/<slug>/fastest/<chain>'
+```
+
+`<slug>` is the profile slug, `<chain>` is the chain name as the profile lists
+it, such as `ethereum`, and `<key>` is your Lasso Cloud key. If your Core node
+listens somewhere other than `localhost:4000`, use that address instead.
+
+Set the URL of each provider in the profile, with its key if it has one:
+
+```bash
+export PROVIDER_1_URL='<provider-1-url>'
+export PROVIDER_2_URL='<provider-2-url>'
+```
+
+For a third provider, export `PROVIDER_3_URL` and add
+`--provider provider-3=env:PROVIDER_3_URL` after the other `--provider` flags
+in both commands below.
+
+#### Comparison
+
+```bash
+node scripts/measure_profile.mjs \
+  --lasso lasso=env:LASSO_URL \
+  --provider provider-1=env:PROVIDER_1_URL \
+  --provider provider-2=env:PROVIDER_2_URL \
+  --out comparison.json
+```
+
+The run takes about 100 seconds: 200 rounds, 2 per second, one call to every
+endpoint per round. Calls rotate through `eth_blockNumber`,
+`eth_getBlockByNumber`, `eth_getBalance`, `eth_getCode`,
+`eth_getTransactionReceipt` and `eth_getLogs` over 10 blocks. Block-dependent
+calls use one block 16 below the lowest provider head, and their addresses and
+transaction hashes come from that block, so no chain-specific input is needed.
+A method that block gives no input for is left out; the output lists the
+methods used.
+The script refuses to start if the endpoints report different chain IDs.
+
+The output has this shape:
+
+```text
+Comparison: chain <id>, 200 rounds at 2 per second, block <n> pinned for block-dependent calls.
+Methods in rotation: <methods>.
+
+Endpoint               Host    Calls  Answered  Errors          p50 ms  p90 ms  p99 ms
+lasso (lasso)          <host>    200       <n>  <kind> <count>    <ms>    <ms>    <ms>
+provider-1 (provider)  <host>    200       <n>  none              <ms>    <ms>    <ms>
+provider-2 (provider)  <host>    200       <n>  none              <ms>    <ms>    <ms>
+
+p50 ms by method  lasso  provider-1  provider-2
+eth_blockNumber    <ms>        <ms>        <ms>
+...
+
+lasso strategy reported by Lasso: <strategy> <count>
+lasso answered by: <provider-id> <count>, <provider-id> <count>
+lasso upstream sends per call: 1 send: <count>, 2 sends: <count> (total <n> for <n> calls)
+lasso latency against the best direct provider (<label>, lowest p50): p50 <+ms> ms, p90 <+ms> ms, p99 <+ms> ms
+lasso routing time reported by Lasso for the same calls: routing apart from upstream waits p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
+
+Samples: comparison.json
+Result: complete.
+```
+
+Errors are counted by kind: `timeout`, `network <code>` (a system error code
+such as `ECONNREFUSED`), `rate limit`, `http <status>`, `rpc <code>` and
+`bad response`. The script sets `include_meta=body` on the Lasso URL,
+replacing any value already there, and reads the strategy that routed each call, the answering
+provider, the number of upstream sends and Lasso's routing time from
+`lasso_meta`. The metadata names the provider that answered, not one that
+refused. Latency is measured from the machine running the script, so it
+includes the network path to each endpoint.
+
+The difference against a direct provider includes everything between the
+script and Lasso. Measure a release build, such as the published image, not a
+development server, which adds time to every request. Lasso's reported time
+covers routing: from receiving the request until routing finishes, split into
+time waiting on the upstream and the rest. The remainder of the difference is
+the path between the script and Lasso plus Lasso's handling of the response.
+If `lasso_meta` carries no timing, that line says so and the run is still
+complete.
+
+#### Rate limit
+
+This run spends `provider-1`'s quota on purpose: it sends up to 400 calls to
+`provider-1` directly, 20 per second for 20 seconds. Name a provider whose
+quota you can spare.
+
+```bash
+node scripts/measure_profile.mjs \
+  --lasso lasso=env:LASSO_URL \
+  --provider provider-1=env:PROVIDER_1_URL \
+  --provider provider-2=env:PROVIDER_2_URL \
+  --rate-limit provider-1 --limit-rate 20 --limit-seconds 20 \
+  --out rate-limit.json
+```
+
+Each round sends the same `eth_getLogs` call to `provider-1` directly and
+through the profile. The direct calls hold `provider-1` over its limit and
+count its refusals: HTTP 429 or a JSON-RPC rate-limit error. The run stops
+early once the caller sees 3 errors through the profile, or once 3 calls
+through the profile need three or more upstream sends. Through the profile, each call
+can reach at most three providers. The script caps `--limit-rate` at 50 and
+`--limit-seconds` at 60.
+
+The output has this shape:
+
+```text
+Rate limit: chain <id>, eth_getLogs, 20 calls/s for up to 20 s, <n> of 400 planned rounds sent.
+Stopped early: <reason, or "no" when every planned round was sent>
+
+provider-1 directly (<host>): <n> calls, <count> refusals (HTTP 429 or a rate-limit error)
+lasso (<host>): <n> calls, answered <n>, errors: <kind> <count>
+  latency of answered calls: p50 <ms> ms, p90 <ms> ms, p99 <ms> ms
+  upstream sends per call: 1 send: <count>, 2 sends: <count>, 3 sends: <count> (total <n> for <n> calls)
+  answered by: <provider-id> <count>, <provider-id> <count>
+  strategy reported by Lasso: <strategy> <count>
+  routing time reported by Lasso: routing apart from upstream waits p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
+  p50 latency: <ms> ms for calls sent once (<n>), <ms> ms for calls sent more than once (<n>)
+
+Samples: rate-limit.json
+Result: complete.
+```
+
+If `provider-1` refused nothing, it was not over its limit and the result is
+incomplete; raise `--limit-rate`.
+
+#### Reading the result
+
+A run is complete when its last line is `Result: complete.` and it exits with
+status 0. A rate-limit run that stopped early is complete. Otherwise the last
+line is `Result: incomplete.` followed by the reasons, and the exit status is 1:
+an endpoint answered no calls, Lasso responses lacked the answering provider or
+send count, or the rate-limit target refused nothing.
+A setup failure, such as an endpoint that does not answer `eth_chainId`, prints
+the reason and the error kind and exits with status 1 before any calls are
+measured. Progress lines, such as `50/200 rounds` and the line that opens a
+rate-limit run, go to standard error and are not part of the output shapes
+above.
+
+The samples file is JSON written to the `--out` path in the current directory,
+complete or not. `manifest` holds the mode, chain ID, pinned block, endpoints
+by label and host, settings and completeness. `samples` holds one entry per
+call: endpoint label, method, round, latency in `ms`, `ok`, the error
+kind, and for Lasso calls `meta.strategy`, `meta.provider`, `meta.sends`,
+`meta.routingMs` and `meta.upstreamMs`. Every line of the output can be
+recomputed from it.
+
+Neither the output nor the samples file contains anything derived from an
+endpoint URL except its host, or any text an endpoint returned apart from the
+strategy and provider identifiers in `lasso_meta`. Errors are recorded by kind
+only, so keys in URLs cannot reach either file.
+
 ## Canary and rollback
 
 Keep the old route available. Send a small, measurable slice of production read

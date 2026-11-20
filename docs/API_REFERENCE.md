@@ -204,11 +204,19 @@ Response body includes a `lasso_meta` field:
     "strategy": "fastest",
     "selected_provider": {"id": "ethereum_llamarpc"},
     "upstream_latency_ms": 45,
+    "end_to_end_latency_ms": 48,
+    "lasso_overhead_ms": 3,
     "retries": 0,
     "circuit_breaker_state": "closed"
   }
 }
 ```
+
+Timing is measured through the end of routing, before the response is encoded.
+`upstream_latency_ms` is the time spent waiting on providers,
+`end_to_end_latency_ms` is the time from receiving the request until routing
+finishes, and `lasso_overhead_ms` is the difference: routing time not spent
+waiting on providers.
 
 ### WebSocket Metadata
 
