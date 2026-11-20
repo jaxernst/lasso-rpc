@@ -147,11 +147,8 @@ defmodule Lasso.Config.ChainConfig do
 
   defmodule Selection do
     @moduledoc """
-    Provider selection configuration for lag-aware routing and archival detection.
-
-    Controls how Lasso filters providers based on block height lag to ensure
-    consistent blockchain state when routing requests, and determines when a
-    block is considered "archival" (requiring historical data support).
+    Provider selection configuration: when a block is considered "archival"
+    (requiring historical data support).
 
     ## Archival Threshold
 
@@ -169,12 +166,10 @@ defmodule Lasso.Config.ChainConfig do
     @default_archival_threshold 128
 
     @type t :: %__MODULE__{
-            max_lag_blocks: non_neg_integer() | nil,
             archival_threshold: non_neg_integer()
           }
 
-    defstruct max_lag_blocks: nil,
-              archival_threshold: @default_archival_threshold
+    defstruct archival_threshold: @default_archival_threshold
 
     @doc "Returns the default archival threshold (blocks behind head to consider archival)."
     @spec default_archival_threshold() :: non_neg_integer()

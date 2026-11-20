@@ -312,7 +312,6 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
         monitoring:
           probe_interval_ms: 200
         selection:
-          max_lag_blocks: 2
           archival_threshold: 20
         providers:
     #{providers}

@@ -7,23 +7,17 @@ defmodule Lasso.Providers.CandidateListing do
   2. WS liveness (shared upstream connection state)
   3. Circuit breaker state
   4. Rate limit state
-  5. Min block height filtering (block-height-aware routing)
-  6. Archival filtering
-  7. `subscribe_new_heads` capability filtering (newHeads-only)
-  8. Exclude list
-  9. Method capability filtering across eligible routes
-  10. Lag filtering (captured profile head evidence for request routing)
+  5. Archival filtering
+  6. `subscribe_new_heads` capability filtering (newHeads-only)
+  7. Exclude list
+  8. Method capability filtering across eligible routes
 
   Return shape: `%{id, config, availability, circuit_state, rate_limited}`.
   """
 
-  require Logger
-
-  alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Config.ConfigStore
-  alias Lasso.Observations.HeadSnapshot
-  alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
-  alias Lasso.RPC.{AttemptProjection, ChainState, Channel, RoutingPlan, SelectionFilters}
+  alias Lasso.Providers.{Catalog, InstanceState}
+  alias Lasso.RPC.{AttemptProjection, Channel, RoutingPlan, SelectionFilters}
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RoutingEvidence.Workload
 
@@ -77,7 +71,7 @@ defmodule Lasso.Providers.CandidateListing do
     with true <- Catalog.snapshot() == snapshot,
          true <- ConfigStore.route_generation() == generation,
          {:ok, plan} <- Catalog.get_routing_plan(snapshot, profile, chain_id) do
-      candidates = do_list_candidates(plan, filters)
+      candidates = do_list_candidates(plan, filters, :full)
 
       if Catalog.snapshot() == snapshot and ConfigStore.route_generation() == generation,
         do: candidates,
@@ -85,16 +79,6 @@ defmodule Lasso.Providers.CandidateListing do
     else
       _unavailable -> []
     end
-  end
-
-  @doc false
-  @spec list_candidates_from_plan(RoutingPlan.t(), SelectionFilters.t() | map()) :: [map()]
-  def list_candidates_from_plan(%RoutingPlan{} = plan, %SelectionFilters{} = filters) do
-    list_candidates_from_plan(plan, SelectionFilters.to_map(filters))
-  end
-
-  def list_candidates_from_plan(%RoutingPlan{} = plan, filters) when is_map(filters) do
-    do_list_candidates(plan, filters, :full)
   end
 
   @doc false
@@ -110,236 +94,63 @@ defmodule Lasso.Providers.CandidateListing do
   end
 
   @doc false
-  @spec list_routing_candidates_from_plan(
-          RoutingPlan.t(),
-          SelectionFilters.t() | map(),
-          non_neg_integer() | :unavailable
-        ) :: [map()]
-  def list_routing_candidates_from_plan(
-        %RoutingPlan{} = plan,
-        %SelectionFilters{} = filters,
-        consensus_height
-      ) do
-    list_routing_candidates_from_plan(plan, SelectionFilters.to_map(filters), consensus_height)
+  @spec list_rankable_candidates_from_plan(RoutingPlan.t(), SelectionFilters.t() | map()) :: [
+          map()
+        ]
+  def list_rankable_candidates_from_plan(%RoutingPlan{} = plan, %SelectionFilters{} = filters) do
+    list_rankable_candidates_from_plan(plan, SelectionFilters.to_map(filters))
   end
 
-  def list_routing_candidates_from_plan(%RoutingPlan{} = plan, filters, consensus_height)
-      when is_map(filters) do
-    do_list_candidates(plan, filters, :routing, consensus_height)
-  end
-
-  @doc false
-  @spec list_rankable_candidates_from_plan(
-          RoutingPlan.t(),
-          SelectionFilters.t() | map(),
-          non_neg_integer() | :unavailable
-        ) :: [map()]
-  def list_rankable_candidates_from_plan(
-        %RoutingPlan{} = plan,
-        %SelectionFilters{} = filters,
-        consensus_height
-      ) do
-    list_rankable_candidates_from_plan(
-      plan,
-      SelectionFilters.to_map(filters),
-      consensus_height
-    )
-  end
-
-  def list_rankable_candidates_from_plan(%RoutingPlan{} = plan, filters, consensus_height)
-      when is_map(filters) do
-    do_list_candidates(plan, filters, :ranked, consensus_height)
+  def list_rankable_candidates_from_plan(%RoutingPlan{} = plan, filters) when is_map(filters) do
+    do_list_candidates(plan, filters, :ranked)
   end
 
   @doc false
   @spec list_fastest_candidates_from_plan(
           RoutingPlan.t(),
           SelectionFilters.t() | map(),
-          non_neg_integer() | :unavailable
+          AttemptProjection.scope_state() | nil
         ) :: [map()]
-  def list_fastest_candidates_from_plan(
-        %RoutingPlan{} = plan,
-        %SelectionFilters{} = filters,
-        consensus_height
-      ) do
-    list_fastest_candidates_from_plan(
-      plan,
-      SelectionFilters.to_map(filters),
-      consensus_height
-    )
-  end
-
-  def list_fastest_candidates_from_plan(%RoutingPlan{} = plan, filters, consensus_height)
-      when is_map(filters) do
-    do_list_candidates(plan, filters, :fastest_ranked, consensus_height)
-  end
-
-  @doc false
-  @spec list_fastest_candidates_from_plan(
-          RoutingPlan.t(),
-          SelectionFilters.t() | map(),
-          non_neg_integer() | :unavailable,
-          AttemptProjection.scope_state()
-        ) :: [map()]
-  def list_fastest_candidates_from_plan(
-        %RoutingPlan{} = plan,
-        %SelectionFilters{} = filters,
-        consensus_height,
-        learned_scope
-      ) do
-    list_fastest_candidates_from_plan(
-      plan,
-      SelectionFilters.to_map(filters),
-      consensus_height,
-      learned_scope
-    )
-  end
+  def list_fastest_candidates_from_plan(plan, filters, learned_scope \\ nil)
 
   def list_fastest_candidates_from_plan(
         %RoutingPlan{} = plan,
-        filters,
-        consensus_height,
-        learned_scope
-      )
-      when is_map(filters) and is_map(learned_scope) do
-    do_list_candidates(plan, filters, :fastest_ranked, consensus_height, true, learned_scope)
-  end
-
-  @doc false
-  @spec routing_candidate_from_plan(
-          RoutingPlan.t(),
-          RoutingPlan.provider(),
-          SelectionFilters.t() | map(),
-          non_neg_integer() | :unavailable
-        ) :: map() | nil
-  def routing_candidate_from_plan(
-        %RoutingPlan{} = plan,
-        provider,
         %SelectionFilters{} = filters,
-        consensus_height
-      ) do
-    routing_candidate_from_plan(
-      plan,
-      provider,
-      SelectionFilters.to_map(filters),
-      consensus_height
-    )
-  end
-
-  def routing_candidate_from_plan(%RoutingPlan{} = plan, provider, filters, consensus_height)
-      when is_map(provider) and is_map(filters) do
-    routing_candidate_from_plan(plan, provider, filters, consensus_height, nil)
-  end
-
-  @doc false
-  @spec routing_candidate_from_plan(
-          RoutingPlan.t(),
-          RoutingPlan.provider(),
-          SelectionFilters.t() | map(),
-          non_neg_integer() | :unavailable,
-          map() | nil
-        ) :: map() | nil
-  def routing_candidate_from_plan(
-        %RoutingPlan{} = plan,
-        provider,
-        %SelectionFilters{} = filters,
-        consensus_height,
         learned_scope
       ) do
-    routing_candidate_from_plan(
-      plan,
-      provider,
-      SelectionFilters.to_map(filters),
-      consensus_height,
-      learned_scope
-    )
+    list_fastest_candidates_from_plan(plan, SelectionFilters.to_map(filters), learned_scope)
   end
 
-  def routing_candidate_from_plan(
-        %RoutingPlan{} = plan,
-        provider,
-        filters,
-        consensus_height,
-        learned_scope
-      )
-      when is_map(provider) and is_map(filters) and
-             (is_map(learned_scope) or is_nil(learned_scope)) do
-    plan
-    |> Map.put(:providers, [provider])
-    |> do_list_candidates(filters, :routing, consensus_height, false, learned_scope)
-    |> List.first()
+  def list_fastest_candidates_from_plan(%RoutingPlan{} = plan, filters, learned_scope)
+      when is_map(filters) and (is_map(learned_scope) or is_nil(learned_scope)) do
+    do_list_candidates(plan, filters, :fastest_ranked, learned_scope)
   end
 
   @doc """
   Selects one provider and retains its unfiltered gate observation on rejection.
 
-  Uses the same reads and filters as `routing_candidate_from_plan/5`, without
-  re-reading gates to reconstruct a failure. A successful result is unchanged;
-  an error contains the observed candidate, not an upstream error or config dump.
+  A successful result is the candidate; an error contains the observed
+  candidate, not an upstream error or config dump.
   """
   @spec routing_candidate_result_from_plan(
           RoutingPlan.t(),
           RoutingPlan.provider(),
           map(),
-          non_neg_integer() | :unavailable,
           map() | nil
         ) :: map() | {:error, map()}
-  def routing_candidate_result_from_plan(plan, provider, filters, head, scope) do
-    case do_list_candidates(
-           %{plan | providers: [provider]},
-           filters,
-           :routing,
-           head,
-           false,
-           scope,
-           true
-         ) do
+  def routing_candidate_result_from_plan(plan, provider, filters, scope) do
+    case do_list_candidates(%{plan | providers: [provider]}, filters, :routing, scope, true) do
       {:error, [candidate]} -> {:error, candidate}
       candidates -> List.first(candidates)
     end
   end
 
-  @doc """
-  Retains the existing pass's gate observations only when no route survives.
-
-  Success returns the original candidate list without an evidence wrapper.
-  On exhaustion, the error contains observations captured before exclusion, so
-  the head prefilter can be explained without additional reads. This is not a
-  fallback. Preserves the existing all-lagging fallback and its warning.
-  """
-  @spec routing_candidates_result_from_plan(
-          RoutingPlan.t(),
-          SelectionFilters.t(),
-          non_neg_integer() | :unavailable,
-          map() | nil
-        ) :: [map()] | {:error, [map()]}
-  def routing_candidates_result_from_plan(plan, filters, head, scope) do
-    do_list_candidates(plan, SelectionFilters.to_map(filters), :routing, head, true, scope, true)
-  end
-
-  defp do_list_candidates(%RoutingPlan{} = plan, filters),
-    do: do_list_candidates(plan, filters, :full)
-
-  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode),
-    do: do_list_candidates(plan, filters, mode, capture_consensus_height(plan.chain_id))
-
-  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode, consensus_height),
-    do: do_list_candidates(plan, filters, mode, consensus_height, true)
-
-  defp do_list_candidates(%RoutingPlan{} = plan, filters, mode, consensus_height, warn_on_lag?),
-    do: do_list_candidates(plan, filters, mode, consensus_height, warn_on_lag?, nil)
-
-  defp do_list_candidates(plan, filters, mode, head, warn?, scope),
-    do: do_list_candidates(plan, filters, mode, head, warn?, scope, false)
-
   defp do_list_candidates(
          %RoutingPlan{} = plan,
          filters,
          mode,
-         consensus_height,
-         warn_on_lag?,
-         learned_scope,
-         capture_rejection
+         learned_scope \\ nil,
+         capture_rejection \\ false
        ) do
     protocol = Map.get(filters, :protocol)
     workload_key = filters |> Map.get(:workload_key, :client) |> Workload.normalize()
@@ -361,29 +172,19 @@ defmodule Lasso.Providers.CandidateListing do
         transport_available?(c, protocol) and
           candidate_gate_ready?(c, protocol, include_half_open, filters, mode)
       end)
-      |> filter_by_min_block(plan.profile, plan.chain_id, Map.get(filters, :min_block))
       |> filter_by_archival(Map.get(filters, :requires_archival))
       |> filter_by_subscribe_new_heads(Map.get(filters, :requires_subscribe_new_heads))
       |> filter_excluded(filters)
 
-    method_candidates = filter_by_method(gate_candidates, plan, Map.get(filters, :method))
+    candidates = filter_by_method(gate_candidates, plan, Map.get(filters, :method))
 
-    candidates =
-      filter_by_lag(
-        method_candidates,
-        plan,
-        Map.get(filters, :max_lag_blocks),
-        consensus_height,
-        warn_on_lag?,
-        Map.get(filters, :head_snapshot)
-      )
-
-    # Deferred ranking avoids gate reads on the common path. If head evidence
-    # changes the candidate set, resolve the real transport gates before the
-    # all-routes availability decision so an open sibling cannot mask fallback.
+    # Deferred ranking avoids gate reads on the common path. When method
+    # capability changes the candidate set, resolve the real transport gates
+    # before the all-routes availability decision so an open sibling cannot mask
+    # fallback.
     result =
       if mode in [:ranked, :fastest_ranked] and candidates != gate_candidates do
-        do_list_candidates(plan, filters, :routing, consensus_height, warn_on_lag?, learned_scope)
+        do_list_candidates(plan, filters, :routing, learned_scope)
       else
         candidates
       end
@@ -672,180 +473,6 @@ defmodule Lasso.Providers.CandidateListing do
     else
       true
     end
-  end
-
-  defp filter_by_lag(candidates, _plan, nil, _consensus_height, _warn_on_lag?, _head_snapshot),
-    do: candidates
-
-  defp filter_by_lag(
-         candidates,
-         %RoutingPlan{} = plan,
-         max_lag_blocks,
-         _consensus_height,
-         warn_on_lag?,
-         %HeadSnapshot{} = snapshot
-       )
-       when is_integer(max_lag_blocks) and max_lag_blocks >= 0 do
-    if matching_snapshot?(plan, snapshot) do
-      filter_by_head_snapshot(candidates, plan, max_lag_blocks, snapshot, warn_on_lag?)
-    else
-      candidates
-    end
-  end
-
-  defp filter_by_lag(
-         candidates,
-         _plan,
-         _max_lag_blocks,
-         _consensus_height,
-         _warn_on_lag?,
-         :unavailable
-       ),
-       do: candidates
-
-  defp filter_by_lag(
-         candidates,
-         %RoutingPlan{profile: profile, chain_id: chain_id},
-         max_lag_blocks,
-         consensus_height,
-         warn_on_lag?,
-         nil
-       )
-       when is_integer(max_lag_blocks) do
-    case resolve_consensus_height(chain_id, consensus_height) do
-      {:ok, consensus_height} ->
-        filter_by_lag_with_consensus(
-          candidates,
-          profile,
-          chain_id,
-          max_lag_blocks,
-          consensus_height,
-          warn_on_lag?
-        )
-
-      :unavailable ->
-        candidates
-    end
-  end
-
-  defp filter_by_lag(
-         candidates,
-         _plan,
-         _max_lag_blocks,
-         _consensus_height,
-         _warn_on_lag?,
-         _unsupported_snapshot
-       ),
-       do: candidates
-
-  defp matching_snapshot?(%RoutingPlan{} = plan, %HeadSnapshot{} = snapshot) do
-    snapshot.chain_id == plan.chain_id and snapshot.revision == plan.generation and
-      match?({:head_scope, _, _, _, _, _, _}, snapshot.scope_id) and
-      elem(snapshot.scope_id, 1) == plan.profile
-  end
-
-  defp filter_by_head_snapshot(candidates, plan, max_lag_blocks, snapshot, warn_on_lag?) do
-    now_ms = System.system_time(:millisecond)
-
-    filtered =
-      Enum.flat_map(candidates, fn candidate ->
-        transports =
-          Enum.reject(candidate.transports, fn transport ->
-            assessment =
-              LagCalculation.assess_transport(
-                plan.chain_id,
-                candidate.instance_id,
-                transport,
-                snapshot,
-                max_lag_blocks,
-                now_ms,
-                get_in(candidate, [:head_freshness_ms, transport])
-              )
-
-            assessment.status == :lagging or assessment.reason == :branch_conflict
-          end)
-
-        if transports == [], do: [], else: [%{candidate | transports: transports}]
-      end)
-
-    if warn_on_lag? and candidates != [] and filtered == [] do
-      Logger.warning(
-        "All routes failed qualified head eligibility; preserving candidates for availability",
-        profile: plan.profile,
-        chain_id: plan.chain_id,
-        max_lag_blocks: max_lag_blocks
-      )
-    end
-
-    if filtered == [], do: candidates, else: filtered
-  end
-
-  defp filter_by_lag_with_consensus(
-         candidates,
-         profile,
-         chain_id,
-         max_lag_blocks,
-         consensus_height,
-         warn_on_lag?
-       ) do
-    block_time_ms = LagCalculation.get_block_time_ms(chain_id, profile)
-
-    filtered =
-      Enum.filter(candidates, fn candidate ->
-        case LagCalculation.calculate_optimistic_lag(
-               chain_id,
-               candidate.instance_id,
-               block_time_ms,
-               consensus_height
-             ) do
-          {:ok, optimistic_lag, _raw_lag} -> optimistic_lag >= -max_lag_blocks
-          {:error, _} -> true
-        end
-      end)
-
-    if warn_on_lag? and candidates != [] and filtered == [] do
-      Logger.warning(
-        "All providers for chain_id #{chain_id} excluded due to lag (threshold: -#{max_lag_blocks} blocks)"
-      )
-    end
-
-    filtered
-  end
-
-  defp resolve_consensus_height(_chain_id, height)
-       when is_integer(height) and height >= 0,
-       do: {:ok, height}
-
-  defp resolve_consensus_height(_chain_id, :unavailable), do: :unavailable
-
-  defp capture_consensus_height(chain_id) do
-    case ChainState.consensus_height(chain_id) do
-      {:ok, height} -> height
-      {:error, _reason} -> :unavailable
-    end
-  end
-
-  defp filter_by_min_block(candidates, _profile, _chain_id, nil), do: candidates
-
-  defp filter_by_min_block(candidates, profile, chain_id, min_block) when is_integer(min_block) do
-    block_time_ms = LagCalculation.get_block_time_ms(chain_id, profile)
-
-    {capable, rest} =
-      Enum.split_with(candidates, fn candidate ->
-        case BlockSyncRegistry.get_height(chain_id, candidate.instance_id) do
-          {:ok, {height, timestamp, _source, _meta}} ->
-            elapsed_ms = System.system_time(:millisecond) - timestamp
-            staleness_credit = if block_time_ms > 0, do: div(elapsed_ms, block_time_ms), else: 0
-            max_credit = div(30_000, max(block_time_ms, 1))
-            optimistic_height = height + min(staleness_credit, max_credit)
-            optimistic_height >= min_block
-
-          {:error, _} ->
-            true
-        end
-      end)
-
-    capable ++ rest
   end
 
   defp filter_by_archival(candidates, true) do

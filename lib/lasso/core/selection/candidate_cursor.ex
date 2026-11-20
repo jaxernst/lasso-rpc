@@ -223,51 +223,29 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
     request_facts = filters.request_facts
 
-    case keep_head_eligible_routes(descriptors, plan, filters, head_snapshot) do
-      {:error, rejections, count} ->
-        %__MODULE__{
-          plan: plan,
-          method: method,
-          filters: filters,
-          head_snapshot: head_snapshot,
-          learned_scope: learned_scope_fun.(),
-          request_facts: request_facts,
-          descriptors: [],
-          limit: Keyword.get(opts, :limit, 1000),
-          deadline_us: Keyword.get(opts, :deadline_us),
-          effect_context:
-            opts
-            |> Keyword.put(:head_suitability, nil)
-            |> effect_context(method, plan, filters)
-            |> Map.put(:selection_rejections, rejections)
-            |> Map.put(:selection_rejection_count, count)
-        }
+    limit = Keyword.get(opts, :limit, 1000)
+    effect_context = effect_context(opts, method, plan, filters)
 
-      descriptors ->
-        limit = Keyword.get(opts, :limit, 1000)
-        effect_context = effect_context(opts, method, plan, filters)
+    {ordered, deferred_routes, decisions} =
+      Effects.order_with_decision(descriptors, plan, method, effect_context)
 
-        {ordered, deferred_routes, decisions} =
-          Effects.order_with_decision(descriptors, plan, method, effect_context)
-
-        %__MODULE__{
-          plan: plan,
-          method: method,
-          filters: filters,
-          head_snapshot: head_snapshot,
-          learned_scope: learned_scope_fun.(),
-          request_facts: request_facts,
-          effect_context: effect_context,
-          learning_decision: decisions,
-          shadow_proposals: Effects.shadow_proposals(descriptors, plan, method, effect_context),
-          descriptors: ordered,
-          deferred_routes: deferred_routes,
-          limit: limit,
-          deadline_us: Keyword.get(opts, :deadline_us),
-          candidate_labels: [],
-          diversity_seen: diversity_seen(strategy, method, opts)
-        }
-    end
+    %__MODULE__{
+      plan: plan,
+      method: method,
+      filters: filters,
+      head_snapshot: head_snapshot,
+      learned_scope: learned_scope_fun.(),
+      request_facts: request_facts,
+      effect_context: effect_context,
+      learning_decision: decisions,
+      shadow_proposals: Effects.shadow_proposals(descriptors, plan, method, effect_context),
+      descriptors: ordered,
+      deferred_routes: deferred_routes,
+      limit: limit,
+      deadline_us: Keyword.get(opts, :deadline_us),
+      candidate_labels: [],
+      diversity_seen: diversity_seen(strategy, method, opts)
+    }
   end
 
   @spec pending?(t()) :: boolean()
@@ -730,7 +708,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
            cursor.plan,
            provider,
            filters,
-           cursor.head_snapshot,
            cursor.learned_scope
          ) do
       %{circuit_state: circuit_state, rate_limited: rate_limited} = candidate ->
@@ -950,65 +927,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         end)
     end
   end
-
-  # A one-provider materialization always triggers the all-lagging fallback.
-  # Decide that fallback across the captured request candidate set first.
-  defp keep_head_eligible_routes(
-         descriptors,
-         plan,
-         %{max_lag_blocks: max_lag_blocks} = filters,
-         %HeadSnapshot{} = snapshot
-       )
-       when is_integer(max_lag_blocks) do
-    case CandidateListing.routing_candidates_result_from_plan(
-           plan,
-           %{filters | head_snapshot: snapshot},
-           :unavailable,
-           nil
-         ) do
-      {:error, observed} ->
-        observations = Map.new(observed, &{&1.id, &1})
-
-        rejections =
-          descriptors
-          |> Enum.take(32)
-          |> Enum.map(fn {provider, transport} ->
-            candidate = Map.fetch!(observations, provider.id)
-
-            reason =
-              if transport == :ws and transport not in candidate.transports do
-                :ws_disconnected
-              else
-                case gate_failure(
-                       filters,
-                       Map.get(candidate.circuit_state, transport),
-                       Map.get(candidate.rate_limited, transport)
-                     ) do
-                  :candidate_filtered -> :head_or_capability_filtered
-                  reason -> reason
-                end
-              end
-
-            %{provider_id: provider.id, transport: transport, reason: reason}
-          end)
-
-        {:error, rejections, length(descriptors)}
-
-      candidates ->
-        eligible =
-          candidates
-          |> Enum.flat_map(fn candidate ->
-            Enum.map(candidate.transports, &{candidate.id, &1})
-          end)
-          |> MapSet.new()
-
-        Enum.filter(descriptors, fn {provider, transport} ->
-          MapSet.member?(eligible, {provider.id, transport})
-        end)
-    end
-  end
-
-  defp keep_head_eligible_routes(descriptors, _plan, _filters, _snapshot), do: descriptors
 
   defp head_snapshot(%RoutingPlan{} = plan) do
     case BlockSyncRegistry.get_head_snapshot(

@@ -55,7 +55,6 @@ chains:
   ethereum:
     chain_id: 1
     selection:
-      max_lag_blocks: 2
       archival_threshold: 128
     providers:
       - id: current-primary

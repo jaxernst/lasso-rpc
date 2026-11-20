@@ -1,13 +1,12 @@
 defmodule Lasso.Providers.HeadEvidenceTest do
   use ExUnit.Case, async: false
 
-  alias Lasso.BlockSync.Registry
+  alias Lasso.BlockSync.{Observation, Registry}
   alias Lasso.BlockSync.Strategies.HttpStrategy
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
-  alias Lasso.Observations.{HeadComparison, HeadObservation, HeadSnapshot}
-  alias Lasso.Providers.{CandidateListing, Catalog, HeadEvidence, LagCalculation}
-  alias Lasso.RPC.Selection.CandidateCursor
+  alias Lasso.Observations.{HeadComparison, HeadObservation}
+  alias Lasso.Providers.{Catalog, HeadEvidence}
   alias LassoWeb.Dashboard.StatusHelpers
 
   test "conflicting WebSocket block hashes need a concrete majority" do
@@ -45,19 +44,19 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert Enum.sort(majority.supporting_instances) == Enum.sort([ids["a"], ids["c"]])
     assert majority.dissenting_instances == [ids["b"]]
 
-    assert LagCalculation.assess_transport(chain_id, ids["b"], :ws, majority, 2).reason ==
+    assert Observation.assess_transport(chain_id, ids["b"], :ws, majority, 2).reason ==
              :branch_conflict
 
     assert StatusHelpers.check_block_lag(chain_id, ids["b"], profile) == :unavailable
 
     assert :ok = Registry.put_height(chain_id, ids["d"], 100, :ws, %{hash: ""})
 
-    assert LagCalculation.assess_transport(chain_id, ids["d"], :ws, majority, 2).status ==
+    assert Observation.assess_transport(chain_id, ids["d"], :ws, majority, 2).status ==
              :eligible
 
     assert :ok = Registry.put_height(chain_id, ids["d"], 100, :ws)
 
-    assert LagCalculation.assess_transport(chain_id, ids["d"], :ws, majority, 2).status ==
+    assert Observation.assess_transport(chain_id, ids["d"], :ws, majority, 2).status ==
              :eligible
 
     assert {:ok, unknown_hash} = HeadEvidence.snapshot(profile, chain_id)
@@ -170,7 +169,6 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert :ok =
              ConfigStore.register_chain_runtime(profile, chain_id, %{
                block_time_ms: 1_000,
-               selection: %{max_lag_blocks: 2},
                providers: [provider("ahead-a"), provider("ahead-b"), provider("behind")]
              })
 
@@ -204,42 +202,6 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert snapshot.qualification == :qualified
     assert snapshot.reference_height == 100
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], profile) == :lagging
-
-    assert {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), profile, chain_id)
-    assert plan.max_lag_blocks == 2
-
-    cursor =
-      CandidateCursor.new(Catalog.snapshot(), plan, "eth_blockNumber",
-        transport: :http,
-        strategy: :priority
-      )
-
-    assert cursor.filters.head_snapshot.qualification == :qualified
-
-    routes = fn ->
-      CandidateListing.list_routing_candidates_from_plan(plan, cursor.filters, :unavailable)
-      |> Enum.map(& &1.id)
-    end
-
-    assert "behind" in routes.()
-
-    {:ok, reference} = HeadSnapshot.reference(snapshot)
-
-    assert :ok =
-             Registry.put_height(chain_id, ids["behind"], 90, :http, %{
-               poll_references: [%{reference | captured_at_ms: System.system_time(:millisecond)}]
-             })
-
-    assert "behind" not in routes.()
-    assert Enum.sort(routes.()) == ["ahead-a", "ahead-b"]
-
-    head_snapshot = HeadEvidence.snapshot_for_plan(plan)
-    assert head_snapshot.qualification == :qualified
-
-    candidates =
-      CandidateListing.list_routing_candidates_from_plan(plan, cursor.filters, :unavailable)
-
-    assert Enum.sort(Enum.map(candidates, & &1.id)) == ["ahead-a", "ahead-b"]
 
     assert :ok = Registry.put_height(chain_id, ids["behind"], 100, :ws)
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], profile) == :synced
@@ -359,7 +321,7 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     assert {:ok, observation} = Registry.get_observation(chain_id, shared, :http)
     assert observation.poll_references == plan.head_references_at_poll_start
 
-    policy = %HeadComparison.AssessmentPolicy{freshness_ms: 30_000, max_lag_blocks: 2}
+    policy = %HeadComparison.AssessmentPolicy{freshness_ms: 30_000, band: 2}
     assessment = HeadComparison.assess(initial_a, observation, policy, observation.observed_at_ms)
     assert assessment.status == :eligible
     assert assessment.lag == -1

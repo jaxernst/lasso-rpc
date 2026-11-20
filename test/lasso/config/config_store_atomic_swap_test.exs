@@ -483,7 +483,7 @@ defmodule Lasso.Config.ConfigStoreAtomicSwapTest do
         }
       ],
       monitoring: %Monitoring{probe_interval_ms: 60_000, lag_alert_threshold_blocks: 5},
-      selection: %Selection{max_lag_blocks: 5},
+      selection: %Selection{archival_threshold: 64},
       websocket: %Websocket{
         subscribe_new_heads: false,
         new_heads_timeout_ms: 30_000,

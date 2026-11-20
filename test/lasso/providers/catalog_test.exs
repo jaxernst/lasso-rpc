@@ -314,7 +314,7 @@ defmodule Lasso.Providers.CatalogTest do
       ConfigStore.register_chain_runtime(@profile_a, @chain_id, %{
         chain_id: @chain_id,
         display_name: "Compiled Plan Chain",
-        selection: %{max_lag_blocks: 7, archival_threshold: 64},
+        selection: %{archival_threshold: 64},
         providers: [
           %{
             id: "compiled",
@@ -332,7 +332,6 @@ defmodule Lasso.Providers.CatalogTest do
 
       assert {:ok, plan} = Catalog.get_routing_plan(snapshot, @profile_a, @chain_id)
       assert plan.generation == snapshot.generation
-      assert plan.max_lag_blocks == 7
       assert plan.archival_threshold == 64
       assert plan.provider_priorities == %{"compiled" => 3}
 

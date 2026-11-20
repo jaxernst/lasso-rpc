@@ -7,7 +7,6 @@ defmodule Lasso.RPC.RoutingPlan do
     :generation,
     :providers,
     :provider_priorities,
-    :max_lag_blocks,
     :archival_threshold,
     :head_scope
   ]
@@ -32,7 +31,6 @@ defmodule Lasso.RPC.RoutingPlan do
           generation: non_neg_integer(),
           providers: [provider()],
           provider_priorities: %{String.t() => non_neg_integer()},
-          max_lag_blocks: non_neg_integer() | nil,
           archival_threshold: non_neg_integer(),
           head_scope: Lasso.Observations.HeadScope.t(),
           transactions: Lasso.Config.ChainConfig.Transactions.t() | nil
@@ -41,8 +39,7 @@ defmodule Lasso.RPC.RoutingPlan do
   def for_request(%__MODULE__{transactions: nil} = plan, _request), do: plan
 
   def for_request(plan, {class, phase}) do
-    send? = class == :raw_transaction_broadcast
-    transaction_providers? = send? and phase == :providers
+    transaction_providers? = class == :raw_transaction_broadcast and phase == :providers
 
     providers =
       Enum.filter(plan.providers, fn provider ->
@@ -52,8 +49,7 @@ defmodule Lasso.RPC.RoutingPlan do
     %{
       plan
       | providers: providers,
-        provider_priorities: Map.take(plan.provider_priorities, Enum.map(providers, & &1.id)),
-        max_lag_blocks: if(send?, do: nil, else: plan.max_lag_blocks)
+        provider_priorities: Map.take(plan.provider_priorities, Enum.map(providers, & &1.id))
     }
   end
 

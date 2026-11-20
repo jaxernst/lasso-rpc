@@ -10,7 +10,7 @@ defmodule Lasso.Observations.HeadComparisonTest do
     reference_freshness_ms: 30_000,
     agreement_window_ms: 2_000
   }
-  @assessment_policy %AssessmentPolicy{freshness_ms: 300_000, max_lag_blocks: 2}
+  @assessment_policy %AssessmentPolicy{freshness_ms: 300_000, band: 2}
 
   defp observation(instance_id, transport, height, age_ms \\ 0, attrs \\ %{}) do
     defaults = %{

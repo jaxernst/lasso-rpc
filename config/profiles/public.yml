@@ -31,9 +31,8 @@ chains:
       probe_interval_ms: 12000 # Health check frequency (~1x block time for L1)
       lag_alert_threshold_blocks: 5 # Dashboard lag status threshold
 
-    # Provider selection: Eligibility filtering
+    # Provider selection: archival detection
     selection:
-      max_lag_blocks: 1 # Filter proven-lagging routes; unknown/all-lagging paths stay available.
       archival_threshold: 128 # Blocks before considering data "archival" (~25 min on Ethereum)
 
     # WebSocket subscriptions: newHeads tracking and failover
@@ -201,7 +200,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 5 # More tolerant for L2
       archival_threshold: 750 # ~25 min on Base (2s blocks)
 
     websocket:
@@ -322,7 +320,6 @@ chains:
       lag_alert_threshold_blocks: 50
 
     selection:
-      max_lag_blocks: 20 # ~2 s at 100 ms blocks
       archival_threshold: 128 # ~13 s at 100 ms blocks
 
     websocket:
@@ -416,7 +413,6 @@ chains:
       lag_alert_threshold_blocks: 15
 
     selection:
-      max_lag_blocks: 10 # More tolerant for fast L2
       archival_threshold: 6000 # ~25 min on Arbitrum (0.25s blocks)
 
     websocket:
@@ -496,7 +492,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 5 # ~10 s at 2 s blocks
       archival_threshold: 750 # ~25 min at 2 s blocks
 
     websocket:
@@ -601,7 +596,6 @@ chains:
       lag_alert_threshold_blocks: 10
 
     selection:
-      max_lag_blocks: 10 # ~10 s at 1 s blocks
       archival_threshold: 1500 # ~25 min at 1 s blocks
 
     websocket:
@@ -684,7 +678,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 5 # ~10 s at 2 s blocks
       archival_threshold: 750 # ~25 min at 2 s blocks
 
     websocket:
@@ -748,7 +741,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 3
       archival_threshold: 128
 
     websocket:
@@ -833,7 +825,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 5
       archival_threshold: 750
 
     websocket:
@@ -902,7 +893,6 @@ chains:
       lag_alert_threshold_blocks: 15
 
     selection:
-      max_lag_blocks: 10
       archival_threshold: 6000
 
     websocket:

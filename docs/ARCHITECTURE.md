@@ -498,18 +498,18 @@ detects an observed branch conflict, not canonical ancestry across heights.
 
 **Request and operator assessment**
 
-When `selection.max_lag_blocks` is set, selection captures one profile snapshot
-for the request and assesses HTTP and WebSocket routes separately. HTTP lag
-uses that poll's reference captured before its request;
-WebSocket lag uses the current qualified reference. A stale fact, missing
-poll reference, wrong scope, or unqualified snapshot is **unknown**, not a
-lagging verdict. A same-height hash conflicting with the qualified majority is
-also unknown to operators and excluded as a routing preference. Only a route
-proven beyond the lag threshold or on that conflicting branch is filtered. If
-filtering would remove every route, Core preserves the candidates for
-standalone availability; the limit is therefore a preference, not a strict
-freshness guarantee. The dashboard uses the same transport assessment with
-`monitoring.lag_alert_threshold_blocks`. For its lag component, any eligible
+Selection captures each route's latest observation once per request and judges
+it against what the request needs: a numeric block, the moving head, or
+nothing. The moving-head target is the highest fresh observation less the
+agreement band. A route proven short of its target, or fresh at the qualified
+reference height on a different hash, is deferred within its health tier and
+never excluded; see [Head freshness](ROUTING.md#head-freshness). Operator
+assessment is separate: the dashboard compares HTTP observations with the
+reference captured before their poll and WebSocket observations with the
+current qualified reference, using `monitoring.lag_alert_threshold_blocks`. A
+stale fact, missing poll reference, wrong scope, or unqualified snapshot is
+**unknown**, not a lagging verdict, and a same-height hash conflicting with the
+qualified majority is also unknown to operators. For its lag component, any eligible
 transport means synced; all assessable transports must lag before it reports
 lagging. Circuit, rate-limit, and connection states still affect overall
 provider status.
@@ -543,7 +543,7 @@ Per-chain health probe coordinator (one per unique chain):
 ```yaml
 chains:
   ethereum:
-    block_time_ms: 12000 # Optimistic lag calculation
+    block_time_ms: 12000 # Head agreement band and block credit
     monitoring:
       lag_alert_threshold_blocks: 5
 ```

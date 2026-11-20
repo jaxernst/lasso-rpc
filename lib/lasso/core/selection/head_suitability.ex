@@ -12,6 +12,8 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   chain could have produced between the two observations, is an outlier and
   cannot be the mark. `assess/2` is pure over that capture:
 
+  - `:against` needs a fresh observation at the qualified reference height
+    with a different block hash, or:
   - `:supports` needs fresh evidence at or above the target height;
   - `:against` needs fresh evidence that stays short of the target even when
     credited with the blocks the chain could have produced since it was
@@ -27,7 +29,16 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   """
 
   alias Lasso.Observations.{HeadCadence, HeadComparison, HeadSnapshot}
-  alias Lasso.RPC.{RequestAnalysis, RoutingPlan}
+  alias Lasso.RPC.{ExecutionEnvelope, RequestAnalysis, RoutingPlan}
+
+  # Methods whose omitted block parameter clients resolve to the moving head.
+  # Required-selector omissions keep no requirement. Client sources:
+  # docs/ROUTING.md#head-freshness
+  @optional_head_methods ~w(
+    eth_estimateGas eth_call eth_getBalance eth_getCode eth_getTransactionCount
+    eth_getProof eth_getStorageValues eth_getStorageAt eth_createAccessList eth_simulateV1
+    debug_traceCall trace_call trace_callMany
+  )
 
   @enforce_keys [:requirement, :band, :cadence, :captured_at_ms, :evidence]
   defstruct @enforce_keys ++ [:mark, outliers: []]
@@ -46,6 +57,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
           :at_or_above_height
           | :within_band
           | :below_height
+          | :branch_conflict
           | :behind_mark
           | :within_credit
           | :cadence_unknown
@@ -57,7 +69,13 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   @typedoc "Ordering class within an availability tier: 0 precedes 1, and 2 is deferred."
   @type class :: 0 | 1 | 2
 
-  @type evidence :: %{height: non_neg_integer(), observed_at_ms: integer(), fresh?: boolean()}
+  @type evidence :: %{
+          height: non_neg_integer(),
+          observed_at_ms: integer(),
+          block_hash: String.t() | nil,
+          fresh?: boolean(),
+          branch_conflict?: boolean()
+        }
   @type mark :: %{
           height: non_neg_integer(),
           route: route(),
@@ -76,21 +94,29 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   @doc """
   The selection phase's requirement. A recovery height, when present, is the
-  phase's only requirement. Hash selectors, `earliest`, `safe`, `finalized`,
-  `pending` and unusable selectors carry none; an omitted selector carries none
-  except a logs `toBlock`, which defaults to `latest`.
+  phase's only requirement. A range uses its upper bound, and an omitted upper
+  bound means `latest`; a single selector uses its block. An omitted optional
+  block parameter means `latest`; an omitted required one carries none. Hash
+  selectors, `earliest`, `safe`, `finalized`, `pending` and unusable selectors
+  carry none. A replay-safe read with no block parameter, such as a lookup by
+  transaction hash, needs the moving head; writes and subscriptions carry none.
   """
   @spec requirement(String.t(), RequestAnalysis.block_facts(), non_neg_integer() | nil) ::
           requirement() | nil
   def requirement(_method, _facts, recovery_height) when is_integer(recovery_height),
     do: {:recovery_height, recovery_height}
 
-  def requirement("eth_blockNumber", _facts, nil), do: :at_head
+  def requirement(_method, %{range: {_from, :omitted}}, nil), do: :at_head
+  def requirement(_method, %{range: {_from, to}}, nil), do: selector_requirement(to)
 
-  def requirement("eth_getLogs", %{range: {_from, :omitted}}, nil), do: :at_head
-  def requirement("eth_getLogs", %{range: {_from, to}}, nil), do: selector_requirement(to)
+  def requirement(method, %{block: :omitted}, nil) when method in @optional_head_methods,
+    do: :at_head
+
   def requirement(_method, %{block: block}, nil), do: selector_requirement(block)
-  def requirement(_method, _facts, nil), do: nil
+
+  def requirement(method, nil, nil) do
+    if ExecutionEnvelope.classify(method) == :replay_safe, do: :at_head
+  end
 
   defp selector_requirement({:number, height}), do: {:request_height, height}
   defp selector_requirement({:tag, :latest, nil}), do: :at_head
@@ -127,15 +153,21 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     freshness = Map.new(plan.providers, &{&1.instance_id, &1.head_freshness_ms})
     default_freshness_ms = plan.head_scope.policy.reference_freshness_ms
 
+    reference_hash = qualified_reference_hash(head_snapshot, now_ms)
+
     evidence =
       Map.new(route_heads(plan, now_ms), fn {{instance_id, transport} = route, head} ->
         stale_after_ms = get_in(freshness, [instance_id, transport]) || default_freshness_ms
-        {route, Map.put(head, :fresh?, now_ms - head.observed_at_ms <= stale_after_ms)}
+
+        {route,
+         head
+         |> Map.put(:fresh?, now_ms - head.observed_at_ms <= stale_after_ms)
+         |> Map.put(:branch_conflict?, branch_conflict?(head, reference_hash))}
       end)
 
     capture = %__MODULE__{
       requirement: requirement,
-      band: plan.max_lag_blocks || HeadComparison.agreement_blocks(plan.head_scope.policy),
+      band: HeadComparison.agreement_blocks(plan.head_scope.policy),
       cadence:
         HeadCadence.with_seed(
           nil,
@@ -175,8 +207,34 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
           )
         ],
         into: %{},
-        do: {{provider.instance_id, transport}, Map.take(observation, [:height, :observed_at_ms])}
+        do:
+          {{provider.instance_id, transport},
+           %{
+             height: observation.height,
+             observed_at_ms: observation.observed_at_ms,
+             block_hash: normalize_hash(observation.metadata[:hash])
+           }}
   end
+
+  defp normalize_hash(hash) when is_binary(hash) and hash != "", do: String.downcase(hash)
+  defp normalize_hash(_unknown), do: nil
+
+  # The qualified reference's height and hash; a fresh route at that height on
+  # another hash is on a branch the scope's majority does not report.
+  defp qualified_reference_hash(
+         %HeadSnapshot{qualification: :qualified, reference_block_hash: hash} = snapshot,
+         now_ms
+       )
+       when is_binary(hash) and now_ms <= snapshot.valid_through_ms,
+       do: {snapshot.reference_height, hash}
+
+  defp qualified_reference_hash(_snapshot, _now_ms), do: nil
+
+  defp branch_conflict?(%{height: height, block_hash: hash}, {height, reference_hash})
+       when is_binary(hash),
+       do: hash != reference_hash
+
+  defp branch_conflict?(_head, _reference), do: false
 
   defp qualified_reference(%HeadSnapshot{} = snapshot, now_ms) do
     with true <- now_ms <= snapshot.valid_through_ms,
@@ -228,6 +286,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   @spec assess(t(), route()) :: {verdict(), reason()}
   def assess(%__MODULE__{} = capture, route) do
     case Map.fetch(capture.evidence, route) do
+      {:ok, %{fresh?: true, branch_conflict?: true}} -> {:against, :branch_conflict}
       {:ok, %{fresh?: true} = observation} -> judge(capture, observation)
       {:ok, _stale} -> {:unknown, :observation_stale}
       :error -> {:unknown, :no_observation}

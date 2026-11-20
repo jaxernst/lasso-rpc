@@ -19,7 +19,6 @@ defmodule Lasso.RPC.HeadWsSourceAcceptanceTest do
     assert :ok =
              ConfigStore.register_chain_runtime(profile, chain, %{
                block_time_ms: 1_000,
-               selection: %{max_lag_blocks: 2},
                providers: []
              })
 

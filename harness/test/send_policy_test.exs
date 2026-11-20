@@ -770,7 +770,6 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
 
   defp policy(relay, fallback \\ false),
     do: %{
-      "selection" => %{"max_lag_blocks" => 1},
       "transactions" => %{
         "providers" => [relay.name],
         "fallback" => if(fallback, do: "read_providers", else: "none")
