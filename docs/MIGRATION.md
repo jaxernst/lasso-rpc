@@ -169,8 +169,9 @@ export PROVIDER_1_URL='<provider-1-url>'
 export PROVIDER_2_URL='<provider-2-url>'
 ```
 
-For a third provider, add `PROVIDER_3_URL` and a matching
-`--provider provider-3=env:PROVIDER_3_URL` flag to both commands below.
+For a third provider, export `PROVIDER_3_URL` and add
+`--provider provider-3=env:PROVIDER_3_URL` after the other `--provider` flags
+in both commands below.
 
 #### Comparison
 
@@ -254,7 +255,7 @@ Each round sends the same `eth_getLogs` call to `provider-1` directly and
 through the profile. The direct calls hold `provider-1` over its limit and
 count its refusals: HTTP 429 or a JSON-RPC rate-limit error. The run stops
 early once the caller sees 3 errors through the profile, or once 3 calls
-through the profile need three upstream sends. Through the profile, each call
+through the profile need three or more upstream sends. Through the profile, each call
 can reach at most three providers. The script caps `--limit-rate` at 50 and
 `--limit-seconds` at 60.
 
@@ -262,12 +263,12 @@ The output has this shape:
 
 ```text
 Rate limit: chain <id>, eth_getLogs, 20 calls/s for up to 20 s, <n> of 400 planned rounds sent.
-Stopped early: <reason, or "no">
+Stopped early: <reason, or "no" when every planned round was sent>
 
 provider-1 directly (<host>): <n> calls, <count> refusals (HTTP 429 or a rate-limit error)
 lasso (<host>): <n> calls, answered <n>, errors: <kind> <count>
   latency of answered calls: p50 <ms> ms, p90 <ms> ms, p99 <ms> ms
-  upstream sends: <n> for <n> calls, <count> calls sent more than once
+  upstream sends per call: 1 send: <count>, 2 sends: <count>, 3 sends: <count> (total <n> for <n> calls)
   answered by: <provider-id> <count>, <provider-id> <count>
   strategy reported by Lasso: <strategy> <count>
   routing time reported by Lasso: routing apart from upstream waits p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
@@ -289,7 +290,9 @@ an endpoint answered no calls, Lasso responses lacked the answering provider or
 send count, or the rate-limit target refused nothing.
 A setup failure, such as an endpoint that does not answer `eth_chainId`, prints
 the reason and the error kind and exits with status 1 before any calls are
-measured.
+measured. Progress lines, such as `50/200 rounds` and the line that opens a
+rate-limit run, go to standard error and are not part of the output shapes
+above.
 
 The samples file is JSON written to the `--out` path in the current directory,
 complete or not. `manifest` holds the mode, chain ID, pinned block, endpoints

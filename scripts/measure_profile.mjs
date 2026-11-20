@@ -18,7 +18,7 @@
 // Rate limit: --rate-limit LABEL calls that provider directly and the first
 // Lasso URL at the same time, at --limit-rate calls/s for up to --limit-seconds.
 // It stops early once the caller sees 3 errors through Lasso or 3 calls need
-// three upstream sends, and is incomplete if the provider refused nothing.
+// three or more upstream sends, and is incomplete if the provider refused nothing.
 //   --limit-rate 20 (at most 50)   --limit-seconds 20 (at most 60)
 // Both: --timeout 10000 (ms per call)   --out FILE (samples, JSON)
 //
@@ -292,8 +292,7 @@ function routingLines(samples, lasso) {
   lines.push(`${lasso.label} answered by: ${listCounts(withMeta.filter((s) => s.ok).map((s) => s.meta.provider ?? "unnamed"))}`);
   const sends = withMeta.map((s) => s.meta.sends).filter((v) => v != null);
   if (sends.length) {
-    const byCount = counts(sends).sort((a, b) => a[0] - b[0]);
-    lines.push(`${lasso.label} upstream sends per call: ${byCount.map(([n, v]) => `${n} send${n === 1 ? "" : "s"}: ${v}`).join(", ")} (total ${sends.reduce((a, b) => a + b, 0)} for ${sends.length} calls)`);
+    lines.push(`${lasso.label} upstream sends per call: ${sendsPerCall(sends)}`);
   } else lines.push(`${lasso.label}: lasso_meta reported no upstream send count.`);
   return lines;
 }
@@ -374,6 +373,11 @@ function metaGaps(samples, lasso) {
   return gaps;
 }
 
+function sendsPerCall(sends) {
+  const byCount = counts(sends).sort((a, b) => a[0] - b[0]);
+  return `${byCount.map(([n, v]) => `${n} send${n === 1 ? "" : "s"}: ${v}`).join(", ")} (total ${sends.reduce((a, b) => a + b, 0)} for ${sends.length} calls)`;
+}
+
 async function rateLimit(chain) {
   const target = providers.find((p) => p.label === opts.rateLimit);
   const lasso = lassos[0];
@@ -404,14 +408,14 @@ async function rateLimit(chain) {
     const at = Math.round(performance.now() - t0);
     for (const endpoint of [target, lasso])
       pending.push(
-        call(endpoint, method, params, { index: i, at }).then(({ sample }) => {
+        call(endpoint, method, params, { round: i, at }).then(({ sample }) => {
           samples.push(sample);
           stopped ??= stopRule();
         })
       );
   }
   await Promise.all(pending);
-  samples.sort((a, b) => a.index - b.index);
+  samples.sort((a, b) => a.round - b.round);
 
   const direct = samples.filter((s) => s.endpoint === target.label);
   const profile = samples.filter((s) => s.endpoint === lasso.label);
@@ -423,7 +427,7 @@ async function rateLimit(chain) {
   const more = ms((s) => s.meta?.sends > 1);
   const lines = [
     `Rate limit: chain ${chain.chainId}, ${method}, ${opts.limitRate} calls/s for up to ${opts.limitSeconds} s, ${direct.length} of ${total} planned rounds sent.`,
-    `Stopped early: ${stopped ?? "no"}`,
+    `Stopped early: ${direct.length < total ? stopped : "no"}`,
     "",
     `${target.label} directly (${target.host}): ${direct.length} calls, ${refusals} refusals (HTTP 429 or a rate-limit error)`,
     `${lasso.label} (${lasso.host}): ${profile.length} calls, answered ${okMs.length}, errors: ${listCounts(profile.filter((s) => !s.ok).map((s) => s.error))}`,
@@ -431,7 +435,7 @@ async function rateLimit(chain) {
   ];
   if (sends.length)
     lines.push(
-      `  upstream sends: ${sends.reduce((a, b) => a + b, 0)} for ${sends.length} calls, ${sends.filter((n) => n > 1).length} calls sent more than once`,
+      `  upstream sends per call: ${sendsPerCall(sends)}`,
       `  answered by: ${listCounts(profile.filter((s) => s.ok).map((s) => s.meta?.provider ?? "unnamed"))}`,
       `  strategy reported by Lasso: ${listCounts(profile.filter((s) => s.meta).map((s) => s.meta.strategy ?? "unreported"))}`,
       `  routing time reported by Lasso: ${reportedTime(profile)}`,
