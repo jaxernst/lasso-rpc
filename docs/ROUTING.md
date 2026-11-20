@@ -158,7 +158,7 @@ Client and system attempts use separate fixed method families: basic, state, log
 **URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias)
 **Module**: `Lasso.RPC.Strategies.BalancedFast`
 
-Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
+Ranks every reliable upstream in one weighted random permutation, using each upstream's best latency evidence: its client mean in the method family, else the same family's system prior. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
 
 **Use When**:
 - You want a balance between performance and distribution
@@ -171,9 +171,10 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
   weight = (best_mean / candidate_mean)^beta
   ```
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
-- Applies reliability as a qualification boundary, not a weight multiplier
-- Uses no latency floor, weight floor, or implicit exploration share
-- When no candidate qualifies, emits an availability degradation and orders routes with recent latency measurements before shuffled unmeasured routes; a wholly unmeasured pool is shuffled uniformly.
+- Gives an upstream with no latency evidence the same weight as the quickest, so it earns a sample instead of being starved
+- Applies reliability as a boundary, not a weight multiplier: upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75) follow the reliable ones in their own permutation, and stale evidence ranks last within its group
+- Uses no latency floor or weight floor
+- When no candidate qualifies, emits an availability degradation; the ordering is unchanged
 
 **Configuration**:
 - `BALANCED_FAST_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)

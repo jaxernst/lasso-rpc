@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `balanced-fast` no longer locks a method family onto the first upstream to qualify. It ranked qualified upstreams ahead of all others, so the first one to reach three successes in a family kept that family's traffic and the rest never earned the samples to qualify. On three healthy upstreams at 20, 60 and 120 ms, `eth_call` or `eth_getLogs` could stay on a slower one for a whole run. Every reliable upstream now shares one weighted permutation on its best latency evidence (client samples, else its probe latency), an upstream with no latency evidence weighs as much as the quickest, and upstreams with three consecutive failures or a recent success probability below 0.75 follow in their own permutation. `fastest` is unchanged. See [balanced fast](docs/ROUTING.md#balanced-fast).
+
 ### Changed
 
 - Requests that need the chain's latest block prefer providers with a current head, under every strategy. A request's need comes from its own parameters: a `latest` selector, the upper bound of a log or trace range (an omitted one means `latest`), an omitted optional selector on reads such as `eth_call` and `eth_getBalance`, and lookups by transaction hash. A provider whose observed head is behind the profile's freshest head by more than the agreement band (about two seconds of blocks) is tried after the others, and so is one reporting the agreed head height on a different block hash. Historical reads at a fixed block, block-hash lookups, `finalized` and `safe` reads and writes keep strategy order, so a provider a few blocks behind still serves the blocks it has. No provider is excluded: when the current ones fail, a lagging one still answers. Head reads routed through Lasso count as observations, so this works with background polling off. See [Head freshness](docs/ROUTING.md#head-freshness).

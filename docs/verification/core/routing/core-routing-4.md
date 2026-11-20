@@ -1,6 +1,6 @@
 # core-routing-4
 
-- `core-routing-4` Balanced-fast weights eligible providers by qualified latency; latency-weighted is its alias. **unguarded**.
+- `core-routing-4` Balanced-fast weights every reliable provider by its best latency evidence and ranks unreliable ones after them; latency-weighted is its alias. **unguarded**.
 
 [Area and shared preconditions](README.md).
 

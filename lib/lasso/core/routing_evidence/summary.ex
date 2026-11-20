@@ -5,7 +5,7 @@ defmodule Lasso.RPC.RoutingEvidence.Summary do
   Storage layout, qualification thresholds, and publication cadence belong to the evidence backend.
   """
 
-  @type state :: :qualified | :unqualified | :provisional | :stale
+  @type state :: :qualified | :unqualified | :provisional | :unreliable | :stale
 
   @type t :: %__MODULE__{
           upstream_instance_id: String.t(),

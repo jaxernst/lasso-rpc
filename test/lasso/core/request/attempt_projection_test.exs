@@ -645,7 +645,7 @@ defmodule Lasso.RPC.AttemptProjectionTest do
     assert row.usable_successes == 4
     assert row.total_failures == 3
     assert row.recent_success_probability < 0.75
-    assert summary.state == :provisional
+    assert summary.state == :unreliable
 
     assert :ok =
              AttemptProjection.apply_control(success_event(8, "projection-instance", generation))

@@ -587,7 +587,7 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 **:balanced_fast**
 
 - Scale-free relative latency weights with exponential-race permutation
-- Reliability qualification remains separate from the latency weight
+- Every reliable upstream is weighted on its best latency evidence; unreliable ones follow
 
 ### Selection API
 

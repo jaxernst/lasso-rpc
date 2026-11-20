@@ -288,7 +288,7 @@ Strategies control how providers are selected for each request. Set via URL path
 | **Priority** | `/rpc/priority/:chain` | Select by `priority` field (lowest first) |
 | **Fastest** | `/rpc/fastest/:chain` | Lowest recent mean latency among reliability-qualified upstreams |
 | **Load Balanced** | `/rpc/load-balanced/:chain` | Randomized order with a bounded distinct-instance first pass for replay-safe fallback |
-| **Balanced Fast** | `/rpc/balanced-fast/:chain` | Weighted permutation using relative successful-attempt latency |
+| **Balanced Fast** | `/rpc/balanced-fast/:chain` | Weighted permutation over each reliable provider's best latency evidence |
 
 ### When to Use Each Strategy
 
@@ -304,7 +304,7 @@ for the dispatch-budget and recovered-head-preference boundaries.
 
 For upgrades from v0.5.1, rename `LW_BETA` to `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); the old variable is no longer read, and startup logs a warning when it is set. Existing `latency-weighted` URLs and `strategy` values remain permanent aliases.
 
-**Balanced Fast** — Weighted random ordering of qualified upstreams using scale-free latency ratios. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. Reliability qualification, capacity policy, and exploration remain separate concerns. `latency-weighted` is an alias.
+**Balanced Fast** — Weighted random ordering of every reliable upstream by its best latency evidence: client samples, else its probe latency. An upstream with no latency evidence yet weighs as much as the quickest, so it earns samples instead of being starved; upstreams with recent failures follow the reliable ones. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. See [balanced fast](ROUTING.md#balanced-fast). `latency-weighted` is an alias.
 
 ### Health-Based Tiering
 
