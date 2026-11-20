@@ -15,7 +15,12 @@ Lasso wrangles your nodes and RPC providers into one fast, resilient, observable
 JSON-RPC endpoint. It measures every upstream by kind of request and transport, sends each
 request to the provider best able to serve it, and routes around outages, rate
 limits, and lagging nodes before your users notice. WebSocket subscriptions
-survive provider failures, and every routing decision is visible.
+survive provider failures, and every routing decision is visible. A provider
+needs only a URL: Lasso learns from live traffic which methods it refuses, how
+deep its history goes, and how wide a log range it accepts
+([learned provider limits](docs/ROUTING.md#learned-provider-limits)). The
+[verification map](docs/verification/README.md) lists Lasso's routing, failover,
+configuration, and WebSocket promises with the recipe that checks each one.
 
 Point your client at a Lasso URL instead of a provider's. No SDK, no client
 library, no application changes.
@@ -49,13 +54,20 @@ and you scale by adding providers instead of replatforming.
 
 - **Outages and rate limits.** Circuit breakers pull a failing provider from
   rotation and reads fail over to the next healthy one. Recovered providers are
-  eased back in.
+  eased back in. A transaction send runs once and is not retried after dispatch.
+  A chain can instead list
+  [transaction providers](docs/RPC_STANDARDS.md#transaction-sends) that receive
+  its sends one at a time.
 - **Uneven performance.** A provider can be fast for `eth_call` and slow for
   `eth_getLogs`. Lasso tracks latency per provider, transport, and kind of request
   (basic reads, state, logs, trace, transactions, subscriptions), and `fastest`
   sends each call to the quickest provider for its kind.
-- **Mixed fleets.** Declare which providers are pruned, cap log ranges, or skip
-  `debug` and `trace`, and Lasso routes each request only where it can be served.
+- **Mixed fleets.** Lasso learns from live traffic which providers refuse a
+  method, lack the history a request needs, or reject a wide log range, and moves
+  them behind providers that can serve it. `?include_meta=body` shows the
+  `learning_decision` behind that order. You can also declare up front which
+  providers are pruned, cap log ranges, or skip `debug` and `trace`, and Lasso
+  routes each request only where it can be served.
 - **Dropped WebSockets.** Matching `newHeads` and `logs` subscriptions share one
   upstream. When it fails, Lasso moves to another provider and backfills missed
   blocks and logs over HTTP.
@@ -79,6 +91,13 @@ endpoint: shared measurements, one place to change providers, and a record of
 every routing decision.
 
 ![Lasso dashboard showing chain topology, provider health, live routing activity, and the request tester](docs/images/dashboard.png)
+
+The dashboard shows each provider's connectivity, circuit state, block
+freshness, attempt and success rates, and latency distributions, measured on
+the node you are viewing ([observability](docs/OBSERVABILITY.md#dashboard-and-metrics-api)).
+Providers and routing live in YAML: `check-config` validates an edit and
+`reload` applies it to the running node without a restart
+([configuration](docs/CONFIGURATION.md#multiple-profiles)).
 
 ## Quick Start
 
@@ -386,8 +405,9 @@ the BEAM was built for.
 
 ## Direction
 
-Lasso's routing is built to learn. Provider behavior such as limits, history
-depth, and method support should be discovered from probes and live traffic,
+Lasso's routing is built to learn. Method support, history depth, and log-range
+limits are already learned from live traffic and explained in response metadata.
+More provider behavior should be discovered from probes and live traffic,
 attributed to evidence, and shown to operators instead of hand-written into
 config. Observations stay typed, so provider comparison can grow from head
 height to fork-aware checks on headers, logs, and responses.
