@@ -219,8 +219,8 @@ Result: complete.
 
 Errors are counted by kind: `timeout`, `network <code>` (a system error code
 such as `ECONNREFUSED`), `rate limit`, `http <status>`, `rpc <code>` and
-`bad response`. The script adds `include_meta=body` to the
-Lasso URL and reads the strategy that routed each call, the answering
+`bad response`. The script sets `include_meta=body` on the Lasso URL,
+replacing any value already there, and reads the strategy that routed each call, the answering
 provider, the number of upstream sends and Lasso's routing time from
 `lasso_meta`. The metadata names the provider that answered, not one that
 refused. Latency is measured from the machine running the script, so it
@@ -237,8 +237,9 @@ complete.
 
 #### Rate limit
 
-This run spends `provider-1`'s quota on purpose. Name a provider whose quota you
-can spare.
+This run spends `provider-1`'s quota on purpose: it sends up to 400 calls to
+`provider-1` directly, 20 per second for 20 seconds. Name a provider whose
+quota you can spare.
 
 ```bash
 node scripts/measure_profile.mjs \
@@ -249,49 +250,43 @@ node scripts/measure_profile.mjs \
   --out rate-limit.json
 ```
 
-Phase 1 sends `eth_getLogs` to `provider-1` directly at 20 calls per second for
-20 seconds and counts its refusals: HTTP 429 or a JSON-RPC rate-limit error.
-Phase 2 keeps sending to `provider-1` directly at the same rate, to hold it
-over its limit, and sends the same calls through the profile at the same rate.
-Phase 2 stops early once the caller sees 3 errors through the profile, or once
-3 calls through the profile need three upstream sends. Each phase sends at most 400 calls per endpoint; through the profile, each
-call can reach at most three providers. The script caps `--limit-rate` at 50
-and `--limit-seconds` at 60.
+Each round sends the same `eth_getLogs` call to `provider-1` directly and
+through the profile. The direct calls hold `provider-1` over its limit and
+count its refusals: HTTP 429 or a JSON-RPC rate-limit error. The run stops
+early once the caller sees 3 errors through the profile, or once 3 calls
+through the profile need three upstream sends. Through the profile, each call
+can reach at most three providers. The script caps `--limit-rate` at 50 and
+`--limit-seconds` at 60.
 
 The output has this shape:
 
 ```text
-Rate limit: chain <id>, 20 calls/s for up to 20 s per phase.
+Rate limit: chain <id>, eth_getLogs, 20 calls/s for up to 20 s, <n> of 400 planned rounds sent.
+Stopped early: <reason, or "no">
 
-Phase 1, provider-1 alone (<host>): <n> of 400 planned eth_getLogs calls
-  answered <n>, errors: rate limit <count>
+provider-1 directly (<host>): <n> calls, <count> refusals (HTTP 429 or a rate-limit error)
+lasso (<host>): <n> calls, answered <n>, errors: <kind> <count>
   latency of answered calls: p50 <ms> ms, p90 <ms> ms, p99 <ms> ms
-  refusals (HTTP 429 or a rate-limit error): <count>
-
-Phase 2, provider-1 directly: <n> calls, <count> refusals.
-Phase 2, through lasso (<host>): <n> of 400 planned eth_getLogs calls
-  answered <n>, errors: <kind> <count>
-  latency of answered calls: p50 <ms> ms, p90 <ms> ms, p99 <ms> ms
-  stopped: <reason, or "no, ran the full duration">
   upstream sends: <n> for <n> calls, <count> calls sent more than once
   answered by: <provider-id> <count>, <provider-id> <count>
   strategy reported by Lasso: <strategy> <count>
   routing time reported by Lasso: routing apart from upstream waits p50 <ms> ms, p90 <ms> ms; waiting on the upstream p50 <ms> ms, p90 <ms> ms
   p50 latency: <ms> ms for calls sent once (<n>), <ms> ms for calls sent more than once (<n>)
+
 Samples: rate-limit.json
 Result: complete.
 ```
 
-If `provider-1` refused nothing in phase 1, phase 2 does not run and the result
-is incomplete: 20 calls per second was below its limit.
+If `provider-1` refused nothing, it was not over its limit and the result is
+incomplete; raise `--limit-rate`.
 
 #### Reading the result
 
 A run is complete when its last line is `Result: complete.` and it exits with
-status 0. A run that stopped early in phase 2 is complete. Otherwise the last
+status 0. A rate-limit run that stopped early is complete. Otherwise the last
 line is `Result: incomplete.` followed by the reasons, and the exit status is 1:
 an endpoint answered no calls, Lasso responses lacked the answering provider or
-send count, or the rate-limit target refused nothing in phase 1 or in phase 2.
+send count, or the rate-limit target refused nothing.
 A setup failure, such as an endpoint that does not answer `eth_chainId`, prints
 the reason and the error kind and exits with status 1 before any calls are
 measured.
@@ -299,7 +294,7 @@ measured.
 The samples file is JSON written to the `--out` path in the current directory,
 complete or not. `manifest` holds the mode, chain ID, pinned block, endpoints
 by label and host, settings and completeness. `samples` holds one entry per
-call: endpoint label, method, round or phase, latency in `ms`, `ok`, the error
+call: endpoint label, method, round, latency in `ms`, `ok`, the error
 kind, and for Lasso calls `meta.strategy`, `meta.provider`, `meta.sends`,
 `meta.routingMs` and `meta.upstreamMs`. Every line of the output can be
 recomputed from it.

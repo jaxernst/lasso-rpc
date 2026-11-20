@@ -15,10 +15,10 @@
 // Comparison (default): every round sends one call to every endpoint at once.
 //   --calls 200     rounds
 //   --rate 2        rounds per second, so calls per second to each endpoint
-// Rate limit: --rate-limit LABEL calls that provider directly (phase 1), then
-// keeps calling it directly while calling the first Lasso URL (phase 2), each
-// at --limit-rate calls/s for up to --limit-seconds. Phase 2 stops early once
-// the caller sees 3 errors or 3 calls need three upstream sends.
+// Rate limit: --rate-limit LABEL calls that provider directly and the first
+// Lasso URL at the same time, at --limit-rate calls/s for up to --limit-seconds.
+// It stops early once the caller sees 3 errors through Lasso or 3 calls need
+// three upstream sends, and is incomplete if the provider refused nothing.
 //   --limit-rate 20 (at most 50)   --limit-seconds 20 (at most 60)
 // Both: --timeout 10000 (ms per call)   --out FILE (samples, JSON)
 //
@@ -39,8 +39,8 @@ const USAGE = `Usage:
     --provider provider-2=env:PROVIDER_2_URL \\
     --out comparison.json
 
-Add --rate-limit provider-1 --limit-rate 20 --limit-seconds 20 to drive one
-provider past its limit. Setup, flags and output: docs/MIGRATION.md,
+Add --rate-limit provider-1 --limit-rate 20 --limit-seconds 20 to call that
+provider directly and through Lasso at once, above its limit. Setup, flags and output: docs/MIGRATION.md,
 "Measure a profile against its own providers".`;
 
 const PIN_DEPTH = 16;
@@ -54,14 +54,19 @@ function fail(message) {
   process.exit(1);
 }
 
+const flagName = (arg) => (/^--?[a-z][a-z-]*$/.test(arg) ? arg : "an argument");
+
 function parseEndpoint(spec, kind) {
+  const shape = `--${kind} takes LABEL=URL or LABEL=env:NAME, where LABEL is letters, digits, ".", "_" or "-".`;
   const eq = spec.indexOf("=");
-  if (eq < 1) fail(`Expected LABEL=URL for --${kind}, got "${spec.split("=")[0]}".`);
-  const label = spec.slice(0, eq);
+  const label = spec.slice(0, Math.max(eq, 0));
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(label)) fail(`A --${kind} value is malformed. ${shape}`);
   let url = spec.slice(eq + 1);
   if (url.startsWith("env:")) {
-    url = process.env[url.slice(4)];
-    if (!url) fail(`Environment variable ${spec.slice(eq + 5)} for ${label} is not set.`);
+    const name = url.slice(4);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) fail(`The --${kind} value for ${label} has a malformed env: name. ${shape}`);
+    url = process.env[name];
+    if (!url) fail(`The environment variable named for ${label} is not set.`);
   }
   let parsed;
   try {
@@ -69,7 +74,7 @@ function parseEndpoint(spec, kind) {
   } catch {
     fail(`The URL for ${label} is not a valid URL.`);
   }
-  if (kind === "lasso" && !parsed.searchParams.has("include_meta")) parsed.searchParams.set("include_meta", "body");
+  if (kind === "lasso") parsed.searchParams.set("include_meta", "body");
   return { label, kind, host: parsed.host, url: parsed.toString() };
 }
 
@@ -92,13 +97,13 @@ function parseArgs(argv) {
   for (let i = 2; i < argv.length; i++) {
     const flag = argv[i];
     const value = argv[++i];
-    if (value === undefined) fail(`Missing value for ${flag}.`);
+    if (value === undefined) fail(`Missing value for ${flagName(flag)}.`);
     if (flag === "--lasso") o.endpoints.push(parseEndpoint(value, "lasso"));
     else if (flag === "--provider") o.endpoints.push(parseEndpoint(value, "provider"));
     else if (flag === "--out") o.out = value;
     else if (flag === "--rate-limit") o.rateLimit = value;
     else if (numbers[flag] && Number(value) > 0) o[numbers[flag]] = Number(value);
-    else fail(`Unknown flag or bad value: ${flag}. See docs/MIGRATION.md for usage.`);
+    else fail(`Unknown flag or bad value for ${flagName(flag)}. See docs/MIGRATION.md for usage.`);
   }
   const labels = o.endpoints.map((e) => e.label);
   if (new Set(labels).size !== labels.length) fail("Endpoint labels must be unique.");
@@ -369,82 +374,61 @@ function metaGaps(samples, lasso) {
   return gaps;
 }
 
-async function burst(endpoints, chain, phase, stopWhen) {
-  const total = Math.round(opts.limitRate * opts.limitSeconds);
-  const interval = 1000 / opts.limitRate;
-  const method = chain.logAddress ? "eth_getLogs" : "eth_getBlockByNumber";
-  const state = { stopped: null, samples: [] };
-  const t0 = performance.now();
-  const pending = [];
-  for (let i = 0; i < total && !state.stopped; i++) {
-    const wait = t0 + i * interval - performance.now();
-    if (wait > 0) await sleep(wait);
-    if (state.stopped) break;
-    const pin = Math.max(0, chain.pin - (i % 50));
-    const params = chain.logAddress
-      ? [{ fromBlock: hex(Math.max(0, pin - LOG_RANGE + 1)), toBlock: hex(pin), address: chain.logAddress }]
-      : [hex(pin), false];
-    const at = Math.round(performance.now() - t0);
-    for (const endpoint of endpoints)
-      pending.push(
-        call(endpoint, method, params, { phase, index: i, at }).then(({ sample }) => {
-          state.samples.push(sample);
-          state.stopped ??= stopWhen(state.samples);
-        })
-      );
-  }
-  await Promise.all(pending);
-  state.samples.sort((a, b) => a.index - b.index);
-  return { ...state, planned: total, method };
-}
-
-function burstLines(title, samples, planned, method) {
-  const ms = samples.filter((s) => s.ok).map((s) => s.ms);
-  return [
-    `${title}: ${samples.length} of ${planned} planned ${method} calls`,
-    `  answered ${ms.length}, errors: ${listCounts(samples.filter((s) => !s.ok).map((s) => s.error))}`,
-    `  latency of answered calls: p50 ${fmt(percentile(ms, 50))} ms, p90 ${fmt(percentile(ms, 90))} ms, p99 ${fmt(percentile(ms, 99))} ms`,
-  ];
-}
-
 async function rateLimit(chain) {
   const target = providers.find((p) => p.label === opts.rateLimit);
   const lasso = lassos[0];
-  const refused = (samples) => samples.filter((s) => s.error === "rate limit").length;
-  console.error(`Phase 1: ${opts.limitRate} calls/s for up to ${opts.limitSeconds} s to ${target.label} directly.`);
-  const direct = await burst([target], chain, "direct", () => null);
-  const lines = [
-    `Rate limit: chain ${chain.chainId}, ${opts.limitRate} calls/s for up to ${opts.limitSeconds} s per phase.`,
-    "",
-    ...burstLines(`Phase 1, ${target.label} alone (${target.host})`, direct.samples, direct.planned, direct.method),
-    `  refusals (HTTP 429 or a rate-limit error): ${refused(direct.samples)}`,
-    "",
-  ];
-  if (!refused(direct.samples)) {
-    lines.push(`${target.label} refused nothing at ${opts.limitRate} calls/s, so phase 2 did not run.`);
-    return { lines, samples: direct.samples, incomplete: [`${target.label} was not driven past its limit; raise --limit-rate`] };
-  }
-  console.error(`Phase 2: the same rate to ${target.label} directly and to ${lasso.label} at once.`);
-  await sleep(2000);
-  const both = await burst([target, lasso], chain, "profile", (samples) => {
+  const total = Math.round(opts.limitRate * opts.limitSeconds);
+  const interval = 1000 / opts.limitRate;
+  const method = chain.logAddress ? "eth_getLogs" : "eth_getBlockByNumber";
+  const samples = [];
+  let stopped = null;
+  const stopRule = () => {
     const mine = samples.filter((s) => s.endpoint === lasso.label);
     const errors = mine.filter((s) => !s.ok).length;
     if (errors >= STOP_AFTER) return `the caller saw ${errors} errors through ${lasso.label}`;
     const maxed = mine.filter((s) => s.meta?.sends >= 3).length;
     if (maxed >= STOP_AFTER) return `${maxed} calls through ${lasso.label} needed three or more upstream sends`;
     return null;
-  });
-  const keep = both.samples.filter((s) => s.endpoint === target.label);
-  const profile = both.samples.filter((s) => s.endpoint === lasso.label);
+  };
+  console.error(`${opts.limitRate} calls/s for up to ${opts.limitSeconds} s to ${target.label} directly and to ${lasso.label} at once.`);
+  const t0 = performance.now();
+  const pending = [];
+  for (let i = 0; i < total && !stopped; i++) {
+    const wait = t0 + i * interval - performance.now();
+    if (wait > 0) await sleep(wait);
+    if (stopped) break;
+    const pin = Math.max(0, chain.pin - (i % 50));
+    const params = chain.logAddress
+      ? [{ fromBlock: hex(Math.max(0, pin - LOG_RANGE + 1)), toBlock: hex(pin), address: chain.logAddress }]
+      : [hex(pin), false];
+    const at = Math.round(performance.now() - t0);
+    for (const endpoint of [target, lasso])
+      pending.push(
+        call(endpoint, method, params, { index: i, at }).then(({ sample }) => {
+          samples.push(sample);
+          stopped ??= stopRule();
+        })
+      );
+  }
+  await Promise.all(pending);
+  samples.sort((a, b) => a.index - b.index);
+
+  const direct = samples.filter((s) => s.endpoint === target.label);
+  const profile = samples.filter((s) => s.endpoint === lasso.label);
+  const refusals = direct.filter((s) => s.error === "rate limit").length;
+  const okMs = profile.filter((s) => s.ok).map((s) => s.ms);
   const sends = profile.map((s) => s.meta?.sends).filter((v) => v != null);
   const ms = (pred) => profile.filter((s) => s.ok && pred(s)).map((s) => s.ms);
   const once = ms((s) => s.meta?.sends === 1);
   const more = ms((s) => s.meta?.sends > 1);
-  lines.push(
-    `Phase 2, ${target.label} directly: ${keep.length} calls, ${refused(keep)} refusals.`,
-    ...burstLines(`Phase 2, through ${lasso.label} (${lasso.host})`, profile, both.planned, both.method),
-    `  stopped: ${both.stopped ?? "no, ran the full duration"}`
-  );
+  const lines = [
+    `Rate limit: chain ${chain.chainId}, ${method}, ${opts.limitRate} calls/s for up to ${opts.limitSeconds} s, ${direct.length} of ${total} planned rounds sent.`,
+    `Stopped early: ${stopped ?? "no"}`,
+    "",
+    `${target.label} directly (${target.host}): ${direct.length} calls, ${refusals} refusals (HTTP 429 or a rate-limit error)`,
+    `${lasso.label} (${lasso.host}): ${profile.length} calls, answered ${okMs.length}, errors: ${listCounts(profile.filter((s) => !s.ok).map((s) => s.error))}`,
+    `  latency of answered calls: p50 ${fmt(percentile(okMs, 50))} ms, p90 ${fmt(percentile(okMs, 90))} ms, p99 ${fmt(percentile(okMs, 99))} ms`,
+  ];
   if (sends.length)
     lines.push(
       `  upstream sends: ${sends.reduce((a, b) => a + b, 0)} for ${sends.length} calls, ${sends.filter((n) => n > 1).length} calls sent more than once`,
@@ -453,10 +437,10 @@ async function rateLimit(chain) {
       `  routing time reported by Lasso: ${reportedTime(profile)}`,
       `  p50 latency: ${fmt(percentile(once, 50))} ms for calls sent once (${once.length}), ${fmt(percentile(more, 50))} ms for calls sent more than once (${more.length})`
     );
+  lines.push("");
   const incomplete = metaGaps(profile, lasso);
-  if (!refused(keep)) incomplete.push(`${target.label} refused nothing in phase 2, so it was not over its limit while the profile was measured`);
-  if (!profile.length) incomplete.push(`no calls reached ${lasso.label}`);
-  return { lines, samples: [...direct.samples, ...both.samples], incomplete };
+  if (!refusals) incomplete.push(`${target.label} refused nothing at ${opts.limitRate} calls/s, so it was not over its limit; raise --limit-rate`);
+  return { lines, samples, incomplete };
 }
 
 async function main() {
