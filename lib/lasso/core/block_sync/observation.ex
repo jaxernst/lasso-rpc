@@ -206,6 +206,7 @@ defmodule Lasso.BlockSync.Observation do
     |> Map.put(:timestamp, observation.block_timestamp)
     |> Map.put(:latency_ms, observation.latency_ms)
     |> Map.put(:poll_references, observation.poll_references)
+    |> Map.put(:sample_interval_ms, observation.sample_interval_ms)
   end
 
   defp positive(value, _fallback) when is_integer(value) and value > 0, do: value
