@@ -26,7 +26,12 @@ defmodule LassoWeb.DashboardCoverageIntegrationTest do
   end
 
   test "missing configured nodes stay in metrics totals and live dashboard coverage" do
-    assert Topology.get_coverage().connected == 1
+    # Cluster tests stop their peers on exit; Topology sees the nodedown afterwards.
+    assert_eventually(fn -> Topology.get_coverage().connected == 1 end,
+      timeout: 5_000,
+      message: "Expected peers from earlier tests to leave the topology"
+    )
+
     Application.put_env(:lasso, :expected_cluster_nodes, 3)
 
     {_data, coverage} =
