@@ -3,51 +3,52 @@ defmodule Lasso.BlockPublication.PublicationTest do
   alias Lasso.BlockPublication.{Block, Gate, Publication}
 
   @members ["a", "b", "c"]
-  @tables [:publication_a, :publication_b, :publication_c]
   @key {"customer", 1}
   @now 1_800_000_000_000
 
   setup do
-    for table <- @tables do
+    suffix = System.unique_integer([:positive])
+    tables = Map.new(@members, fn m -> {m, :"publication_#{m}_#{suffix}"} end)
+
+    for {_member, table} <- tables do
       Gate.create_table!(table)
       Gate.bootstrapped(table)
     end
 
-    boots =
-      Map.new(Enum.zip(@members, @tables), fn {member, table} -> {member, Gate.boot(table)} end)
+    boots = Map.new(tables, fn {member, table} -> {member, Gate.boot(table)} end)
 
     state =
       Enum.reduce(@members, Publication.new(@members, 60_000), fn m, s ->
         apply!(s, {:join, m, boots[m], nil})
       end)
 
-    %{state: state, boots: boots}
+    %{state: state, boots: boots, tables: tables}
   end
 
   test "retained replies, closure barrier, lost commits, stale messages and stale blocks", c do
     s = publish(c.state, c.boots, block(100))
-    install_all(s)
-    assert heights() == [100, 100, 100]
-    assert heights(@now + 60_001) == [:error, :error, :error]
+    install_all(s, c.tables)
+    assert heights(c.tables) == [100, 100, 100]
+    assert heights(c.tables, @now + 60_001) == [:error, :error, :error]
 
     closing = prepare(s, c.boots, block(101))
-    Gate.install(@key, closing, "a", :publication_a)
+    Gate.install(@key, closing, "a", c.tables["a"])
     a = apply!(closing, {:closed, closing["epoch"], "a", c.boots["a"]})
     assert a["published"]["height"] == 100
-    assert heights() == [:error, 100, 100]
-    Gate.install(@key, closing, "b", :publication_b)
+    assert heights(c.tables) == [:error, 100, 100]
+    Gate.install(@key, closing, "b", c.tables["b"])
     ab = apply!(a, {:closed, closing["epoch"], "b", c.boots["b"]})
     assert ab["phase"] == "closing"
-    assert heights() == [:error, :error, 100]
+    assert heights(c.tables) == [:error, :error, 100]
 
-    Gate.install(@key, ab, "c", :publication_c)
+    Gate.install(@key, ab, "c", c.tables["c"])
     committed = apply!(ab, {:closed, closing["epoch"], "c", c.boots["c"]})
-    Gate.install(@key, committed, "a", :publication_a)
-    assert heights() == [101, :error, :error]
-    install_all(s)
-    assert heights() == [101, :error, :error]
-    install_all(committed)
-    assert heights() == [101, 101, 101]
+    Gate.install(@key, committed, "a", c.tables["a"])
+    assert heights(c.tables) == [101, :error, :error]
+    install_all(s, c.tables)
+    assert heights(c.tables) == [101, :error, :error]
+    install_all(committed, c.tables)
+    assert heights(c.tables) == [101, 101, 101]
 
     assert {:error, :stale_command} =
              Publication.apply(committed, {:closed, closing["epoch"], "a", c.boots["a"]})
@@ -58,13 +59,13 @@ defmodule Lasso.BlockPublication.PublicationTest do
 
   test "a new boot cannot inherit a grant or replace a partitioned boot", c do
     s = publish(c.state, c.boots, block(101))
-    install_all(s)
-    :ets.delete(:publication_b)
-    Gate.create_table!(:publication_b)
-    Gate.bootstrapped(:publication_b)
-    Gate.install(@key, s, "b", :publication_b)
-    assert heights() == [101, :error, 101]
-    new_boot = Gate.boot(:publication_b)
+    install_all(s, c.tables)
+    :ets.delete(c.tables["b"])
+    Gate.create_table!(c.tables["b"])
+    Gate.bootstrapped(c.tables["b"])
+    Gate.install(@key, s, "b", c.tables["b"])
+    assert heights(c.tables) == [101, :error, 101]
+    new_boot = Gate.boot(c.tables["b"])
 
     assert {:error, :previous_boot_requires_fence} =
              Publication.apply(s, {:join, "b", new_boot, nil})
@@ -74,19 +75,19 @@ defmodule Lasso.BlockPublication.PublicationTest do
     joined = apply!(fenced, {:join, "b", new_boot, nil})
     boots = Map.put(c.boots, "b", new_boot)
     rejoined = publish(joined, boots, block(101))
-    install_all(rejoined)
-    assert heights() == [101, 101, 101]
+    install_all(rejoined, c.tables)
+    assert heights(c.tables) == [101, 101, 101]
     assert rejoined["fences"] != []
   end
 
   test "reactivation requested during disable waits for every closure and fresh admission", c do
     original = publish(c.state, c.boots, block(101))
-    install_all(original)
+    install_all(original, c.tables)
     disabling = apply!(original, :disable)
     resumed = apply!(disabling, :enable)
     assert resumed["phase"] == "disabling"
-    install_all(resumed)
-    assert heights() == [:error, :error, :error]
+    install_all(resumed, c.tables)
+    assert heights(c.tables) == [:error, :error, :error]
 
     partial = apply!(resumed, {:closed, resumed["epoch"], "a", c.boots["a"]})
     assert partial["phase"] == "disabling"
@@ -96,10 +97,10 @@ defmodule Lasso.BlockPublication.PublicationTest do
     assert closed["phase"] == "active"
     assert closed["active_members"] == %{}
     assert closed["minimum_height"] == 101
-    install_all(closed)
-    assert heights() == [:error, :error, :error]
-    install_all(publish(closed, c.boots, block(101)))
-    assert heights() == [101, 101, 101]
+    install_all(closed, c.tables)
+    assert heights(c.tables) == [:error, :error, :error]
+    install_all(publish(closed, c.boots, block(101)), c.tables)
+    assert heights(c.tables) == [101, 101, 101]
   end
 
   test "local floors seed the durable minimum and scopes remain independent", c do
@@ -109,9 +110,9 @@ defmodule Lasso.BlockPublication.PublicationTest do
     assert {:error, :ineligible_candidate} =
              Publication.apply(s, {:propose, "a", c.boots["a"], block(104)})
 
-    install_all(publish(s, c.boots, block(105)))
-    assert :unmanaged = Gate.read({"other-customer", 1}, @now, :publication_a)
-    assert :unmanaged = Gate.read({"customer", 2}, @now, :publication_a)
+    install_all(publish(s, c.boots, block(105)), c.tables)
+    assert :unmanaged = Gate.read({"other-customer", 1}, @now, c.tables["a"])
+    assert :unmanaged = Gate.read({"customer", 2}, @now, c.tables["a"])
   end
 
   test "disable before the first publication does not wait for an unjoined member", c do
@@ -123,28 +124,28 @@ defmodule Lasso.BlockPublication.PublicationTest do
     assert state["phase"] == "disabled"
     assert state["minimum_height"] == 105
     assert state["members"]["b"] == nil
-    install_all(state)
-    assert :unmanaged == Gate.read(@key, @now, :publication_a)
+    install_all(state, c.tables)
+    assert :unmanaged == Gate.read(@key, @now, c.tables["a"])
   end
 
   test "disable closes admitted boots without waiting for a newly configured member", c do
     original = publish(c.state, c.boots, block(101))
-    install_all(original)
+    install_all(original, c.tables)
     disabling = original |> apply!({:add_member, "d"}) |> apply!(:disable)
     assert disabling["phase"] == "disabling"
     assert disabling["members"]["d"] == nil
 
-    Gate.install(@key, disabling, "a", :publication_a)
+    Gate.install(@key, disabling, "a", c.tables["a"])
     partial = apply!(disabling, {:closed, disabling["epoch"], "a", c.boots["a"]})
     assert partial["phase"] == "disabling"
-    assert heights() == [:error, 101, 101]
+    assert heights(c.tables) == [:error, 101, 101]
 
-    install_all(partial)
+    install_all(partial, c.tables)
     disabled = close(partial, c.boots)
     assert disabled["phase"] == "disabled"
     assert disabled["minimum_height"] == 101
-    install_all(disabled)
-    assert :unmanaged == Gate.read(@key, @now, :publication_a)
+    install_all(disabled, c.tables)
+    assert :unmanaged == Gate.read(@key, @now, c.tables["a"])
     assert apply!(disabled, :enable)["phase"] == "joining"
   end
 
@@ -169,16 +170,16 @@ defmodule Lasso.BlockPublication.PublicationTest do
     assert edited["published"] == published["published"]
     assert edited["fenced_boots"][c.boots["b"]] == "b"
     assert {:error, :boot_fenced} = Publication.apply(edited, {:join, "d", c.boots["b"], 0})
-    install_all(edited)
-    assert :unmanaged == Gate.read(@key, @now, :publication_a)
-    assert :unmanaged == Gate.read(@key, @now, :publication_c)
+    install_all(edited, c.tables)
+    assert :unmanaged == Gate.read(@key, @now, c.tables["a"])
+    assert :unmanaged == Gate.read(@key, @now, c.tables["c"])
     assert apply!(edited, :enable)["phase"] == "joining"
   end
 
   test "external fencing during disable preserves closure acknowledgments", c do
     original = publish(c.state, c.boots, block(101))
     disabling = apply!(original, :disable)
-    install_all(disabling)
+    install_all(disabling, c.tables)
     a_closed = apply!(disabling, {:closed, disabling["epoch"], "a", c.boots["a"]})
     fenced = apply!(a_closed, {:fence, "b", c.boots["b"], "VM externally stopped"})
     assert fenced["closed"]["a"] == c.boots["a"]
@@ -188,9 +189,9 @@ defmodule Lasso.BlockPublication.PublicationTest do
     assert disabled["phase"] == "disabled"
     assert disabled["active_members"] == %{}
     assert disabled["minimum_height"] == 101
-    install_all(disabled)
-    assert :unmanaged == Gate.read(@key, @now, :publication_a)
-    assert {:error, :member_fenced} == Gate.read(@key, @now, :publication_b)
+    install_all(disabled, c.tables)
+    assert :unmanaged == Gate.read(@key, @now, c.tables["a"])
+    assert {:error, :member_fenced} == Gate.read(@key, @now, c.tables["b"])
   end
 
   test "reactivation after fencing waits for replacement admission", c do
@@ -201,8 +202,8 @@ defmodule Lasso.BlockPublication.PublicationTest do
     assert resumed["phase"] == "joining"
     assert resumed["active_members"] == %{}
     assert resumed["minimum_height"] == 101
-    install_all(resumed)
-    assert heights() == [:error, :error, :error]
+    install_all(resumed, c.tables)
+    assert heights(c.tables) == [:error, :error, :error]
   end
 
   test "disagreement does not close grants; common anchor changes remain explicit evidence", c do
@@ -222,38 +223,38 @@ defmodule Lasso.BlockPublication.PublicationTest do
 
   test "retirement is permanent for the boot even when newer snapshots arrive", c do
     s = publish(c.state, c.boots, block(100))
-    install_all(s)
-    Gate.retire(:publication_b)
+    install_all(s, c.tables)
+    Gate.retire(c.tables["b"])
     s = publish(s, c.boots, block(101))
-    install_all(s)
-    assert heights() == [101, :error, 101]
+    install_all(s, c.tables)
+    assert heights(c.tables) == [101, :error, 101]
   end
 
   test "an externally fenced runtime cannot serve or reclaim the slot", c do
     s = publish(c.state, c.boots, block(100))
-    install_all(s)
+    install_all(s, c.tables)
     fenced = apply!(s, {:fence, "b", c.boots["b"], "Ingress permanently excluded this boot"})
-    install_all(fenced)
-    assert heights() == [100, :error, 100]
+    install_all(fenced, c.tables)
+    assert heights(c.tables) == [100, :error, 100]
     assert {:error, :boot_fenced} = Publication.apply(fenced, {:join, "b", c.boots["b"], nil})
   end
 
   test "disable closes all grants and re-enable retains the durable floor", c do
     s = publish(c.state, c.boots, block(101))
-    install_all(s)
+    install_all(s, c.tables)
     disabling = apply!(s, :disable)
-    Gate.install(@key, disabling, "a", :publication_a)
+    Gate.install(@key, disabling, "a", c.tables["a"])
     a = apply!(disabling, {:closed, disabling["epoch"], "a", c.boots["a"]})
     assert a["phase"] == "disabling"
-    assert heights() == [:error, 101, 101]
-    install_all(a)
+    assert heights(c.tables) == [:error, 101, 101]
+    install_all(a, c.tables)
     disabled = close(a, c.boots)
-    install_all(disabled)
-    assert Enum.all?(@tables, &(Gate.read(@key, @now, &1) == :unmanaged))
+    install_all(disabled, c.tables)
+    assert Enum.all?(Map.values(c.tables), &(Gate.read(@key, @now, &1) == :unmanaged))
     assert disabled["minimum_height"] == 101
     enabled = apply!(disabled, :enable)
-    install_all(enabled)
-    assert heights() == [:error, :error, :error]
+    install_all(enabled, c.tables)
+    assert heights(c.tables) == [:error, :error, :error]
 
     assert {:error, :ineligible_candidate} =
              Publication.apply(enabled, {:propose, "a", c.boots["a"], block(100)})
@@ -261,8 +262,8 @@ defmodule Lasso.BlockPublication.PublicationTest do
     altered_timestamp = block(101) |> Map.put("timestamp_ms", @now + 10_000)
     republished = publish(enabled, c.boots, altered_timestamp)
     assert republished["published"]["timestamp_ms"] == @now
-    install_all(republished)
-    assert heights() == [101, 101, 101]
+    install_all(republished, c.tables)
+    assert heights(c.tables) == [101, 101, 101]
   end
 
   test "a local floor found during re-enrollment rejects a lower candidate", c do
@@ -319,13 +320,13 @@ defmodule Lasso.BlockPublication.PublicationTest do
     next
   end
 
-  defp install_all(s),
-    do: Enum.each(Enum.zip(@members, @tables), fn {m, t} -> Gate.install(@key, s, m, t) end)
+  defp install_all(s, tables),
+    do: Enum.each(@members, fn m -> Gate.install(@key, s, m, tables[m]) end)
 
-  defp heights(now \\ @now),
+  defp heights(tables, now \\ @now),
     do:
-      Enum.map(@tables, fn table ->
-        case Gate.read(@key, now, table) do
+      Enum.map(@members, fn m ->
+        case Gate.read(@key, now, tables[m]) do
           {:ok, grant} -> grant.block["height"]
           _ -> :error
         end
