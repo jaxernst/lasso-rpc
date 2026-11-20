@@ -13,6 +13,7 @@ defmodule Lasso.RPC.RequestOptions.Builder do
 
   alias Lasso.Config.{MethodConstraints, MethodPolicy, ProfileValidator}
   alias Lasso.RPC.RequestOptions
+  alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
   alias LassoWeb.Plugs.RequestTimingPlug
 
   @type override_opts :: [
@@ -133,13 +134,13 @@ defmodule Lasso.RPC.RequestOptions.Builder do
     overrides[:strategy] ||
       conn.assigns[:provider_strategy] ||
       parse_strategy(conn.params["strategy"]) ||
-      default_strategy()
+      StrategyRegistry.default_strategy()
   end
 
   defp resolve_strategy_from_map(params, overrides) do
     overrides[:strategy] ||
       parse_strategy(params["strategy"]) ||
-      default_strategy()
+      StrategyRegistry.default_strategy()
   end
 
   # Provider resolution
@@ -211,10 +212,6 @@ defmodule Lasso.RPC.RequestOptions.Builder do
   defp parse_strategy("latency_weighted"), do: :balanced_fast
   defp parse_strategy(nil), do: nil
   defp parse_strategy(_), do: nil
-
-  @spec default_strategy() :: RequestOptions.strategy()
-  defp default_strategy,
-    do: Application.get_env(:lasso, :provider_selection_strategy, :load_balanced)
 
   @spec put_request_context(RequestOptions.t(), any()) :: RequestOptions.t()
   defp put_request_context(%RequestOptions{} = o, nil), do: o

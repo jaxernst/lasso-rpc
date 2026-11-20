@@ -108,7 +108,7 @@ Strategies control the initial ordering of providers. Select via URL path segmen
 `lasso_meta.strategy` reports the strategy that routed the request as an atom name with an
 underscore, such as `load_balanced` or `balanced_fast`. URLs use the hyphenated slug.
 
-### Load Balanced (Default)
+### Load Balanced
 
 **URL**: `/rpc/load-balanced/:chain`
 **Module**: `Lasso.RPC.Strategies.LoadBalanced`
@@ -153,9 +153,9 @@ Client and system attempts use separate fixed method families: basic, state, log
 - Preserves all live candidates and emits an availability degradation when none qualifies
 - Still subject to health tiering (closed-circuit providers preferred)
 
-### Balanced Fast
+### Balanced Fast (Default)
 
-**URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias)
+**URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias), or `/rpc/:chain` with no strategy
 **Module**: `Lasso.RPC.Strategies.BalancedFast`
 
 Orders reliable upstreams by a weighted random permutation over each upstream's best latency evidence: its client mean in the method family, else the same family's system prior. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
@@ -218,7 +218,7 @@ cannot express exploration or ambiguous response semantics. See
 
 ### Priority
 
-**URL**: `/rpc/priority/:chain`, or `/rpc/:chain` when `config :lasso, :provider_selection_strategy, :priority` is set. The shipped default is `:load_balanced`.
+**URL**: `/rpc/priority/:chain`, or `/rpc/:chain` when `config :lasso, :provider_selection_strategy, :priority` is set. The shipped default is `:balanced_fast`.
 **Module**: `Lasso.RPC.Strategies.Priority`
 
 Selects providers in the order defined by the `priority` field in the profile. Lower priority values are tried first.

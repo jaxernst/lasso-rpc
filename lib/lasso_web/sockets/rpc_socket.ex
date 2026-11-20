@@ -25,6 +25,7 @@ defmodule LassoWeb.RPCSocket do
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.JSONRPC.RequestValidator
   alias Lasso.RPC.{Observability, RequestContext, Response}
+  alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
   alias LassoWeb.RPC.Helpers
   alias LassoWeb.RPCSocket.ItemOwner
 
@@ -86,8 +87,8 @@ defmodule LassoWeb.RPCSocket do
         profile: profile_meta.profile_id,
         profile_slug: profile_slug,
         chain_id: chain_id,
-        strategy: strategy || default_provider_strategy(),
-        requested_strategy: strategy || default_provider_strategy(),
+        strategy: strategy || StrategyRegistry.default_strategy(),
+        requested_strategy: strategy || StrategyRegistry.default_strategy(),
         provider_id: provider_id,
         subscriptions: %{},
         orphaned_subscription_count: 0,
@@ -535,7 +536,7 @@ defmodule LassoWeb.RPCSocket do
       method: method,
       params: params,
       profile: state.profile,
-      strategy: state.strategy || default_provider_strategy(),
+      strategy: state.strategy,
       provider_id: state.provider_id,
       jsonrpc_id: id,
       jsonrpc_id_present?: respond?,
@@ -775,10 +776,6 @@ defmodule LassoWeb.RPCSocket do
       {:ok, chain_id} -> {:ok, chain_id}
       :not_found -> {:error, "Unknown chain '#{identifier}'"}
     end
-  end
-
-  defp default_provider_strategy do
-    Helpers.default_provider_strategy()
   end
 
   ## Observability helpers
