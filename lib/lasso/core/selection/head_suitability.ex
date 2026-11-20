@@ -28,6 +28,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   excludes one.
   """
 
+  alias Lasso.BlockSync.Observation
   alias Lasso.Observations.{HeadCadence, HeadComparison, HeadSnapshot}
   alias Lasso.RPC.{ExecutionEnvelope, RequestAnalysis, RoutingPlan}
 
@@ -150,19 +151,11 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   end
 
   defp build(plan, requirement, head_snapshot, now_ms) do
-    freshness = Map.new(plan.providers, &{&1.instance_id, &1.head_freshness_ms})
-    default_freshness_ms = plan.head_scope.policy.reference_freshness_ms
-
     reference_hash = qualified_reference_hash(head_snapshot, now_ms)
 
     evidence =
-      Map.new(route_heads(plan, now_ms), fn {{instance_id, transport} = route, head} ->
-        stale_after_ms = get_in(freshness, [instance_id, transport]) || default_freshness_ms
-
-        {route,
-         head
-         |> Map.put(:fresh?, now_ms - head.observed_at_ms <= stale_after_ms)
-         |> Map.put(:branch_conflict?, branch_conflict?(head, reference_hash))}
+      Map.new(route_heads(plan, now_ms), fn {route, head} ->
+        {route, Map.put(head, :branch_conflict?, branch_conflict?(head, reference_hash))}
       end)
 
     capture = %__MODULE__{
@@ -194,26 +187,35 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
+  # Freshness is the observation layer's verdict, which honours an
+  # observation's own longer window such as a slow HTTP poll interval.
   defp route_heads(plan, now_ms) do
     for provider <- plan.providers,
         transport <- provider.transports,
-        {:ok, observation} <- [
-          Lasso.BlockSync.Observation.read_transport(
-            plan.chain_id,
-            provider.instance_id,
-            transport,
-            now_ms,
-            Map.fetch!(provider.head_freshness_ms, transport)
-          )
-        ],
+        {fresh?, observation} <- [read_head(plan.chain_id, provider, transport, now_ms)],
         into: %{},
         do:
           {{provider.instance_id, transport},
            %{
              height: observation.height,
              observed_at_ms: observation.observed_at_ms,
-             block_hash: normalize_hash(observation.metadata[:hash])
+             block_hash: normalize_hash(observation.metadata[:hash]),
+             fresh?: fresh?
            }}
+  end
+
+  defp read_head(chain_id, provider, transport, now_ms) do
+    case Observation.read_transport(
+           chain_id,
+           provider.instance_id,
+           transport,
+           now_ms,
+           Map.fetch!(provider.head_freshness_ms, transport)
+         ) do
+      {:ok, observation} -> {true, observation}
+      {:error, {:stale, observation}} -> {false, observation}
+      {:error, :not_found} -> nil
+    end
   end
 
   defp normalize_hash(hash) when is_binary(hash) and hash != "", do: String.downcase(hash)
