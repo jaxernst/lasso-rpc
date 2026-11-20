@@ -142,8 +142,10 @@ transports actually served the tests.
 
 `scripts/measure_profile.mjs` sends the same calls, at the same moment, to each
 provider directly and through a Lasso profile that uses those providers. It
-needs Node.js 18 or newer and no packages. Run it from the repository root
-against a profile that is already serving traffic. To serve a profile on Core,
+needs Node.js 18 or newer and no packages. It runs from a clone of this
+repository, which a Docker install doesn't have, so clone it first
+(`git clone https://github.com/jaxernst/lasso-rpc && cd lasso-rpc`) and run it
+from the repository root against a profile that is already serving traffic. To serve a profile on Core,
 including one exported from Lasso Cloud, see [Deployment](DEPLOYMENT.md).
 
 Set the profile URL your application would use. Self-hosted Core takes no key:
