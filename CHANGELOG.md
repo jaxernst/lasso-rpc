@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A provider can declare `heads: live`, `standby`, `passive` or `off` to set its role in Lasso's own head tracking. With one `live` provider and the rest `standby`, a chain holds a single upstream `newHeads` subscription instead of one per WebSocket provider. A standby subscribes only while no live feed has delivered a head within `evidence_freshness_ms`, and releases the feed once live heads return. If the first standby's subscription fails, the next one takes over. Previously the only way to drop a provider's background subscription was `subscribe_new_heads: false`, which also removed the provider from client `eth_subscribe newHeads` routing and left no failover feed. Client subscriptions still route to every provider that accepts them. See [head feeds](docs/CONFIGURATION.md#head-feeds).
+
 ### Changed
 
 - Requests that need the chain's latest block prefer providers with a current head, under every strategy. A request's need comes from its own parameters: a `latest` selector, the upper bound of a log or trace range (an omitted one means `latest`), an omitted optional selector on reads such as `eth_call` and `eth_getBalance`, and lookups by transaction hash. A provider whose observed head is behind the profile's freshest head by more than the agreement band (about two seconds of blocks) is tried after the others, and so is one reporting the agreed head height on a different block hash. Historical reads at a fixed block, block-hash lookups, `finalized` and `safe` reads and writes keep strategy order, so a provider a few blocks behind still serves the blocks it has. No provider is excluded: when the current ones fail, a lagging one still answers. Head reads routed through Lasso count as observations, so this works with background polling off. See [Head freshness](docs/ROUTING.md#head-freshness).

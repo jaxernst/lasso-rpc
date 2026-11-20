@@ -12,6 +12,7 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
+  - `{:head_feed, chain_id, provider_id}` => `%{head_at_ms: integer() | nil, failed_at_ms: integer() | nil}`
 
   ## Freshness
 
@@ -142,6 +143,32 @@ defmodule Lasso.BlockSync.Registry do
     case :ets.lookup(@table, {:head_observation, chain_id, provider_id, transport}) do
       [{_key, %HeadObservation{} = observation}] -> {:ok, observation}
       [] -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Record that an upstream's background `newHeads` feed delivered a head or
+  failed to subscribe. Only the upstream's block-sync worker writes this key.
+  Routed requests never touch it, so it reflects the feed alone.
+  """
+  @spec put_feed_event(pos_integer(), String.t(), :head | :failure, integer()) :: :ok
+  def put_feed_event(chain_id, provider_id, kind, at_ms)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) and
+             kind in [:head, :failure] and is_integer(at_ms) do
+    field = if kind == :head, do: :head_at_ms, else: :failed_at_ms
+    feed = get_feed(chain_id, provider_id) || %{head_at_ms: nil, failed_at_ms: nil}
+    :ets.insert(@table, {{:head_feed, chain_id, provider_id}, Map.put(feed, field, at_ms)})
+    :ok
+  end
+
+  @doc "Latest background `newHeads` feed head and failure times for an upstream."
+  @spec get_feed(pos_integer(), String.t()) ::
+          %{head_at_ms: integer() | nil, failed_at_ms: integer() | nil} | nil
+  def get_feed(chain_id, provider_id)
+      when is_integer(chain_id) and chain_id > 0 and is_binary(provider_id) do
+    case :ets.lookup(@table, {:head_feed, chain_id, provider_id}) do
+      [{_key, feed}] -> feed
+      [] -> nil
     end
   end
 
@@ -346,6 +373,7 @@ defmodule Lasso.BlockSync.Registry do
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
     :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
+    :ets.match_delete(@table, {{:head_feed, chain_id, :_}, :_})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
     :ets.delete(@table, {:head_revision, chain_id})
@@ -365,6 +393,7 @@ defmodule Lasso.BlockSync.Registry do
     :ets.delete(@table, {:height, chain_id, provider_id})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :http})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :ws})
+    :ets.delete(@table, {:head_feed, chain_id, provider_id})
     next_head_revision(chain_id)
 
     :ets.match_delete(

@@ -173,6 +173,7 @@ defmodule Lasso.Config.ConfigValidator do
   def format_error(:invalid_priority_range), do: "Provider priorities must be >= 1"
   def format_error(:duplicate_priorities), do: "Provider priorities must be unique"
   def format_error(:invalid_subscribe_new_heads), do: "subscribe_new_heads must be a boolean"
+  def format_error(:invalid_heads), do: "heads must be live, standby, passive or off"
   def format_error(:new_heads_timeout_too_short), do: "new_heads_timeout_ms must be >= 5000ms"
   def format_error(:new_heads_timeout_too_long), do: "new_heads_timeout_ms must be <= 120000ms"
   def format_error(:invalid_backfill_blocks), do: "max_backfill_blocks must be >= 1"
@@ -257,6 +258,7 @@ defmodule Lasso.Config.ConfigValidator do
   defp validate_provider_observation_settings(providers) do
     Enum.reduce_while(providers, :ok, fn provider, :ok ->
       with :ok <- ObservationConfig.validate_overrides(provider.observation_overrides),
+           :ok <- ObservationConfig.validate_heads(Map.get(provider, :heads)),
            true <- is_boolean(provider.background_observations),
            :ok <- validate_optional_observation_interval(provider.block_poll_interval_ms),
            :ok <- validate_optional_observation_interval(provider.chain_identity_interval_ms) do
