@@ -18,9 +18,7 @@ limits, and lagging nodes before your users notice. WebSocket subscriptions
 survive provider failures, and every routing decision is visible. A provider
 needs only a URL: Lasso learns from live traffic which methods it refuses, how
 deep its history goes, and how wide a log range it accepts
-([learned provider limits](docs/ROUTING.md#learned-provider-limits)). The
-[verification map](docs/verification/README.md) lists Lasso's routing, failover,
-configuration, and WebSocket promises with the recipe that checks each one.
+([learned provider limits](docs/ROUTING.md#learned-provider-limits)).
 
 Point your client at a Lasso URL instead of a provider's. No SDK, no client
 library, no application changes.
