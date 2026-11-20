@@ -4,10 +4,10 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
   the quickest providers. Upstreams with recent failure evidence follow in their own permutation.
 
   Weights are dimensionless latency ratios over the best evidence each upstream has: client
-  samples, else the same family's system prior. An upstream with no latency evidence weighs as
-  much as the quickest, so it earns a sample instead of being starved. Sampling uses
-  exponential-race keys, which produces a correct weighted permutation without a weight floor or
-  hidden success-rate multiplier.
+  samples, else the same family's system prior. One upstream with no latency evidence joins each
+  permutation at the weight of the quickest, so it earns a sample instead of being starved; any
+  others follow the measured upstreams. Sampling uses exponential-race keys, which produces a
+  correct weighted permutation without a weight floor or hidden success-rate multiplier.
   """
 
   @behaviour Lasso.RPC.Strategy
@@ -48,13 +48,17 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
       Enum.split_with(channels, &match?(%{state: :stale}, summary(summaries, &1)))
 
     {measured, unmeasured} = Enum.split_with(current, &measured?(summary(summaries, &1)))
+    # One unmeasured upstream per request competes with the measured ones, so a request never
+    # spends its deadline on two unproven upstreams ahead of a proven one.
+    {sampled, deferred} = unmeasured |> Enum.shuffle() |> Enum.split(1)
     beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
     latencies = Enum.map(measured, &summary(summaries, &1).successful_mean_latency_ms)
 
     measured
     |> Enum.zip(relative_weights(latencies, beta))
-    |> Enum.concat(Enum.map(unmeasured, &{&1, 1.0}))
+    |> Enum.concat(Enum.map(sampled, &{&1, 1.0}))
     |> weighted_permutation()
+    |> Enum.concat(deferred)
     |> Enum.concat(Enum.shuffle(stale))
   end
 

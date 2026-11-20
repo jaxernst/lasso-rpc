@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `balanced-fast` no longer locks a method family onto the first upstream to qualify. It ranked qualified upstreams ahead of all others, so the first one to reach three successes in a family kept that family's traffic and the rest never earned the samples to qualify. On three healthy upstreams at 20, 60 and 120 ms, `eth_call` or `eth_getLogs` could stay on a slower one for a whole run. Every reliable upstream now shares one weighted permutation on its best latency evidence (client samples, else its probe latency), an upstream with no latency evidence weighs as much as the quickest, and upstreams with three consecutive failures or a recent success probability below 0.75 follow in their own permutation. `fastest` is unchanged. See [balanced fast](docs/ROUTING.md#balanced-fast).
+- `balanced-fast` no longer locks a method family onto the first upstream to qualify. It ranked qualified upstreams ahead of all others, so the first one to reach three successes in a family kept that family's traffic and the rest never earned the samples to qualify. On three healthy upstreams at 20, 60 and 120 ms, `eth_call` or `eth_getLogs` could stay on a slower one for a whole run. Every reliable upstream now shares one weighted permutation on its best latency evidence (client samples in the method family, else the same family's system prior), one upstream with no latency evidence competes per request at the weight of the quickest, and upstreams with three consecutive failures or a recent success probability below 0.75 follow in their own permutation. `fastest` is unchanged. See [balanced fast](docs/ROUTING.md#balanced-fast).
 
 ### Changed
 
