@@ -6,7 +6,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
 
   alias Lasso.BlockSync.{Observation, Registry}
   alias Lasso.Config.ConfigStore
-  alias Lasso.Providers.{Catalog, HeadEvidence, LagCalculation}
+  alias Lasso.Providers.{Catalog, HeadEvidence}
 
   # Configuration: maximum blocks a provider can lag behind before showing as "syncing"
   # Read from application config at runtime
@@ -251,7 +251,7 @@ defmodule LassoWeb.Dashboard.StatusHelpers do
         chain_id
         |> Registry.get_observations(instance_id)
         |> Enum.map(fn observation ->
-          LagCalculation.assess_transport(
+          Observation.assess_transport(
             chain_id,
             instance_id,
             observation.transport,

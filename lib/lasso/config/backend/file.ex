@@ -242,7 +242,7 @@ defmodule Lasso.Config.Backend.File do
              {:ok, chains_data} <- YamlElixir.read_from_string(chains_yaml),
              :ok <- FileSchema.validate_metadata!(meta),
              :ok <- FileSchema.validate_body!(chains_data),
-             {:ok, chains} <- parse_chains_data(chains_data) do
+             {:ok, chains} <- parse_chains_data(chains_data, meta["slug"]) do
           {:ok,
            %{
              scope: :system,
@@ -266,10 +266,8 @@ defmodule Lasso.Config.Backend.File do
     # Legacy format: just chains (from chains.yml migration)
     with {:ok, yaml_data} <- YamlElixir.read_from_string(content),
          :ok <- FileSchema.validate_legacy!(yaml_data),
-         {:ok, chains} <- parse_chains_data(yaml_data) do
-      # Extract slug from frontmatter or fall back to "public"
-      slug = yaml_data["slug"] || "public"
-
+         slug = yaml_data["slug"] || "public",
+         {:ok, chains} <- parse_chains_data(yaml_data, slug) do
       {:ok,
        %{
          scope: :system,
@@ -285,8 +283,9 @@ defmodule Lasso.Config.Backend.File do
     end
   end
 
-  defp parse_chains_data(%{"chains" => chains_data}) when is_map(chains_data) do
+  defp parse_chains_data(%{"chains" => chains_data}, slug) when is_map(chains_data) do
     FileSchema.validate_chains!(chains_data)
+    warn_retired_lag_limit(chains_data, slug)
 
     chains =
       Map.new(chains_data, fn {chain_name, chain_data} ->
@@ -296,7 +295,21 @@ defmodule Lasso.Config.Backend.File do
     {:ok, chains}
   end
 
-  defp parse_chains_data(_), do: {:error, :invalid_chains_format}
+  defp parse_chains_data(_, _slug), do: {:error, :invalid_chains_format}
+
+  defp warn_retired_lag_limit(chains_data, slug) do
+    case for({name, %{"selection" => %{"max_lag_blocks" => _}}} <- chains_data, do: name) do
+      [] ->
+        :ok
+
+      names ->
+        Logger.warning(
+          "Profile #{slug} sets selection.max_lag_blocks on #{names |> Enum.sort() |> Enum.join(", ")}; " <>
+            "the field has no effect and can be removed. Requests that need the latest block " <>
+            "prefer providers with a current head."
+        )
+    end
+  end
 
   defp parse_chain_config(chain_name, chain_data) do
     %ChainConfig{
@@ -502,7 +515,6 @@ defmodule Lasso.Config.Backend.File do
     default_threshold = ChainConfig.Selection.default_archival_threshold()
 
     %ChainConfig.Selection{
-      max_lag_blocks: Map.get(selection_data, "max_lag_blocks"),
       archival_threshold: Map.get(selection_data, "archival_threshold", default_threshold)
     }
   end

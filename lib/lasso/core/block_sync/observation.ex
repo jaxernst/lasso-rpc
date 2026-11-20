@@ -4,7 +4,8 @@ defmodule Lasso.BlockSync.Observation do
   """
 
   alias Lasso.BlockSync.{Registry, Worker}
-  alias Lasso.Observations.HeadObservation
+  alias Lasso.Observations.{HeadComparison, HeadObservation, HeadSnapshot}
+  alias Lasso.Observations.HeadComparison.{Assessment, AssessmentPolicy}
 
   @default_stale_after_ms 60_000
 
@@ -105,6 +106,54 @@ defmodule Lasso.BlockSync.Observation do
     :exit, _reason -> @default_stale_after_ms
   end
 
+  @doc """
+  Assesses one upstream transport's retained head against a profile-scoped
+  snapshot. A route more than `band` blocks behind the qualified reference is
+  `:lagging`; missing, stale or ambiguous evidence is `:unknown`. Routing never
+  reads this verdict; it serves status and metrics.
+  """
+  @spec assess_transport(
+          pos_integer(),
+          String.t(),
+          :http | :ws,
+          HeadSnapshot.t(),
+          non_neg_integer(),
+          integer(),
+          pos_integer() | nil
+        ) :: Assessment.t()
+  def assess_transport(
+        chain_id,
+        instance_id,
+        transport,
+        %HeadSnapshot{} = snapshot,
+        band,
+        now_ms \\ System.system_time(:millisecond),
+        compiled_freshness_ms \\ nil
+      )
+      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) and
+             transport in [:http, :ws] and is_integer(band) and band >= 0 and
+             is_integer(now_ms) do
+    case Registry.get_observation(chain_id, instance_id, transport) do
+      {:ok, %HeadObservation{} = observation} ->
+        policy = %AssessmentPolicy{
+          freshness_ms: effective_stale_after_ms(observation, compiled_freshness_ms),
+          band: band
+        }
+
+        HeadComparison.assess(snapshot, observation, policy, now_ms)
+
+      {:error, :not_found} ->
+        %Assessment{
+          status: :unknown,
+          reason: :observation_missing,
+          lag: nil,
+          raw_lag: nil,
+          compared_height: nil,
+          age_ms: 0
+        }
+    end
+  end
+
   @doc "Returns the freshness window for a retained transport fact."
   @spec effective_stale_after_ms(HeadObservation.t(), pos_integer() | nil) :: pos_integer()
   def effective_stale_after_ms(%HeadObservation{} = observation, compiled_freshness_ms) do
@@ -157,6 +206,7 @@ defmodule Lasso.BlockSync.Observation do
     |> Map.put(:timestamp, observation.block_timestamp)
     |> Map.put(:latency_ms, observation.latency_ms)
     |> Map.put(:poll_references, observation.poll_references)
+    |> Map.put(:sample_interval_ms, observation.sample_interval_ms)
   end
 
   defp positive(value, _fallback) when is_integer(value) and value > 0, do: value

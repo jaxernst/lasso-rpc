@@ -28,12 +28,12 @@ defmodule Lasso.Observations.HeadComparison do
   defmodule AssessmentPolicy do
     @moduledoc "Profile-scoped policy for assessing one route."
 
-    @enforce_keys [:freshness_ms, :max_lag_blocks]
+    @enforce_keys [:freshness_ms, :band]
     defstruct @enforce_keys
 
     @type t :: %__MODULE__{
             freshness_ms: pos_integer(),
-            max_lag_blocks: non_neg_integer()
+            band: non_neg_integer()
           }
   end
 
@@ -233,7 +233,7 @@ defmodule Lasso.Observations.HeadComparison do
         reference = assessment_reference(observation, snapshot)
         lag = assessed_lag(observation, reference, compared_height)
 
-        if lag < -assessment_policy.max_lag_blocks do
+        if lag < -assessment_policy.band do
           %Assessment{
             status: :lagging,
             reason: :exceeds_lag_limit,

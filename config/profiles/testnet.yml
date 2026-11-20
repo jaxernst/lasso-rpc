@@ -13,7 +13,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 1
       archival_threshold: 128 # ~25 minutes (128 * 12s blocks)
 
     websocket:
@@ -87,8 +86,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      # More tolerant for L2 testnet (accounts for faster blocks + instability)
-      max_lag_blocks: 5
       archival_threshold: 750 # ~25 minutes (750 * 2s blocks)
 
     websocket:
@@ -146,8 +143,6 @@ chains:
       lag_alert_threshold_blocks: 20
 
     selection:
-      # Very tolerant for L2 testnet (fast blocks + testnet instability)
-      max_lag_blocks: 15
       archival_threshold: 6000 # ~25 minutes (6000 * 0.25s blocks)
 
     websocket:

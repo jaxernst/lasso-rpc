@@ -84,7 +84,7 @@ defmodule Lasso.Config.FileSchema do
     },
     "providers" => {:list, @provider},
     "monitoring" => @monitoring,
-    "selection" => %{"max_lag_blocks" => :nonnegative, "archival_threshold" => :nonnegative},
+    "selection" => %{"max_lag_blocks" => :retired, "archival_threshold" => :nonnegative},
     "websocket" => %{
       "subscribe_new_heads" => :boolean,
       "new_heads_timeout_ms" => :positive,
@@ -212,6 +212,9 @@ defmodule Lasso.Config.FileSchema do
       do: invalid!(path, "expected one of #{inspect(values)}; found #{found(value)}")
   end
 
+  # A retired field still loads so an upgrade never takes a profile offline; the
+  # loader warns that it has no effect.
+  defp validate!(_value, :retired, _), do: :ok
   defp validate!(value, :positive, _) when is_integer(value) and value > 0, do: :ok
   defp validate!(value, :nonnegative, _) when is_integer(value) and value >= 0, do: :ok
 

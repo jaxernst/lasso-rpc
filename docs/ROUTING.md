@@ -21,6 +21,52 @@ Candidate Pool → Strategy Ranking → Health Tiering → Execution
 
 The pipeline ensures that healthy providers receive preference while recovering providers are gradually reintroduced. Open-circuit providers are excluded entirely.
 
+## Head freshness
+
+A request that needs the chain's moving head prefers routes with fresh evidence
+that they are at it. Each route's latest HTTP and WebSocket head observation,
+from background polling, `newHeads` or a client's own head reads, is compared
+with the highest fresh observation in the profile, less the agreement band: the
+blocks the chain produces in two seconds at its `block_time_ms`, from 1 to 20.
+The band is the same span of time on a 250 ms chain and a 12 s chain. A route proven short of that
+target after crediting the blocks it could have produced since it was observed
+is deferred behind the others in its health tier. A fresh route that reports the
+qualified reference height on a different block hash is deferred the same way.
+Unobserved and stale routes keep their strategy position. Deferral never
+excludes a route, so when every current route fails or lacks the method, a
+lagging route still serves.
+
+What a request needs comes from its own parameters:
+
+| Request | Requirement |
+|---------|-------------|
+| `latest` selector | The moving head |
+| Numeric selector | That block |
+| Range (`eth_getLogs`, `trace_filter`, `debug_getModifiedAccountsByNumber`) | Its upper bound; an omitted upper bound means the moving head |
+| Omitted optional selector (see below) | The moving head |
+| Replay-safe read with no block parameter, such as `eth_blockNumber` or `eth_getTransactionReceipt` | The moving head |
+| Block hash, `earliest`, `safe`, `finalized`, `pending`, an unusable selector, or an omitted required selector | None |
+| Writes and subscriptions | None |
+
+A route proven below a numeric block is deferred for that request; a route at or
+above it keeps its order. A provider a few blocks behind therefore still serves
+historical reads under any strategy, while it loses `latest` reads to a current
+peer.
+
+Omitted optional selectors resolve to the client's current state. Lasso treats
+these methods' omissions as the moving head, from these pinned client sources:
+
+| Method | Client source |
+|--------|---------------|
+| `eth_call`, `eth_estimateGas`, `eth_simulateV1` | Geth [Call](https://github.com/ethereum/go-ethereum/blob/v1.16.4/internal/ethapi/api.go#L769-L777), [EstimateGas](https://github.com/ethereum/go-ethereum/blob/v1.16.4/internal/ethapi/api.go#L880-L886), [SimulateV1](https://github.com/ethereum/go-ethereum/blob/v1.16.4/internal/ethapi/api.go#L791-L802); Erigon [Call and EstimateGas](https://github.com/erigontech/erigon/blob/v3.2.2/rpc/jsonrpc/eth_call.go#L57-L166) |
+| `eth_getBalance`, `eth_getCode`, `eth_getTransactionCount`, `eth_getStorageAt` | Nethermind [EthRpcModule](https://github.com/NethermindEth/nethermind/blob/1.35.2/src/Nethermind/Nethermind.JsonRpc/Modules/Eth/EthRpcModule.cs#L161-L279) through [SearchForHeader](https://github.com/NethermindEth/nethermind/blob/1.35.2/src/Nethermind/Nethermind.JsonRpc/Modules/BlockFinderExtensions.cs#L29-L36), which resolves null to latest |
+| `eth_getProof`, `eth_getStorageValues` | Geth v1.17.10 [blockNrOrHashOrLatest](https://github.com/ethereum/go-ethereum/blob/v1.17.10/internal/ethapi/api.go#L334-L341) |
+| `eth_createAccessList` | Geth [CreateAccessList](https://github.com/ethereum/go-ethereum/blob/v1.16.4/internal/ethapi/api.go#L1141-L1147) uses latest; Erigon [uses pending](https://github.com/erigontech/erigon/blob/v3.2.2/rpc/jsonrpc/eth_call.go#L750-L803), which also depends on current state |
+| `debug_traceCall`, `trace_call`, `trace_callMany` | Nethermind [debug](https://github.com/NethermindEth/nethermind/blob/1.35.2/src/Nethermind/Nethermind.JsonRpc/Modules/DebugModule/DebugRpcModule.cs#L84-L90) and [trace](https://github.com/NethermindEth/nethermind/blob/1.35.2/src/Nethermind/Nethermind.JsonRpc/Modules/Trace/TraceRpcModule.cs#L56-L73) modules; Erigon [trace_adhoc](https://github.com/erigontech/erigon/blob/v3.2.2/rpc/jsonrpc/trace_adhoc.go#L1030-L1235) |
+
+Lasso never rewrites the parameters; the requirement only orders routes. These
+sources are evidence for the rule, not a qualification of any live provider.
+
 ## Learned provider limits
 
 Method refusal, historical depth and `eth_getLogs` span learning are enabled by

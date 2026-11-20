@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Requests that need the chain's latest block prefer providers with a current head, under every strategy. A request's need comes from its own parameters: a `latest` selector, the upper bound of a log or trace range (an omitted one means `latest`), an omitted optional selector on reads such as `eth_call` and `eth_getBalance`, and lookups by transaction hash. A provider whose observed head is behind the profile's freshest head by more than the agreement band (about two seconds of blocks) is tried after the others, and so is one reporting the agreed head height on a different block hash. Historical reads at a fixed block, block-hash lookups, `finalized` and `safe` reads and writes keep strategy order, so a provider a few blocks behind still serves the blocks it has. No provider is excluded: when the current ones fail, a lagging one still answers. Head reads routed through Lasso count as observations, so this works with background polling off. See [Head freshness](docs/ROUTING.md#head-freshness).
+
+### Removed
+
+- `selection.max_lag_blocks` is retired. A fixed block count means different things on different chains (ten blocks is 2.5 seconds at 250 ms blocks and two minutes at 12-second blocks), and the filter excluded lagging providers even from historical reads they could serve. Profiles that still set it keep loading; the field has no effect, and each load logs a warning naming the profile and chains. Remove it from your profiles. Nothing replaces it: freshness preference is automatic and follows `block_time_ms`.
+
 ## [0.8.6] - 2026-11-19
 
 ### Added

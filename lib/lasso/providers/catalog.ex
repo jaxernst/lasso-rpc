@@ -563,10 +563,6 @@ defmodule Lasso.Providers.Catalog do
 
     selection = chain_config.selection || %ChainConfig.Selection{}
 
-    max_lag_blocks =
-      selection.max_lag_blocks ||
-        Application.get_env(:lasso, :selection, []) |> Keyword.get(:max_lag_blocks)
-
     head_scope =
       Lasso.Observations.HeadScope.new(
         profile,
@@ -582,7 +578,6 @@ defmodule Lasso.Providers.Catalog do
       providers: providers,
       transactions: chain_config.transactions,
       provider_priorities: Map.new(providers, &{&1.id, &1.priority}),
-      max_lag_blocks: max_lag_blocks,
       head_scope: head_scope,
       archival_threshold:
         selection.archival_threshold || ChainConfig.Selection.default_archival_threshold()

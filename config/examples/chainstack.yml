@@ -52,7 +52,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 1
       archival_threshold: 128
 
     websocket:
@@ -138,7 +137,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 5
       archival_threshold: 750
 
     websocket:
@@ -201,7 +199,6 @@ chains:
       lag_alert_threshold_blocks: 15
 
     selection:
-      max_lag_blocks: 10
       archival_threshold: 6000
 
     websocket:

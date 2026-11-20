@@ -162,9 +162,9 @@ the reference is an observed height, not a projected or final block. HTTP lag
 uses the reference captured when its poll began, while WebSocket lag uses the
 current qualified reference. Missing, stale, conflicting, or wrong-profile
 evidence is unknown. The dashboard calls a provider lagging only when every
-assessable transport exceeds its threshold. Request routing uses the same
-transport assessment when `selection.max_lag_blocks` is set, but preserves all
-candidates if every route would be filtered. This local evidence does not prove
+assessable transport exceeds its threshold. Request routing reads the same
+observations but judges them per request and only reorders routes; see
+[Head freshness](ROUTING.md#head-freshness). This local evidence does not prove
 fleet-wide agreement. See [Configuration](CONFIGURATION.md) for the operator
 knobs and [Architecture](ARCHITECTURE.md#block-height-monitoring) for the
 comparison rules.

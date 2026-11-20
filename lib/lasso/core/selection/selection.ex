@@ -88,7 +88,7 @@ defmodule Lasso.RPC.Selection do
   end
 
   defp do_select_provider(snapshot, plan, method, params, selection_opts) do
-    {filters, head_snapshot} =
+    filters =
       build_selection_filters(
         plan,
         method,
@@ -100,8 +100,7 @@ defmodule Lasso.RPC.Selection do
         workload_key: Workload.for_request(selection_opts.request_origin, method)
       )
 
-    candidates =
-      CandidateListing.list_routing_candidates_from_plan(plan, filters, head_snapshot)
+    candidates = CandidateListing.list_routing_candidates_from_plan(plan, filters)
 
     case candidates do
       [] ->
@@ -331,8 +330,7 @@ defmodule Lasso.RPC.Selection do
     {transport, workload_key, pool_filters, head_snapshot} =
       routing_inputs(plan, method, opts)
 
-    candidates =
-      candidates_from_inputs(plan, pool_filters, head_snapshot, gate_mode)
+    candidates = candidates_from_inputs(plan, pool_filters, gate_mode)
 
     {candidates, transport, workload_key, pool_filters, head_snapshot}
   end
@@ -362,37 +360,16 @@ defmodule Lasso.RPC.Selection do
     {transport, workload_key, pool_filters, head_snapshot}
   end
 
-  defp candidates_from_inputs(plan, filters, head_snapshot, gate_mode, learned_scope \\ nil) do
+  defp candidates_from_inputs(plan, filters, gate_mode, learned_scope \\ nil) do
     case gate_mode do
       :deferred_fastest ->
-        if learned_scope do
-          CandidateListing.list_fastest_candidates_from_plan(
-            plan,
-            filters,
-            head_snapshot,
-            learned_scope
-          )
-        else
-          CandidateListing.list_fastest_candidates_from_plan(
-            plan,
-            filters,
-            head_snapshot
-          )
-        end
+        CandidateListing.list_fastest_candidates_from_plan(plan, filters, learned_scope)
 
       :deferred_gates ->
-        CandidateListing.list_rankable_candidates_from_plan(
-          plan,
-          filters,
-          head_snapshot
-        )
+        CandidateListing.list_rankable_candidates_from_plan(plan, filters)
 
       :captured_gates ->
-        CandidateListing.list_routing_candidates_from_plan(
-          plan,
-          filters,
-          head_snapshot
-        )
+        CandidateListing.list_routing_candidates_from_plan(plan, filters)
     end
   end
 
@@ -437,9 +414,9 @@ defmodule Lasso.RPC.Selection do
          strategy_mod,
          strategy,
          workload_key,
-         %{filters: filters, head_snapshot: head_snapshot} = selection
+         %{filters: filters} = selection
        ) do
-    candidates = candidates_from_inputs(plan, filters, head_snapshot, :deferred_gates)
+    candidates = candidates_from_inputs(plan, filters, :deferred_gates)
 
     entries =
       for candidate <- candidates,
@@ -500,13 +477,7 @@ defmodule Lasso.RPC.Selection do
       case matching_providers do
         [provider] ->
           eligible =
-            candidates_from_inputs(
-              plan,
-              filters,
-              head_snapshot,
-              :deferred_fastest,
-              learned_scope
-            )
+            candidates_from_inputs(plan, filters, :deferred_fastest, learned_scope)
 
           {eligible,
            for candidate <- eligible,
@@ -1279,18 +1250,17 @@ defmodule Lasso.RPC.Selection do
   end
 
   defp build_selection_filters(plan, method, params, exclude, protocol, opts) do
-    head_snapshot = get_head_snapshot(plan)
-
-    filters =
-      SelectionFilters.for_phase(plan, method, head_snapshot, Keyword.put(opts, :params, params),
-        exclude: exclude,
-        protocol: protocol,
-        include_half_open: Keyword.get(opts, :include_half_open, false),
-        requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
-        workload_key: Keyword.get(opts, :workload_key, :client)
-      )
-
-    {filters, head_snapshot}
+    SelectionFilters.for_phase(
+      plan,
+      method,
+      get_head_snapshot(plan),
+      Keyword.put(opts, :params, params),
+      exclude: exclude,
+      protocol: protocol,
+      include_half_open: Keyword.get(opts, :include_half_open, false),
+      requires_subscribe_new_heads: Keyword.get(opts, :requires_subscribe_new_heads, false),
+      workload_key: Keyword.get(opts, :workload_key, :client)
+    )
   end
 
   defp enrich_strategy_context(

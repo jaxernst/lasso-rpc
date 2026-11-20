@@ -289,8 +289,8 @@ and per-provider overrides.
 
 Current limits:
 
-- Lag filtering needs `selection.max_lag_blocks` and a reference head that a
-  majority of at least two providers agree on.
+- Lasso prefers a current provider only once it has observed each provider's
+  head, from background polling, `newHeads` or head reads routed through it.
 - Head comparison assumes 12-second blocks unless `block_time_ms` is set, so
   set it on faster chains.
 - Methods Lasso does not recognize, such as vendor extensions, get one attempt

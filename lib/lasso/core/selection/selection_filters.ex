@@ -18,7 +18,6 @@ defmodule Lasso.RPC.SelectionFilters do
           exclude: [String.t()],
           include_half_open: boolean(),
           exclude_rate_limited: boolean(),
-          max_lag_blocks: non_neg_integer() | nil,
           requires_archival: boolean(),
           historical_resource: Lasso.RPC.HistoricalCoverage.resource(),
           historical_height: non_neg_integer() | nil,
@@ -34,9 +33,7 @@ defmodule Lasso.RPC.SelectionFilters do
             exclude: [],
             include_half_open: false,
             exclude_rate_limited: false,
-            max_lag_blocks: nil,
             head_snapshot: nil,
-            min_block: nil,
             requires_archival: false,
             historical_resource: nil,
             historical_height: nil,
@@ -60,15 +57,14 @@ defmodule Lasso.RPC.SelectionFilters do
     * `:exclude` - List of provider IDs to exclude
     * `:include_half_open` - Include half-open circuit breaker providers (default: false)
     * `:exclude_rate_limited` - Exclude rate-limited providers (default: false)
-    * `:max_lag_blocks` - Maximum acceptable block lag (nil = no limit)
     * `:requires_archival` - Request requires archival data support (default: false)
     * `:requires_subscribe_new_heads` - Request is an `eth_subscribe newHeads`
       and excludes providers with current explicit rejection evidence (default: false)
 
   ## Examples
 
-      iex> SelectionFilters.new(protocol: :http, max_lag_blocks: 5)
-      %SelectionFilters{protocol: :http, max_lag_blocks: 5, ...}
+      iex> SelectionFilters.new(protocol: :http)
+      %SelectionFilters{protocol: :http, ...}
 
       iex> SelectionFilters.new(requires_archival: true)
       %SelectionFilters{requires_archival: true, ...}
@@ -81,9 +77,7 @@ defmodule Lasso.RPC.SelectionFilters do
       exclude: Keyword.get(opts, :exclude, []) |> List.wrap(),
       include_half_open: Keyword.get(opts, :include_half_open, false),
       exclude_rate_limited: Keyword.get(opts, :exclude_rate_limited, false),
-      max_lag_blocks: Keyword.get(opts, :max_lag_blocks),
       head_snapshot: Keyword.get(opts, :head_snapshot),
-      min_block: Keyword.get(opts, :min_block),
       requires_archival: Keyword.get(opts, :requires_archival, false),
       historical_resource: Keyword.get(opts, :historical_resource),
       historical_height: Keyword.get(opts, :historical_height),
@@ -131,20 +125,19 @@ defmodule Lasso.RPC.SelectionFilters do
     filter_opts
     |> Keyword.merge(
       method: method,
-      max_lag_blocks: plan.max_lag_blocks,
       head_snapshot: head_snapshot,
       requires_archival: requirements.requires_archival,
       historical_resource: requirements.historical_resource,
       historical_height: requirements.historical_height,
       reference_height: reference_height,
       head_suitability:
-        recovery_suitability(
+        Lasso.RPC.Selection.HeadSuitability.capture(
           plan,
           method,
           block_facts,
+          Keyword.get(selection_opts, :preferred_head_height),
           head_snapshot,
-          now_ms,
-          Keyword.get(selection_opts, :preferred_head_height)
+          now_ms
         ),
       request_facts:
         RequestFacts.capture(
@@ -157,20 +150,6 @@ defmodule Lasso.RPC.SelectionFilters do
     )
     |> new()
   end
-
-  defp recovery_suitability(plan, method, block_facts, snapshot, now_ms, height)
-       when is_integer(height),
-       do:
-         Lasso.RPC.Selection.HeadSuitability.capture(
-           plan,
-           method,
-           block_facts,
-           height,
-           snapshot,
-           now_ms
-         )
-
-  defp recovery_suitability(_plan, _method, _block_facts, _snapshot, _now_ms, _height), do: nil
 
   @doc """
   Creates SelectionFilters from a raw map (for backward compatibility).
@@ -186,9 +165,7 @@ defmodule Lasso.RPC.SelectionFilters do
       include_half_open: to_boolean(map[:include_half_open] || Map.get(map, "include_half_open")),
       exclude_rate_limited:
         to_boolean(map[:exclude_rate_limited] || Map.get(map, "exclude_rate_limited")),
-      max_lag_blocks: map[:max_lag_blocks] || Map.get(map, "max_lag_blocks"),
       head_snapshot: map[:head_snapshot],
-      min_block: map[:min_block],
       requires_archival: to_boolean(map[:requires_archival] || Map.get(map, "requires_archival")),
       historical_resource: map[:historical_resource] || Map.get(map, "historical_resource"),
       historical_height: map[:historical_height] || Map.get(map, "historical_height"),
@@ -211,9 +188,7 @@ defmodule Lasso.RPC.SelectionFilters do
       exclude: filters.exclude,
       include_half_open: filters.include_half_open,
       exclude_rate_limited: filters.exclude_rate_limited,
-      max_lag_blocks: filters.max_lag_blocks,
       head_snapshot: filters.head_snapshot,
-      min_block: filters.min_block,
       requires_archival: filters.requires_archival,
       historical_resource: filters.historical_resource,
       historical_height: filters.historical_height,

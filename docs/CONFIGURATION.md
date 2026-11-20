@@ -55,7 +55,6 @@ chains:
       lag_alert_threshold_blocks: 5
 
     selection:
-      max_lag_blocks: 1
       archival_threshold: 128
 
     websocket:
@@ -123,12 +122,16 @@ The new intervals accept `0` to disable that activity, or at least 1000 ms. When
 
 ### Selection
 
-Controls provider eligibility filtering during request routing.
+Controls archival routing.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_lag_blocks` | integer | unset | Filter HTTP/WS routes proven more than N blocks behind a qualified profile reference. Missing or ambiguous evidence stays eligible; if all routes lag, Core keeps them for availability. |
 | `archival_threshold` | integer | 128 | Blocks before data is considered "archival". Requests for blocks older than `head - threshold` are only routed to archival providers |
+
+Requests that need the latest block prefer providers with a current head; see
+[Head freshness](ROUTING.md#head-freshness). The retired `max_lag_blocks` field
+still loads, has no effect and logs a warning naming the profile and chains.
+Remove it.
 
 ### WebSocket
 

@@ -16,10 +16,11 @@ defmodule Lasso.Observability.Prometheus do
 
   use GenServer
 
+  alias Lasso.BlockSync.Observation
   alias Lasso.BlockSync.Registry, as: BlockRegistry
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
-  alias Lasso.Providers.{Catalog, LagCalculation}
+  alias Lasso.Providers.Catalog
 
   alias Lasso.Observability.{
     MetricsScope,
@@ -391,7 +392,7 @@ defmodule Lasso.Observability.Prometheus do
          %{} = route <- Enum.find(plan.providers, &(&1.instance_id == instance_id)),
          {:ok, snapshot} <- BlockRegistry.get_cached_head_snapshot(plan.head_scope),
          %{status: status, lag: lag} when status in [:eligible, :lagging] and is_integer(lag) <-
-           LagCalculation.assess_transport(
+           Observation.assess_transport(
              chain,
              instance_id,
              transport,

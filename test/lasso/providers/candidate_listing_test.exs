@@ -90,11 +90,7 @@ defmodule Lasso.Providers.CandidateListingTest do
       {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
 
       fastest =
-        CandidateListing.list_fastest_candidates_from_plan(
-          plan,
-          %{protocol: :http},
-          :unavailable
-        )
+        CandidateListing.list_fastest_candidates_from_plan(plan, %{protocol: :http})
 
       assert length(fastest) == 3
 
@@ -112,55 +108,15 @@ defmodule Lasso.Providers.CandidateListingTest do
         CandidateListing.list_fastest_candidates_from_plan(
           plan,
           %{protocol: :http},
-          :unavailable,
           captured_scope
         )
 
       assert Enum.all?(captured, &(not &1.learned_feedback_degraded?))
 
       [rankable | _] =
-        CandidateListing.list_rankable_candidates_from_plan(
-          plan,
-          %{protocol: :http},
-          :unavailable
-        )
+        CandidateListing.list_rankable_candidates_from_plan(plan, %{protocol: :http})
 
       assert is_map(rankable.routing_states.http)
-    end
-
-    test "lag filtering uses the request's captured consensus" do
-      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
-      providers = Map.new(plan.providers, &{&1.id, &1.instance_id})
-
-      :ok = BlockSyncRegistry.put_height(@chain, providers["p1"], 100, :http)
-      :ok = BlockSyncRegistry.put_height(@chain, providers["p2"], 90, :http)
-      :ok = BlockSyncRegistry.put_height(@chain, providers["p3"], 80, :http)
-
-      candidates =
-        CandidateListing.list_routing_candidates_from_plan(
-          plan,
-          %{protocol: :http, max_lag_blocks: 5},
-          90
-        )
-
-      assert Enum.map(candidates, & &1.id) == ["p1", "p2"]
-    end
-
-    test "lag filtering fails open when the request captured no consensus" do
-      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
-      providers = Map.new(plan.providers, &{&1.id, &1.instance_id})
-
-      :ok = BlockSyncRegistry.put_height(@chain, providers["p1"], 100, :http)
-      :ok = BlockSyncRegistry.put_height(@chain, providers["p2"], 90, :http)
-
-      candidates =
-        CandidateListing.list_routing_candidates_from_plan(
-          plan,
-          %{protocol: :http, max_lag_blocks: 0},
-          :unavailable
-        )
-
-      assert Enum.map(candidates, & &1.id) == ["p1", "p2", "p3"]
     end
 
     test "does not read or expose a disconnected WebSocket route" do

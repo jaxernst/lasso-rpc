@@ -88,7 +88,6 @@ defmodule Lasso.RPC.HeadRealWsUpstreamTest do
     assert :ok =
              ConfigStore.register_chain_runtime(profile, chain, %{
                block_time_ms: 1_000,
-               selection: %{max_lag_blocks: 2},
                websocket: %{subscribe_new_heads: true, new_heads_timeout_ms: 5_000},
                providers: []
              })

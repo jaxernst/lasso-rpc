@@ -1,6 +1,8 @@
 defmodule Lasso.Config.FileBackendCompatibilityTest do
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Lasso.Config.Backend.File, as: FileBackend
 
   setup do
@@ -51,7 +53,9 @@ defmodule Lasso.Config.FileBackendCompatibilityTest do
              )
 
     assert File.exists?(Path.join(context.profiles_dir, "public.yml"))
-    assert {:ok, [profile]} = FileBackend.load_all(state)
+    {loaded, log} = with_log(fn -> FileBackend.load_all(state) end)
+    assert {:ok, [profile]} = loaded
+    assert log =~ "Profile public sets selection.max_lag_blocks on ethereum"
     assert profile.profile_id == "public"
     assert profile.slug == "public"
 
@@ -61,7 +65,7 @@ defmodule Lasso.Config.FileBackendCompatibilityTest do
     assert chain.display_name == "Ethereum Mainnet"
     assert chain.url_aliases == ["ethereum"]
     assert chain.block_time_ms == 12_000
-    assert chain.selection.max_lag_blocks == 2
+    refute Map.has_key?(chain.selection, :max_lag_blocks)
     assert chain.selection.archival_threshold == 256
     assert chain.monitoring.probe_interval_ms == 15_000
     assert chain.websocket.subscribe_new_heads == false

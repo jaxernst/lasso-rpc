@@ -10,8 +10,7 @@ defmodule Lasso.RPC.Selection.Exhaustion do
 
   alias Lasso.Config.ConfigStore
   alias Lasso.Core.Support.CircuitBreaker.Snapshot, as: BreakerSnapshot
-  alias Lasso.Observations.HeadSnapshot
-  alias Lasso.Providers.{Catalog, InstanceState, LagCalculation}
+  alias Lasso.Providers.{Catalog, InstanceState}
 
   alias Lasso.RPC.{
     BoundedIdentifier,
@@ -59,7 +58,6 @@ defmodule Lasso.RPC.Selection.Exhaustion do
     plan = plan(candidates, snapshot, profile, ctx.chain_id)
     providers = if plan, do: plan.providers, else: []
     filters = filters(candidates, ctx, plan)
-    head = head_snapshot(candidates, plan)
 
     evidence = %{
       version: 1,
@@ -83,7 +81,7 @@ defmodule Lasso.RPC.Selection.Exhaustion do
       omitted_candidates: max(length(providers) - @limit, 0),
       candidates:
         Enum.map(Enum.take(providers, @limit), fn provider ->
-          candidate(provider, plan, filters, head)
+          candidate(provider, plan, filters)
         end),
       recorded_rejections: rejections(candidates)
     }
@@ -153,17 +151,8 @@ defmodule Lasso.RPC.Selection.Exhaustion do
   defp captured_generation(_), do: nil
   defp filters(%CandidateCursor{filters: filters}, _ctx, _plan), do: filters
 
-  defp filters(_, ctx, plan) do
-    SelectionFilters.new(
-      protocol: ctx.opts.transport || :both,
-      include_half_open: true,
-      max_lag_blocks: if(plan, do: plan.max_lag_blocks, else: nil)
-    )
-  end
-
-  defp head_snapshot(%CandidateCursor{filters: filters}, _plan), do: filters.head_snapshot
-  defp head_snapshot(_, nil), do: :unavailable
-  defp head_snapshot(_, _plan), do: :unavailable
+  defp filters(_, ctx, _plan),
+    do: SelectionFilters.new(protocol: ctx.opts.transport || :both, include_half_open: true)
 
   defp omitted_rejections(%CandidateCursor{} = cursor),
     do:
@@ -183,15 +172,15 @@ defmodule Lasso.RPC.Selection.Exhaustion do
 
   defp rejections(_), do: []
 
-  defp candidate(provider, plan, filters, head) do
+  defp candidate(provider, plan, filters) do
     %{
       provider_id: BoundedIdentifier.encode(provider.id),
       instance_id: BoundedIdentifier.encode(provider.instance_id),
-      transports: Enum.map([:http, :ws], &transport(provider, &1, plan, filters, head))
+      transports: Enum.map([:http, :ws], &transport(provider, &1, plan, filters))
     }
   end
 
-  defp transport(provider, transport, plan, filters, head) do
+  defp transport(provider, transport, plan, filters) do
     breaker = breaker(provider.instance_id, transport)
     configured? = transport in provider.transports
     requested? = filters.protocol in [nil, :both, transport]
@@ -199,7 +188,6 @@ defmodule Lasso.RPC.Selection.Exhaustion do
     ws_connected? =
       transport != :ws or InstanceState.read_ws_status(provider.instance_id).status == :connected
 
-    lag = lag(provider, transport, plan, filters, head)
     health = InstanceState.read_health(provider.instance_id)
 
     rate_limit =
@@ -223,7 +211,6 @@ defmodule Lasso.RPC.Selection.Exhaustion do
       observed_exclusions: Enum.reverse(reasons),
       breaker: breaker,
       health: Map.take(health, [:status, :http_status]),
-      head_assessment: lag,
       rate_limit: Map.take(rate_limit, [:rate_limited, :remaining_ms]),
       channel_cache: channel_cache(plan, provider, transport)
     }
@@ -249,27 +236,6 @@ defmodule Lasso.RPC.Selection.Exhaustion do
   rescue
     ArgumentError -> %{status: :missing, state: :unavailable, ready: false, owner_alive: false}
   end
-
-  defp lag(provider, transport, plan, %{max_lag_blocks: limit}, %HeadSnapshot{} = head)
-       when is_integer(limit) do
-    assessment =
-      LagCalculation.assess_transport(
-        plan.chain_id,
-        provider.instance_id,
-        transport,
-        head,
-        limit,
-        System.system_time(:millisecond),
-        get_in(provider, [:head_freshness_ms, transport])
-      )
-
-    # Selection may preserve all lagging candidates. Never label assessment as
-    # the actual rejection without a recorded decision.
-    Map.take(assessment, [:status, :reason, :lag, :raw_lag])
-    |> Map.put(:observation, :assessment_only)
-  end
-
-  defp lag(_provider, _transport, _plan, _filters, _head), do: %{status: :unavailable}
 
   defp channel_cache(plan, provider, transport) do
     case :ets.lookup(
