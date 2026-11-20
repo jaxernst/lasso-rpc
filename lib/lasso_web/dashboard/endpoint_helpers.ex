@@ -32,7 +32,7 @@ defmodule LassoWeb.Dashboard.EndpointHelpers do
       profile: profile,
       base_url: base_url,
       ws_base_url: ws_base_url,
-      # Base endpoints (use default strategy configured in config.exs)
+      # Base endpoints route with the default strategy
       http_base: "#{base_url}/rpc/profile/#{profile}/#{chain_name}",
       ws_base: "#{ws_base_url}/ws/rpc/profile/#{profile}/#{chain_name}"
     }

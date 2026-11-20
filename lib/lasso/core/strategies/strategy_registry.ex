@@ -35,6 +35,15 @@ defmodule Lasso.RPC.Strategies.Registry do
     Map.get(registry, strategy, Lasso.RPC.Strategies.LoadBalanced)
   end
 
+  @doc """
+  Returns the strategy for requests whose URL names none.
+
+  Operators override it with `config :lasso, :provider_selection_strategy, <strategy>`.
+  """
+  @spec default_strategy() :: strategy
+  def default_strategy,
+    do: Application.get_env(:lasso, :provider_selection_strategy, :balanced_fast)
+
   @spec strategy_atoms() :: [atom()]
   def strategy_atoms do
     Application.get_env(:lasso, :strategy_registry, default_registry())
