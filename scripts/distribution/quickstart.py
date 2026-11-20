@@ -16,8 +16,8 @@ import urllib.request
 from verify import run
 
 
-# The README promises these mainnets and testnets without provider credentials.
-README_CHAINS = {"1", "8453", "42161", "11155111", "84532", "421614"}
+# The README promises these chains without provider credentials.
+README_CHAINS = {"1", "8453", "42161", "11155111", "84532", "421614", "10", "130", "480", "4663"}
 
 
 def main():
@@ -77,7 +77,7 @@ def main():
                 raise RuntimeError("Versioned health check failed")
             chains = request("/api/chains")["chains"]
             if not README_CHAINS.issubset({str(chain["chain_id"]) for chain in chains}):
-                raise RuntimeError("Chain inventory is missing a README mainnet or testnet")
+                raise RuntimeError("Chain inventory is missing a chain the README promises")
             for index, chain in enumerate(chains, 1):
                 slug = urllib.parse.quote(chain["chain_name"], safe="")
                 payload = {"jsonrpc": "2.0", "id": index, "method": "eth_blockNumber", "params": []}

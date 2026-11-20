@@ -60,8 +60,8 @@ The quickstart uses a fresh directory, generated secrets, a free localhost port,
 and a disposable data volume. It preserves the recipe and bundled profiles;
 only the candidate image and local port are selected through the recipe's
 supported variables. It checks versioned health and `eth_blockNumber` through
-the README's `fastest` route on every advertised chain, including all six
-mainnets and testnets promised by the README. It makes one request per chain;
+the README's `fastest` route on every advertised chain, including every chain
+the README promises. It makes one request per chain;
 Lasso owns provider selection and failover. One unavailable provider does not
 fail a chain that Lasso can still serve. Failure to boot or serve any chain
 fails the check. A public-provider or network outage requires diagnosis, not a

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-11-19
+
+### Added
+
+- `lasso check-config` and the profile loader warn about each `*.yaml` file in the profiles directory. Profile files must end in `.yml`; previously a `.yaml` file was skipped without a word, so its profile returned 404 while `check-config` reported the configuration valid. The warning never fails a check, load or reload, and files starting with `.` or `_` stay silent.
+- The README and `docs/DEPLOYMENT.md` show how to run a profile exported from a hosted Lasso account on a self-hosted node.
+
 ### Fixed
 
 - A WebSocket continuity backfill that fails on one HTTP source and is retried on another is now logged once, at warning level, instead of several times at error level. Owner crashes, an expired recovery deadline and terminal resubscribe failures still log at error.
@@ -22,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `LASSO_COWBOY_TELEMETRY_ENABLED` is gone. Cowboy per-request telemetry was already on by default and now always is; setting the variable has no effect.
 - The unused provider-knowledge template shadow path is gone: the `:provider_knowledge_template_observer`, `:provider_knowledge_template_outcomes`, `:provider_knowledge_template_catalog`, `:provider_knowledge_classifier_mode`, `:provider_knowledge_request_fault_mode` and `:provider_knowledge_eval_sample_enabled` application settings, the `[:lasso, :provider_knowledge, :classifier_shadow]` telemetry event, the `classifier_shadow_since_boot` census field, and the `:provider_messages` and `:provider_outcomes` projection lanes. All were off or inert in Core, so routing is unchanged; setting any of these settings now has no effect.
+
+### Compatibility
+
+- No storage or profile format changes. Upgrading from v0.8.5 needs only the new image or release.
+- HTTP 402 and 406 refusals no longer open circuits. They appear as rate limits and capability refusals, so alerts keyed on those circuit openings stop firing.
+- Setting a removed variable or application setting has no effect and is not an error.
 
 ## [0.8.5] - 2026-11-19
 
@@ -606,7 +619,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.5...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.6...HEAD
+[0.8.6]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.2...v0.8.3
