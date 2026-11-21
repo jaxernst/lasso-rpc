@@ -90,6 +90,7 @@ defmodule Lasso.MixProject do
   defp deps do
     [
       {:ex_keccak, "~> 0.7"},
+      {:rustler, "~> 0.36.2", runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dotenvy, "~> 0.8.0"},

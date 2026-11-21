@@ -295,6 +295,43 @@ the defaults for a node that serves a whole application fleet.
 | `PHX_SERVER` | Optional. Production releases already serve HTTP (`server: true` in `config/prod.exs`) |
 | `PORT` | HTTP listener port (default: `4000`) |
 
+### Standalone Archives
+
+Releases after v0.8.6 carry archives that run without Erlang, Docker or system
+OpenSSL:
+
+| Platform | Archive | Needs |
+|----------|---------|-------|
+| Linux x86_64 | `lasso-<version>-linux-x86_64.tar.gz` | glibc 2.28 or later |
+| Linux aarch64 | `lasso-<version>-linux-aarch64.tar.gz` | glibc 2.28 or later |
+| macOS on Apple silicon | `lasso-<version>-macos-aarch64.tar.gz` | macOS 12 or later |
+
+```bash
+gh release download --repo jaxernst/lasso-rpc --pattern 'lasso-*-linux-x86_64.tar.gz'
+tar -xzf lasso-*-linux-x86_64.tar.gz
+lasso/bin/lasso start
+```
+
+The node serves the bundled profiles on port 4000 with no environment variables,
+as described in [Launching a Native Release](#launching-a-native-release). Set
+`LASSO_PROFILES_DIR` to serve your own profiles, and see
+[Running Beside Another Application](#running-beside-another-application) when
+another program starts it.
+
+The node writes benchmark snapshots under the unpacked directory's `tmp`. When
+that directory is read-only, set `RELEASE_TMP` to a writable one.
+
+Alpine and other musl systems need the container image. The macOS archive is
+not notarized. Unpacked with `tar` it runs as is; if macOS blocks a copy
+unpacked in Finder, clear the flag with `xattr -dr com.apple.quarantine lasso`.
+
+Every archive has a `.sha256` file, an SPDX SBOM and build provenance. Check one
+with `gh attestation verify <archive> --repo jaxernst/lasso-rpc`. The
+`Standalone archives` workflow builds them with `scripts/standalone/`, compiling
+Erlang/OTP with OpenSSL linked in statically and the native libraries from
+source, then runs each one in bare Linux images and on clean macOS runners
+before attaching it to the release.
+
 ### Provider API Keys
 
 Provider URLs in profile YAML support `${ENV_VAR}` substitution. Unresolved placeholders crash at startup.

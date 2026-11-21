@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Standalone archives for Linux x86_64, Linux aarch64 and macOS on Apple silicon, attached to each release. They run without Erlang, Docker or system OpenSSL and start with no environment variables: unpack one and run `lasso/bin/lasso start`. They need glibc 2.28 or later on Linux and macOS 12 or later. Each archive has a checksum, an SPDX SBOM and build provenance. See [Standalone Archives](docs/DEPLOYMENT.md#standalone-archives).
 - `sidecar.vm.args` in the release, for a node that another application starts on the same machine: two schedulers that sleep as soon as they are idle. Use it with `RELEASE_MODE=interactive`. See [Running Beside Another Application](docs/DEPLOYMENT.md#running-beside-another-application).
 
 ### Fixed
