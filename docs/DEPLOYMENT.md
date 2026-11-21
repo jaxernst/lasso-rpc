@@ -268,6 +268,22 @@ directory. The runtime user needs read access to the profiles and write access
 to the snapshots directory, and any `${VAR}` a profile references must be set in
 its environment.
 
+### Running Beside Another Application
+
+When another application starts Lasso as a child process on the same machine,
+start the release with:
+
+```bash
+RELEASE_VM_ARGS="$PWD/_build/prod/rel/lasso/sidecar.vm.args" RELEASE_MODE=interactive \
+  _build/prod/rel/lasso/bin/lasso start
+```
+
+`sidecar.vm.args` runs two schedulers that sleep as soon as they are idle, in
+place of one scheduler per core. Interactive mode loads modules on first use
+rather than all at boot, which roughly halves resident memory and shortens
+startup; the first request on each code path pays a one-time module load. Keep
+the defaults for a node that serves a whole application fleet.
+
 ### Environment Variables for a Server
 
 | Variable | Description |
