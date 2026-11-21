@@ -158,7 +158,7 @@ Client and system attempts use separate fixed method families: basic, state, log
 **URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias)
 **Module**: `Lasso.RPC.Strategies.BalancedFast`
 
-Produces a weighted random permutation of reliability-qualified upstreams using recent successful-attempt latency. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
+Orders reliable upstreams by a weighted random permutation over each upstream's best latency evidence: its client mean in the method family, else the same family's system prior. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
 
 **Use When**:
 - You want a balance between performance and distribution
@@ -171,9 +171,11 @@ Produces a weighted random permutation of reliability-qualified upstreams using 
   weight = (best_mean / candidate_mean)^beta
   ```
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
-- Applies reliability as a qualification boundary, not a weight multiplier
-- Uses no latency floor, weight floor, or implicit exploration share
-- When no candidate qualifies, emits an availability degradation and orders routes with recent latency measurements before shuffled unmeasured routes; a wholly unmeasured pool is shuffled uniformly.
+- Places upstreams in this order: (1) a weighted permutation of the upstreams with current latency evidence plus one picked at random from those with none, which weighs as much as the quickest so it earns a sample instead of being starved; (2) the remaining upstreams with no latency evidence; (3) upstreams whose evidence is stale; (4) upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75), ordered among themselves the same way
+- Applies reliability as a boundary, not a weight multiplier
+- Bounds the ranking, not every dispatch order: among upstreams that are not unreliable, at most one unmeasured upstream ranks ahead of those with current latency evidence, but health tiering runs afterwards and can move a measured upstream with a half-open circuit behind unmeasured ones
+- Uses no latency floor or weight floor
+- When no candidate qualifies, emits an availability degradation; the ordering is unchanged
 
 **Configuration**:
 - `BALANCED_FAST_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)

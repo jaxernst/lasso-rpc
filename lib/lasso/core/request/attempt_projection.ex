@@ -1982,6 +1982,9 @@ defmodule Lasso.RPC.AttemptProjection do
         routing_evidence_stale?(row.observed_at_us, now_us) ->
           :stale
 
+        not reliable_row?(row) ->
+          :unreliable
+
         row.comparable_attempts > 0 ->
           :provisional
 
@@ -2011,9 +2014,11 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp qualified_row?(row, now_us) do
     not routing_evidence_stale?(row.observed_at_us, now_us) and row.usable_successes >= 3 and
-      row.consecutive_failures < 3 and is_number(row.recent_success_probability) and
-      row.recent_success_probability >= @qualified_reliability
+      is_number(row.recent_success_probability) and reliable_row?(row)
   end
+
+  defp reliable_row?(%{consecutive_failures: failures, recent_success_probability: probability}),
+    do: failures < 3 and (is_nil(probability) or probability >= @qualified_reliability)
 
   defp attach_system_prior(nil, nil), do: nil
   defp attach_system_prior(nil, %Summary{state: :stale}), do: nil
@@ -2022,7 +2027,7 @@ defmodule Lasso.RPC.AttemptProjection do
     %{
       prior
       | workload_key: :client,
-        state: :unqualified,
+        state: prior_backed_state(:unqualified, prior),
         comparable_attempts: 0,
         usable_successes: 0,
         support_source: :system_prior
@@ -2051,7 +2056,7 @@ defmodule Lasso.RPC.AttemptProjection do
     else
       %{
         primary
-        | state: if(primary.state == :stale, do: :unqualified, else: primary.state),
+        | state: prior_backed_state(primary.state, prior),
           successful_mean_latency_ms: prior.successful_mean_latency_ms,
           successful_p95_latency_ms: prior.successful_p95_latency_ms,
           last_observed_at_ms: prior.last_observed_at_ms,
@@ -2060,6 +2065,10 @@ defmodule Lasso.RPC.AttemptProjection do
       }
     end
   end
+
+  defp prior_backed_state(_state, %Summary{state: :unreliable}), do: :unreliable
+  defp prior_backed_state(:stale, _prior), do: :unqualified
+  defp prior_backed_state(state, _prior), do: state
 
   defp workload_support_source(:client), do: :client_attempt
   defp workload_support_source(:system), do: :system_attempt

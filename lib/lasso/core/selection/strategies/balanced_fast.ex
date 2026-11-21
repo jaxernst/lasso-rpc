@@ -1,10 +1,14 @@
 defmodule Lasso.RPC.Strategies.BalancedFast do
   @moduledoc """
-  Produces a weighted random permutation of reliability-qualified upstreams, spreading load
-  while favoring the quickest providers.
+  Orders reliable upstreams by a weighted random permutation, spreading load while favoring the
+  quickest providers. Upstreams with recent failure evidence follow, ordered the same way.
 
-  Weights are dimensionless latency ratios. Sampling uses exponential-race keys, which produces a
-  correct weighted permutation without a weight floor or hidden success-rate multiplier.
+  Weights are dimensionless latency ratios over the best current evidence each upstream has:
+  client samples, else the same family's system prior. One upstream with no latency evidence
+  joins each group's permutation at the weight of the quickest, so it earns a sample instead of
+  being starved; the group's other unmeasured upstreams follow its permutation, then stale ones.
+  Sampling uses exponential-race keys, which produces a correct weighted permutation without a
+  weight floor or hidden success-rate multiplier.
   """
 
   @behaviour Lasso.RPC.Strategy
@@ -24,64 +28,54 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
       ctx.routing_summaries ||
         RoutingEvidence.batch_get_summaries(profile, channels, chain_id, ctx.workload_key)
 
-    {qualified, remaining} =
-      Enum.split_with(channels, fn channel ->
-        summaries |> RoutingEvidence.summary_for_channel(channel) |> RoutingEvidence.qualified?()
-      end)
-
-    case qualified do
-      [] ->
-        RoutingEvidence.emit_availability_degradation(
-          profile,
-          :balanced_fast,
-          chain_id,
-          ctx.workload_key,
-          length(channels)
-        )
-
-        weighted_available(channels, summaries)
-
-      _ ->
-        weighted_available(qualified, summaries) ++ weighted_available(remaining, summaries)
+    if not Enum.any?(channels, &RoutingEvidence.qualified?(summary(summaries, &1))) do
+      RoutingEvidence.emit_availability_degradation(
+        profile,
+        :balanced_fast,
+        chain_id,
+        ctx.workload_key,
+        length(channels)
+      )
     end
+
+    {unreliable, reliable} =
+      Enum.split_with(channels, &match?(%{state: :unreliable}, summary(summaries, &1)))
+
+    weighted_available(reliable, summaries) ++ weighted_available(unreliable, summaries)
   end
 
-  defp weighted_available([], _summaries), do: []
-
   defp weighted_available(channels, summaries) do
-    {measured, unmeasured} =
-      Enum.split_with(channels, &measured?(RoutingEvidence.summary_for_channel(summaries, &1)))
+    {stale, current} =
+      Enum.split_with(channels, &match?(%{state: :stale}, summary(summaries, &1)))
 
-    weighted =
-      case measured do
-        [] ->
-          []
+    {measured, unmeasured} = Enum.split_with(current, &measured?(summary(summaries, &1)))
+    # One unmeasured upstream per request competes with the measured ones, so this ranking never
+    # puts two unproven upstreams ahead of a proven one in the same group.
+    {sampled, deferred} = unmeasured |> Enum.shuffle() |> Enum.split(1)
+    beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
+    latencies = Enum.map(measured, &summary(summaries, &1).successful_mean_latency_ms)
 
-        _ ->
-          latencies = Enum.map(measured, &mean_latency(&1, summaries))
-          beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
-
-          measured
-          |> Enum.zip(relative_weights(latencies, beta))
-          |> weighted_permutation()
-      end
-
-    weighted ++ Enum.shuffle(unmeasured)
+    measured
+    |> Enum.zip(relative_weights(latencies, beta))
+    |> Enum.concat(Enum.map(sampled, &{&1, 1.0}))
+    |> weighted_permutation()
+    |> Enum.concat(deferred)
+    |> Enum.concat(Enum.shuffle(stale))
   end
 
   # As in qualification, a zero mean is not a usable latency measurement.
-  defp measured?(%{state: state, successful_mean_latency_ms: mean})
-       when state != :stale and is_number(mean),
-       do: mean > 0
-
+  defp measured?(%{successful_mean_latency_ms: mean}) when is_number(mean), do: mean > 0
   defp measured?(_summary), do: false
 
-  defp mean_latency(channel, summaries),
-    do: RoutingEvidence.summary_for_channel(summaries, channel).successful_mean_latency_ms
+  defp summary(summaries, channel), do: RoutingEvidence.summary_for_channel(summaries, channel)
 
   @doc "Converts latency samples into bounded relative selection weights."
   @spec relative_weights([number()], number()) :: [float()]
   def relative_weights(latencies, beta \\ @default_beta)
+
+  def relative_weights([], _beta), do: []
+
+  def relative_weights(latencies, beta)
       when is_list(latencies) and is_number(beta) and beta > 0 do
     best = Enum.min(latencies)
 
