@@ -55,7 +55,13 @@ defmodule Lasso.Benchmarking.Persistence do
   @impl true
   def init(_opts) do
     snapshots_dir = Application.get_env(:lasso, :snapshots_dir, "priv/benchmark_snapshots")
-    File.mkdir_p!(snapshots_dir)
+
+    with {:error, reason} <- File.mkdir_p(snapshots_dir) do
+      Logger.warning(
+        "Benchmark snapshots will not be saved: cannot create #{snapshots_dir} (#{:file.format_error(reason)})"
+      )
+    end
+
     schedule_cleanup()
 
     {:ok, %{snapshots_dir: snapshots_dir}}
