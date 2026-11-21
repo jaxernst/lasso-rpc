@@ -296,11 +296,15 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
-  # A fresh observation exists, so a moving requirement always has a mark.
+  # A moving requirement has no mark when every fresh head is an outlier above the
+  # qualified reference; with no target to judge against, those routes keep strategy order.
   defp judge(capture, observation) do
     target = target_height(capture)
 
     cond do
+      is_nil(target) ->
+        {:unknown, :no_observation}
+
       observation.height >= target ->
         {:supports, supports_reason(capture.requirement)}
 
