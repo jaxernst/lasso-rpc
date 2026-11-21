@@ -194,11 +194,12 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       token = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
       timeout_ms = max(div(deadline_us - now_us + 999, 1_000), 1)
 
-      request =
-        {:admit_exceptional, token, self(), snapshot.generation, snapshot.epoch, deadline_us}
-
       try do
-        GenServer.call(snapshot.owner_pid, request, timeout_ms)
+        GenServer.call(
+          snapshot.owner_pid,
+          {:admit_exceptional, token, self(), deadline_us},
+          timeout_ms
+        )
       catch
         :exit, {:timeout, _} ->
           GenServer.cast(snapshot.owner_pid, {:release, token})
@@ -672,20 +673,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_call(
-        {:admit_exceptional, token, owner_pid, expected_generation, expected_epoch, deadline_us},
-        _from,
-        state
-      ) do
+  # The caller's snapshot may predate a transition; the breaker answers from its current state.
+  def handle_call({:admit_exceptional, token, owner_pid, deadline_us}, _from, state) do
     now_us = System.monotonic_time(:microsecond)
 
     cond do
       now_us >= deadline_us ->
         {:reply, {:error, :admission_timeout}, state}
-
-      expected_epoch != state.process_epoch or
-          expected_generation != state.transition_generation ->
-        {:reply, {:error, :admission_unavailable}, state}
 
       state.state == :open and not recovery_eligible?(state, now_us) ->
         {:reply, {:error, :circuit_open}, state}
@@ -693,14 +687,16 @@ defmodule Lasso.Core.Support.CircuitBreaker do
       state.state == :half_open and state.inflight_count >= state.half_open_max_inflight ->
         {:reply, {:error, :half_open_busy}, state}
 
-      state.state == :closed and state.control_health != :degraded ->
-        {:reply, {:error, :admission_unavailable}, state}
+      state.state == :closed and state.control_health != :degraded and
+          not failure_drop_pending?(state) ->
+        {:reply, {:ok, closed_receipt(state, deadline_us)}, state}
 
       true ->
         admitted_state = prepare_exceptional_generation(state)
 
         case persist_exceptional_lease(admitted_state, token, owner_pid, deadline_us) do
           {:ok, receipt, new_state} ->
+            commit_exceptional_generation(state)
             write_ets_state(new_state)
             {:reply, {:ok, receipt}, new_state}
 
@@ -986,29 +982,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   defp prepare_exceptional_generation(%{state: :half_open} = state), do: state
 
-  defp prepare_exceptional_generation(%{state: :open} = state) do
-    send(self(), {
-      :emit_breaker_transition,
-      [:lasso, :circuit_breaker, :half_open],
-      %{
-        instance_id: state.instance_id,
-        transport: state.transport,
-        from_state: :open,
-        to_state: :half_open,
-        reason: :attempt_recovery,
-        consecutive_open_count: state.consecutive_open_count
-      }
-    })
-
-    prepare_probation(state)
-  end
-
-  defp prepare_exceptional_generation(state), do: prepare_probation(state)
-
-  defp prepare_probation(state) do
-    cancel_recovery_timer(state.recovery_timer_ref)
-    acknowledge_control_degradation(state)
-
+  defp prepare_exceptional_generation(state) do
     %{
       state
       | state: :half_open,
@@ -1018,6 +992,51 @@ defmodule Lasso.Core.Support.CircuitBreaker do
         recovery_timer_gen: state.recovery_timer_gen + 1,
         transition_generation: state.transition_generation + 1,
         control_health: :healthy
+    }
+  end
+
+  # Runs only once the probation lease is held, so a busy lease leaves the recovery timer and
+  # the pending dropped failure in place for the next caller.
+  defp commit_exceptional_generation(%{state: :half_open}), do: :ok
+
+  defp commit_exceptional_generation(state) do
+    if state.state == :open do
+      send(self(), {
+        :emit_breaker_transition,
+        [:lasso, :circuit_breaker, :half_open],
+        %{
+          instance_id: state.instance_id,
+          transport: state.transport,
+          from_state: :open,
+          to_state: :half_open,
+          reason: :attempt_recovery,
+          consecutive_open_count: state.consecutive_open_count
+        }
+      })
+    end
+
+    cancel_recovery_timer(state.recovery_timer_ref)
+    acknowledge_control_degradation(state)
+  end
+
+  # A saturated control ring marks a dropped failure before the breaker drains it; a closed
+  # admission then enters probation, as it does for a degraded snapshot.
+  defp failure_drop_pending?(state) do
+    ControlRing.failure_drop_pending?(
+      {state.instance_id, state.transport},
+      state.transition_generation,
+      state.process_epoch
+    )
+  end
+
+  defp closed_receipt(state, deadline_us) do
+    %AdmissionReceipt{
+      breaker_id: {state.instance_id, state.transport},
+      kind: :closed,
+      generation: state.transition_generation,
+      epoch: state.process_epoch,
+      owner_pid: self(),
+      deadline_us: deadline_us
     }
   end
 
@@ -1783,14 +1802,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
     breaker_id = {state.instance_id, state.transport}
 
-    control_health =
-      if ControlRing.failure_drop_pending?(
-           breaker_id,
-           state.transition_generation,
-           state.process_epoch
-         ),
-         do: :degraded,
-         else: state.control_health
+    control_health = if failure_drop_pending?(state), do: :degraded, else: state.control_health
 
     :ets.insert(:lasso_instance_state, {
       {:circuit, state.instance_id, state.transport},
@@ -1820,12 +1832,7 @@ defmodule Lasso.Core.Support.CircuitBreaker do
     snapshot_write_barrier(:before)
     Snapshot.put(snapshot)
 
-    if snapshot.control_health == :healthy and
-         ControlRing.failure_drop_pending?(
-           breaker_id,
-           state.transition_generation,
-           state.process_epoch
-         ) do
+    if snapshot.control_health == :healthy and failure_drop_pending?(state) do
       Snapshot.put(%{snapshot | control_health: :degraded})
     end
 
