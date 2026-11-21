@@ -36,6 +36,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   alias Lasso.Config.MonitoringDefaults
   alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Discovery.ErrorClassifier
   alias Lasso.Providers.{Catalog, ChainIdentity, InstanceState, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
@@ -186,8 +187,10 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
         updated = %{updated | probe_ref: nil, probe_timeouts: probe_timeouts(inst, result)}
 
+        # The breaker's own state, not the routing view: a restarted breaker reads as half-open
+        # to routing while it stays open with its recovery deadline.
         if updated.probe_timeouts >= @probe_timeouts_to_open and timeout?(result) and
-             InstanceState.read_circuit(instance_id, :http).state != :open,
+             not match?({:ok, %{state: :open}}, Snapshot.lookup({instance_id, :http})),
            do: CircuitBreaker.open({instance_id, :http})
 
         state =
