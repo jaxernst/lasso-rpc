@@ -38,7 +38,7 @@ defmodule Lasso.MixProject do
       lasso: [
         include_executables_for: [:unix],
         applications: [runtime_tools: :permanent],
-        steps: [:assemble, &install_operator_commands/1]
+        steps: [:assemble, &install_operator_commands/1, &install_profiles/1]
       ]
     ]
   end
@@ -49,6 +49,13 @@ defmodule Lasso.MixProject do
     File.rename!(generated, runtime)
     File.cp!(Path.expand("rel/operator-lasso", __DIR__), generated)
     File.chmod!(generated, 0o755)
+    release
+  end
+
+  defp install_profiles(release) do
+    target = Path.join(release.path, "config/profiles")
+    File.mkdir_p!(target)
+    File.cp_r!(Path.expand("config/profiles", __DIR__), target)
     release
   end
 

@@ -100,10 +100,18 @@ if System.get_env("PHX_SERVER") do
 end
 
 data_dir = System.get_env("LASSO_DATA_DIR")
+release_root = System.get_env("RELEASE_ROOT")
 
+# A release started without a data directory reads the profiles it ships with and
+# writes only under RELEASE_TMP (default: the release tmp directory), so it never
+# depends on the working directory.
 profiles_dir =
   System.get_env("LASSO_PROFILES_DIR") ||
-    if(data_dir, do: Path.join(data_dir, "config/profiles"))
+    cond do
+      data_dir -> Path.join(data_dir, "config/profiles")
+      release_root -> Path.join(release_root, "config/profiles")
+      true -> nil
+    end
 
 if profiles_dir do
   config :lasso, :backend_config,
@@ -113,7 +121,19 @@ end
 
 snapshots_dir =
   System.get_env("LASSO_SNAPSHOTS_DIR") ||
-    if(data_dir, do: Path.join(data_dir, "benchmark_snapshots"), else: "priv/benchmark_snapshots")
+    cond do
+      data_dir ->
+        Path.join(data_dir, "benchmark_snapshots")
+
+      release_root ->
+        Path.join(
+          System.get_env("RELEASE_TMP", Path.join(release_root, "tmp")),
+          "benchmark_snapshots"
+        )
+
+      true ->
+        "priv/benchmark_snapshots"
+    end
 
 config :lasso, :snapshots_dir, snapshots_dir
 
@@ -189,11 +209,17 @@ end
 # metrics) via {provider_id, node_id} keys. Each node in a cluster MUST have a distinct value.
 # Convention: use geographic region names (e.g., "us-east-1", "iad") when deploying one node
 # per region, but any unique string works.
+#
+# A node started without distribution cannot join a cluster, so it runs with a
+# local node ID and a per-boot SECRET_KEY_BASE when none is set. A distributed
+# node must be given both, because cluster members need distinct IDs and a
+# shared signing secret.
+distributed? = Node.alive?()
 node_id = System.get_env("LASSO_NODE_ID")
 
-if config_env() == :prod and is_nil(node_id) do
+if config_env() == :prod and distributed? and is_nil(node_id) do
   raise """
-  LASSO_NODE_ID is required in production.
+  LASSO_NODE_ID is required when distribution is enabled.
 
   Set it to a stable, unique identifier for this node instance.
   """
@@ -233,13 +259,20 @@ if config_env() == :prod do
   # External URL scheme (HTTPS in production behind a reverse proxy)
   scheme = System.get_env("PHX_SCHEME") || "https"
 
-  # Require SECRET_KEY_BASE in production for security
   secret_key_base =
-    System.get_env("SECRET_KEY_BASE") ||
-      raise """
-      environment variable SECRET_KEY_BASE is missing.
-      You can generate one by calling: mix phx.gen.secret
-      """
+    cond do
+      secret = System.get_env("SECRET_KEY_BASE") ->
+        secret
+
+      distributed? ->
+        raise """
+        environment variable SECRET_KEY_BASE is missing.
+        You can generate one by calling: mix phx.gen.secret
+        """
+
+      true ->
+        64 |> :crypto.strong_rand_bytes() |> Base.encode64()
+    end
 
   config :lasso, LassoWeb.Endpoint,
     http: [ip: {0, 0, 0, 0}, port: port],
