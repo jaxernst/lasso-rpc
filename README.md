@@ -106,6 +106,21 @@ curl --fail http://localhost:4000/api/health
 Open **<http://localhost:4000/dashboard>**. The prebuilt image supports Linux AMD64
 and ARM64; no source checkout or build tools required.
 
+Without Docker, download the standalone archive for Linux x86_64, Linux aarch64
+or macOS on Apple silicon from the
+[v0.9.0 release](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.9.0). It
+runs without Erlang, Docker or environment variables and serves the bundled
+profiles on port 4000:
+
+```bash
+gh release download v0.9.0 --repo jaxernst/lasso-rpc --pattern 'lasso-*-linux-x86_64.tar.gz'
+tar -xzf lasso-*-linux-x86_64.tar.gz
+lasso/bin/lasso start
+```
+
+See [Standalone Archives](docs/DEPLOYMENT.md#standalone-archives) for each
+platform's requirements, checksums and build provenance.
+
 Send a request through the `fastest` strategy and ask Lasso where it went:
 
 ```bash
@@ -411,7 +426,7 @@ logs, and responses.
 - [API reference](docs/API_REFERENCE.md): routes, metadata, subscriptions, and errors
 - [Block regression protection](docs/BLOCK_CONTINUITY.md) and [reading at one block](docs/READ_AT_ONE_BLOCK.md)
 - [Migration guide](docs/MIGRATION.md): move from direct providers or another gateway with a measured canary
-- [Deployment](docs/DEPLOYMENT.md): containers, persistence, upgrades, and clustering
+- [Deployment](docs/DEPLOYMENT.md): containers, standalone archives, persistence, upgrades, and clustering
 - [Observability](docs/OBSERVABILITY.md): logs and metrics
 - [RPC standards](docs/RPC_STANDARDS.md): method support and execution semantics
 - [Testing](docs/TESTING.md) and [Changelog](CHANGELOG.md)
