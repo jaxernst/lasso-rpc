@@ -2,6 +2,7 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
   use ExUnit.Case, async: false
 
   alias Lasso.Config.ConfigStore
+  alias Lasso.Core.Transport.UpstreamAdmission
   alias Lasso.Providers.{Catalog, ProbeCoordinator}
 
   @profile "pc_test"
@@ -120,6 +121,7 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
 
     def call(conn, opts) do
       Process.sleep(Keyword.get(opts, :response_delay_ms, 0))
+      if notify = opts[:notify], do: send(notify, :probed)
 
       conn
       |> put_resp_content_type("application/json")
@@ -148,6 +150,63 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
 
     test "accepts the configured chain and preserves independent circuit admission" do
       assert_probe_identity("0x62", :healthy)
+    end
+  end
+
+  describe "local probe refusals" do
+    test "an instance whose probe admission refused is probed again" do
+      chain = 96
+      profile = "pc_refusal"
+      test_pid = self()
+      ref = {:refusal_endpoint, make_ref()}
+      handler = {__MODULE__, ref}
+
+      {:ok, _} =
+        Plug.Cowboy.http(ChainIdEndpoint, [result: "0x60", notify: test_pid], ref: ref, port: 0)
+
+      port = :ranch.get_port(ref)
+
+      register_chain(profile, chain, [
+        %{id: "pc_refused", name: "Refused", url: "http://127.0.0.1:#{port}", priority: 1}
+      ])
+
+      Catalog.build_from_config()
+      [instance_id] = Catalog.list_instances_for_chain(chain)
+
+      :ok =
+        :telemetry.attach(
+          handler,
+          [:lasso, :upstream_admission, :rejected],
+          fn _event, _measurements, metadata, pid ->
+            if metadata.upstream_instance_id == instance_id, do: send(pid, :refused)
+          end,
+          test_pid
+        )
+
+      on_exit(fn ->
+        :telemetry.detach(handler)
+        Plug.Cowboy.shutdown(ref)
+
+        try do
+          case GenServer.whereis(ProbeCoordinator.via_name(chain)) do
+            nil -> :ok
+            proc -> GenServer.stop(proc, :normal, 1_000)
+          end
+        catch
+          :exit, _ -> :ok
+        end
+
+        ConfigStore.unregister_chain_runtime(profile, chain)
+        Catalog.build_from_config()
+      end)
+
+      leases = fill_upstream_capacity({:http, "127.0.0.1", port})
+      {:ok, _pid} = start_coordinator(chain)
+
+      assert_receive :refused, 2_000
+      Enum.each(leases, &UpstreamAdmission.release(&1, :test_finished))
+      refute_received :probed
+      assert_receive :probed, 6_000
     end
   end
 
@@ -561,6 +620,13 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     send(pid, :load_instances)
     assert_wait_until(fn -> map_size(:sys.get_state(pid).instances) > 0 end)
     {:ok, pid}
+  end
+
+  defp fill_upstream_capacity(capacity_key, leases \\ []) do
+    case UpstreamAdmission.acquire(capacity_key, "pc_capacity_fill") do
+      {:ok, lease} -> fill_upstream_capacity(capacity_key, [lease | leases])
+      {:error, :upstream_capacity} -> leases
+    end
   end
 
   defp register_chain(profile, chain, providers) do

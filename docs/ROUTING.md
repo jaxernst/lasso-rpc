@@ -381,7 +381,9 @@ to a read provider. Every selection step, including pins and retries, works on
 that side alone. Background checks sit outside request routing: the `eth_chainId`
 identity probe still reaches every provider, and a transaction provider with a
 `ws_url` keeps its `newHeads` head subscription. Neither carries transaction
-data, and `background_observations: false` on the provider stops both.
+data. `background_observations: false` on the provider disables both periodic
+checks, though a routed request to it that times out still schedules one probe
+of that upstream.
 
 Sending fails closed: when no transaction provider can take a send, the request
 fails instead of reaching another provider. `fallback: read_providers` adds a

@@ -18,7 +18,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
     scheduled visit, in the order instances were marked due
   - Two consecutive probe timeouts open the instance's HTTP circuit; probes never
     close a circuit or count toward its probation
-  - A probe the instance's request budget refuses stays due
+  - A probe refused locally before it is sent stays due
 
   ## ETS Write Partitioning
 
@@ -166,7 +166,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
       inst ->
         updated =
           case result do
-            :budget_refused ->
+            :refused ->
               inst
 
             :success ->
@@ -186,8 +186,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
         updated = %{updated | probe_ref: nil, probe_timeouts: probe_timeouts(inst, result)}
 
-        if updated.probe_timeouts >= @probe_timeouts_to_open and timeout?(result),
-          do: CircuitBreaker.open({instance_id, :http})
+        if updated.probe_timeouts >= @probe_timeouts_to_open and timeout?(result) and
+             InstanceState.read_circuit(instance_id, :http).state != :open,
+           do: CircuitBreaker.open({instance_id, :http})
 
         state =
           state
@@ -201,10 +202,10 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   # Request timeouts leave a shared circuit alone and ask for a probe instead, because a probe's
   # budget is the same for every profile sharing the route. Only the probe-timeout streak reaches
-  # the breaker, and only to open it, again on each further timeout until a probe succeeds.
-  # Other probe results are left to routed attempts.
-  # Any other outcome shows the upstream answered and ends the streak; a local refusal sent nothing.
-  defp probe_timeouts(inst, :budget_refused), do: inst.probe_timeouts
+  # the breaker, and only to open a circuit that is not already open, so a timeout fails a half-open
+  # trial but leaves an open circuit's recovery deadline in place. Any other outcome shows the
+  # upstream answered and ends the streak; a local refusal sent nothing and leaves it.
+  defp probe_timeouts(inst, :refused), do: inst.probe_timeouts
 
   defp probe_timeouts(inst, result),
     do: if(timeout?(result), do: inst.probe_timeouts + 1, else: 0)
@@ -212,8 +213,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
   defp timeout?({:failure, %Finch.TransportError{reason: :timeout}}), do: true
   defp timeout?(_result), do: false
 
-  # A local budget refusal sent nothing, so the instance stays owed its probe at the queue's front.
-  defp requeue_refused(state, instance_id, :budget_refused),
+  # A local refusal sent nothing, so the instance stays owed its probe at the queue's front.
+  defp requeue_refused(state, instance_id, :refused),
     do: %{state | due: [instance_id | List.delete(state.due, instance_id)]}
 
   defp requeue_refused(state, _instance_id, _result), do: state
@@ -452,9 +453,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
         )
       end)
 
+    # Only the response handler returns a tagged result; any error before it is a local refusal
+    # that sent nothing, and an exit is a probe that may have reached the upstream.
     case result do
-      {:error, {:upstream_request_budget_exhausted, _}} -> {instance_id, :budget_refused}
-      other -> other
+      {^instance_id, _probed} -> result
+      {:error, {:request_exit, _} = reason} -> {instance_id, {:failure, reason}}
+      {:error, _refused} -> {instance_id, :refused}
     end
   end
 
