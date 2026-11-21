@@ -227,40 +227,56 @@ Or build a Docker image using the included `Dockerfile`.
 
 ### Launching a Native Release
 
-A release looks for profiles in `config/profiles` under its working directory.
-Set `LASSO_DATA_DIR` so it finds them wherever it starts. From the source
-checkout:
+A release carries the profiles from `config/profiles` and starts with no
+environment variables:
 
 ```bash
-export LASSO_DATA_DIR="$HOME/lasso-data"
-mkdir -p "$LASSO_DATA_DIR/config/profiles" "$LASSO_DATA_DIR/benchmark_snapshots"
-cp config/profiles/*.yml "$LASSO_DATA_DIR/config/profiles/"
+_build/prod/rel/lasso/bin/lasso start
+```
 
+Started this way, the node runs without Erlang distribution. It opens no EPMD or
+distribution port, uses the node ID `local`, generates a `SECRET_KEY_BASE` on
+each boot, and writes benchmark snapshots under the release's `tmp` directory
+(`RELEASE_TMP` moves it). Commands that reach the running node over
+distribution (`rpc`, `remote`, `stop`, `restart`, `pid` and `reload`) report
+that distribution is off; stop the node with SIGTERM.
+
+Setting `RELEASE_COOKIE` or `CLUSTER_DNS_QUERY` turns distribution on. A
+distributed node refuses to start without `SECRET_KEY_BASE` and `LASSO_NODE_ID`,
+because cluster members need distinct IDs and a shared signing secret. Set all
+three for a server you operate:
+
+```bash
 export SECRET_KEY_BASE="$(openssl rand -base64 64)"
-export PHX_HOST="rpc.example.com"
+export RELEASE_COOKIE="$(openssl rand -hex 32)"
 export LASSO_NODE_ID="node-1"
+export PHX_HOST="rpc.example.com"
+export LASSO_DATA_DIR="$HOME/lasso-data"
+mkdir -p "$LASSO_DATA_DIR/config/profiles"
+cp _build/prod/rel/lasso/config/profiles/*.yml "$LASSO_DATA_DIR/config/profiles/"
 
 _build/prod/rel/lasso/bin/lasso start
 ```
 
-Lasso reads profiles from `$LASSO_DATA_DIR/config/profiles` and writes snapshots
-to `$LASSO_DATA_DIR/benchmark_snapshots`. `LASSO_PROFILES_DIR` and
+With `LASSO_DATA_DIR` set, Lasso reads profiles from
+`$LASSO_DATA_DIR/config/profiles` and writes snapshots to
+`$LASSO_DATA_DIR/benchmark_snapshots`. `LASSO_PROFILES_DIR` and
 `LASSO_SNAPSHOTS_DIR` override either path.
 
 To run the release on another machine, copy the whole `_build/prod/rel/lasso`
-directory and your profile files, set the same variables there, and keep
-`SECRET_KEY_BASE` the same across restarts. The runtime user needs read access to
-the profiles and write access to the snapshots directory, and any `${VAR}` a
-profile references must be set in its environment.
+directory. The runtime user needs read access to the profiles and write access
+to the snapshots directory, and any `${VAR}` a profile references must be set in
+its environment.
 
-### Required Environment Variables
+### Environment Variables for a Server
 
 | Variable | Description |
 |----------|-------------|
-| `SECRET_KEY_BASE` | Phoenix signing/encryption secret. Generate with `mix phx.gen.secret` (64+ bytes) |
+| `SECRET_KEY_BASE` | Phoenix signing/encryption secret. Generate with `mix phx.gen.secret` (64+ bytes). Required with distribution; without it a node generates one per boot, which signs out dashboard sessions on restart |
+| `RELEASE_COOKIE` | Erlang distribution secret. Setting it turns distribution on |
+| `LASSO_NODE_ID` | Unique, stable identifier for this node. Required with distribution. Convention: use region names (e.g., `us-east-1`) for geo-distributed deployments |
 | `PHX_HOST` | Public hostname for URL generation (e.g., `rpc.example.com`) |
 | `PHX_SERVER` | Optional. Production releases already serve HTTP (`server: true` in `config/prod.exs`) |
-| `LASSO_NODE_ID` | Unique, stable identifier for this node. Required in production. Convention: use region names (e.g., `us-east-1`) for geo-distributed deployments |
 | `PORT` | HTTP listener port (default: `4000`) |
 
 ### Provider API Keys
@@ -474,15 +490,15 @@ The dashboard aggregates data across all nodes for unified observability with re
 
 | Variable | Required | Description | Default |
 |----------|----------|-------------|---------|
-| `SECRET_KEY_BASE` | Prod | Phoenix signing secret (64+ bytes) | - |
+| `SECRET_KEY_BASE` | With distribution | Phoenix signing secret (64+ bytes) | Generated per boot without distribution |
 | `PHX_HOST` | Prod | Public hostname | `localhost` |
 | `PHX_SCHEME` | No | External URL scheme | `https` in production |
 | `PHX_SERVER` | No | Starts the HTTP server; production already enables it in `config/prod.exs` | Enabled in production |
 | `PORT` | No | HTTP listener port | `4000` |
-| `LASSO_NODE_ID` | Prod | Unique node identifier | `"local"` in dev |
+| `LASSO_NODE_ID` | With distribution | Unique node identifier | `"local"` |
 | `LASSO_DATA_DIR` | No | Base directory for profiles and snapshots | `/data` in Docker; unset outside Docker |
-| `LASSO_PROFILES_DIR` | No | Profile YAML directory; overrides the data directory | `config/profiles` outside Docker |
-| `LASSO_SNAPSHOTS_DIR` | No | Snapshot directory, selected at runtime | `priv/benchmark_snapshots` outside Docker |
+| `LASSO_PROFILES_DIR` | No | Profile YAML directory; overrides the data directory | The release's `config/profiles` outside Docker |
+| `LASSO_SNAPSHOTS_DIR` | No | Snapshot directory, selected at runtime | `$RELEASE_TMP/benchmark_snapshots` for a release outside Docker |
 | `LASSO_VM_METRICS_ENABLED` | No | Set to `true` to enable VM metrics | `false` |
 | `LASSO_OTEL_ENABLED` | No | Enable optional tracing (`true`, `false`, `1`, or `0`); invalid values fail startup. See [Tracing](TRACING.md). | `false` |
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | No | Use a larger short-lived heap while validating completed HTTP upstream responses; benchmark before enabling for latency-bound traffic | `false` |
@@ -495,9 +511,9 @@ The dashboard aggregates data across all nodes for unified observability with re
 |----------|----------|-------------|
 | `CLUSTER_DNS_QUERY` | For clustering | DNS name for node discovery |
 | `CLUSTER_NODE_BASENAME` | For clustering | Erlang distribution node basename |
-| `RELEASE_DISTRIBUTION` | For clustering | Set to `name` for long node names |
+| `RELEASE_DISTRIBUTION` | No | `name` when `RELEASE_COOKIE` or `CLUSTER_DNS_QUERY` is set, otherwise `none` |
 | `RELEASE_NODE` | For clustering | `<basename>@<reachable-private-IP>` |
-| `RELEASE_COOKIE` | Release/container | Private distribution secret; identical across cluster members. Generate it with `openssl rand -hex 32`. A value that starts with `+` or `-` is used with a `lasso` prefix, because `erl` parses such arguments as flags |
+| `RELEASE_COOKIE` | For clustering and operator commands | Private distribution secret; turns distribution on; identical across cluster members. Generate it with `openssl rand -hex 32`. A value that starts with `+` or `-` is used with a `lasso` prefix, because `erl` parses such arguments as flags |
 
 ### Provider Keys
 
@@ -507,7 +523,7 @@ Any `${VAR_NAME}` in profile YAML is resolved from environment variables at star
 
 ## Production Checklist
 
-- [ ] `SECRET_KEY_BASE` set (64+ bytes)
+- [ ] `SECRET_KEY_BASE` and `RELEASE_COOKIE` set
 - [ ] `PHX_HOST` set to public hostname
 - [ ] `LASSO_NODE_ID` set to a unique, stable value
 - [ ] Provider credentials set when referenced by profile configuration

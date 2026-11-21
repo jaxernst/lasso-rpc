@@ -462,6 +462,10 @@ _build/prod/rel/lasso/bin/lasso check-config
 _build/prod/rel/lasso/bin/lasso reload
 ```
 
+`reload` reaches the running node over Erlang distribution, so start the release
+with `RELEASE_COOKIE` set and run `reload` with the same value. `check-config`
+needs neither.
+
 From source, run the same commands in the IEx session started with
 `iex -S mix phx.server`:
 
@@ -493,11 +497,11 @@ Set in `config/runtime.exs` or via environment variables. Application configurat
 
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
-| `LASSO_NODE_ID` | Stable unique node identifier, required in production | `local` in development |
+| `LASSO_NODE_ID` | Stable unique node identifier, required in production when Erlang distribution is on | `local` |
 | `CLUSTER_DNS_QUERY` | DNS name for cluster node discovery | (disabled) |
 | `PHX_HOST` | Hostname for the Phoenix endpoint | `localhost` |
 | `PORT` | HTTP port | `4000` |
-| `SECRET_KEY_BASE` | Phoenix secret key (required in production) | - |
+| `SECRET_KEY_BASE` | Phoenix secret key, required in production when Erlang distribution is on | Generated per boot without distribution |
 | `LASSO_OTEL_ENABLED` | Enable optional tracing (`true`, `false`, `1`, or `0`); invalid values fail startup. See [Tracing](TRACING.md). | `false` |
 | `LASSO_HTTP_RESPONSE_HEAP_TUNING_ENABLED` | Use a larger short-lived heap while validating completed HTTP upstream responses; useful for CPU-bound, high-concurrency deployments | `false` |
 | `LASSO_HTTP_POOL_SIZE` | Maximum HTTP/1 connections per upstream host and pool | `256` |

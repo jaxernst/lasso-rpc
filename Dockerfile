@@ -68,7 +68,6 @@ WORKDIR /app
 ENV MIX_ENV=prod PHX_SERVER=true LASSO_DATA_DIR=/data RELEASE_TMP=/tmp/lasso LANG=C.UTF-8
 
 COPY --from=builder /app/_build/prod/rel/lasso ./
-COPY --from=builder /app/config/profiles ./config/profiles
 COPY --chmod=755 deployment/entrypoint.sh /app/entrypoint.sh
 
 USER 10001:10001
