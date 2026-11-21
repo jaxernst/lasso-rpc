@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Exercise a standalone Lasso release against local mock upstreams.
 
-  smoke.py mock --profiles DIR              write profiles and serve mock upstreams until stopped
-  smoke.py wait --url URL                   wait until every chain answers through Lasso
-  smoke.py send --url URL                   check the hash Lasso computes for a raw transaction
+  smoke.py mock --profiles DIR   write a profile and serve the mock upstreams until stopped
+  smoke.py wait --url URL        wait until the chain answers through Lasso
+  smoke.py send --url URL        check the hash Lasso computes for a raw transaction
 
-Every chain gets three mock upstreams answering in 20, 60 and 120 ms. The
-profile `public` holds all chains, so requests go to /rpc/<chain_id>. On chain
-8453 the first upstream is the transaction provider: it rejects every raw
-transaction and reports any looked-up transaction as known, so Lasso answers a
-send with the hash it computed itself.
+The profile `public` holds one chain with two upstreams, the fewest a chain with
+a transaction provider can have, so requests go to /rpc/8453. Both reject every
+raw transaction and report any looked-up transaction as known, so Lasso answers
+a send with the hash it computed itself.
 """
 
 import argparse
@@ -21,9 +20,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-CHAIN_IDS = [1, 10, 56, 100, 137, 250, 324, 8453, 42161, 43114, 59144, 81457, 534352]
-LATENCIES_MS = [20, 60, 120]
-SEND_CHAIN = 8453
+CHAIN_ID = 8453
+UPSTREAM_PORTS = [18100, 18101]
 RAW_TRANSACTION = "0x02f86c0180843b9aca0082520894111111111111111111111111111111111180c0"
 # Keccak-256 of RAW_TRANSACTION, from `cast keccak`.
 RAW_TRANSACTION_HASH = "0x051b28aab7d905fcd825527a911975d0e0dd82c2a56e9b813e2871647a2b3240"
@@ -36,10 +34,9 @@ def head():
 
 
 def block(number):
-    tag = f"{number:064x}"
     return {
         "number": hex(number),
-        "hash": "0x" + tag,
+        "hash": "0x" + f"{number:064x}",
         "parentHash": "0x" + f"{number - 1:064x}",
         "timestamp": hex(EPOCH + (number - 70_000_000) * BLOCK_S),
         "gasLimit": hex(30_000_000),
@@ -50,12 +47,12 @@ def block(number):
     }
 
 
-def answer(chain_id, request):
+def answer(request):
     method = request.get("method")
     params = request.get("params") or []
     results = {
-        "eth_chainId": hex(chain_id),
-        "net_version": str(chain_id),
+        "eth_chainId": hex(CHAIN_ID),
+        "net_version": str(CHAIN_ID),
         "eth_syncing": False,
         "eth_blockNumber": hex(head()),
         "eth_gasPrice": hex(30_000_000_000),
@@ -74,44 +71,19 @@ def answer(chain_id, request):
     return {"jsonrpc": "2.0", "id": request.get("id"), "result": result}
 
 
-def serve_upstream(port, chain_id, latency_ms):
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
-            time.sleep(latency_ms / 1000)
-            reply = [answer(chain_id, r) for r in body] if isinstance(body, list) else answer(chain_id, body)
-            data = json.dumps(reply).encode()
-            self.send_response(200)
-            self.send_header("content-type", "application/json")
-            self.send_header("content-length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
+class Upstream(BaseHTTPRequestHandler):
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+        reply = [answer(r) for r in body] if isinstance(body, list) else answer(body)
+        data = json.dumps(reply).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
-        def log_message(self, *_args):
-            pass
-
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-
-
-def start_mocks(chains, base_port):
-    for k, chain_id in enumerate(chains):
-        for i, latency in enumerate(LATENCIES_MS):
-            serve_upstream(base_port + 3 * k + i, chain_id, latency)
-
-
-def write_profiles(directory, chains, base_port):
-    directory.mkdir(parents=True, exist_ok=True)
-    lines = ["---", "name: Public RPC", "slug: public", "---", "chains:"]
-    for k, chain_id in enumerate(chains):
-        lines += [f"  chain_{chain_id}:", f"    chain_id: {chain_id}", "    block_time_ms: 2000"]
-        if chain_id == SEND_CHAIN:
-            lines += ["    transactions:", f'      providers: ["c{chain_id}_up1"]', "      fallback: none"]
-        lines += ["    providers:"]
-        for i in range(len(LATENCIES_MS)):
-            lines += [f'      - id: "c{chain_id}_up{i + 1}"', f'        url: "http://127.0.0.1:{base_port + 3 * k + i}"']
-    (directory / "public.yml").write_text("\n".join(lines) + "\n")
+    def log_message(self, *_args):
+        pass
 
 
 def rpc(url, method, timeout=2, params=()):
@@ -121,40 +93,51 @@ def rpc(url, method, timeout=2, params=()):
         return json.loads(response.read())
 
 
-def wait_for_chains(url, chains, started, deadline_s):
-    first = {}
-    while len(first) < len(chains):
-        if time.monotonic() - started > deadline_s:
-            missing = sorted(set(chains) - set(first))
-            raise SystemExit(f"chains never answered: {missing}")
-        for chain_id in chains:
-            if chain_id in first:
-                continue
-            try:
-                reply = rpc(f"{url}/rpc/{chain_id}", "eth_blockNumber")
-                if int(reply["result"], 16) > 0:
-                    first[chain_id] = time.monotonic() - started
-            except Exception:
-                pass
-        time.sleep(0.02)
-    return first
-
-
 def command_mock(args):
-    write_profiles(Path(args.profiles), CHAIN_IDS[: args.chains], args.base_port)
-    start_mocks(CHAIN_IDS[: args.chains], args.base_port)
+    directory = Path(args.profiles)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "public.yml").write_text(
+        f"""---
+name: Public RPC
+slug: public
+---
+chains:
+  chain_{CHAIN_ID}:
+    chain_id: {CHAIN_ID}
+    block_time_ms: 2000
+    transactions:
+      providers: ["up1"]
+      fallback: none
+    providers:
+      - id: "up1"
+        url: "http://127.0.0.1:{UPSTREAM_PORTS[0]}"
+      - id: "up2"
+        url: "http://127.0.0.1:{UPSTREAM_PORTS[1]}"
+"""
+    )
+    servers = [ThreadingHTTPServer(("127.0.0.1", port), Upstream) for port in UPSTREAM_PORTS]
+    for server in servers:
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     print("mock upstreams ready", flush=True)
     threading.Event().wait()
 
 
 def command_wait(args):
-    chains = CHAIN_IDS[: args.chains]
-    first = wait_for_chains(args.url, chains, time.monotonic(), args.timeout)
-    print(json.dumps({"chains": len(first), "slowest_s": round(max(first.values()), 3)}))
+    deadline = time.monotonic() + args.timeout
+    while True:
+        try:
+            if int(rpc(f"{args.url}/rpc/{CHAIN_ID}", "eth_blockNumber")["result"], 16) > 0:
+                return
+        except Exception:
+            pass
+        if time.monotonic() > deadline:
+            raise SystemExit(f"chain {CHAIN_ID} never answered through {args.url}")
+        time.sleep(0.05)
 
 
 def command_send(args):
-    reply = rpc(f"{args.url}/rpc/{SEND_CHAIN}", "eth_sendRawTransaction", timeout=10, params=[RAW_TRANSACTION])
+    reply = rpc(f"{args.url}/rpc/{CHAIN_ID}", "eth_sendRawTransaction", timeout=10, params=[RAW_TRANSACTION])
     print(json.dumps(reply))
     if reply.get("result") != RAW_TRANSACTION_HASH:
         raise SystemExit(f"expected {RAW_TRANSACTION_HASH}")
@@ -163,14 +146,11 @@ def command_send(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("mock", "wait", "send"):
-        p = sub.add_parser(name)
-        p.add_argument("--chains", type=int, default=len(CHAIN_IDS))
-        p.add_argument("--base-port", type=int, default=18100)
-    sub.choices["mock"].add_argument("--profiles", required=True)
-    sub.choices["wait"].add_argument("--url", default="http://127.0.0.1:4000")
-    sub.choices["wait"].add_argument("--timeout", type=float, default=60)
-    sub.choices["send"].add_argument("--url", default="http://127.0.0.1:4000")
+    sub.add_parser("mock").add_argument("--profiles", required=True)
+    wait = sub.add_parser("wait")
+    wait.add_argument("--url", default="http://127.0.0.1:4000")
+    wait.add_argument("--timeout", type=float, default=60)
+    sub.add_parser("send").add_argument("--url", default="http://127.0.0.1:4000")
     args = parser.parse_args()
     {"mock": command_mock, "wait": command_wait, "send": command_send}[args.command](args)
 
