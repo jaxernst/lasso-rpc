@@ -1,0 +1,14 @@
+## VM settings for one local node that another application starts and owns.
+## Use them with RELEASE_VM_ARGS=<release>/sidecar.vm.args and
+## RELEASE_MODE=interactive, which loads modules on first use instead of all at
+## boot. They replace releases/<version>/vm.args.
+
+# Two schedulers bound the threads and per-scheduler memory the VM allocates.
++S 2:2
++SDcpu 1:1
++SDio 2
+
+# Idle schedulers go to sleep at once instead of spinning first.
++sbwt none
++sbwtdcpu none
++sbwtdio none
