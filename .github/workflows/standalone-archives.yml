@@ -1,0 +1,354 @@
+name: Standalone archives
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release to attach archives to (for example v0.9.0). Empty builds the selected branch and publishes nothing
+        type: string
+        required: false
+  release:
+    types: [published]
+  pull_request:
+    paths: &build_inputs
+      - .github/workflows/standalone-archives.yml
+      - scripts/standalone/**
+      - rel/**
+      - mix.exs
+      - mix.lock
+  # Runs on main keep the runtime cache that pull requests restore from.
+  push:
+    branches: [main]
+    paths: *build_inputs
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+concurrency:
+  group: standalone-archives-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - target: macos-aarch64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      TARGET: ${{ matrix.target }}
+      # Linux builds run in AlmaLinux 8 so the archive needs glibc 2.28 or newer.
+      BUILD_IMAGE: almalinux:8.10
+      RUST_TOOLCHAIN: 1.89.0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Restore the runtime build
+        id: runtime
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/runtime
+          key: runtime-${{ matrix.target }}-${{ hashFiles('scripts/standalone/build-runtime.sh') }}
+      - name: Build on Linux
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/runtime" dist
+          docker run --rm -e TARGET -e RUST_TOOLCHAIN -v "$PWD:/src" -v "$RUNNER_TEMP/runtime:/opt/lasso-runtime" -w /src "$BUILD_IMAGE" sh -c '
+            set -e
+            # Mirrors can serve repository metadata older than the packages they list
+            # while they sync; the origin is always consistent.
+            sed -i -e "s|^mirrorlist=|#mirrorlist=|" -e "s|^# *baseurl=|baseurl=|" /etc/yum.repos.d/*.repo
+            dnf install -y -q --enablerepo=powertools gcc gcc-c++ libstdc++-static make perl-core perl-IPC-Cmd unzip git findutils binutils >/dev/null
+            case $(uname -m) in
+              x86_64) rustup_sha256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;;
+              aarch64) rustup_sha256=e3853c5a252fca15252d07cb23a1bdd9377a8c6f3efa01531109281ae47f841c ;;
+            esac
+            curl --fail --silent --show-error --location --retry 3 -o /opt/rustup-init \
+              "https://static.rust-lang.org/rustup/archive/1.28.2/$(uname -m)-unknown-linux-gnu/rustup-init"
+            echo "$rustup_sha256  /opt/rustup-init" | sha256sum -c - >/dev/null
+            chmod +x /opt/rustup-init
+            /opt/rustup-init -y -q --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --no-modify-path
+            export PATH="$HOME/.cargo/bin:$PATH"
+            test -x /opt/lasso-runtime/otp/bin/erl || scripts/standalone/build-runtime.sh /opt/lasso-runtime
+            scripts/standalone/package.sh /opt/lasso-runtime "$TARGET" dist
+            chown -R '"$(id -u):$(id -g)"' /src /opt/lasso-runtime'
+      - name: Build on macOS
+        if: runner.os == 'macOS'
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+          test -x "$RUNNER_TEMP/runtime/otp/bin/erl" || scripts/standalone/build-runtime.sh "$RUNNER_TEMP/runtime"
+          scripts/standalone/package.sh "$RUNNER_TEMP/runtime" "$TARGET" dist
+      - name: Build the single-file launcher
+        run: scripts/standalone/single-file.sh dist/lasso-*-"$TARGET".tar.gz dist
+      - name: Show linkage
+        run: cat dist/*.linkage.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: standalone-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  clean-linux:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x86_64, linux-aarch64]
+        image: ["debian:bookworm-slim", "ubuntu:20.04", "almalinux:8"]
+    runs-on: ${{ matrix.target == 'linux-x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: standalone-${{ matrix.target }}
+          path: dist
+      - name: Start mock upstreams on the host
+        run: |
+          python3 scripts/standalone/smoke.py mock --profiles "$RUNNER_TEMP/profiles" > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for _ in $(seq 50); do grep -q ready "$RUNNER_TEMP/mock.log" && exit 0; sleep 0.2; done
+          cat "$RUNNER_TEMP/mock.log"; exit 1
+      - name: Start the archive read-only in a bare container with no setup variables
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/install" && tar -xzf dist/lasso-*.tar.gz -C "$RUNNER_TEMP/install"
+          docker run -d --name lasso --network host --user 10001:10001 \
+            -v "$RUNNER_TEMP/install/lasso:/opt/lasso:ro" -v "$RUNNER_TEMP/profiles:/profiles:ro" \
+            -e LASSO_PROFILES_DIR=/profiles "$IMAGE" /opt/lasso/bin/lasso start
+      - name: Every native file resolves its libraries from the base image
+        run: |
+          docker exec lasso sh -c 'cat /etc/os-release | head -2; ldd --version | head -1
+            find /opt/lasso -type f \( -name "*.so" -o -perm -u+x \) | while read -r f; do
+              out=$(ldd "$f" 2>&1) || continue
+              echo "== ${f#/opt/lasso/}"; echo "$out"
+            done' | tee linkage.txt
+          ! grep "not found" linkage.txt
+      - name: Route JSON-RPC to the mock upstreams
+        run: |
+          python3 scripts/standalone/smoke.py wait --url http://127.0.0.1:4000
+          curl --fail --silent http://127.0.0.1:4000/rpc/8453 -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' | tee reply.json
+          grep -q '"result":"0x2105"' reply.json
+          python3 scripts/standalone/smoke.py send
+      - name: Verify TLS without an operating system certificate store
+        run: |
+          docker exec lasso /opt/lasso/bin/lasso eval '
+            {:ok, _} = Application.ensure_all_started(:mint)
+            store = try do
+              :public_key.cacerts_get()
+              "the operating system store"
+            rescue
+              _ -> "the CA store bundled in the release"
+            end
+            {:ok, conn} = Mint.HTTP.connect(:https, "api.github.com", 443)
+            IO.puts("Verified TLS to api.github.com with #{store}")
+            Mint.HTTP.close(conn)'
+      - name: Time the single file's first and second start
+        if: matrix.image == 'debian:bookworm-slim'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          mkdir -m 777 "$RUNNER_TEMP/cache"
+          for run in first second; do
+            start=$(python3 -c 'import time; print(time.time())')
+            docker run -d --name "$run" --network host --user 10001:10001 \
+              -v "$PWD/dist:/dist:ro" -v "$RUNNER_TEMP/cache:/cache" -v "$RUNNER_TEMP/profiles:/profiles:ro" \
+              -e LASSO_EXTRACT_DIR=/cache -e PORT=4001 -e LASSO_PROFILES_DIR=/profiles "$IMAGE" \
+              sh -c 'exec sh /dist/lasso-*.run start' >/dev/null
+            python3 scripts/standalone/smoke.py wait --chains 1 --url http://127.0.0.1:4001 >/dev/null \
+              || { docker logs "$run" 2>&1 | tail -20; exit 1; }
+            python3 -c "import time; print('$run start: %.2f s to the first answer' % (time.time() - $start))"
+            docker rm -f "$run" >/dev/null
+          done
+          sudo du -sh "$RUNNER_TEMP"/cache/*
+      - name: Show the node log
+        if: always()
+        run: docker logs lasso 2>&1 | tail -40
+
+  clean-macos:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-26]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: standalone-macos-aarch64
+          path: dist
+      - name: Remove Homebrew and any installed Erlang from reach
+        run: |
+          sudo mv /opt/homebrew /opt/homebrew-hidden
+          sudo mv /usr/local /usr/local-hidden || true
+          ! command -v erl
+      - name: Start the archive with no setup variables and route JSON-RPC
+        run: |
+          cat dist/*.linkage.txt
+          ! grep -v '^#' dist/*.linkage.txt | tr ' ' '\n' | grep '^/' | grep -v -e '^/usr/lib/' -e '^/System/'
+          mkdir -p "$RUNNER_TEMP/run" && tar -xzf dist/lasso-*-macos-aarch64.tar.gz -C "$RUNNER_TEMP/run"
+          /usr/bin/python3 scripts/standalone/smoke.py mock --profiles "$RUNNER_TEMP/profiles" > "$RUNNER_TEMP/mock.log" 2>&1 &
+          sleep 2
+          env -i PATH=/usr/bin:/bin HOME="$HOME" LASSO_PROFILES_DIR="$RUNNER_TEMP/profiles" \
+            "$RUNNER_TEMP/run/lasso/bin/lasso" start > "$RUNNER_TEMP/lasso.log" 2>&1 &
+          /usr/bin/python3 scripts/standalone/smoke.py wait --url http://127.0.0.1:4000
+          curl --fail --silent http://127.0.0.1:4000/rpc/8453 -H 'content-type: application/json' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"eth_chainId","params":[]}' | tee reply.json
+          grep -q '"result":"0x2105"' reply.json
+          /usr/bin/python3 scripts/standalone/smoke.py send
+      - name: Show the node log
+        if: always()
+        run: tail -40 "$RUNNER_TEMP/lasso.log"
+      - name: Put Homebrew back
+        if: always()
+        run: |
+          sudo mv /opt/homebrew-hidden /opt/homebrew || true
+          sudo mv /usr/local-hidden /usr/local || true
+
+  footprint:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-24.04
+          - target: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - target: macos-aarch64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: standalone-${{ matrix.target }}
+          path: dist
+      - name: Measure start, memory, idle CPU and processes with 13 chains
+        run: |
+          mkdir -p rel footprint && tar -xzf dist/lasso-*.tar.gz -C rel
+          sidecar="$PWD/rel/lasso/sidecar.vm.args"
+          for config in server local sidecar; do
+            case $config in
+              server) set -- --env RELEASE_COOKIE=footprint --env SECRET_KEY_BASE="$(openssl rand -hex 64)" --env LASSO_NODE_ID=ci ;;
+              local) set -- ;;
+              sidecar) set -- --env "RELEASE_VM_ARGS=$sidecar" --env RELEASE_MODE=interactive ;;
+            esac
+            mkdir -p "footprint/$config"
+            python3 scripts/standalone/smoke.py run --release rel/lasso --work "footprint/$config" \
+              --report "footprint/$config.json" --idle 90 "$@"
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: footprint-${{ matrix.target }}
+          path: footprint/*.json
+
+  trust:
+    if: github.event_name != 'pull_request'
+    needs: [build, clean-linux, clean-macos]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x86_64, linux-aarch64, macos-aarch64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: standalone-${{ matrix.target }}
+          path: dist
+      - name: Write checksums
+        run: |
+          cd dist
+          name=$(basename lasso-*.tar.gz .tar.gz)
+          sha256sum "$name.tar.gz" "$name.run" | tee "$name.sha256"
+          echo "NAME=$name" >> "$GITHUB_ENV"
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        id: syft
+      - name: Generate an SPDX SBOM from the unpacked archive
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+        run: |
+          mkdir scan && tar -xzf "dist/$NAME.tar.gz" -C scan
+          "$SYFT" scan dir:scan -o "spdx-json=dist/$NAME.spdx.json" -q
+          jq -r '.packages[] | "\(.name) \(.versionInfo)"' "dist/$NAME.spdx.json" | sort | tee sbom-packages.txt | wc -l
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: |
+            dist/${{ env.NAME }}.tar.gz
+            dist/${{ env.NAME }}.run
+      - name: Attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/${{ env.NAME }}.tar.gz
+          sbom-path: dist/${{ env.NAME }}.spdx.json
+      - name: Verify checksums and attestations as a downloader would
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist && sha256sum -c "$NAME.sha256"
+          gh attestation verify "$NAME.tar.gz" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "$NAME.run" --repo "$GITHUB_REPOSITORY"
+          gh attestation verify "$NAME.tar.gz" --repo "$GITHUB_REPOSITORY" --predicate-type https://spdx.dev/Document/v2.3
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trust-${{ matrix.target }}
+          path: |
+            dist/*.sha256
+            dist/*.spdx.json
+
+  publish:
+    if: inputs.tag || github.event_name == 'release'
+    needs: trust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: standalone-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: trust-*
+          merge-multiple: true
+          path: dist
+      - name: Attach the archives, checksums and SBOMs to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            dist/lasso-*.tar.gz dist/lasso-*.run dist/lasso-*.sha256 dist/lasso-*.spdx.json
