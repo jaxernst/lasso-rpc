@@ -158,7 +158,7 @@ Client and system attempts use separate fixed method families: basic, state, log
 **URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias)
 **Module**: `Lasso.RPC.Strategies.BalancedFast`
 
-Ranks every reliable upstream in one weighted random permutation, using each upstream's best latency evidence: its client mean in the method family, else the same family's system prior. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
+Orders reliable upstreams by a weighted random permutation over each upstream's best latency evidence: its client mean in the method family, else the same family's system prior. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
 
 **Use When**:
 - You want a balance between performance and distribution
@@ -171,8 +171,9 @@ Ranks every reliable upstream in one weighted random permutation, using each ups
   weight = (best_mean / candidate_mean)^beta
   ```
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
-- Lets one upstream with no latency evidence compete in each request's permutation at the weight of the quickest, so it earns a sample instead of being starved. Any other unmeasured upstreams rank behind the measured ones of their reliability group, so the ranking puts at most one unproven upstream ahead of a proven one. Health tiering applies after ranking and can still move a proven upstream with a half-open circuit behind them
-- Applies reliability as a boundary, not a weight multiplier: upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75) follow the reliable ones in their own permutation, and stale evidence ranks last within its group
+- Places upstreams in this order: (1) a weighted permutation of the upstreams with current latency evidence plus one picked at random from those with none, which weighs as much as the quickest so it earns a sample instead of being starved; (2) the remaining upstreams with no latency evidence; (3) upstreams whose evidence is stale; (4) upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75), ordered among themselves the same way
+- Applies reliability as a boundary, not a weight multiplier
+- Bounds the ranking, not every dispatch order: among upstreams that are not unreliable, at most one unmeasured upstream ranks ahead of those with current latency evidence, but health tiering runs afterwards and can move a measured upstream with a half-open circuit behind unmeasured ones
 - Uses no latency floor or weight floor
 - When no candidate qualifies, emits an availability degradation; the ordering is unchanged
 

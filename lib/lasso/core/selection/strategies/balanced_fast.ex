@@ -1,13 +1,14 @@
 defmodule Lasso.RPC.Strategies.BalancedFast do
   @moduledoc """
-  Produces one weighted random permutation of reliable upstreams, spreading load while favoring
-  the quickest providers. Upstreams with recent failure evidence follow in their own permutation.
+  Orders reliable upstreams by a weighted random permutation, spreading load while favoring the
+  quickest providers. Upstreams with recent failure evidence follow, ordered the same way.
 
-  Weights are dimensionless latency ratios over the best evidence each upstream has: client
-  samples, else the same family's system prior. One upstream with no latency evidence joins each
-  permutation at the weight of the quickest, so it earns a sample instead of being starved; any
-  others follow the measured upstreams. Sampling uses exponential-race keys, which produces a
-  correct weighted permutation without a weight floor or hidden success-rate multiplier.
+  Weights are dimensionless latency ratios over the best current evidence each upstream has:
+  client samples, else the same family's system prior. One upstream with no latency evidence
+  joins each group's permutation at the weight of the quickest, so it earns a sample instead of
+  being starved; the group's other unmeasured upstreams follow its permutation, then stale ones.
+  Sampling uses exponential-race keys, which produces a correct weighted permutation without a
+  weight floor or hidden success-rate multiplier.
   """
 
   @behaviour Lasso.RPC.Strategy
