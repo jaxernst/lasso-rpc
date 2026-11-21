@@ -493,6 +493,22 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc """
+  Records a successful external check (async). It resets a closed circuit's consecutive
+  failures and never moves an open or half-open circuit toward recovery.
+  """
+  @spec record_success(breaker_id()) :: :ok | {:error, :not_found}
+  def record_success(id) do
+    case safe_whereis(via_name(id)) do
+      nil ->
+        {:error, :not_found}
+
+      pid ->
+        GenServer.cast(pid, {:report_external, {:ok, :external_check}})
+        :ok
+    end
+  end
+
+  @doc """
   Record a failed operation for the circuit breaker (async).
   """
   @spec record_failure(breaker_id(), term()) :: :ok | {:error, :not_found}
@@ -513,36 +529,19 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   def report_external_bounded(id, result) do
     case Snapshot.lookup(id) do
       {:ok, snapshot} ->
-        ControlRing.enqueue(external_receipt(snapshot), control_signal(result, id))
+        receipt = %AdmissionReceipt{
+          breaker_id: id,
+          kind: :closed,
+          generation: snapshot.generation,
+          epoch: snapshot.epoch,
+          owner_pid: self()
+        }
+
+        ControlRing.enqueue(receipt, control_signal(result, id))
 
       :missing ->
         {:error, :stale}
     end
-  end
-
-  @doc """
-  Resets a closed circuit's consecutive failures as a closed-state success does. The signal is
-  bound to the closed generation, so it never moves an open or half-open circuit toward recovery.
-  """
-  @spec reset_closed_failures(breaker_id()) :: :ok | {:error, :saturated | :stale}
-  def reset_closed_failures(id) do
-    case Snapshot.lookup(id) do
-      {:ok, %Snapshot{state: :closed} = snapshot} ->
-        ControlRing.enqueue(external_receipt(snapshot), :success)
-
-      _not_closed ->
-        :ok
-    end
-  end
-
-  defp external_receipt(snapshot) do
-    %AdmissionReceipt{
-      breaker_id: snapshot.breaker_id,
-      kind: :closed,
-      generation: snapshot.generation,
-      epoch: snapshot.epoch,
-      owner_pid: self()
-    }
   end
 
   @doc """
@@ -796,13 +795,23 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
+  def handle_cast(
+        {:report_external, {:ok, _result}},
+        %{state: :closed, failure_count: count} = state
+      )
+      when count > 0 do
+    new_state = %{state | failure_count: 0}
+    write_ets_state(new_state)
+    {:noreply, new_state}
+  end
+
   def handle_cast({:report_external, {:ok, _result}}, state) do
     {:noreply, state}
   end
 
-  @impl true
   def handle_cast({:report_external, outcome}, state) do
     new_state = classify_and_update_state_for_report(outcome, state)
+    write_ets_state(new_state)
     {:noreply, new_state}
   end
 

@@ -17,6 +17,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
     scheduled visit, in the order instances were marked due
   - A probe timeout counts against the instance's HTTP circuit, and a probe success
     resets a closed circuit's consecutive failures
+  - A probe the instance's request budget refuses stays due
 
   ## ETS Write Partitioning
 
@@ -177,14 +178,35 @@ defmodule Lasso.Providers.ProbeCoordinator do
               %{inst | consecutive_failures: new_failures, current_backoff_ms: backoff}
           end
 
+        report_circuit(instance_id, result)
+
         state =
           state
           |> Map.put(:instances, Map.put(state.instances, instance_id, updated))
+          |> requeue_refused(instance_id, result)
           |> maybe_clear_restart_count(result)
 
         {:noreply, state}
     end
   end
+
+  # Request timeouts stay neutral to the circuit and ask for a probe instead, because a probe's
+  # budget is the same for every profile sharing the route. Other probe failures are left to the
+  # routed attempts that already count them. Outcomes reach the breaker from this one process, so
+  # it applies them in probe order.
+  defp report_circuit(instance_id, :success),
+    do: CircuitBreaker.record_success({instance_id, :http})
+
+  defp report_circuit(instance_id, {:failure, %Finch.TransportError{reason: :timeout}}),
+    do: CircuitBreaker.record_failure({instance_id, :http}, :timeout)
+
+  defp report_circuit(_instance_id, _result), do: :ok
+
+  # A local budget refusal sent nothing, so the instance stays owed its probe at the queue's front.
+  defp requeue_refused(state, instance_id, :budget_refused),
+    do: %{state | due: [instance_id | List.delete(state.due, instance_id)]}
+
+  defp requeue_refused(state, _instance_id, _result), do: state
 
   # First successful probe after a (re)start clears the restart
   # counter. A coordinator that crashes before any provider responds
@@ -448,7 +470,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
           :ok ->
             ChainIdentity.record(observation, :verified)
             write_probe_success(instance_id)
-            CircuitBreaker.reset_closed_failures({instance_id, :http})
             {instance_id, :success}
 
           {:rate_limited, reason} ->
@@ -567,17 +588,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
          last_error: reason
        })}
     )
-
-    report_unanswered(instance_id, reason)
   end
-
-  # Request timeouts stay neutral to the circuit and ask for this probe instead, because a probe's
-  # budget is the same for every profile sharing the route. Other probe failures are left to the
-  # routed attempts that already count them. A probe success resets only a closed circuit's count.
-  defp report_unanswered(instance_id, %Finch.TransportError{reason: :timeout}),
-    do: CircuitBreaker.report_external_bounded({instance_id, :http}, {:error, :timeout})
-
-  defp report_unanswered(_instance_id, _reason), do: :ok
 
   defp write_probe_auth_failure(instance_id, status) do
     existing = read_existing_probe(instance_id)
