@@ -134,7 +134,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/install" && tar -xzf dist/lasso-*.tar.gz -C "$RUNNER_TEMP/install"
           docker run -d --name lasso --network host --user 10001:10001 \
             -v "$RUNNER_TEMP/install/lasso:/opt/lasso:ro" -v "$RUNNER_TEMP/profiles:/profiles:ro" \
-            -e LASSO_PROFILES_DIR=/profiles -e RELEASE_TMP=/tmp/lasso "$IMAGE" /opt/lasso/bin/lasso start
+            -e LASSO_PROFILES_DIR=/profiles "$IMAGE" /opt/lasso/bin/lasso start
       - name: Every native file resolves its libraries from the base image
         run: |
           docker exec lasso sh -c 'cat /etc/os-release | head -2; ldd --version | head -1

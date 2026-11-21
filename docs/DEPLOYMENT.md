@@ -319,7 +319,9 @@ as described in [Launching a Native Release](#launching-a-native-release). Set
 another program starts it.
 
 The node writes benchmark snapshots under the unpacked directory's `tmp`. When
-that directory is read-only, set `RELEASE_TMP` to a writable one.
+that directory is read-only the node still starts and serves requests, and logs
+that snapshots will not be saved. Set `RELEASE_TMP` or `LASSO_SNAPSHOTS_DIR` to
+a writable directory to keep them.
 
 Alpine and other musl systems need the container image. The macOS archive is
 not notarized. Unpacked with `tar` it runs as is; if macOS blocks a copy
