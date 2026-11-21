@@ -4,6 +4,8 @@ defmodule Lasso.RPC.Strategies.Fastest do
 
   Reliability qualification is a boundary rather than a score multiplier. When no upstream has
   qualified evidence, the strategy preserves availability and emits an explicit degradation event.
+  Unqualified upstreams follow the qualified ones by prior latency, with those whose evidence is
+  unreliable last.
   Live circuit, rate-limit, and other admission state is applied after this ranking.
   """
 
@@ -184,6 +186,7 @@ defmodule Lasso.RPC.Strategies.Fastest do
     summary = RoutingEvidence.summary_for_channel(summaries, channel)
 
     {
+      match?(%{state: :unreliable}, summary),
       prior_latency(summary),
       channel.provider_id,
       channel.transport

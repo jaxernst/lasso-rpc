@@ -151,6 +151,7 @@ Client and system attempts use separate fixed method families: basic, state, log
 - Uses successful p95 and deterministic identity to break equal-mean ties
 - Never uses lifetime averages for routing
 - Preserves all live candidates and emits an availability degradation when none qualifies
+- Orders unqualified upstreams after the qualified ones in two groups: first those whose evidence is not unreliable, then the unreliable ones (three consecutive failures, or recent success probability below 0.75, in evidence that has not gone stale). Each group is ordered by prior latency, then provider and transport identity. When no upstream is qualified the same order ranks all of them, so this ranking places an unreliable upstream behind every upstream that is not
 - Still subject to health tiering (closed-circuit providers preferred)
 
 ### Balanced Fast
