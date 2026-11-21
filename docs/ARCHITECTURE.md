@@ -620,9 +620,10 @@ A request timeout is neutral to the circuit, because it shows only that a
 provider was slower than that attempt's share of one request's budget. It asks
 the probe coordinator to probe the instance, and a probe timeout counts as a
 timeout failure, so an upstream that accepts requests and never answers opens
-after two probe timeouts. Other probe outcomes update identity and health
-evidence without opening or recovering circuits. Routed request and head-poll
-outcomes drive circuit recovery.
+after two consecutive probe timeouts. A probe success resets a closed circuit's
+consecutive failures but never moves an open or half-open circuit toward
+recovery; other probe outcomes update identity and health evidence only. Routed
+request and head-poll outcomes drive circuit recovery.
 
 ### Configuration
 

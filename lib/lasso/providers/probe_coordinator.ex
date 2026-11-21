@@ -15,7 +15,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
   - Auth-failed providers (401/402) back off to 120s
   - An instance whose request timed out is probed on the next tick, beside the
     scheduled visit, in the order instances were marked due
-  - A probe timeout counts against the instance's HTTP circuit
+  - A probe timeout counts against the instance's HTTP circuit, and a probe success
+    resets a closed circuit's consecutive failures
 
   ## ETS Write Partitioning
 
@@ -250,15 +251,18 @@ defmodule Lasso.Providers.ProbeCoordinator do
   # cannot hold back the chain's other probes.
   defp do_tick(state), do: state |> due_tick() |> scheduled_tick()
 
-  defp due_tick(%{due: []} = state), do: state
-
-  defp due_tick(%{due: [instance_id | rest]} = state) do
-    state = %{state | due: rest}
+  # The oldest eligible instance is probed; the others keep their place until they are eligible.
+  defp due_tick(state) do
     now = System.monotonic_time(:millisecond)
+    due = Enum.filter(state.due, &Map.has_key?(state.instances, &1))
 
-    case Map.get(state.instances, instance_id) do
-      nil -> state
-      inst -> if due?(inst, now), do: probe_instance(state, instance_id, inst, now), else: state
+    case Enum.find(due, &due?(Map.fetch!(state.instances, &1), now)) do
+      nil ->
+        %{state | due: due}
+
+      instance_id ->
+        state = %{state | due: List.delete(due, instance_id)}
+        probe_instance(state, instance_id, Map.fetch!(state.instances, instance_id), now)
     end
   end
 
@@ -444,6 +448,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
           :ok ->
             ChainIdentity.record(observation, :verified)
             write_probe_success(instance_id)
+            CircuitBreaker.reset_closed_failures({instance_id, :http})
             {instance_id, :success}
 
           {:rate_limited, reason} ->
@@ -568,7 +573,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   # Request timeouts stay neutral to the circuit and ask for this probe instead, because a probe's
   # budget is the same for every profile sharing the route. Other probe failures are left to the
-  # routed attempts that already count them.
+  # routed attempts that already count them. A probe success resets only a closed circuit's count.
   defp report_unanswered(instance_id, %Finch.TransportError{reason: :timeout}),
     do: CircuitBreaker.report_external_bounded({instance_id, :http}, {:error, :timeout})
 

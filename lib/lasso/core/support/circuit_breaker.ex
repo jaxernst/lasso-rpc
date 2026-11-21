@@ -513,19 +513,36 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   def report_external_bounded(id, result) do
     case Snapshot.lookup(id) do
       {:ok, snapshot} ->
-        receipt = %AdmissionReceipt{
-          breaker_id: id,
-          kind: :closed,
-          generation: snapshot.generation,
-          epoch: snapshot.epoch,
-          owner_pid: self()
-        }
-
-        ControlRing.enqueue(receipt, control_signal(result, id))
+        ControlRing.enqueue(external_receipt(snapshot), control_signal(result, id))
 
       :missing ->
         {:error, :stale}
     end
+  end
+
+  @doc """
+  Resets a closed circuit's consecutive failures as a closed-state success does. The signal is
+  bound to the closed generation, so it never moves an open or half-open circuit toward recovery.
+  """
+  @spec reset_closed_failures(breaker_id()) :: :ok | {:error, :saturated | :stale}
+  def reset_closed_failures(id) do
+    case Snapshot.lookup(id) do
+      {:ok, %Snapshot{state: :closed} = snapshot} ->
+        ControlRing.enqueue(external_receipt(snapshot), :success)
+
+      _not_closed ->
+        :ok
+    end
+  end
+
+  defp external_receipt(snapshot) do
+    %AdmissionReceipt{
+      breaker_id: snapshot.breaker_id,
+      kind: :closed,
+      generation: snapshot.generation,
+      epoch: snapshot.epoch,
+      owner_pid: self()
+    }
   end
 
   @doc """

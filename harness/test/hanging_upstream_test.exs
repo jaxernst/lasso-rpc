@@ -6,32 +6,34 @@ defmodule Lasso.Harness.HangingUpstreamTest do
 
   test "upstreams that accept requests and never answer leave the priority route" do
     journey(3, fn tenant, [hung_a, hung_b, healthy] ->
-      for fleet <- [hung_a, hung_b],
-          method <- ["eth_getBalance", "eth_chainId"],
-          do: hang(fleet, method)
-
+      hung = [hung_a, hung_b]
+      for fleet <- hung, method <- ["eth_getBalance", "eth_chainId"], do: hang(fleet, method)
       Fleet.script(healthy, "eth_getBalance", [], {:answer, "0x20"})
+      opened = Settle.listen([:lasso, :circuit_breaker, :open])
 
-      # Each hung upstream needs two probe timeouts, at least one probe budget apart.
-      Settle.await(
-        "hung upstreams leave the priority route",
-        fn ->
-          before = held_reads([hung_a, hung_b])
-          result = balance(Tenant.credentials(tenant), 1)
+      instances =
+        Enum.map(
+          hung,
+          &Lasso.Providers.Catalog.lookup_instance_id(tenant.profile, 31_337, &1.name)
+        )
 
-          if result == "0x20" and held_reads([hung_a, hung_b]) == before,
-            do: {:ok, result},
-            else: result
-        end,
-        20_000
-      )
+      # Both reads time out on each hung upstream within one probe budget and no read follows,
+      # so each upstream's second probe comes from a timeout that arrived during its first.
+      for n <- 1..2, do: balance(Tenant.credentials(tenant), n)
 
-      held = held_reads([hung_a, hung_b])
+      Enum.reduce(instances, instances, fn _, waiting ->
+        {_, _, %{instance_id: id}} =
+          Settle.event(opened, &(&1.transport == :http and &1.instance_id in waiting), 20_000)
 
-      assert Enum.map(2..5, &balance(Tenant.credentials(tenant), &1)) ==
+        List.delete(waiting, id)
+      end)
+
+      held = held_reads(hung)
+
+      assert Enum.map(3..6, &balance(Tenant.credentials(tenant), &1)) ==
                List.duplicate("0x20", 4)
 
-      assert held_reads([hung_a, hung_b]) == held
+      assert held_reads(hung) == held
     end)
   end
 
