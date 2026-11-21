@@ -10,7 +10,7 @@ on:
   release:
     types: [published]
   pull_request:
-    paths: &build_inputs
+    paths:
       - .github/workflows/standalone-archives.yml
       - scripts/standalone/**
       - rel/**
@@ -19,7 +19,12 @@ on:
   # Runs on main keep the runtime cache that pull requests restore from.
   push:
     branches: [main]
-    paths: *build_inputs
+    paths:
+      - .github/workflows/standalone-archives.yml
+      - scripts/standalone/**
+      - rel/**
+      - mix.exs
+      - mix.lock
 
 permissions:
   contents: read
@@ -270,7 +275,7 @@ jobs:
           path: footprint/*.json
 
   trust:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: [build, clean-linux, clean-macos]
     strategy:
       fail-fast: false
