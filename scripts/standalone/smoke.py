@@ -4,7 +4,6 @@
   smoke.py mock --profiles DIR              write profiles and serve mock upstreams until stopped
   smoke.py wait --url URL                   wait until every chain answers through Lasso
   smoke.py send --url URL                   check the hash Lasso computes for a raw transaction
-  smoke.py run --release DIR --report FILE  start the release, wait, then sample its footprint
 
 Every chain gets three mock upstreams answering in 20, 60 and 120 ms. The
 profile `public` holds all chains, so requests go to /rpc/<chain_id>. On chain
@@ -15,9 +14,6 @@ send with the hash it computed itself.
 
 import argparse
 import json
-import os
-import platform
-import subprocess
 import sys
 import threading
 import time
@@ -125,10 +121,10 @@ def rpc(url, method, timeout=2, params=()):
         return json.loads(response.read())
 
 
-def wait_for_chains(url, chains, started, deadline_s, alive=lambda: True):
+def wait_for_chains(url, chains, started, deadline_s):
     first = {}
     while len(first) < len(chains):
-        if time.monotonic() - started > deadline_s or not alive():
+        if time.monotonic() - started > deadline_s:
             missing = sorted(set(chains) - set(first))
             raise SystemExit(f"chains never answered: {missing}")
         for chain_id in chains:
@@ -142,42 +138,6 @@ def wait_for_chains(url, chains, started, deadline_s, alive=lambda: True):
                 pass
         time.sleep(0.02)
     return first
-
-
-def process_tree(root):
-    rows = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss=,comm="], capture_output=True, text=True).stdout
-    procs = {}
-    for line in rows.splitlines():
-        pid, ppid, rss, comm = line.split(None, 3)
-        procs[int(pid)] = (int(ppid), int(rss), comm)
-    tree = {root} if root in procs else set()
-    grew = True
-    while grew:
-        grew = False
-        for pid, (ppid, _rss, _comm) in procs.items():
-            if ppid in tree and pid not in tree:
-                tree.add(pid)
-                grew = True
-    return {pid: procs[pid] for pid in tree}
-
-
-def cpu_seconds(pids):
-    if platform.system() == "Linux":
-        ticks = os.sysconf("SC_CLK_TCK")
-        total = 0
-        for pid in pids:
-            try:
-                fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
-                total += int(fields[11]) + int(fields[12])
-            except OSError:
-                pass
-        return total / ticks
-    out = subprocess.run(["ps", "-o", "time=", "-p", ",".join(map(str, pids))], capture_output=True, text=True).stdout
-    total = 0.0
-    for value in out.split():
-        parts = [float(p) for p in value.replace("-", ":").split(":")]
-        total += sum(p * 60**i for i, p in enumerate(reversed(parts)))
-    return total
 
 
 def command_mock(args):
@@ -200,77 +160,10 @@ def command_send(args):
         raise SystemExit(f"expected {RAW_TRANSACTION_HASH}")
 
 
-def command_run(args):
-    chains = CHAIN_IDS[: args.chains]
-    work = Path(args.work).resolve()
-    profiles = work / "profiles"
-    write_profiles(profiles, chains, args.base_port)
-    start_mocks(chains, args.base_port)
-    env = {"PATH": "/usr/bin:/bin", "HOME": os.environ.get("HOME", str(work)), "PORT": str(args.port),
-           "LASSO_PROFILES_DIR": str(profiles), "RELEASE_TMP": str(work / "tmp")}
-    env.update(dict(item.split("=", 1) for item in args.env))
-    log = open(work / "lasso.log", "w")
-    started = time.monotonic()
-    proc = subprocess.Popen([str(Path(args.release).resolve() / "bin/lasso"), "start"], env=env, cwd=work,
-                            stdout=log, stderr=subprocess.STDOUT)
-    samples = []
-    stop_sampling = threading.Event()
-
-    def sample(interval):
-        while not stop_sampling.wait(interval):
-            tree = process_tree(proc.pid)
-            if tree:
-                samples.append({"t": round(time.monotonic() - started, 2),
-                                "rss_mb": round(sum(r for _p, r, _c in tree.values()) / 1024, 1),
-                                "procs": sorted(os.path.basename(c) for _p, _r, c in tree.values())})
-
-    sampler = threading.Thread(target=sample, args=(0.1,), daemon=True)
-    sampler.start()
-    try:
-        first = wait_for_chains(f"http://127.0.0.1:{args.port}", chains, started, 120, lambda: proc.poll() is None)
-        ready = time.monotonic() - started
-        while time.monotonic() - started < ready + 10:
-            time.sleep(0.1)
-        stop_sampling.set()
-        sampler.join()
-        boot_peak = max(s["rss_mb"] for s in samples)
-        stop_sampling.clear()
-        sampler = threading.Thread(target=sample, args=(5,), daemon=True)
-        sampler.start()
-        idle_start = time.monotonic()
-        cpu_start = cpu_seconds(list(process_tree(proc.pid)))
-        time.sleep(args.idle)
-        cpu_used = cpu_seconds(list(process_tree(proc.pid))) - cpu_start
-        idle_s = time.monotonic() - idle_start
-        stop_sampling.set()
-        sampler.join()
-        idle = [s for s in samples if s["t"] >= idle_start - started]
-        report = {
-            "system": f"{platform.system()} {platform.machine()}",
-            "env": args.env,
-            "first_answer_s": round(min(first.values()), 3),
-            "all_chains_s": round(max(first.values()), 3),
-            "boot_peak_rss_mb": boot_peak,
-            "settled_rss_mb": sorted(s["rss_mb"] for s in idle)[len(idle) // 2],
-            "idle_s": round(idle_s, 1),
-            "idle_cpu_percent": round(100 * cpu_used / idle_s, 2),
-            "processes": idle[-1]["procs"],
-        }
-        Path(args.report).write_text(json.dumps({**report, "samples": samples}, indent=2))
-        print(json.dumps(report))
-    finally:
-        stop_sampling.set()
-        proc.terminate()
-        try:
-            proc.wait(30)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("mock", "wait", "send", "run"):
+    for name in ("mock", "wait", "send"):
         p = sub.add_parser(name)
         p.add_argument("--chains", type=int, default=len(CHAIN_IDS))
         p.add_argument("--base-port", type=int, default=18100)
@@ -278,15 +171,8 @@ def main():
     sub.choices["wait"].add_argument("--url", default="http://127.0.0.1:4000")
     sub.choices["wait"].add_argument("--timeout", type=float, default=60)
     sub.choices["send"].add_argument("--url", default="http://127.0.0.1:4000")
-    run = sub.choices["run"]
-    run.add_argument("--release", required=True)
-    run.add_argument("--report", required=True)
-    run.add_argument("--work", default=".")
-    run.add_argument("--port", type=int, default=4000)
-    run.add_argument("--idle", type=float, default=120)
-    run.add_argument("--env", action="append", default=[], help="KEY=VALUE passed to the release")
     args = parser.parse_args()
-    {"mock": command_mock, "wait": command_wait, "send": command_send, "run": command_run}[args.command](args)
+    {"mock": command_mock, "wait": command_wait, "send": command_send}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -318,9 +318,8 @@ as described in [Launching a Native Release](#launching-a-native-release). Set
 [Running Beside Another Application](#running-beside-another-application) when
 another program starts it.
 
-Each archive also comes as one `.run` file, which unpacks itself into the user
-cache directory on first run (`LASSO_EXTRACT_DIR` moves it) and then takes the
-same arguments as `bin/lasso`.
+The node writes benchmark snapshots under the unpacked directory's `tmp`. When
+that directory is read-only, set `RELEASE_TMP` to a writable one.
 
 Alpine and other musl systems need the container image. The macOS archive is
 not notarized. Unpacked with `tar` it runs as is; if macOS blocks a copy
