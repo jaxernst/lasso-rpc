@@ -29,8 +29,8 @@ from background polling, `newHeads` or a client's own head reads, is compared
 with the highest fresh observation in the profile, less the agreement band: the
 blocks the chain produces in two seconds at its `block_time_ms`, from 1 to 20.
 The band is the same span of time on a 250 ms chain and a 12 s chain. A route proven short of that
-target after crediting the blocks it could have produced since it was observed
-is deferred behind the others in its health tier. A fresh route that reports the
+target after crediting the blocks it could have produced between its
+observation and the freshest one is deferred behind the others in its health tier. A fresh route that reports the
 qualified reference height on a different block hash is deferred the same way.
 Unobserved and stale routes keep their strategy position. Deferral never
 excludes a route, so when every current route fails or lacks the method, a

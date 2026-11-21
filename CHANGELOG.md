@@ -7,14 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-21
+
 ### Added
 
 - Standalone archives for Linux x86_64, Linux aarch64 and macOS on Apple silicon, attached to each release. They run without Erlang, Docker or system OpenSSL and start with no environment variables: unpack one and run `lasso/bin/lasso start`. They need glibc 2.28 or later on Linux and macOS 12 or later. Each archive has a checksum, an SPDX SBOM and build provenance. See [Standalone Archives](docs/DEPLOYMENT.md#standalone-archives).
 - `sidecar.vm.args` in the release, for a node that another application starts on the same machine: two schedulers that sleep as soon as they are idle. Use it with `RELEASE_MODE=interactive`. See [Running Beside Another Application](docs/DEPLOYMENT.md#running-beside-another-application).
+- `scripts/measure_profile.mjs` sends the same calls, at the same moment, to each provider directly and through a Lasso profile that uses those providers, and prints answers, errors by kind, latency percentiles, the answering provider and upstream sends per call. It needs Node.js 18 or newer, no packages and a clone of this repository. See [Measure a profile against its own providers](docs/MIGRATION.md#measure-a-profile-against-its-own-providers).
 
 ### Fixed
 
-- A request that reached a circuit breaker just as it changed state is no longer refused. A request reads the breaker's last published state, and if the breaker reopened for a recovery attempt or closed before answering, it refused the request as unavailable although it would have admitted it. A WebSocket subscription recovering through its only HTTP upstream was closed with "continuity exhausted" on that one refusal, with most of its recovery time unused. The breaker now answers from its current state.
+- A request that reached a circuit breaker just as it changed state is no longer refused. A request reads the breaker's last published state, and if the breaker moved to half-open for a recovery attempt or closed before answering, it refused the request as unavailable although it would have admitted it. A WebSocket subscription recovering through its only HTTP upstream was closed with "continuity exhausted" on that one refusal, with most of its recovery time unused. The breaker now answers from its current state.
 - A node no longer stops at boot when it cannot create its benchmark snapshot directory, as happened when a standalone archive was unpacked somewhere read-only. It starts, serves requests and logs that snapshots will not be saved. Set `RELEASE_TMP` or `LASSO_SNAPSHOTS_DIR` to a writable directory to keep them.
 - `fastest` no longer keeps sending a method family to upstreams that are failing when none has qualified yet. With no qualified upstream it ordered candidates by prior latency and then provider id, so an upstream with three consecutive failures and no successes still sorted ahead of an untried one with a later id. With two of three upstreams accepting requests and never answering, 629 of 900 requests failed in a three-minute run, and every `eth_call` failed until the end; with this change 8 failed, all in the first three seconds. Upstreams whose evidence is unreliable now sort after the other unqualified ones. See [fastest](docs/ROUTING.md#fastest).
 - `balanced-fast` no longer locks a method family onto the first upstream to qualify. It ranked qualified upstreams ahead of all others, so the first one to reach three successes in a family kept that family's traffic and the rest never earned the samples to qualify. On three healthy upstreams at 20, 60 and 120 ms, `eth_call` or `eth_getLogs` could stay on a slower one for a whole run. Reliable upstreams with latency evidence (client samples in the method family, else the same family's system prior) now share one weighted permutation, joined in each ranking by one upstream with no latency evidence at the weight of the quickest. Upstreams with three consecutive failures or a recent success probability below 0.75 follow, ordered the same way. `fastest` is unchanged. See [balanced fast](docs/ROUTING.md#balanced-fast).
@@ -24,10 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - Phoenix 1.8.17 and Phoenix.PubSub 2.4.1, for CVE-2026-128361 (an unsanitized presence key crashes the Presence tracker) and CVE-2026-129344 (a channel message that cannot be serialized crashes broadcast dispatch for clients on a shared topic).
+- Phoenix LiveView 1.1.34, for CVE-2026-126334 (joining a LiveView without `"url"` skips its `live_session` `on_mount` hooks).
 
 ### Changed
 
-- A release starts with no environment variables. Without `RELEASE_COOKIE` or `CLUSTER_DNS_QUERY` it runs without Erlang distribution, so it opens no EPMD or distribution port and never uses the cookie written into the release at build time, which every copy of the same build shares. Such a node uses the node ID `local`, generates `SECRET_KEY_BASE` per boot (dashboard sessions end at restart), reads the profiles the release now carries in `config/profiles` and writes benchmark snapshots under `RELEASE_TMP`. A distributed node still requires `SECRET_KEY_BASE` and `LASSO_NODE_ID`. See [Launching a Native Release](docs/DEPLOYMENT.md#launching-a-native-release).
+- A release starts with no environment variables. Without `RELEASE_COOKIE` or `CLUSTER_DNS_QUERY` it runs without Erlang distribution, so it opens no EPMD or distribution port and never uses the cookie written into the release at build time, which every copy of the same build shares. Unless `LASSO_NODE_ID` and `SECRET_KEY_BASE` are set, such a node uses the node ID `local` and generates `SECRET_KEY_BASE` per boot (dashboard sessions end at restart). It reads the profiles the release now carries in `config/profiles` and writes benchmark snapshots under `RELEASE_TMP`. A distributed node still requires `SECRET_KEY_BASE` and `LASSO_NODE_ID`. See [Launching a Native Release](docs/DEPLOYMENT.md#launching-a-native-release).
 - **Behavior change for native releases started without `RELEASE_COOKIE`**, as the deployment guide showed: such a node ran Erlang distribution with the build-time cookie and now runs without it, so `lasso reload`, `rpc`, `remote`, `stop`, `restart` and `pid` exit with a message that distribution is off. Set `RELEASE_COOKIE` when starting the node and when running these commands, or restart the node to apply profile changes; `lasso check-config` is unaffected. Container images, including the source `compose.yml` and `./run-docker.sh`, are built without the release's `env.sh` template and keep their current distribution behavior.
 - `vm.args` no longer fixes the scheduler count to the cores of the machine that built the release; the VM uses the cores, and any CPU quota, of the machine it runs on. The flags that restated OTP 28 defaults (`-smp auto`, `+t 1048576`, `+P 1048576`, `net_ticktime 60` and `prevent_overlapping_partitions true`) are removed. Container images never used this file, so they are unaffected.
 - Requests that need the chain's latest block prefer providers with a current head, under every strategy. A request's need comes from its own parameters: a `latest` selector, the upper bound of a log or trace range (an omitted one means `latest`), an omitted optional selector on reads such as `eth_call` and `eth_getBalance`, and lookups by transaction hash. A provider whose observed head is behind the profile's freshest head by more than the agreement band (about two seconds of blocks) is tried after the others, and so is one reporting the agreed head height on a different block hash. Historical reads at a fixed block, block-hash lookups, `finalized` and `safe` reads and writes keep strategy order, so a provider a few blocks behind still serves the blocks it has. No provider is excluded: when the current ones fail, a lagging one still answers. Head reads routed through Lasso count as observations, so this works with background polling off. See [Head freshness](docs/ROUTING.md#head-freshness).
@@ -35,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - `selection.max_lag_blocks` is retired. A fixed block count means different things on different chains (ten blocks is 2.5 seconds at 250 ms blocks and two minutes at 12-second blocks), and the filter excluded lagging providers even from historical reads they could serve. Profiles that still set it keep loading; the field has no effect, and each load logs a warning naming the profile and chains. Remove it from your profiles. Nothing replaces it: freshness preference is automatic and follows `block_time_ms`.
+
+### Compatibility
+
+- No storage format changes. A container deployment, including the downloadable `compose.yml`, upgrades from v0.8.6 with the new image alone and keeps its distribution behavior and data paths.
+- A native release started without `RELEASE_COOKIE` runs without Erlang distribution. Set `RELEASE_COOKIE` when starting the node and when running `lasso reload`, `rpc`, `remote`, `stop`, `restart` or `pid`; without it those commands exit with a message that distribution is off, and SIGTERM stops the node.
+- A native release started without `LASSO_DATA_DIR` or `LASSO_PROFILES_DIR` reads the profiles it carries and writes snapshots under `RELEASE_TMP`, no longer `config/profiles` and `priv/benchmark_snapshots` in its working directory. Set `LASSO_DATA_DIR` to keep your own profiles and history. Its scheduler count now follows the machine it runs on, not the build machine.
+- Profiles that set `selection.max_lag_blocks` still load and log a warning on each load. Remove the field.
+- Expect traffic to move: requests for the latest block try providers more than the agreement band behind the freshest head after the others, `balanced-fast` spreads each method family across reliable upstreams, and an upstream whose health probe times out twice in a row has its HTTP circuit opened.
 
 ## [0.8.6] - 2026-11-19
 
@@ -648,7 +660,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.6...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.6...v0.9.0
 [0.8.6]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.3...v0.8.4
