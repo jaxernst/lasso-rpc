@@ -35,6 +35,7 @@ defmodule LassoWeb.RPCController do
   alias Lasso.RPC.RequestOptions.Builder, as: RequestOptionsBuilder
   alias Lasso.RPC.RequestPipeline
   alias Lasso.RPC.Response
+  alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
   alias LassoWeb.Plugs.ObservabilityPlug
   alias LassoWeb.Plugs.RequestTimingPlug
   alias LassoWeb.RPC.Helpers
@@ -89,7 +90,7 @@ defmodule LassoWeb.RPCController do
 
   @spec rpc_base(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def rpc_base(conn, params) do
-    rpc_with_strategy(conn, params, default_provider_strategy())
+    rpc_with_strategy(conn, params, StrategyRegistry.default_strategy())
   end
 
   @spec rpc_fastest(Plug.Conn.t(), map()) :: Plug.Conn.t()
@@ -605,7 +606,7 @@ defmodule LassoWeb.RPCController do
       nil ->
         case Keyword.get(opts, :conn) do
           %Plug.Conn{assigns: %{provider_strategy: s}} when not is_nil(s) -> s
-          _ -> default_provider_strategy()
+          _ -> StrategyRegistry.default_strategy()
         end
 
       s ->
@@ -613,15 +614,11 @@ defmodule LassoWeb.RPCController do
     end
   end
 
-  defp default_provider_strategy do
-    Helpers.default_provider_strategy()
-  end
-
   defp strategy_from(conn, params) do
     conn.assigns[:requested_provider_strategy] ||
       conn.assigns[:provider_strategy] ||
       Helpers.normalize_strategy_token(params["strategy"]) ||
-      default_provider_strategy()
+      StrategyRegistry.default_strategy()
   end
 
   # Determine provider override from opts, params, or header.

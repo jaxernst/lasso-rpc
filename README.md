@@ -318,7 +318,7 @@ Current limits:
 | Provider override | `/rpc/provider/:provider_id/:chain` | `/ws/rpc/provider/:provider_id/:chain` |
 | Profile | `/rpc/profile/:profile/:chain` | `/ws/rpc/profile/:profile/:chain` |
 
-Strategies are `load-balanced` (the default), `fastest`, `balanced-fast`, which
+Strategies are `load-balanced`, `fastest`, `balanced-fast` (the default), which
 spreads load while favoring the quickest providers, and `priority`, which tries
 providers in their configured `priority` order; `latency-weighted` is an alias of
 `balanced-fast`.

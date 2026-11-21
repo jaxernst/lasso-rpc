@@ -12,7 +12,7 @@ All HTTP RPC endpoints accept `POST` requests with `Content-Type: application/js
 POST /rpc/:chain
 ```
 
-Routes using the default strategy (configurable, defaults to `:load_balanced`).
+Routes using the default strategy (configurable, defaults to `:balanced_fast`).
 
 **Example:**
 
@@ -32,7 +32,7 @@ POST /rpc/priority/:chain
 POST /rpc/round-robin/:chain
 ```
 
-`round-robin` is an alias of `load-balanced`: it randomizes provider order per request rather than rotating strictly, and response metadata reports the strategy as `load_balanced`. See [load balanced](ROUTING.md#load-balanced-default).
+`round-robin` is an alias of `load-balanced`: it randomizes provider order per request rather than rotating strictly, and response metadata reports the strategy as `load_balanced`. See [load balanced](ROUTING.md#load-balanced).
 
 ### Provider Override
 

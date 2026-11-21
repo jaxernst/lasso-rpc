@@ -32,11 +32,12 @@ defmodule LassoWeb.BalancedFastStrategyRouteTest do
     :ok
   end
 
-  test "balanced-fast and its latency-weighted alias route the same strategy over HTTP", %{
-    chain: chain
-  } do
-    for strategy <- ["balanced-fast", "latency-weighted"],
-        path <- ["/rpc/#{strategy}/#{chain}", "/rpc/profile/public/#{strategy}/#{chain}"] do
+  test "balanced-fast, its latency-weighted alias and the no-strategy default route the same strategy over HTTP",
+       %{chain: chain} do
+    for prefix <- ["/rpc", "/rpc/profile/public"],
+        strategy <- ["balanced-fast/", "latency-weighted/", ""] do
+      path = "#{prefix}/#{strategy}#{chain}"
+
       response =
         build_conn()
         |> put_req_header("content-type", "application/json")
@@ -48,15 +49,16 @@ defmodule LassoWeb.BalancedFastStrategyRouteTest do
     end
   end
 
-  test "balanced-fast and its latency-weighted alias route the same strategy over WebSocket", %{
-    chain: chain
-  } do
+  test "balanced-fast, its latency-weighted alias and the no-strategy default route the same strategy over WebSocket",
+       %{chain: chain} do
     port = @endpoint.config(:http)[:port]
 
     for path <- [
           "/ws/rpc/balanced-fast/#{chain}",
           "/ws/rpc/latency-weighted/#{chain}",
-          "/ws/rpc/#{chain}?strategy=latency_weighted"
+          "/ws/rpc/#{chain}?strategy=latency_weighted",
+          "/ws/rpc/#{chain}",
+          "/ws/rpc/profile/public/#{chain}"
         ] do
       assert {:ok, socket} = Client.start_link("ws://127.0.0.1:#{port}#{path}", Socket, self())
       Client.cast(socket, {:send, Map.put(balance_request(3), "lasso_meta", "notify")})

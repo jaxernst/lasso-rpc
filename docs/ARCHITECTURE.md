@@ -575,7 +575,7 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 
 ### Available Strategies
 
-**:load_balanced** (default)
+**:load_balanced**
 
 - Distributes requests across healthy providers with health-aware tiering
 
@@ -584,7 +584,7 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 - Lowest recent successful mean among reliability-qualified upstream instances
 - Reads published routing-evidence summaries rather than BenchmarkStore lifetime averages
 
-**:balanced_fast**
+**:balanced_fast** (default)
 
 - Scale-free relative latency weights with exponential-race permutation
 - Reliable upstreams are weighted on their best latency evidence; unreliable ones follow

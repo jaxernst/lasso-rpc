@@ -299,7 +299,7 @@ Strategies control how providers are selected for each request. Set via URL path
 **Load Balanced** — Randomized ordering with health-aware tiering. For replay-safe
 fallback, distinct physical instances receive a bounded first pass before sibling
 transports within a tier. It does not guarantee exact shares, capacity-aware
-balancing, or independent operators. See [Routing](ROUTING.md#load-balanced-default)
+balancing, or independent operators. See [Routing](ROUTING.md#load-balanced)
 for the dispatch-budget and recovered-head-preference boundaries.
 
 For upgrades from v0.5.1, rename `LW_BETA` to `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); the old variable is no longer read, and startup logs a warning when it is set. Existing `latency-weighted` URLs and `strategy` values remain permanent aliases.
@@ -315,7 +315,7 @@ All strategies are subject to health-based tiering after initial ranking. The pi
 3. **Tier 3**: Closed circuit + rate-limited
 4. **Tier 4**: Half-open circuit + rate-limited
 
-Open-circuit providers are excluded entirely. Within each tier, the strategy's ranking is preserved; load-balanced replay-safe fallback gives distinct physical instances a first pass before alternate transports, subject to the cursor's candidate bound and explicit recovered-head preference. See [load-balanced semantics](ROUTING.md#load-balanced-default) for limits and tradeoffs.
+Open-circuit providers are excluded entirely. Within each tier, the strategy's ranking is preserved; load-balanced replay-safe fallback gives distinct physical instances a first pass before alternate transports, subject to the cursor's candidate bound and explicit recovered-head preference. See [load-balanced semantics](ROUTING.md#load-balanced) for limits and tradeoffs.
 
 Exception: a connection-class HTTP circuit in half-open with a free probation lease and no rate limit keeps its ordinary strategy ranking instead of being deferred behind closed circuits.
 
@@ -413,7 +413,7 @@ chains:
 
 ### Provider templates
 
-`config/examples/` holds provider-specific profiles. Each keeps the provider at `priority: 1` with keyless public fallbacks at lower priority, copied from `config/profiles/public.yml` with their capabilities and error rules, so rate limits, outages, range limits, and archive reads still have somewhere to fail over. The default `load_balanced` strategy uses `priority` only as a tiebreaker, so keep the provider primary with the priority strategy. A template copied as its own profile is addressed by its slug: route through `/rpc/profile/<slug>/priority/:chain`, or through `/rpc/profile/<slug>/:chain` after setting the node-wide default `config :lasso, :provider_selection_strategy, :priority`. Unscoped routes such as `/rpc/priority/:chain` use the `public` profile, so they apply only when you merge the template's providers into `public.yml`. See [Priority routing](ROUTING.md#priority).
+`config/examples/` holds provider-specific profiles. Each keeps the provider at `priority: 1` with keyless public fallbacks at lower priority, copied from `config/profiles/public.yml` with their capabilities and error rules, so rate limits, outages, range limits, and archive reads still have somewhere to fail over. The default `balanced_fast` strategy orders by measured latency and ignores `priority`, so keep the provider primary with the priority strategy. A template copied as its own profile is addressed by its slug: route through `/rpc/profile/<slug>/priority/:chain`, or through `/rpc/profile/<slug>/:chain` after setting the node-wide default `config :lasso, :provider_selection_strategy, :priority`. Unscoped routes such as `/rpc/priority/:chain` use the `public` profile, so they apply only when you merge the template's providers into `public.yml`. See [Priority routing](ROUTING.md#priority).
 
 #### Chainstack
 
@@ -526,6 +526,8 @@ config :lasso, :circuit_breaker,
 Circuit settings take effect when provider instances start; restart Lasso after changing application configuration. YAML reload does not restart existing circuit breakers.
 
 ### Default Strategy
+
+Routes that name no strategy, such as `/rpc/:chain` and `/ws/rpc/:chain`, use `:balanced_fast`. To change the node-wide default:
 
 ```elixir
 config :lasso, :provider_selection_strategy, :load_balanced
