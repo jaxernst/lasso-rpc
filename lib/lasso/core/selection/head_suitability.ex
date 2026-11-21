@@ -17,7 +17,8 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   - `:supports` needs fresh evidence at or above the target height;
   - `:against` needs fresh evidence that stays short of the target even when
     credited with the blocks the chain could have produced since it was
-    observed, at the fastest cadence the chain has shown, or at twice the
+    observed, until the mark's observation for a moving head or until capture
+    for a fixed height, at the fastest cadence the chain has shown, or at twice the
     configured rate until cadence is measured; without either, an exact request
     height uses the observed height while moving-head and recovery requirements
     remain unknown;
@@ -295,25 +296,36 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
-  # A fresh observation exists, so a moving requirement always has a mark.
+  # A moving requirement has no mark when every fresh head is an outlier above the
+  # qualified reference; with no target to judge against, those routes keep strategy order.
   defp judge(capture, observation) do
     target = target_height(capture)
 
     cond do
+      is_nil(target) ->
+        {:unknown, :no_observation}
+
       observation.height >= target ->
         {:supports, supports_reason(capture.requirement)}
 
       is_nil(capture.cadence.credit_block_time_ms) ->
         without_cadence(capture.requirement)
 
-      observation.height +
-        credit(capture, max(capture.captured_at_ms - observation.observed_at_ms, 0)) < target ->
+      observation.height + credit(capture, credit_ms(capture, observation)) < target ->
         {:against, against_reason(capture.requirement)}
 
       true ->
         {:unknown, :within_credit}
     end
   end
+
+  # The mark ages with the route, so a moving head credits only the gap between the two
+  # observations; a fixed height credits the observation's full age.
+  defp credit_ms(%__MODULE__{requirement: :at_head, mark: mark}, observation),
+    do: max(mark.observed_at_ms - observation.observed_at_ms, 0)
+
+  defp credit_ms(capture, observation),
+    do: max(capture.captured_at_ms - observation.observed_at_ms, 0)
 
   defp without_cadence({:request_height, _height}), do: {:against, :below_height}
   defp without_cadence(_requirement), do: {:unknown, :cadence_unknown}

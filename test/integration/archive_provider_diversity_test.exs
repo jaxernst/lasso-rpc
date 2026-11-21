@@ -603,7 +603,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
              Lasso.BlockSync.Registry.put_height_at(
                chain,
                ahead,
-               99_999_998,
+               99_999_999,
                initial_at_ms + 2,
                :ws,
                %{}
