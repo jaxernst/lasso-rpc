@@ -243,40 +243,6 @@ defmodule Lasso.RPC.CircuitBreakerTest do
   end
 
   describe "shared penalty policy" do
-    test "shared mode does not penalize timeout errors" do
-      alias Lasso.JSONRPC.Error, as: JError
-
-      id = {"cb_shared_timeout", :http}
-
-      {:ok, _pid} =
-        CircuitBreaker.start_link(
-          {id,
-           %{
-             shared_mode: true,
-             failure_threshold: 1,
-             recovery_timeout: 100,
-             success_threshold: 1,
-             category_thresholds: %{timeout: 1}
-           }}
-        )
-
-      timeout_error =
-        JError.new(-32_007, "Request timeout",
-          category: :timeout,
-          retriable?: true,
-          breaker_penalty?: true
-        )
-
-      assert {:executed, {:error, _}} =
-               CircuitBreaker.call(id, fn -> {:error, timeout_error} end)
-
-      assert {:executed, {:error, _}} =
-               CircuitBreaker.call(id, fn -> {:error, timeout_error} end)
-
-      Process.sleep(20)
-      assert CircuitBreaker.get_state(id).state == :closed
-    end
-
     test "shared mode penalizes server errors" do
       alias Lasso.JSONRPC.Error, as: JError
 

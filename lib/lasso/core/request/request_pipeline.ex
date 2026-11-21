@@ -27,7 +27,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
   alias Lasso.Core.Support.{ClaimAudit, CredentialHealth, LogRangeLimit}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.{CandidateListing, ChainIdentity}
+  alias Lasso.Providers.{CandidateListing, ChainIdentity, ProbeCoordinator}
 
   alias Lasso.RPC.{
     AttemptIdentity,
@@ -1203,7 +1203,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
     projection = ExecutionProjector.qualify(outcome.projection, qualification)
 
-    _control_result = CircuitBreaker.report_canonical(receipt, outcome.fact, projection)
+    _control_result = report_control(receipt, outcome.fact, projection, channel)
 
     _projection_result =
       AttemptProjection.process(
@@ -1262,6 +1262,18 @@ defmodule Lasso.RPC.RequestPipeline do
 
     handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision)
   end
+
+  # A timeout says only that a provider was slower than this attempt's share of one request's
+  # budget, so it asks for a probe, whose own fixed budget decides whether the provider answers.
+  defp report_control(receipt, fact, %{breaker_effect: :failure} = projection, channel)
+       when is_struct(fact, AttemptTerminal.Deadline) or
+              (is_struct(fact, AttemptTerminal.TransportFailure) and fact.reason == :timeout) do
+    ProbeCoordinator.probe_soon(channel.chain_id, channel.instance_id)
+    CircuitBreaker.report_canonical(receipt, fact, %{projection | breaker_effect: :none})
+  end
+
+  defp report_control(receipt, fact, projection, _channel),
+    do: CircuitBreaker.report_canonical(receipt, fact, projection)
 
   defp transaction_evidence_options(_channel, %{method: "eth_sendRawTransaction"}, _outcome),
     do: []

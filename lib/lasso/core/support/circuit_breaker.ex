@@ -1992,11 +1992,10 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   defp extract_error_info(_), do: nil
 
-  # Shared circuit breakers should only trip on clearly provider-wide failures.
-  # This avoids cross-profile coupling from workload-specific timeout patterns.
+  # Shared circuit breakers trip on provider-wide failures. Request timeouts never arrive here; a
+  # health probe's timeout does, because its budget is the same for every profile sharing the route.
   defp shared_breaker_penalty?(%JError{category: :server_error}, %{shared_mode: true}), do: true
   defp shared_breaker_penalty?(%JError{category: :network_error}, %{shared_mode: true}), do: true
-  defp shared_breaker_penalty?(%JError{category: :timeout}, %{shared_mode: true}), do: false
   defp shared_breaker_penalty?(%JError{category: :auth_error}, %{shared_mode: true}), do: false
 
   defp shared_breaker_penalty?(%JError{breaker_penalty?: penalty}, %{shared_mode: true}),

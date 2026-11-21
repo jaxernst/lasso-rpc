@@ -13,6 +13,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
   - Exponential backoff per-instance on failure (2s base, 30s max, ±20% jitter)
   - Rate-limited providers back off to 30s
   - Auth-failed providers (401/402) back off to 120s
+  - An instance whose request timed out is probed on the next tick, beside the
+    scheduled visit, in the order instances were marked due
+  - A probe timeout counts against the instance's HTTP circuit
 
   ## ETS Write Partitioning
 
@@ -29,6 +32,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   require Logger
 
   alias Lasso.Config.MonitoringDefaults
+  alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Discovery.ErrorClassifier
   alias Lasso.Providers.{Catalog, ChainIdentity, InstanceState, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
@@ -57,6 +61,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
     instances: %{},
     probe_order: [],
     probe_index: 0,
+    due: [],
     last_reload_at: 0,
     subscribed_instances: [],
     restart_count_cleared: false
@@ -75,6 +80,16 @@ defmodule Lasso.Providers.ProbeCoordinator do
     GenServer.cast(via_name(chain_id), :reload_instances)
   end
 
+  @doc """
+  Probes an instance on the coordinator's next tick, after a request to it timed out. The verdict
+  comes from a probe with its own fixed budget rather than from what was left of one request's.
+  It keeps to the scheduler's pacing: one probe of an instance at a time, one due probe per tick
+  beside the scheduled one, and none within the failure backoff or a rate-limit cooldown.
+  """
+  @spec probe_soon(pos_integer(), String.t() | nil) :: :ok
+  def probe_soon(chain_id, instance_id),
+    do: GenServer.cast(via_name(chain_id), {:probe_soon, instance_id})
+
   @impl true
   def init(chain_id) do
     state = %__MODULE__{chain_id: chain_id, last_reload_at: System.monotonic_time(:millisecond)}
@@ -91,6 +106,13 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @impl true
   def handle_cast(:reload_instances, state) do
     {:noreply, do_reload_instances(state)}
+  end
+
+  # Due instances wait in arrival order, so a provider that keeps timing out cannot keep another
+  # one's probe waiting.
+  def handle_cast({:probe_soon, instance_id}, state) do
+    due = if instance_id in state.due, do: state.due, else: state.due ++ [instance_id]
+    {:noreply, %{state | due: due}}
   end
 
   @impl true
@@ -224,7 +246,30 @@ defmodule Lasso.Providers.ProbeCoordinator do
     %{state | subscribed_instances: new_instance_ids}
   end
 
-  defp do_tick(state) do
+  # A due probe never takes the scheduled visit's place, so a provider whose reads keep timing out
+  # cannot hold back the chain's other probes.
+  defp do_tick(state), do: state |> due_tick() |> scheduled_tick()
+
+  defp due_tick(%{due: []} = state), do: state
+
+  defp due_tick(%{due: [instance_id | rest]} = state) do
+    state = %{state | due: rest}
+    now = System.monotonic_time(:millisecond)
+
+    case Map.get(state.instances, instance_id) do
+      nil -> state
+      inst -> if due?(inst, now), do: probe_instance(state, instance_id, inst, now), else: state
+    end
+  end
+
+  # Waiting out the previous probe's budget keeps one probe of an instance in flight at a time.
+  defp due?(inst, now) do
+    not InstanceState.read_rate_limit(inst.instance_id, :http).rate_limited and
+      (is_nil(inst.last_probe_monotonic) or
+         now - inst.last_probe_monotonic >= max(@default_timeout_ms, inst.current_backoff_ms))
+  end
+
+  defp scheduled_tick(state) do
     case state.probe_order do
       [] ->
         state
@@ -517,7 +562,17 @@ defmodule Lasso.Providers.ProbeCoordinator do
          last_error: reason
        })}
     )
+
+    report_unanswered(instance_id, reason)
   end
+
+  # Request timeouts stay neutral to the circuit and ask for this probe instead, because a probe's
+  # budget is the same for every profile sharing the route. Other probe failures are left to the
+  # routed attempts that already count them.
+  defp report_unanswered(instance_id, %Finch.TransportError{reason: :timeout}),
+    do: CircuitBreaker.report_external_bounded({instance_id, :http}, {:error, :timeout})
+
+  defp report_unanswered(_instance_id, _reason), do: :ok
 
   defp write_probe_auth_failure(instance_id, status) do
     existing = read_existing_probe(instance_id)
