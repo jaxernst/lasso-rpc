@@ -171,7 +171,7 @@ Ranks every reliable upstream in one weighted random permutation, using each ups
   weight = (best_mean / candidate_mean)^beta
   ```
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
-- Lets one upstream with no latency evidence compete in each request's permutation at the weight of the quickest, so it earns a sample instead of being starved. Any other unmeasured upstreams follow the measured ones, so a request never tries two unproven upstreams ahead of a proven one
+- Lets one upstream with no latency evidence compete in each request's permutation at the weight of the quickest, so it earns a sample instead of being starved. Any other unmeasured upstreams rank behind the measured ones of their reliability group, so the ranking puts at most one unproven upstream ahead of a proven one. Health tiering applies after ranking and can still move a proven upstream with a half-open circuit behind them
 - Applies reliability as a boundary, not a weight multiplier: upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75) follow the reliable ones in their own permutation, and stale evidence ranks last within its group
 - Uses no latency floor or weight floor
 - When no candidate qualifies, emits an availability degradation; the ordering is unchanged

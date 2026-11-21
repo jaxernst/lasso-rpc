@@ -48,8 +48,8 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
       Enum.split_with(channels, &match?(%{state: :stale}, summary(summaries, &1)))
 
     {measured, unmeasured} = Enum.split_with(current, &measured?(summary(summaries, &1)))
-    # One unmeasured upstream per request competes with the measured ones, so a request never
-    # spends its deadline on two unproven upstreams ahead of a proven one.
+    # One unmeasured upstream per request competes with the measured ones, so this ranking never
+    # puts two unproven upstreams ahead of a proven one in the same group.
     {sampled, deferred} = unmeasured |> Enum.shuffle() |> Enum.split(1)
     beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
     latencies = Enum.map(measured, &summary(summaries, &1).successful_mean_latency_ms)
