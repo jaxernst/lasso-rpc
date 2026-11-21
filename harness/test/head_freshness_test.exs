@@ -65,14 +65,36 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     end)
   end
 
-  defp world(action) do
+  test "a primary steadily behind the mark stays deferred for latest reads as both observations age" do
+    # A 20 ms block time caps the band at 20 blocks and makes ordinary request time worth
+    # many blocks of credit, while observations stay fresh for 30 s. Observed together, the
+    # primary is thirty blocks past the band, so crediting its own age alone would undefer it.
+    world(
+      fn tenant, primary, current ->
+        observe(tenant, primary, current, @current - 50)
+        deadline = System.monotonic_time(:millisecond) + 600
+
+        Stream.repeatedly(fn ->
+          assert sends(tenant, [primary, current], "eth_getBalance", [@address, "latest"]) ==
+                   [current.name]
+        end)
+        |> Stream.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
+        |> Stream.run()
+      end,
+      %{"block_time_ms" => 20}
+    )
+  end
+
+  defp world(action, chain \\ %{}) do
     primary = Fleet.start!(self(), "freshness-primary")
     current = Fleet.start!(self(), "freshness-current")
 
     try do
       # A retired lag limit still loads and no longer excludes the lagging route.
       tenant =
-        Tenant.open!([primary, current], chain: %{"selection" => %{"max_lag_blocks" => 10}})
+        Tenant.open!([primary, current],
+          chain: Map.merge(%{"selection" => %{"max_lag_blocks" => 10}}, chain)
+        )
 
       try do
         action.(tenant, primary, current)
@@ -87,8 +109,8 @@ defmodule Lasso.Harness.HeadFreshnessTest do
 
   # Pinned head reads record each route's head; the moving-head preference
   # becomes visible once both observations are published.
-  defp observe(tenant, primary, current) do
-    for {fleet, height} <- [{primary, @behind}, {current, @current}] do
+  defp observe(tenant, primary, current, behind \\ @behind) do
+    for {fleet, height} <- [{primary, behind}, {current, @current}] do
       Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(height)})
       pinned = %{rpc_url: tenant.rpc_url <> "?provider_override=" <> fleet.name}
       assert %{body: %{"result" => result}} = Rpc.call(pinned, "eth_blockNumber")
