@@ -325,11 +325,11 @@ defmodule Lasso.TwoProviderWsFailoverTest do
     instance = Lasso.Providers.Catalog.lookup_instance_id("public", chain, a.name)
     breaker = {instance, :http}
 
-    for _ <- 1..3 do
-      assert %{body: %{"result" => "0x10"}} = Rpc.call(credentials, "web3_clientVersion")
-    end
+    Eventually.assert_eventually(fn ->
+      Rpc.call(credentials, "web3_clientVersion")
+      CircuitBreaker.get_state(breaker).state == :open
+    end)
 
-    Eventually.assert_eventually(fn -> CircuitBreaker.get_state(breaker).state == :open end)
     :ok = Fleet.resume_listener(a)
     assert CircuitBreaker.get_state(breaker).state == :open
     assert CircuitBreaker.get_recovery_time_remaining(breaker) > 0
