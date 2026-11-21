@@ -105,6 +105,22 @@ defmodule Lasso.RPC.CircuitBreakerHalfOpenAdmissionTest do
              :sys.get_state(breaker_pid)
   end
 
+  # A surface cannot hold a request between its snapshot read and the breaker's answer.
+  test "a request holding the snapshot from before the circuit closed is admitted as closed" do
+    {id, _breaker_pid} = start_half_open_breaker()
+    assert {:ok, %Snapshot{state: :half_open} = before_close} = Snapshot.lookup(id)
+
+    assert {:executed, :ok} = CircuitBreaker.call(id, fn -> :ok end, 100)
+    assert %{state: :closed} = CircuitBreaker.get_state(id)
+    assert {:ok, %Snapshot{state: :closed, generation: generation}} = Snapshot.lookup(id)
+    assert generation > before_close.generation
+
+    Snapshot.put(before_close)
+
+    assert {:ok, %AdmissionReceipt{kind: :closed, generation: ^generation}} =
+             CircuitBreaker.admit(id, deadline_us())
+  end
+
   test "policy rejection releases a live half-open lease without declaring recovery" do
     {id, breaker_pid} = start_half_open_breaker()
     assert {:ok, receipt} = CircuitBreaker.admit(id, deadline_us())

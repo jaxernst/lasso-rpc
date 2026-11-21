@@ -201,8 +201,7 @@ defmodule Lasso.RPC.RequestPipelineExecutionScopeTest do
 
     await_mailbox(breaker_pid, fn messages ->
       Enum.any?(messages, fn
-        {:"$gen_call", _from,
-         {:admit_exceptional, _token, ^owner, _generation, _epoch, _deadline}} ->
+        {:"$gen_call", _from, {:admit_exceptional, _token, ^owner, _deadline}} ->
           true
 
         _message ->
