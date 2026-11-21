@@ -493,22 +493,6 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @doc """
-  Records a successful external check (async). It resets a closed circuit's consecutive
-  failures and never moves an open or half-open circuit toward recovery.
-  """
-  @spec record_success(breaker_id()) :: :ok | {:error, :not_found}
-  def record_success(id) do
-    case safe_whereis(via_name(id)) do
-      nil ->
-        {:error, :not_found}
-
-      pid ->
-        GenServer.cast(pid, {:report_external, {:ok, :external_check}})
-        :ok
-    end
-  end
-
-  @doc """
   Record a failed operation for the circuit breaker (async).
   """
   @spec record_failure(breaker_id(), term()) :: :ok | {:error, :not_found}
@@ -795,23 +779,13 @@ defmodule Lasso.Core.Support.CircuitBreaker do
   end
 
   @impl true
-  def handle_cast(
-        {:report_external, {:ok, _result}},
-        %{state: :closed, failure_count: count} = state
-      )
-      when count > 0 do
-    new_state = %{state | failure_count: 0}
-    write_ets_state(new_state)
-    {:noreply, new_state}
-  end
-
   def handle_cast({:report_external, {:ok, _result}}, state) do
     {:noreply, state}
   end
 
+  @impl true
   def handle_cast({:report_external, outcome}, state) do
     new_state = classify_and_update_state_for_report(outcome, state)
-    write_ets_state(new_state)
     {:noreply, new_state}
   end
 
@@ -2018,10 +1992,11 @@ defmodule Lasso.Core.Support.CircuitBreaker do
 
   defp extract_error_info(_), do: nil
 
-  # Shared circuit breakers trip on provider-wide failures. Request timeouts never arrive here; a
-  # health probe's timeout does, because its budget is the same for every profile sharing the route.
+  # Shared circuit breakers should only trip on clearly provider-wide failures.
+  # This avoids cross-profile coupling from workload-specific timeout patterns.
   defp shared_breaker_penalty?(%JError{category: :server_error}, %{shared_mode: true}), do: true
   defp shared_breaker_penalty?(%JError{category: :network_error}, %{shared_mode: true}), do: true
+  defp shared_breaker_penalty?(%JError{category: :timeout}, %{shared_mode: true}), do: false
   defp shared_breaker_penalty?(%JError{category: :auth_error}, %{shared_mode: true}), do: false
 
   defp shared_breaker_penalty?(%JError{breaker_penalty?: penalty}, %{shared_mode: true}),

@@ -1722,6 +1722,75 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
   end
 
   describe "shared circuit breaker profile behavior" do
+    test "timeout-heavy traffic in one profile does not open shared circuit for another profile",
+         %{
+           chain: chain
+         } do
+      primary_profile = "public"
+      secondary_profile = "testnet"
+      provider_id = "shared_timeout"
+
+      timeout_error =
+        %Lasso.JSONRPC.Error{
+          code: -32_007,
+          message: "Request timeout",
+          category: :timeout,
+          retriable?: true,
+          breaker_penalty?: true
+        }
+
+      setup_providers([
+        %{id: provider_id, priority: 10, behavior: :healthy, profile: primary_profile}
+      ])
+
+      register_shared_profile_provider(chain, secondary_profile, provider_id, priority: 10)
+
+      instance_primary =
+        Lasso.Providers.Catalog.lookup_instance_id(primary_profile, chain, provider_id)
+
+      instance_secondary =
+        Lasso.Providers.Catalog.lookup_instance_id(secondary_profile, chain, provider_id)
+
+      assert is_binary(instance_primary)
+      assert instance_primary == instance_secondary
+
+      CircuitBreakerHelper.ensure_circuit_breaker_started(instance_primary, :http)
+
+      set_shared_breaker_mode(instance_primary, :http,
+        timeout: 1,
+        network_error: 1,
+        server_error: 1
+      )
+
+      for _ <- 1..3 do
+        assert {:executed, {:error, _}} =
+                 Lasso.Core.Support.CircuitBreaker.call(
+                   {instance_primary, :http},
+                   fn -> {:error, timeout_error} end
+                 )
+      end
+
+      Process.sleep(50)
+      CircuitBreakerHelper.assert_circuit_breaker_state({instance_primary, :http}, :closed)
+
+      {:ok, result, _ctx} =
+        RequestPipeline.execute_via_channels(
+          chain,
+          "eth_blockNumber",
+          [],
+          %RequestOptions{
+            profile: secondary_profile,
+            provider_override: provider_id,
+            failover_on_override: false,
+            timeout_ms: 1_000,
+            strategy: :load_balanced
+          }
+        )
+
+      assert %Response.Success{} = result
+      CircuitBreakerHelper.assert_circuit_breaker_state({instance_primary, :http}, :closed)
+    end
+
     test "server/network style failures in one profile open shared circuit for the shared instance",
          %{
            chain: chain

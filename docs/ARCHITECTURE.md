@@ -535,8 +535,8 @@ Per-chain health probe coordinator (one per unique chain):
 - 200ms tick cycle, probes one instance per tick
 - Periodic `eth_chainId` probes (health check + version detection)
 - Exponential backoff on failure (2s base, 30s max, ±20% jitter)
-- Probes an instance on the next tick after a request to it times out, beside the scheduled visit
-- Reports chain identity and probe health; a probe timeout counts against the HTTP circuit
+- Probes an instance on the next tick after a request to it times out, beside the scheduled visit, with at most one probe of an instance in flight
+- Reports chain identity and probe health; two consecutive probe timeouts open the HTTP circuit
 - Writes health status to `:lasso_instance_state` ETS
 
 **Configuration**:
@@ -618,12 +618,12 @@ ordinary requests can recover it even with background observations disabled.
 Other failure classes retain their normal cooldown and success threshold.
 A request timeout is neutral to the circuit, because it shows only that a
 provider was slower than that attempt's share of one request's budget. It asks
-the probe coordinator to probe the instance, and a probe timeout counts as a
-timeout failure, so an upstream that accepts requests and never answers opens
-after two consecutive probe timeouts. A probe success resets a closed circuit's
-consecutive failures but never moves an open or half-open circuit toward
-recovery; other probe outcomes update identity and health evidence only. Routed
-request and head-poll outcomes drive circuit recovery.
+the probe coordinator to probe the instance instead. The coordinator runs one
+probe of an instance at a time and counts consecutive probe timeouts; at two it
+opens the HTTP circuit, so an upstream that accepts requests and never answers
+leaves the route. A probe success resets only that count. Probes never close a
+circuit or count toward its probation, and no other probe outcome reaches the
+breaker. Routed request and head-poll outcomes drive circuit recovery.
 
 ### Configuration
 

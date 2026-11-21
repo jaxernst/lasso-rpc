@@ -13,10 +13,11 @@ defmodule Lasso.Providers.ProbeCoordinator do
   - Exponential backoff per-instance on failure (2s base, 30s max, ±20% jitter)
   - Rate-limited providers back off to 30s
   - Auth-failed providers (401/402) back off to 120s
+  - An instance has at most one probe in flight
   - An instance whose request timed out is probed on the next tick, beside the
     scheduled visit, in the order instances were marked due
-  - A probe timeout counts against the instance's HTTP circuit, and a probe success
-    resets a closed circuit's consecutive failures
+  - Two consecutive probe timeouts open the instance's HTTP circuit; probes never
+    close a circuit or count toward its probation
   - A probe the instance's request budget refuses stays due
 
   ## ETS Write Partitioning
@@ -47,6 +48,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @auth_backoff_ms 120_000
   @probe_rate_limit_ttl_ms 60_000
   @jitter_percent 0.2
+  @probe_timeouts_to_open 2
 
   @type instance_state :: %{
           instance_id: String.t(),
@@ -54,7 +56,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
           last_probe_monotonic: integer() | nil,
           current_backoff_ms: non_neg_integer(),
           cached_interval_ms: non_neg_integer() | nil,
-          cached_at: integer() | nil
+          cached_at: integer() | nil,
+          probe_ref: reference() | nil,
+          probe_timeouts: non_neg_integer()
         }
 
   defstruct [
@@ -86,7 +90,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
   Probes an instance on the coordinator's next tick, after a request to it timed out. The verdict
   comes from a probe with its own fixed budget rather than from what was left of one request's.
   It keeps to the scheduler's pacing: one probe of an instance at a time, one due probe per tick
-  beside the scheduled one, and none within the failure backoff or a rate-limit cooldown.
+  beside the scheduled one, and none within the failure backoff or a rate-limit cooldown. A due
+  instance whose probe is in flight stays queued.
   """
   @spec probe_soon(pos_integer(), String.t() | nil) :: :ok
   def probe_soon(chain_id, instance_id),
@@ -143,13 +148,14 @@ defmodule Lasso.Providers.ProbeCoordinator do
   end
 
   @impl true
-  def handle_info({:probe_result, instance_id, result}, state) do
-    handle_probe_result(instance_id, result, state)
-  end
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    instances =
+      Map.new(state.instances, fn
+        {id, %{probe_ref: ^ref} = inst} -> {id, %{inst | probe_ref: nil}}
+        entry -> entry
+      end)
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
-    {:noreply, state}
+    {:noreply, %{state | instances: instances}}
   end
 
   defp handle_probe_result(instance_id, result, state) do
@@ -178,7 +184,10 @@ defmodule Lasso.Providers.ProbeCoordinator do
               %{inst | consecutive_failures: new_failures, current_backoff_ms: backoff}
           end
 
-        report_circuit(instance_id, result)
+        updated = %{updated | probe_ref: nil, probe_timeouts: probe_timeouts(inst, result)}
+
+        if updated.probe_timeouts >= @probe_timeouts_to_open and timeout?(result),
+          do: CircuitBreaker.open({instance_id, :http})
 
         state =
           state
@@ -190,17 +199,17 @@ defmodule Lasso.Providers.ProbeCoordinator do
     end
   end
 
-  # Request timeouts stay neutral to the circuit and ask for a probe instead, because a probe's
-  # budget is the same for every profile sharing the route. Other probe failures are left to the
-  # routed attempts that already count them. Outcomes reach the breaker from this one process, so
-  # it applies them in probe order.
-  defp report_circuit(instance_id, :success),
-    do: CircuitBreaker.record_success({instance_id, :http})
+  # Request timeouts leave a shared circuit alone and ask for a probe instead, because a probe's
+  # budget is the same for every profile sharing the route. Only the probe-timeout streak reaches
+  # the breaker, and only to open it, again on each further timeout until a probe succeeds.
+  # Other probe results are left to routed attempts.
+  defp probe_timeouts(_inst, :success), do: 0
 
-  defp report_circuit(instance_id, {:failure, %Finch.TransportError{reason: :timeout}}),
-    do: CircuitBreaker.record_failure({instance_id, :http}, :timeout)
+  defp probe_timeouts(inst, result),
+    do: inst.probe_timeouts + if(timeout?(result), do: 1, else: 0)
 
-  defp report_circuit(_instance_id, _result), do: :ok
+  defp timeout?({:failure, %Finch.TransportError{reason: :timeout}}), do: true
+  defp timeout?(_result), do: false
 
   # A local budget refusal sent nothing, so the instance stays owed its probe at the queue's front.
   defp requeue_refused(state, instance_id, :budget_refused),
@@ -236,7 +245,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
               last_probe_monotonic: nil,
               current_backoff_ms: 0,
               cached_interval_ms: nil,
-              cached_at: nil
+              cached_at: nil,
+              probe_ref: nil,
+              probe_timeouts: 0
             }
 
         {id, inst_state}
@@ -288,11 +299,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
     end
   end
 
-  # Waiting out the previous probe's budget keeps one probe of an instance in flight at a time.
+  defp due?(%{probe_ref: ref}, _now) when is_reference(ref), do: false
+
   defp due?(inst, now) do
     not InstanceState.read_rate_limit(inst.instance_id, :http).rate_limited and
       (is_nil(inst.last_probe_monotonic) or
-         now - inst.last_probe_monotonic >= max(@default_timeout_ms, inst.current_backoff_ms))
+         now - inst.last_probe_monotonic >= max(@base_backoff_ms, inst.current_backoff_ms))
   end
 
   defp scheduled_tick(state) do
@@ -330,6 +342,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   end
 
   defp should_probe?(nil, _now, _state), do: {false, nil}
+  defp should_probe?(%{probe_ref: ref}, _now, _state) when is_reference(ref), do: {false, nil}
 
   defp should_probe?(inst, now, state) do
     effective_ms = effective_probe_interval_ms(state, inst.instance_id)
@@ -379,7 +392,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   defp probe_instance(state, instance_id, inst, now) do
     chain_id = state.chain_id
-    coordinator = self()
     snapshot = Catalog.snapshot()
 
     case snapshot && Catalog.get_instance(snapshot, instance_id) do
@@ -391,12 +403,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
         observation = ChainIdentity.capture(instance_id, snapshot)
 
-        Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-          {^instance_id, result} = do_http_probe(instance_id, url, chain_id, headers, observation)
-          send(coordinator, {:probe_result, instance_id, result})
-        end)
+        task =
+          Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
+            do_http_probe(instance_id, url, chain_id, headers, observation)
+          end)
 
-        mark_probe_attempt(state, instance_id, inst, now)
+        mark_probe_attempt(state, instance_id, %{inst | probe_ref: task.ref}, now)
 
       _ ->
         state
