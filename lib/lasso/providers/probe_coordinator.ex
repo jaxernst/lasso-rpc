@@ -203,10 +203,11 @@ defmodule Lasso.Providers.ProbeCoordinator do
   # budget is the same for every profile sharing the route. Only the probe-timeout streak reaches
   # the breaker, and only to open it, again on each further timeout until a probe succeeds.
   # Other probe results are left to routed attempts.
-  defp probe_timeouts(_inst, :success), do: 0
+  # Any other outcome shows the upstream answered and ends the streak; a local refusal sent nothing.
+  defp probe_timeouts(inst, :budget_refused), do: inst.probe_timeouts
 
   defp probe_timeouts(inst, result),
-    do: inst.probe_timeouts + if(timeout?(result), do: 1, else: 0)
+    do: if(timeout?(result), do: inst.probe_timeouts + 1, else: 0)
 
   defp timeout?({:failure, %Finch.TransportError{reason: :timeout}}), do: true
   defp timeout?(_result), do: false
