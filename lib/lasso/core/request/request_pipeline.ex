@@ -27,7 +27,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
   alias Lasso.Core.Support.{ClaimAudit, CredentialHealth, LogRangeLimit}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.Providers.{CandidateListing, ChainIdentity}
+  alias Lasso.Providers.{CandidateListing, ChainIdentity, ProbeCoordinator}
 
   alias Lasso.RPC.{
     AttemptIdentity,
@@ -1204,6 +1204,7 @@ defmodule Lasso.RPC.RequestPipeline do
     projection = ExecutionProjector.qualify(outcome.projection, qualification)
 
     _control_result = CircuitBreaker.report_canonical(receipt, outcome.fact, projection)
+    :ok = request_probe(outcome.fact, projection, channel)
 
     _projection_result =
       AttemptProjection.process(
@@ -1262,6 +1263,16 @@ defmodule Lasso.RPC.RequestPipeline do
 
     handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision)
   end
+
+  # A shared circuit ignores request timeouts, because one says only that a provider was slower
+  # than this attempt's share of one request's budget. A timed-out attempt asks for a probe
+  # instead, whose own fixed budget decides whether the provider answers.
+  defp request_probe(fact, %{breaker_effect: :failure}, channel)
+       when is_struct(fact, AttemptTerminal.Deadline) or
+              (is_struct(fact, AttemptTerminal.TransportFailure) and fact.reason == :timeout),
+       do: ProbeCoordinator.probe_soon(channel.chain_id, channel.instance_id)
+
+  defp request_probe(_fact, _projection, _channel), do: :ok
 
   defp transaction_evidence_options(_channel, %{method: "eth_sendRawTransaction"}, _outcome),
     do: []

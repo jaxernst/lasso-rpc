@@ -106,7 +106,7 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 |-------|------|---------|-------------|
 | `probe_interval_ms` | integer | 12000 | Legacy fallback for HTTP head and chain-identity intervals. Set to ~1x block time for L1, ~2.5x for L2. |
 | `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold for qualified profile-scoped transport evidence; this setting does not emit lag warning logs. |
-| `background_observations` | boolean | true | Enable periodic head polling, chain-identity probes, and configured `newHeads` observation. Client requests remain separate. |
+| `background_observations` | boolean | true | Enable periodic head polling, chain-identity probes, and configured `newHeads` observation. Client requests remain separate, and a routed request that times out still schedules one probe of that upstream. |
 | `http_heads_interval_ms` | integer | `probe_interval_ms` | Normal HTTP head-poll interval; `0` disables periodic head polling. |
 | `http_backup_interval_ms` | integer | 3 × normal interval | HTTP head-poll interval while WebSocket head evidence is fresh; `0` disables backup polling. |
 | `chain_identity_interval_ms` | integer | `probe_interval_ms` | Interval for `eth_chainId` probes; `0` disables periodic identity probes. |
@@ -214,7 +214,7 @@ providers:
 | `archival` | boolean | No | Whether this provider serves historical data (default: true) |
 | `subscribe_new_heads` | boolean | No | Override chain-level `subscribe_new_heads` for this provider |
 | `request_budget` | map | No | Per-node outbound JSON-RPC token bucket: positive integer `requests_per_second`, optional positive integer `burst` (defaults to the rate). Shared by HTTP, WebSocket, client attempts and background work; omitted means unlimited unless another reference to the same upstream declares a budget |
-| `background_observations` | boolean | No | `false` removes this provider reference's periodic identity checks, block-height polls, and `newHeads` demand (default: true). Shared upstreams may still observe for another enabled reference; client requests and subscriptions remain available |
+| `background_observations` | boolean | No | `false` removes this provider reference's periodic identity checks, block-height polls, and `newHeads` demand (default: true). Shared upstreams may still observe for another enabled reference; client requests and subscriptions remain available, and a routed request that times out still schedules one probe of that upstream |
 | `observation_overrides` | map | No | Sparse per-provider overrides for `background_observations`, `subscribe_new_heads`, and the HTTP head, backup, and chain-identity intervals |
 | `capabilities` | map | No | Provider capabilities (see Capabilities below) |
 | `sharing_mode` | string | No | `auto` shares identical upstream runtime; `isolated` separates it by profile |

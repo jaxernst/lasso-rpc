@@ -13,6 +13,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
   - Exponential backoff per-instance on failure (2s base, 30s max, ±20% jitter)
   - Rate-limited providers back off to 30s
   - Auth-failed providers (401/402) back off to 120s
+  - An instance has at most one probe in flight
+  - An instance whose request timed out is probed on the next tick, beside the
+    scheduled visit, in the order instances were marked due
+  - Two consecutive probe timeouts open the instance's HTTP circuit; probes never
+    close a circuit or count toward its probation
+  - A probe refused locally before it is sent stays due
 
   ## ETS Write Partitioning
 
@@ -29,6 +35,8 @@ defmodule Lasso.Providers.ProbeCoordinator do
   require Logger
 
   alias Lasso.Config.MonitoringDefaults
+  alias Lasso.Core.Support.CircuitBreaker
+  alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.Discovery.ErrorClassifier
   alias Lasso.Providers.{Catalog, ChainIdentity, InstanceState, ObservationPolicy, RestartCounter}
   alias Lasso.RPC.Transport.HTTP.Client.Finch, as: BoundedHTTP
@@ -41,6 +49,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @auth_backoff_ms 120_000
   @probe_rate_limit_ttl_ms 60_000
   @jitter_percent 0.2
+  @probe_timeouts_to_open 2
 
   @type instance_state :: %{
           instance_id: String.t(),
@@ -48,7 +57,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
           last_probe_monotonic: integer() | nil,
           current_backoff_ms: non_neg_integer(),
           cached_interval_ms: non_neg_integer() | nil,
-          cached_at: integer() | nil
+          cached_at: integer() | nil,
+          probe_ref: reference() | nil,
+          probe_timeouts: non_neg_integer()
         }
 
   defstruct [
@@ -57,6 +68,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
     instances: %{},
     probe_order: [],
     probe_index: 0,
+    due: [],
     last_reload_at: 0,
     subscribed_instances: [],
     restart_count_cleared: false
@@ -75,6 +87,17 @@ defmodule Lasso.Providers.ProbeCoordinator do
     GenServer.cast(via_name(chain_id), :reload_instances)
   end
 
+  @doc """
+  Probes an instance on the coordinator's next tick, after a request to it timed out. The verdict
+  comes from a probe with its own fixed budget rather than from what was left of one request's.
+  It keeps to the scheduler's pacing: one probe of an instance at a time, one due probe per tick
+  beside the scheduled one, and none within the failure backoff or a rate-limit cooldown. A due
+  instance whose probe is in flight stays queued.
+  """
+  @spec probe_soon(pos_integer(), String.t() | nil) :: :ok
+  def probe_soon(chain_id, instance_id),
+    do: GenServer.cast(via_name(chain_id), {:probe_soon, instance_id})
+
   @impl true
   def init(chain_id) do
     state = %__MODULE__{chain_id: chain_id, last_reload_at: System.monotonic_time(:millisecond)}
@@ -91,6 +114,13 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @impl true
   def handle_cast(:reload_instances, state) do
     {:noreply, do_reload_instances(state)}
+  end
+
+  # Due instances wait in arrival order, so a provider that keeps timing out cannot keep another
+  # one's probe waiting.
+  def handle_cast({:probe_soon, instance_id}, state) do
+    due = if instance_id in state.due, do: state.due, else: state.due ++ [instance_id]
+    {:noreply, %{state | due: due}}
   end
 
   @impl true
@@ -119,13 +149,14 @@ defmodule Lasso.Providers.ProbeCoordinator do
   end
 
   @impl true
-  def handle_info({:probe_result, instance_id, result}, state) do
-    handle_probe_result(instance_id, result, state)
-  end
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
+    instances =
+      Map.new(state.instances, fn
+        {id, %{probe_ref: ^ref} = inst} -> {id, %{inst | probe_ref: nil}}
+        entry -> entry
+      end)
 
-  @impl true
-  def handle_info({:DOWN, _ref, :process, _pid, _reason}, state) do
-    {:noreply, state}
+    {:noreply, %{state | instances: instances}}
   end
 
   defp handle_probe_result(instance_id, result, state) do
@@ -136,7 +167,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
       inst ->
         updated =
           case result do
-            :budget_refused ->
+            :refused ->
               inst
 
             :success ->
@@ -154,14 +185,42 @@ defmodule Lasso.Providers.ProbeCoordinator do
               %{inst | consecutive_failures: new_failures, current_backoff_ms: backoff}
           end
 
+        updated = %{updated | probe_ref: nil, probe_timeouts: probe_timeouts(inst, result)}
+
+        # The breaker's own state, not the routing view: a restarted breaker reads as half-open
+        # to routing while it stays open with its recovery deadline.
+        if updated.probe_timeouts >= @probe_timeouts_to_open and timeout?(result) and
+             not match?({:ok, %{state: :open}}, Snapshot.lookup({instance_id, :http})),
+           do: CircuitBreaker.open({instance_id, :http})
+
         state =
           state
           |> Map.put(:instances, Map.put(state.instances, instance_id, updated))
+          |> requeue_refused(instance_id, result)
           |> maybe_clear_restart_count(result)
 
         {:noreply, state}
     end
   end
+
+  # Request timeouts leave a shared circuit alone and ask for a probe instead, because a probe's
+  # budget is the same for every profile sharing the route. Only the probe-timeout streak reaches
+  # the breaker, and only to open a circuit that is not already open, so a timeout fails a half-open
+  # trial but leaves an open circuit's recovery deadline in place. Any other outcome shows the
+  # upstream answered and ends the streak; a local refusal sent nothing and leaves it.
+  defp probe_timeouts(inst, :refused), do: inst.probe_timeouts
+
+  defp probe_timeouts(inst, result),
+    do: if(timeout?(result), do: inst.probe_timeouts + 1, else: 0)
+
+  defp timeout?({:failure, %Finch.TransportError{reason: :timeout}}), do: true
+  defp timeout?(_result), do: false
+
+  # A local refusal sent nothing, so the instance stays owed its probe at the queue's front.
+  defp requeue_refused(state, instance_id, :refused),
+    do: %{state | due: [instance_id | List.delete(state.due, instance_id)]}
+
+  defp requeue_refused(state, _instance_id, _result), do: state
 
   # First successful probe after a (re)start clears the restart
   # counter. A coordinator that crashes before any provider responds
@@ -191,7 +250,9 @@ defmodule Lasso.Providers.ProbeCoordinator do
               last_probe_monotonic: nil,
               current_backoff_ms: 0,
               cached_interval_ms: nil,
-              cached_at: nil
+              cached_at: nil,
+              probe_ref: nil,
+              probe_timeouts: 0
             }
 
         {id, inst_state}
@@ -224,7 +285,34 @@ defmodule Lasso.Providers.ProbeCoordinator do
     %{state | subscribed_instances: new_instance_ids}
   end
 
-  defp do_tick(state) do
+  # A due probe never takes the scheduled visit's place, so a provider whose reads keep timing out
+  # cannot hold back the chain's other probes.
+  defp do_tick(state), do: state |> due_tick() |> scheduled_tick()
+
+  # The oldest eligible instance is probed; the others keep their place until they are eligible.
+  defp due_tick(state) do
+    now = System.monotonic_time(:millisecond)
+    due = Enum.filter(state.due, &Map.has_key?(state.instances, &1))
+
+    case Enum.find(due, &due?(Map.fetch!(state.instances, &1), now)) do
+      nil ->
+        %{state | due: due}
+
+      instance_id ->
+        state = %{state | due: List.delete(due, instance_id)}
+        probe_instance(state, instance_id, Map.fetch!(state.instances, instance_id), now)
+    end
+  end
+
+  defp due?(%{probe_ref: ref}, _now) when is_reference(ref), do: false
+
+  defp due?(inst, now) do
+    not InstanceState.read_rate_limit(inst.instance_id, :http).rate_limited and
+      (is_nil(inst.last_probe_monotonic) or
+         now - inst.last_probe_monotonic >= max(@base_backoff_ms, inst.current_backoff_ms))
+  end
+
+  defp scheduled_tick(state) do
     case state.probe_order do
       [] ->
         state
@@ -259,6 +347,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
   end
 
   defp should_probe?(nil, _now, _state), do: {false, nil}
+  defp should_probe?(%{probe_ref: ref}, _now, _state) when is_reference(ref), do: {false, nil}
 
   defp should_probe?(inst, now, state) do
     effective_ms = effective_probe_interval_ms(state, inst.instance_id)
@@ -308,7 +397,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   defp probe_instance(state, instance_id, inst, now) do
     chain_id = state.chain_id
-    coordinator = self()
     snapshot = Catalog.snapshot()
 
     case snapshot && Catalog.get_instance(snapshot, instance_id) do
@@ -320,12 +408,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
         observation = ChainIdentity.capture(instance_id, snapshot)
 
-        Task.Supervisor.start_child(Lasso.TaskSupervisor, fn ->
-          {^instance_id, result} = do_http_probe(instance_id, url, chain_id, headers, observation)
-          send(coordinator, {:probe_result, instance_id, result})
-        end)
+        task =
+          Task.Supervisor.async_nolink(Lasso.TaskSupervisor, fn ->
+            do_http_probe(instance_id, url, chain_id, headers, observation)
+          end)
 
-        mark_probe_attempt(state, instance_id, inst, now)
+        mark_probe_attempt(state, instance_id, %{inst | probe_ref: task.ref}, now)
 
       _ ->
         state
@@ -368,9 +456,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
         )
       end)
 
+    # Only the response handler returns a tagged result; any error before it is a local refusal
+    # that sent nothing, and an exit is a probe that may have reached the upstream.
     case result do
-      {:error, {:upstream_request_budget_exhausted, _}} -> {instance_id, :budget_refused}
-      other -> other
+      {^instance_id, _probed} -> result
+      {:error, {:request_exit, _} = reason} -> {instance_id, {:failure, reason}}
+      {:error, _refused} -> {instance_id, :refused}
     end
   end
 
