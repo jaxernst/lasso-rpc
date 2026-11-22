@@ -1582,12 +1582,14 @@ defmodule Lasso.RPC.AttemptProjection do
        do: nil
 
   defp summary(row, instance_id, transport, chain_id, workload_key, now_us) do
+    stale? = row_stale?(row, workload_key, now_us)
+
     state =
       cond do
-        qualified_row?(row, now_us) ->
+        not stale? and qualified_row?(row) ->
           :qualified
 
-        row_stale?(row, now_us) ->
+        stale? ->
           :stale
 
         not reliable_row?(row) ->
@@ -1617,12 +1619,9 @@ defmodule Lasso.RPC.AttemptProjection do
     }
   end
 
-  defp qualified_row?(nil, _now_us), do: false
-  defp qualified_row?(%{observed_at_us: nil}, _now_us), do: false
-
-  defp qualified_row?(row, now_us) do
-    not row_stale?(row, now_us) and row.usable_successes >= 3 and
-      is_number(row.recent_success_probability) and reliable_row?(row)
+  defp qualified_row?(row) do
+    row.usable_successes >= 3 and is_number(row.recent_success_probability) and
+      reliable_row?(row)
   end
 
   defp reliable_row?(%{consecutive_failures: failures, recent_success_probability: probability}),
@@ -1687,17 +1686,22 @@ defmodule Lasso.RPC.AttemptProjection do
   defp routing_evidence_stale?(observed_at_us, now_us),
     do: now_us - observed_at_us >= @routing_evidence_max_age_us
 
-  # Stale evidence makes a route a sampling candidate again. Each consecutive failure after the
-  # first doubles how long a failing route's evidence stays current, up to an hour, so a route
-  # that never answers is re-sampled a few times a day; any success resets the count.
-  defp row_stale?(%{observed_at_us: observed_at_us, consecutive_failures: failures}, now_us) do
-    max_age_us =
-      min(
-        @routing_evidence_max_age_us * 2 ** min(max(failures - 1, 0), 4),
-        @failing_evidence_max_age_us
-      )
+  # Stale evidence makes a route a sampling candidate again. Each consecutive client failure after
+  # the first doubles how long a failing route's evidence stays current, up to an hour, so a route
+  # that never answers is re-sampled a few times a day; any success resets the count. System
+  # evidence keeps the fixed lifetime: probes and head polls run on their own cadence, so a longer
+  # lifetime would only hide a recovery they have not observed yet.
+  defp row_stale?(row, workload, now_us),
+    do: now_us - row.observed_at_us >= evidence_max_age_us(row.consecutive_failures, workload)
 
-    now_us - observed_at_us >= max_age_us
+  defp evidence_max_age_us(failures, workload) do
+    if Workload.system?(workload),
+      do: @routing_evidence_max_age_us,
+      else:
+        min(
+          @routing_evidence_max_age_us * 2 ** min(max(failures - 1, 0), 4),
+          @failing_evidence_max_age_us
+        )
   end
 
   defp diagnostic_attempt?(%__MODULE__{qualification: :policy_rejected}), do: true
