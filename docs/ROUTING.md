@@ -154,9 +154,9 @@ Client and system attempts use separate fixed method families: basic, state, log
 - Orders unqualified upstreams after the qualified ones in two groups: first those whose evidence is not unreliable, then the unreliable ones (three consecutive failures, or recent success probability below 0.75, in evidence that has not gone stale). Each group is ordered by prior latency, then provider and transport identity. When no upstream is qualified the same order ranks all of them, so this ranking places an unreliable upstream behind every upstream that is not
 - Still subject to health tiering (closed-circuit providers preferred)
 
-### Balanced Fast (Default)
+### Balanced Fast
 
-**URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias), or `/rpc/:chain` with no strategy
+**URL**: `/rpc/balanced-fast/:chain` (`latency-weighted` is an alias), or `/rpc/:chain` with no strategy, since this is the default
 **Module**: `Lasso.RPC.Strategies.BalancedFast`
 
 Orders reliable upstreams by a weighted random permutation over each upstream's best latency evidence: its client mean in the method family, else the same family's system prior. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it.
