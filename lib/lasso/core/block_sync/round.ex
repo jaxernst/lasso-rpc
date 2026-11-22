@@ -1,8 +1,8 @@
 defmodule Lasso.BlockSync.Round do
   @moduledoc """
-  One chain's head round. Every upstream on the chain reports its head in the
-  same tick, so the heights can be compared as they stand, without converting
-  time into blocks.
+  One chain's head round. Every upstream on the chain is asked for its head in
+  the same tick, so their heights describe the same moment, apart from when each
+  answer lands.
 
   Each tick asks every BlockSync worker on the chain for its head. A worker fed
   by a live `newHeads` subscription answers at once with its latest head. Any
@@ -15,11 +15,14 @@ defmodule Lasso.BlockSync.Round do
 
   When a round closes, it judges each profile scope on the chain, from the
   catalog's current routing plans, that has at least two of its head-observing
-  upstreams in the round. Each of those upstreams gets that scope's lag: the
-  highest of the scope's heights less its own. With three or more heights, a
-  height more than the scope's agreement band above their lower median is an
-  outlier and ignored. Two heights cannot show which one is wrong, so the higher
-  one is the mark. The lags go to `Lasso.BlockSync.Registry` for
+  upstreams in the round. The scope's mark is the highest of its heights. With
+  three or more heights, a height more than the scope's agreement band above
+  their lower median is an outlier and cannot be the mark. Two heights cannot
+  show which one is wrong, so the higher one is the mark. Each upstream's lag is
+  the mark less its own height, less the blocks the chain could produce between
+  its answer and the mark's earliest answer, at twice the scope's configured
+  block rate. An upstream that answers early is never behind for it, and no lag
+  is below zero. The lags go to `Lasso.BlockSync.Registry` for
   `Lasso.RPC.Selection.HeadSuitability`. A scope with fewer answers keeps the
   lags it has, so neither another profile's rounds nor an upstream that errors
   or skips replaces a verdict, and an answer from an upstream the catalog no
@@ -40,7 +43,7 @@ defmodule Lasso.BlockSync.Round do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Core.Support.DynamicSupervisorCall
-  alias Lasso.Observations.HeadComparison
+  alias Lasso.Observations.{HeadCadence, HeadComparison}
   alias Lasso.Providers.Catalog
 
   @supervisor Lasso.BlockSync.RoundSupervisor
@@ -120,7 +123,7 @@ defmodule Lasso.BlockSync.Round do
         round
         | waiting: MapSet.delete(round.waiting, instance_id),
           intervals: if(interval_ms, do: [interval_ms | round.intervals], else: round.intervals),
-          heights: record_height(round.heights, instance_id, result)
+          answers: record_answer(round.answers, instance_id, result)
       }
 
       state = put_in(state.open[ref], round)
@@ -135,10 +138,10 @@ defmodule Lasso.BlockSync.Round do
 
   def handle_info(_late_or_unknown, state), do: {:noreply, state}
 
-  defp record_height(heights, instance_id, {:ok, height}),
-    do: Map.put(heights, instance_id, height)
+  defp record_answer(answers, instance_id, {:ok, height}),
+    do: Map.put(answers, instance_id, {height, System.monotonic_time(:millisecond)})
 
-  defp record_height(heights, _instance_id, _error_or_skip), do: heights
+  defp record_answer(answers, _instance_id, _error_or_skip), do: answers
 
   defp schedule(state, delay_ms) do
     ref = make_ref()
@@ -164,7 +167,7 @@ defmodule Lasso.BlockSync.Round do
       started_at_ms: started_at_ms,
       waiting: MapSet.new(workers, &elem(&1, 0)),
       intervals: [],
-      heights: %{}
+      answers: %{}
     }
 
     put_in(state.open[ref], round)
@@ -186,12 +189,11 @@ defmodule Lasso.BlockSync.Round do
       else: state
   end
 
-  defp judge(chain_id, %{heights: heights} = round) when map_size(heights) >= @min_heights do
+  defp judge(chain_id, %{answers: answers} = round) when map_size(answers) >= @min_heights do
     for scope <- head_scopes(chain_id),
-        scope_heights <- [Map.take(heights, scope.observer_ids)],
-        map_size(scope_heights) >= @min_heights do
-      band = HeadComparison.agreement_blocks(scope.policy)
-      BlockSyncRegistry.put_head_lags(scope, lags(scope_heights, band, round))
+        scope_answers <- [Map.take(answers, scope.observer_ids)],
+        map_size(scope_answers) >= @min_heights do
+      BlockSyncRegistry.put_head_lags(scope, lags(scope_answers, scope.policy, round))
     end
 
     :ok
@@ -206,24 +208,32 @@ defmodule Lasso.BlockSync.Round do
     end
   end
 
-  defp lags(heights, band, round) do
-    sorted = heights |> Map.values() |> Enum.sort()
-    ceiling = ceiling(sorted, band)
-    top = sorted |> Enum.take_while(&(&1 <= ceiling)) |> List.last()
+  defp lags(answers, policy, round) do
+    cadence = HeadCadence.with_seed(nil, policy.block_time_ms)
+    ceiling = answers |> Map.values() |> Enum.map(&elem(&1, 0)) |> Enum.sort() |> ceiling(policy)
 
-    Map.new(heights, fn {instance_id, height} ->
+    {mark, mark_at} =
+      answers
+      |> Map.values()
+      |> Enum.filter(fn {height, _at} -> height <= ceiling end)
+      |> Enum.min_by(fn {height, at} -> {-height, at} end)
+
+    Map.new(answers, fn {instance_id, {height, at}} ->
+      early_blocks = HeadCadence.credit_blocks(cadence, max(mark_at - at, 0))
+
       {instance_id,
        %{
-         lag: top - height,
-         outlier?: height > ceiling,
+         lag: max(mark - height - early_blocks, 0),
          round: round.sequence,
          measured_at_ms: round.started_at_ms
        }}
     end)
   end
 
-  defp ceiling([_low, high], _band), do: high
-  defp ceiling(sorted, band), do: Enum.at(sorted, div(length(sorted) - 1, 2)) + band
+  defp ceiling([_low, high], _policy), do: high
+
+  defp ceiling(sorted, policy),
+    do: Enum.at(sorted, div(length(sorted) - 1, 2)) + HeadComparison.agreement_blocks(policy)
 
   defp now_ms, do: System.system_time(:millisecond)
 

@@ -433,8 +433,8 @@ Lasso tracks blockchain state using HTTP polling as a reliable foundation with o
 **HTTP Polling** (Always Running):
 
 - Bounded observation delay (`probe_interval_ms`)
-- Polls every upstream on a chain in the same round, so heights compare
-  without converting time into blocks
+- Polls every upstream on a chain in the same round, so heights describe the
+  same moment apart from when each answer lands
 - Captures available reference evidence before HTTP polls
 - Resilient to WebSocket failures
 
@@ -475,6 +475,8 @@ Per-provider GenServer managing block height tracking:
 - Closes each round at its own poll deadline, so rounds overlap, and judges
   each profile with at least two of its head-observing upstreams in the round,
   recording their lags for that profile; other profiles keep the lags they have
+- Measures each lag against the round's mark, crediting an upstream that
+  answered before the mark with the blocks the chain could produce in between
 - Starts a round at once when an upstream's head feed switches or its
   `newHeads` head moves backward
 - Sends no requests itself; each poll runs in its Worker's disposable owner
@@ -518,10 +520,9 @@ Selection captures each route's latest observation once per request and judges
 it against what the request needs: a numeric block, the moving head, or
 nothing. For the moving head, a route is deferred when the latest head round
 that judged its profile found its upstream more than the agreement band behind
-the other upstreams that profile observes; a newer passive observation never
-clears that. For a numeric block, a route is deferred when its fresh
-observation stays short of the block even after crediting the blocks the chain
-could have produced since.
+that round's mark; passive observations never change that verdict. For a
+numeric block, a route is deferred when its fresh observation stays short of
+the block even after crediting the blocks the chain could have produced since.
 A route fresh at the qualified reference height on a different hash is
 deferred too. Deferral stays within the route's health tier and never excludes
 it; see [Head freshness](ROUTING.md#head-freshness). Operator

@@ -69,7 +69,7 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     end)
   end
 
-  test "a primary its round found behind stays deferred while passive reads raise the mark" do
+  test "a primary its round found behind stays deferred while pinned reads refresh its peers" do
     # A 20 ms block time caps the band at 20 blocks and makes request time worth many blocks
     # of credit. Pinned reads keep the current routes' observations new while the primary's
     # ages, so crediting that age would undefer the primary within a few hundred milliseconds.
@@ -222,6 +222,31 @@ defmodule Lasso.Harness.HeadFreshnessTest do
       end
     after
       release.()
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  test "a round never finds a route behind for answering before its peers" do
+    # 250 ms blocks make the band 8 blocks. The early route answers at once; its peers' polls
+    # land 2.8 s later, 11 blocks on, beside a laggard 20 blocks behind them. A third peer keeps
+    # the peers the round's majority, so their height is the mark.
+    heights = [@current - 9, @current, @current + 11, @current + 11, @current + 11]
+    [_laggard, early | _peers] = fleets = fleets!("freshness-skew", heights)
+
+    for {fleet, height} <- Enum.zip(fleets, heights),
+        fleet != early,
+        do:
+          Fleet.script(fleet, "eth_blockNumber", [], {:respond, fn _ -> late(fleet, height) end})
+
+    try do
+      tenant = open!(fleets, %{"block_time_ms" => 250})
+
+      try do
+        assert lead(tenant, fleets) == [early.name]
+      after
+        Tenant.close!(tenant)
+      end
+    after
       Enum.each(fleets, &Fleet.stop/1)
     end
   end
@@ -412,6 +437,15 @@ defmodule Lasso.Harness.HeadFreshnessTest do
 
   defp head_polls(fleet),
     do: Enum.count(Fleet.drain(fleet), &(&1.request["method"] == "eth_blockNumber"))
+
+  defp late(fleet, height) do
+    token = make_ref()
+
+    {:ok, _timer} =
+      :timer.apply_after(2_800, Fleet, :release, [fleet, token, {:answer, hex(height)}])
+
+    {:hold, token}
+  end
 
   defp hex(height), do: "0x" <> String.downcase(Integer.to_string(height, 16))
 end

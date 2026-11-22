@@ -25,25 +25,28 @@ The pipeline ensures that healthy providers receive preference while recovering 
 
 A request that needs the chain's moving head prefers routes measured at it.
 Background head observations run in rounds: once per head interval, every
-upstream on a chain reports its head in the same tick, so the heights compare
-as they stand. An upstream fed by a live `newHeads` subscription answers with
-its latest head and needs no poll; any other is polled over HTTP. A route is
-compared with the other upstreams its profile observes in that round, and an
-upstream's HTTP and WebSocket routes share its verdict. Its lag is their
-highest height less its own; with three or more upstreams, a height more than
-the agreement band above their lower median is ignored as an outlier. The band
-is the blocks the chain produces in two seconds at its `block_time_ms`, from 1
-to 20, the same span of time on a 250 ms chain and a 12 s chain. A route whose
-lag exceeds the band is deferred behind the others in its health tier until a
-later round measures it within the band. A client's head read or a `newHeads`
-event between rounds can raise the profile's mark, but never clears a measured
-lag.
+upstream on a chain is asked for its head in the same tick. An upstream fed by a
+live `newHeads` subscription answers with its latest head and needs no poll; any
+other is polled over HTTP. A route is compared with the other upstreams its
+profile observes in that round, and an upstream's HTTP and WebSocket routes
+share its verdict. The round's mark is their highest height; with three or more
+upstreams, a height more than the agreement band above their lower median is an
+outlier and cannot be the mark. A route's lag is the mark less its own height.
+Answers land at different moments, since an HTTP poll may take up to its 3 s
+deadline, so a route that answered before the mark is also credited with the
+blocks the chain could have produced in between, at twice the rate its
+`block_time_ms` gives. Answering early never makes a route look behind. The
+band is the blocks the chain produces in two seconds at its `block_time_ms`,
+from 1 to 20, the same span of time on a 250 ms chain and a 12 s chain. A route
+whose lag exceeds the band is deferred behind the others in its health tier
+until a later round measures it within the band. Client head reads and
+`newHeads` events between rounds never change a route's moving-head verdict.
 
 A round judges a profile's routes only when at least two of its upstreams
-answered. Two heights cannot show which one is wrong, so neither is an outlier,
-and the lower route is deferred when its gap to the higher one exceeds the
-band. A profile with fewer than two upstreams with background observations on a
-chain gets no lag verdict there, so its moving-head reads keep strategy order.
+answered. Two heights cannot show which one is wrong, so the higher one is the
+mark, and the lower route is deferred when its lag exceeds the band. A profile
+with fewer than two upstreams with background observations on a chain gets no
+lag verdict there, so its moving-head reads keep strategy order.
 A round counts every answer that arrives before its poll deadline, even after
 the next round has started. A round with at least two of a profile's upstreams
 records each one's lag for that profile; a round with fewer leaves the

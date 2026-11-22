@@ -322,8 +322,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   # Recorded when head suitability moved a route relative to the order learned
-  # deferral alone would apply, or when it kept an outlying head from the mark.
-  # Routes are named by baseline position to stay within the frame budget.
+  # deferral alone would apply. Routes are named by baseline position to stay
+  # within the frame budget.
   defp head_decision(head, entries, plan, order, bucket_deferral? \\ false)
 
   defp head_decision(nil, _entries, _plan, _order, _bucket_deferral?), do: nil
@@ -334,7 +334,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
       |> Enum.sort_by(fn {_descriptor, _class, learned?, _verdict} -> is_map(learned?) end)
       |> Enum.map(&elem(&1, 0))
 
-    if bucket_deferral? or learned_only != order.applied or head.outliers != [] do
+    if bucket_deferral? or learned_only != order.applied do
       positions = Decision.route_positions(order.baseline)
 
       proposed =
@@ -347,6 +347,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
             verdict != :supports do
           route = Decision.route(descriptor)
           observation = Map.get(head.evidence, route)
+          round_lag = observation && observation.round_lag
 
           %{
             baseline_position: Map.get(positions, route),
@@ -354,7 +355,9 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
             reason: reason,
             reached: HeadSuitability.reached?(head, route),
             height: observation && observation.height,
-            age_ms: observation && age_ms(head, observation)
+            age_ms: observation && age_ms(head, observation.observed_at_ms),
+            lag: round_lag && round_lag.lag,
+            lag_age_ms: round_lag && age_ms(head, round_lag.measured_at_ms)
           }
         end
         |> Enum.sort_by(&(&1.verdict != :against))
@@ -368,20 +371,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         target_height: HeadSuitability.target_height(head),
         band: head.band,
         cadence: %{source: head.cadence.source, block_time_ms: head.cadence.block_time_ms},
-        mark: head.mark && %{height: head.mark.height, age_ms: age_ms(head, head.mark)},
-        outlier:
-          case head.outliers do
-            [highest | _rest] ->
-              %{
-                baseline_position: Map.get(positions, highest.route),
-                height: highest.height,
-                age_ms: age_ms(head, highest)
-              }
-
-            [] ->
-              nil
-          end,
-        omitted_outliers: max(length(head.outliers) - 1, 0),
         evidence: Enum.take(evidence, @max_head_evidence),
         omitted_evidence: max(length(evidence) - @max_head_evidence, 0),
         order_scope: :materialized_candidates,
@@ -390,7 +379,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     end
   end
 
-  defp age_ms(head, observation), do: max(head.captured_at_ms - observation.observed_at_ms, 0)
+  defp age_ms(head, at_ms), do: max(head.captured_at_ms - at_ms, 0)
 
   defp requirement_source({source, _height}), do: source
   defp requirement_source(:at_head), do: :at_head

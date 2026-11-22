@@ -38,13 +38,12 @@ defmodule Lasso.BlockSync.Registry do
   @observation_retries 4
 
   @typedoc """
-  An upstream's lag behind its scope in a head round, the round's place in
-  `next_sequence/0` order, and the wall-clock time it started, which expires the
-  lag on the same clock as the route's head observations.
+  An upstream's lag in blocks behind its scope's mark in a head round, the
+  round's place in `next_sequence/0` order, and the wall-clock time it started,
+  which expires the lag on the same clock as the route's head observations.
   """
   @type head_lag :: %{
-          lag: integer(),
-          outlier?: boolean(),
+          lag: non_neg_integer(),
           round: pos_integer(),
           measured_at_ms: integer()
         }
