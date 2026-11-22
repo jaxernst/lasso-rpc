@@ -11,7 +11,7 @@
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 
 Lasso wrangles your nodes and RPC providers into one fast, resilient, and observable
-JSON-RPC endpoint. It adapts to transient failures, unifies inconsistent RPC semantics,
+JSON-RPC endpoint. It adapts to transient failures, absorbs provider inconsistencies,
 and learns the optimal path for your app's RPC workload. Use it to aggregate all your RPC
 infra and tune your RPC throughput and performance
 [without redeploys](docs/DEPLOYMENT.md#custom-profiles-and-credentials).
@@ -21,16 +21,18 @@ Express routing controls right in the RPC endpoint path:
 ```
 /rpc/load-balanced/ethereum  -> spread requests across healthy providers (the default)
 /rpc/fastest/ethereum        -> route to the fastest provider by latency per method type and transport
-/rpc/balanced-fast/ethereum  -> load balance between the fastest options
-/rpc/priority/ethereum       -> fixed provider priority and fallback order
+/rpc/balanced-fast/ethereum  -> spread load, weighted toward the fastest providers
+/rpc/priority/ethereum       -> your provider priority and fallback order
 ```
+
+No SDK, no client library, no application changes: point your client at a Lasso URL.
 
 Build custom routing pools for all your environments and configure each to optimize for
 its workload:
 
 ```
 /rpc/profile/prod/fastest/ethereum     -> subscribe_new_heads: true, http_heads_interval_ms: 2000
-/rpc/profile/staging/priority/ethereum -> subscribe_new_heads: false, background_observations: false
+/rpc/profile/staging/priority/ethereum -> background_observations: false
 ```
 
 Run your own Lasso proxy, deploy it to your own infra, or use hosted, edge-routed custom
@@ -39,8 +41,8 @@ RPC profiles at [lasso.sh](https://lasso.sh).
 Apache-2.0 core built on Elixir/OTP. The bundled public pool aggregates public providers
 across Ethereum, Base, Arbitrum, Optimism, Robinhood Chain, and more.
 
-Add any additional EVM chain and your own providers in YAML, and Lasso will learn methods
-and capabilities to route requests optimally.
+Add any additional EVM chain and your own providers in YAML, and Lasso will learn each
+provider's method, history and log-range limits from live traffic.
 
 [Quick Start](#quick-start) · [Use it from your app](#use-it-from-your-app) ·
 [Configuration](#configuration) · [Endpoints](#endpoints) ·
