@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- An identity probe that gets an empty, unparsable or result-less answer no longer marks the upstream as serving the wrong chain. Only a readable wrong chain ID does. Previously one malformed answer blocked HTTP requests to that upstream until the next identity check; it now counts as an ordinary probe failure and retries on the failure backoff.
+- An identity probe whose answer is empty, unparsable, null or not a valid hex chain ID no longer marks the upstream as serving the wrong chain. Only a readable wrong chain ID does. Previously one malformed answer blocked HTTP requests to that upstream until the next identity check; it now counts as an ordinary probe failure and requests keep flowing.
 
 ## [0.9.0] - 2026-11-21
 

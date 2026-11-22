@@ -554,14 +554,15 @@ defmodule Lasso.Providers.ProbeCoordinator do
       {:ok, %{"error" => %{"message" => msg}}} ->
         {:error, msg}
 
-      {:ok, %{"result" => hex_chain_id}} ->
-        case ChainIdentity.validate(hex_chain_id, chain_id) do
+      # Only a readable chain ID can prove the wrong chain; a malformed answer is an ordinary
+      # failure, which leaves admission unchanged.
+      {:ok, %{"result" => result}} ->
+        case ChainIdentity.validate(result, chain_id) do
           :ok -> :ok
-          {:error, reason} -> {:identity_error, reason}
+          {:wrong_chain, reason} -> {:identity_error, reason}
+          {:error, reason} -> {:error, reason}
         end
 
-      # Only a readable chain ID can prove the wrong chain; a malformed answer is an ordinary
-      # failure and retries on the failure backoff instead of waiting for the next identity check.
       {:ok, _} ->
         {:error, "unexpected JSON-RPC response shape"}
 
