@@ -25,8 +25,6 @@ Express routing controls right in the RPC endpoint path:
 /rpc/priority/ethereum       -> your provider priority and fallback order
 ```
 
-No SDK, no client library, no application changes: point your client at a Lasso URL.
-
 Build custom routing pools for all your environments and configure each to optimize for
 its workload:
 
