@@ -12,8 +12,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
-  - `{:head_lags, chain_id, profile, scope_id}` => when the catalog published the
-    scope and the round lag last measured for each of its upstreams
+  - `{:head_lags, chain_id, profile, scope_id}` => the publication that opened the
+    row and the round lag last measured for each of its upstreams
 
   ## Freshness
 
@@ -37,8 +37,17 @@ defmodule Lasso.BlockSync.Registry do
   @cache_retries 4
   @observation_retries 4
 
-  @typedoc "An upstream's lag behind its scope in a head round, and when that round started."
-  @type head_lag :: %{lag: integer(), outlier?: boolean(), measured_at_ms: integer()}
+  @typedoc """
+  An upstream's lag behind its scope in a head round, the round's place in
+  `next_sequence/0` order, and the wall-clock time it started, which expires the
+  lag on the same clock as the route's head observations.
+  """
+  @type head_lag :: %{
+          lag: integer(),
+          outlier?: boolean(),
+          round: pos_integer(),
+          measured_at_ms: integer()
+        }
 
   ## Client API
 
@@ -125,28 +134,34 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
+  The next value of the node-wide sequence that orders head rounds and lag row
+  publications. Every value is unique and greater than any earlier one.
+  """
+  @spec next_sequence() :: pos_integer()
+  def next_sequence, do: System.unique_integer([:monotonic, :positive])
+
+  @doc """
   Records the lags a head round measured for a published scope's upstreams. The
-  round replaces only the row it read, and only with lags measured after that
-  row was published, so a round delayed across publications can't recreate a
-  retired scope or carry an earlier verdict into a later publication of the
-  same scope. Each upstream keeps its newest lag, and an upstream the round did
-  not measure keeps the one it has.
+  write replaces only the row it read, and keeps only lags from rounds opened
+  after that row's publication, so a round delayed across publications can't
+  recreate a retired scope or carry an earlier verdict into a later publication
+  of the same scope. Each upstream keeps the lag of its latest round, and an
+  upstream the round did not measure keeps the one it has.
   """
   @spec put_head_lags(HeadScope.t(), %{String.t() => head_lag()}) :: :ok
   def put_head_lags(%HeadScope{} = scope, lags) do
     key = head_lags_key(scope)
 
-    with [{^key, published_at_ms, held}] <- :ets.lookup(@table, key) do
-      measured =
-        Map.filter(lags, fn {_instance_id, lag} -> lag.measured_at_ms >= published_at_ms end)
+    with [{^key, publication, held}] <- :ets.lookup(@table, key) do
+      measured = Map.filter(lags, fn {_instance_id, lag} -> lag.round > publication end)
 
       lags =
         Map.merge(held, measured, fn _instance_id, held, new ->
-          if new.measured_at_ms >= held.measured_at_ms, do: new, else: held
+          if new.round > held.round, do: new, else: held
         end)
 
       :ets.select_replace(@table, [
-        {{key, published_at_ms, :_}, [], [{{{:const, key}, published_at_ms, {:const, lags}}}]}
+        {{key, publication, :_}, [], [{{{:const, key}, publication, {:const, lags}}}]}
       ])
     end
 
@@ -157,7 +172,7 @@ defmodule Lasso.BlockSync.Registry do
   @spec get_head_lags(HeadScope.t()) :: %{String.t() => head_lag()}
   def get_head_lags(%HeadScope{} = scope) do
     case :ets.lookup(@table, head_lags_key(scope)) do
-      [{_key, _published_at_ms, lags}] -> lags
+      [{_key, _publication, lags}] -> lags
       [] -> %{}
     end
   end
@@ -169,11 +184,11 @@ defmodule Lasso.BlockSync.Registry do
   """
   @spec publish_head_lags(%{{String.t(), pos_integer()} => RoutingPlan.t()}) :: :ok
   def publish_head_lags(routing_plans) do
-    published_at_ms = System.system_time(:millisecond)
+    publication = next_sequence()
     current = MapSet.new(routing_plans, fn {_key, plan} -> plan.head_scope.scope_id end)
 
     for {_key, %{head_scope: scope}} <- routing_plans,
-        do: :ets.insert_new(@table, {head_lags_key(scope), published_at_ms, %{}})
+        do: :ets.insert_new(@table, {head_lags_key(scope), publication, %{}})
 
     for [chain_id, profile, scope_id] <-
           :ets.match(@table, {{:head_lags, :"$1", :"$2", :"$3"}, :_, :_}),

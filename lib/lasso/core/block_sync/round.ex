@@ -156,6 +156,7 @@ defmodule Lasso.BlockSync.Round do
     Process.send_after(self(), {:close, ref}, @answer_window_ms)
 
     round = %{
+      sequence: BlockSyncRegistry.next_sequence(),
       started_at_ms: now_ms(),
       waiting: MapSet.new(workers, &elem(&1, 0)),
       intervals: [],
@@ -208,7 +209,12 @@ defmodule Lasso.BlockSync.Round do
 
     Map.new(heights, fn {instance_id, height} ->
       {instance_id,
-       %{lag: top - height, outlier?: height > ceiling, measured_at_ms: round.started_at_ms}}
+       %{
+         lag: top - height,
+         outlier?: height > ceiling,
+         round: round.sequence,
+         measured_at_ms: round.started_at_ms
+       }}
     end)
   end
 
