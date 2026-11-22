@@ -5,9 +5,9 @@ defmodule Lasso.Providers.ChainIdentity do
   Published catalog generation fences probe writes; rejection survives unrelated
   configuration changes until a matching probe or physical endpoint teardown.
 
-  Unknown identity preserves normal admission. An explicit malformed or mismatched
-  `eth_chainId` response rejects HTTP admission until a later matching probe.
-  Transport failures and JSON-RPC errors cannot establish or clear identity.
+  Unknown identity preserves normal admission. A readable `eth_chainId` answer naming
+  another chain rejects HTTP admission until a later matching probe. Malformed answers,
+  transport failures and JSON-RPC errors cannot establish or clear identity.
   HTTP observations never authorize or reject the independent WebSocket endpoint.
   """
 
@@ -21,13 +21,13 @@ defmodule Lasso.Providers.ChainIdentity do
           sequence: pos_integer()
         }
 
-  @spec validate(term(), pos_integer()) :: :ok | {:error, String.t()}
+  @spec validate(term(), pos_integer()) :: :ok | {:wrong_chain, String.t()} | {:error, String.t()}
   def validate("0x" <> digits, expected_chain_id)
       when is_integer(expected_chain_id) do
     if Regex.match?(~r/\A(?:0|[1-9a-fA-F][0-9a-fA-F]*)\z/, digits) do
       case String.to_integer(digits, 16) do
         ^expected_chain_id -> :ok
-        actual -> {:error, "wrong chain_id: got #{actual}, expected #{expected_chain_id}"}
+        actual -> {:wrong_chain, "wrong chain_id: got #{actual}, expected #{expected_chain_id}"}
       end
     else
       {:error, "invalid chain_id response"}

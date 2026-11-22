@@ -133,23 +133,32 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
   end
 
   describe "chain identity probes" do
-    for result <- [nil, 97, false, %{}, [], "62", "0x", "0x+62", "0x062", "0xgg", "0x61"] do
+    test "rejects a readable wrong chain ID without restoring HTTP or changing WS eligibility" do
+      assert_probe_identity("0x61", :degraded, {:error, :chain_identity_rejected})
+    end
+
+    for result <- [nil, 97, false, %{}, [], "62", "0x", "0x+62", "0x062", "0xgg"] do
       @probe_result result
-      test "rejects #{inspect(result)} without restoring HTTP or changing WS eligibility" do
-        assert_probe_identity(@probe_result, :degraded)
+      test "fails the probe on #{inspect(result)} without deciding identity" do
+        assert_probe_identity(@probe_result, :degraded, :ok)
       end
     end
 
     test "waits for a slow identity response before asserting rejection" do
-      assert_probe_identity(false, :degraded, response_delay_ms: 1_500)
+      assert_probe_identity("0x61", :degraded, {:error, :chain_identity_rejected},
+        response_delay_ms: 1_500
+      )
     end
 
     test "starts an identity probe with fresh health after prior failures" do
-      assert_probe_identity(false, :degraded, response_delay_ms: 1_500, prior_probe_failures: 2)
+      assert_probe_identity("0x61", :degraded, {:error, :chain_identity_rejected},
+        response_delay_ms: 1_500,
+        prior_probe_failures: 2
+      )
     end
 
     test "accepts the configured chain and preserves independent circuit admission" do
-      assert_probe_identity("0x62", :healthy)
+      assert_probe_identity("0x62", :healthy, :ok)
     end
   end
 
@@ -491,7 +500,7 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
     end
   end
 
-  defp assert_probe_identity(result, expected_status, endpoint_opts \\ []) do
+  defp assert_probe_identity(result, expected_status, expected_identity, endpoint_opts \\ []) do
     alias Lasso.Core.Support.CircuitBreaker.{Snapshot, Storage}
     alias Lasso.Providers.CandidateListing
 
@@ -587,11 +596,7 @@ defmodule Lasso.Providers.ProbeCoordinatorTest do
       end)
     end
 
-    identity =
-      Lasso.Providers.ChainIdentity.check(instance_id, :http)
-
-    assert identity ==
-             if(expected_status == :healthy, do: :ok, else: {:error, :chain_identity_rejected})
+    assert Lasso.Providers.ChainIdentity.check(instance_id, :http) == expected_identity
 
     assert Lasso.Providers.ChainIdentity.check(instance_id, :ws) ==
              :ok

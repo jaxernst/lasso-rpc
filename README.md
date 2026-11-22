@@ -272,14 +272,13 @@ Profiles separate routing configuration; they are not access controls. Profile
 
 Lasso tracks every provider's block height so it can tell when one falls
 behind. That tracking runs on every node and spends provider quota beside your
-own traffic. With no `block_time_ms` or cadence overrides, each distinct
-upstream costs:
+own traffic. With no cadence overrides, each distinct upstream costs:
 
 | Background request | Rate per upstream, per node |
 |--------------------|-----------------------------|
 | `newHeads` notification, when the provider has a `ws_url` | One per block, pushed by the provider; it does not spend a `request_budget` |
-| `eth_blockNumber` | One per 12 s, or one per 36 s while its feed is current |
-| `eth_chainId` | One per 12 s |
+| `eth_blockNumber` | One per `max(2 × block_time_ms, 5 s)`, or 12 s without `block_time_ms`; three times that interval while its feed is current |
+| `eth_chainId` | One per 30 min |
 
 Successful routed `eth_blockNumber` and `eth_getBlockByNumber("latest")`
 responses also provide head evidence for the provider that served them. A chain

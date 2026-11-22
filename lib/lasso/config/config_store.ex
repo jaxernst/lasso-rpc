@@ -2326,6 +2326,7 @@ defmodule Lasso.Config.ConfigStore do
     selection_attrs = Map.get(attrs, :selection) || Map.get(attrs, "selection")
     monitoring_attrs = Map.get(attrs, :monitoring) || Map.get(attrs, "monitoring") || %{}
     providers_attrs = Map.get(attrs, :providers) || Map.get(attrs, "providers") || []
+    block_time_ms = Map.get(attrs, :block_time_ms, Map.get(attrs, "block_time_ms"))
 
     display_name =
       Map.get(attrs, :display_name) || Map.get(attrs, "display_name") ||
@@ -2334,7 +2335,7 @@ defmodule Lasso.Config.ConfigStore do
     %ChainConfig{
       chain_id: chain_id,
       head_policy: Map.get(attrs, :head_policy, Map.get(attrs, "head_policy", "off")),
-      block_time_ms: Map.get(attrs, :block_time_ms, Map.get(attrs, "block_time_ms")),
+      block_time_ms: block_time_ms,
       name: display_name,
       display_name: display_name,
       url_aliases:
@@ -2348,7 +2349,7 @@ defmodule Lasso.Config.ConfigStore do
           Map.get(attrs, :transactions, Map.get(attrs, "transactions"))
         ),
       selection: normalize_selection_config(selection_attrs),
-      monitoring: normalize_monitoring_config(monitoring_attrs)
+      monitoring: normalize_monitoring_config(monitoring_attrs, block_time_ms)
     }
   end
 
@@ -2390,10 +2391,13 @@ defmodule Lasso.Config.ConfigStore do
     }
   end
 
-  defp normalize_monitoring_config(attrs) when is_map(attrs) do
+  defp normalize_monitoring_config(attrs, block_time_ms) when is_map(attrs) do
     Lasso.Config.ObservationConfig.monitoring(attrs, %ChainConfig.Monitoring{
       probe_interval_ms:
-        Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") || 15_000,
+        Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") ||
+          Lasso.Config.MonitoringDefaults.default_probe_interval_ms(block_time_ms),
+      chain_identity_interval_ms:
+        Lasso.Config.ObservationConfig.new_defaults(block_time_ms).chain_identity_interval_ms,
       lag_alert_threshold_blocks:
         Map.get(attrs, :lag_alert_threshold_blocks) ||
           Map.get(attrs, "lag_alert_threshold_blocks") ||

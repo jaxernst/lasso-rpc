@@ -85,8 +85,9 @@ chains:
 ### HTTP chain identity
 
 The configured `chain_id` is the expected identity of every provider on that
-chain. Background HTTP `eth_chainId` probes reject mismatched or malformed
-results. Once observed, that rejection blocks HTTP dispatch even while the
+chain. A background HTTP `eth_chainId` probe that returns a readable, different
+chain ID rejects the provider. An empty, null or malformed answer is an ordinary
+probe failure and leaves identity as it was. Once observed, a rejection blocks HTTP dispatch even while the
 provider's circuit is closed; requests can fail over to another eligible route.
 A later matching probe clears the identity rejection without resetting circuit
 state. Transport errors, rate limits, and JSON-RPC errors cannot clear it.
@@ -104,12 +105,12 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `probe_interval_ms` | integer | 12000 | Legacy fallback for HTTP head and chain-identity intervals. Set to ~1x block time for L1, ~2.5x for L2. |
+| `probe_interval_ms` | integer | `max(2 * block_time_ms, 5000)`, or 12000 without `block_time_ms` | Legacy fallback for the HTTP head-poll interval. |
 | `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold for qualified profile-scoped transport evidence; this setting does not emit lag warning logs. |
 | `background_observations` | boolean | true | Enable periodic head polling, chain-identity probes, and configured `newHeads` observation. Client requests remain separate, and a routed request that times out still schedules one probe of that upstream. |
 | `http_heads_interval_ms` | integer | `probe_interval_ms` | Normal HTTP head-poll interval; `0` disables periodic head polling. |
 | `http_backup_interval_ms` | integer | 3 × normal interval | HTTP head-poll interval while WebSocket head evidence is fresh; `0` disables backup polling. |
-| `chain_identity_interval_ms` | integer | `probe_interval_ms` | Interval for `eth_chainId` probes; `0` disables periodic identity probes. |
+| `chain_identity_interval_ms` | integer | 1800000 (30 min) | Interval for `eth_chainId` probes; `0` disables periodic identity probes. A routed request that times out still schedules one probe of its upstream, so liveness does not wait for this interval. |
 | `evidence_freshness_ms` | integer | 30000–60000 from block time | Freshness window for retained head evidence. |
 | `subscribe_new_heads` | boolean | WebSocket setting | Override automatic `newHeads` observation for the chain. |
 

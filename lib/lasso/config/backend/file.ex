@@ -41,7 +41,7 @@ defmodule Lasso.Config.Backend.File do
 
   require Logger
 
-  alias Lasso.Config.{ChainConfig, FileSchema, ProfileId}
+  alias Lasso.Config.{ChainConfig, FileSchema, ObservationConfig, ProfileId}
   alias Lasso.RPC.MethodRegistry
   alias Lasso.RPC.Providers.Capabilities
 
@@ -322,7 +322,7 @@ defmodule Lasso.Config.Backend.File do
       providers: parse_providers(chain_data["providers"] || []),
       transactions: ChainConfig.Transactions.parse(chain_data["transactions"]),
       selection: parse_selection(chain_data["selection"]),
-      monitoring: parse_monitoring(chain_data["monitoring"]),
+      monitoring: parse_monitoring(chain_data["monitoring"] || %{}, chain_data["block_time_ms"]),
       websocket: parse_websocket(chain_data["websocket"], chain_data),
       topology: parse_topology(chain_data["ui-topology"])
     }
@@ -519,11 +519,15 @@ defmodule Lasso.Config.Backend.File do
     }
   end
 
-  defp parse_monitoring(nil), do: %ChainConfig.Monitoring{}
+  # Head polls follow block time and identity rechecks are rare; liveness comes from head
+  # polls and from the probe a timed-out request schedules.
+  defp parse_monitoring(monitoring_data, block_time_ms) when is_map(monitoring_data) do
+    defaults = ObservationConfig.new_defaults(block_time_ms)
 
-  defp parse_monitoring(monitoring_data) when is_map(monitoring_data) do
-    Lasso.Config.ObservationConfig.monitoring(monitoring_data, %ChainConfig.Monitoring{
-      probe_interval_ms: Map.get(monitoring_data, "probe_interval_ms", 12_000),
+    ObservationConfig.monitoring(monitoring_data, %ChainConfig.Monitoring{
+      probe_interval_ms:
+        Map.get(monitoring_data, "probe_interval_ms", defaults.http_heads_interval_ms),
+      chain_identity_interval_ms: defaults.chain_identity_interval_ms,
       # Support both new and legacy field names
       lag_alert_threshold_blocks:
         Map.get(monitoring_data, "lag_alert_threshold_blocks") ||
