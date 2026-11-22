@@ -213,7 +213,7 @@ defmodule Lasso.Providers.Catalog.Owner do
     old_table = Catalog.table()
     :persistent_term.put(Catalog.persistent_term_key(), snapshot)
     Lasso.BlockSync.Registry.clear_scoped_head_snapshots()
-    Lasso.BlockSync.Registry.retain_head_lags(snapshot.routing_plans)
+    Lasso.BlockSync.Registry.publish_head_lags(snapshot.routing_plans)
     if old_table, do: Process.send_after(self(), {:delete_table, old_table}, @grace_period_ms)
     :ok
   end
