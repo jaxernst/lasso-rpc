@@ -49,13 +49,18 @@ the next round has started. A round with at least two of a profile's upstreams
 records each one's lag for that profile; a round with fewer leaves the
 profile's lags as they are, so another profile's rounds never replace them.
 Changing a profile's upstreams, which of them have background observations on,
-or its `block_time_ms` starts it with no lags, and only rounds that start after
-the change record lags for it, so a lag measured against other upstreams or
-before the change is never read. A route that errors or skips a round keeps its
-last measured lag until that measurement is older than the freshness window of
-the route's own head observations. When an upstream switches between `newHeads`
-and HTTP polling, or its `newHeads` head moves backward, a round starts at once,
-so the change is measured without waiting for the next tick.
+or its `block_time_ms` starts it with no lags, even when the change restores an
+earlier configuration. Only a round that starts after the change records lags
+for it, and a round starts before it asks any upstream for a head, so neither an
+answer given before the change nor a lag measured against other upstreams is
+ever read. Until a round that started after the change has heights from at
+least two of the profile's observing upstreams, the profile has no lag verdict,
+and its moving-head reads keep strategy order as they do with no stored lag. A
+route that errors or skips a round keeps its last measured lag until that
+measurement is older than the freshness window of the route's own head
+observations. When an upstream switches between `newHeads` and HTTP polling, or
+its `newHeads` head moves backward, a round starts at once, so the change is
+measured without waiting for the next tick.
 
 A profile with background observations off gets no round lag, so its
 moving-head reads keep strategy order even when another profile observes the

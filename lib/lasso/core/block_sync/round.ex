@@ -146,7 +146,11 @@ defmodule Lasso.BlockSync.Round do
     %{state | tick_ref: ref}
   end
 
+  # A round takes its place in the sequence before it asks any worker, so no
+  # answer it collects predates a lag row publication that the round follows.
   defp open(state) do
+    sequence = BlockSyncRegistry.next_sequence()
+    started_at_ms = now_ms()
     ref = make_ref()
     workers = workers(state.chain_id)
 
@@ -156,8 +160,8 @@ defmodule Lasso.BlockSync.Round do
     Process.send_after(self(), {:close, ref}, @answer_window_ms)
 
     round = %{
-      sequence: BlockSyncRegistry.next_sequence(),
-      started_at_ms: now_ms(),
+      sequence: sequence,
+      started_at_ms: started_at_ms,
       waiting: MapSet.new(workers, &elem(&1, 0)),
       intervals: [],
       heights: %{}
