@@ -13,8 +13,7 @@
 Lasso wrangles your nodes and RPC providers into one fast, resilient, and observable
 JSON-RPC endpoint. It adapts to transient failures, absorbs provider inconsistencies,
 and learns the optimal path for your app's RPC workload. Use it to aggregate all your RPC
-infra and tune your RPC throughput and performance
-[without redeploys](docs/DEPLOYMENT.md#custom-profiles-and-credentials).
+infra and tune your RPC throughput and performance without redeploys.
 
 Express routing controls right in the RPC endpoint path:
 
