@@ -246,7 +246,14 @@ defmodule Lasso.RPC.HeadEvidenceReloadTest do
     end)
 
     assert StatusHelpers.check_block_lag(chain_id, ids["behind"], slug) == :synced
-    assert_routed_to(slug, chain_id, "behind")
+
+    # Recovery shows once a head round measures the caught-up route.
+    Lasso.Test.Eventually.assert_eventually(fn ->
+      match?(
+        {:ok, _response, %{executed_channel: %{provider_id: "behind"}}},
+        request(slug, chain_id)
+      )
+    end)
   end
 
   defp assert_cached(%HeadSnapshot{scope_id: scope_id} = snapshot) do

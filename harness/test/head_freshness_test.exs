@@ -10,8 +10,8 @@ defmodule Lasso.Harness.HeadFreshnessTest do
   @hash "0x" <> String.duplicate("ab", 32)
 
   test "a lagging primary keeps historical reads and loses every read that needs the head" do
-    world(fn tenant, primary, current ->
-      observe(tenant, primary, current)
+    world(fn tenant, [primary | current] = fleets ->
+      lead(tenant, fleets)
       tx = %{"to" => @address, "data" => "0x12345678"}
 
       for strategy <- ["priority", "load-balanced", "fastest", "balanced-fast"],
@@ -27,8 +27,8 @@ defmodule Lasso.Harness.HeadFreshnessTest do
             {"eth_getLogs", [%{"fromBlock" => hex(9_990)}]},
             {"eth_getLogs", [%{"fromBlock" => hex(9_990), "toBlock" => hex(@current)}]}
           ] do
-        assert sends(tenant, [primary, current], method, params, strategy) == [current.name],
-               "#{strategy} #{method} #{inspect(params)}"
+        assert [sent] = sends(tenant, fleets, method, params, strategy)
+        assert sent in Enum.map(current, & &1.name), "#{strategy} #{method} #{inspect(params)}"
       end
 
       for {method, params} <- [
@@ -39,87 +39,105 @@ defmodule Lasso.Harness.HeadFreshnessTest do
             {"eth_getLogs", [%{"fromBlock" => hex(8_990), "toBlock" => hex(9_000)}]},
             {"eth_sendRawTransaction", ["0x02f86c0180843b9aca00825208"]}
           ] do
-        assert sends(tenant, [primary, current], method, params) == [primary.name],
+        assert sends(tenant, fleets, method, params) == [primary.name],
                "#{method} #{inspect(params)}"
       end
     end)
   end
 
-  test "a deferred lagging route still serves when the current route fails" do
-    world(fn tenant, primary, current ->
-      observe(tenant, primary, current)
-      Fleet.script(current, "eth_getBalance", [{:status, 503, [], "<html>unavailable</html>"}])
+  test "a deferred lagging route still serves when the current routes fail" do
+    world(fn tenant, [primary | current] = fleets ->
+      lead(tenant, fleets)
+
+      for fleet <- current,
+          do:
+            Fleet.script(fleet, "eth_getBalance", [{:status, 503, [], "<html>unavailable</html>"}])
+
       Fleet.script(primary, "eth_getBalance", [], {:answer, "0x5"})
       params = [@address, "latest"]
 
       {response, reports} =
         Settle.closed(
           fn -> Rpc.call(Tenant.credentials(tenant), "eth_getBalance", params) end,
-          [primary, current],
+          fleets,
           %{method: "eth_getBalance", params: params}
         )
 
-      # Both routes answer only when the current route is tried first.
+      # Every route answers only when the current routes are tried first.
       assert %{status: 200, body: %{"result" => "0x5"}} = response
-      assert Enum.sort(Enum.map(reports, & &1.fleet)) == Enum.sort([current.name, primary.name])
+      assert Enum.sort(Enum.map(reports, & &1.fleet)) == Enum.sort(Enum.map(fleets, & &1.name))
     end)
   end
 
-  test "a primary steadily behind the mark stays deferred for latest reads as both observations age" do
-    # A 20 ms block time caps the band at 20 blocks and makes ordinary request time worth
-    # many blocks of credit, while observations stay fresh for 30 s. Observed together, the
-    # primary is thirty blocks past the band, so crediting its own age alone would undefer it.
+  test "a primary its round found behind stays deferred while passive reads raise the mark" do
+    # A 20 ms block time caps the band at 20 blocks and makes request time worth many blocks
+    # of credit. Pinned reads keep the current routes' observations new while the primary's
+    # ages, so crediting that age would undefer the primary within a few hundred milliseconds.
     world(
-      fn tenant, primary, current ->
-        observe(tenant, primary, current, @current - 50)
-        deadline = System.monotonic_time(:millisecond) + 600
+      fn tenant, [primary, current | _rest] = fleets ->
+        lead(tenant, fleets)
+        pinned = %{rpc_url: tenant.rpc_url <> "?provider_override=" <> current.name}
+        deadline = System.monotonic_time(:millisecond) + 1_000
 
         Stream.repeatedly(fn ->
-          assert sends(tenant, [primary, current], "eth_getBalance", [@address, "latest"]) ==
-                   [current.name]
+          assert %{body: %{"result" => result}} = Rpc.call(pinned, "eth_blockNumber")
+          assert result == hex(@current)
+          assert [sent] = sends(tenant, fleets, "eth_getBalance", [@address, "latest"])
+          assert sent != primary.name
         end)
         |> Stream.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
         |> Stream.run()
       end,
-      %{"block_time_ms" => 20}
+      behind: @current - 50,
+      chain: %{"block_time_ms" => 20}
     )
   end
 
-  defp world(action, chain \\ %{}) do
-    primary = Fleet.start!(self(), "freshness-primary")
-    current = Fleet.start!(self(), "freshness-current")
+  # Three upstreams so the round's outlier rule can judge them. The round polls each once
+  # when the tenant opens; its long interval keeps later rounds out of the sends.
+  defp world(action, opts \\ []) do
+    behind = Keyword.get(opts, :behind, @behind)
+
+    fleets =
+      for {name, height} <- [
+            {"freshness-primary", behind},
+            {"freshness-current", @current},
+            {"freshness-current-2", @current}
+          ] do
+        fleet = Fleet.start!(self(), name)
+        Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(height)})
+        fleet
+      end
 
     try do
       # A retired lag limit still loads and no longer excludes the lagging route.
       tenant =
-        Tenant.open!([primary, current],
-          chain: Map.merge(%{"selection" => %{"max_lag_blocks" => 10}}, chain)
+        Tenant.open!(fleets,
+          chain:
+            Map.merge(
+              %{
+                "selection" => %{"max_lag_blocks" => 10},
+                "monitoring" => %{"http_heads_interval_ms" => 600_000}
+              },
+              Keyword.get(opts, :chain, %{})
+            ),
+          providers: Map.new(fleets, &{&1.name, %{"background_observations" => true}})
         )
 
       try do
-        action.(tenant, primary, current)
+        action.(tenant, fleets)
       after
         Tenant.close!(tenant)
       end
     after
-      Fleet.stop(primary)
-      Fleet.stop(current)
+      Enum.each(fleets, &Fleet.stop/1)
     end
   end
 
-  # Pinned head reads record each route's head; the moving-head preference
-  # becomes visible once both observations are published.
-  defp observe(tenant, primary, current, behind \\ @behind) do
-    for {fleet, height} <- [{primary, behind}, {current, @current}] do
-      Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(height)})
-      pinned = %{rpc_url: tenant.rpc_url <> "?provider_override=" <> fleet.name}
-      assert %{body: %{"result" => result}} = Rpc.call(pinned, "eth_blockNumber")
-      assert result == hex(height)
-    end
-
-    Settle.await("current route leads latest reads", fn ->
-      case sends(tenant, [primary, current], "eth_getBalance", [@address, "latest"]) do
-        [name] = sent when name == current.name -> {:ok, sent}
+  defp lead(tenant, [primary | _current] = fleets) do
+    Settle.await("a round defers the lagging primary for latest reads", fn ->
+      case sends(tenant, fleets, "eth_getBalance", [@address, "latest"]) do
+        [name] = sent when name != primary.name -> {:ok, sent}
         other -> other
       end
     end)

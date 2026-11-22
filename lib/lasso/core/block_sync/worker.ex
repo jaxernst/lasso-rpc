@@ -3,7 +3,8 @@ defmodule Lasso.BlockSync.Worker do
   Per-instance GenServer that orchestrates block sync strategies.
 
   Each unique provider instance gets one Worker that:
-  1. Runs HTTP polling when a profile requests periodic head observations
+  1. Polls HTTP heads in its chain's `Lasso.BlockSync.Round` when a profile
+     requests periodic head observations
   2. Optionally runs WS subscription for real-time updates
   3. Reports heights to BlockSync.Registry
   4. Fan-out broadcasts to all profiles referencing this instance
@@ -25,6 +26,7 @@ defmodule Lasso.BlockSync.Worker do
   require Logger
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
+  alias Lasso.BlockSync.Round
   alias Lasso.BlockSync.Strategies.{HttpStrategy, WsStrategy}
   alias Lasso.Cluster.Topology
   alias Lasso.Config.{ConfigStore, MonitoringDefaults, ObservationConfig}
@@ -35,6 +37,7 @@ defmodule Lasso.BlockSync.Worker do
   alias Lasso.RPC.Transport.WebSocket.Connection
 
   @reconnect_delay_ms 5_000
+  @round_rejoin_ms 1_000
   @ws_active_poll_multiplier 3
 
   @type mode :: :standby | :http_only | :http_with_ws
@@ -60,6 +63,7 @@ defmodule Lasso.BlockSync.Worker do
           last_emitted_coalesced: tuple() | nil,
           start_timer_ref: reference() | nil,
           policy_timer_ref: reference() | nil,
+          round_ref: reference() | nil,
           restart_count_cleared: boolean()
         }
 
@@ -74,6 +78,7 @@ defmodule Lasso.BlockSync.Worker do
     :last_emitted_coalesced,
     :start_timer_ref,
     :policy_timer_ref,
+    :round_ref,
     ws_retry_count: 0,
     http_reduced: false,
     restart_count_cleared: false
@@ -196,9 +201,8 @@ defmodule Lasso.BlockSync.Worker do
 
     # Release strategy resources on supervised shutdown (auth rotation,
     # provider removal, profile suspension). Without this, WS subscriptions
-    # leak on the InstanceSubscriptionManager and pending HTTP poll timers
-    # remain associated with a dead pid (cosmetically benign but obscures
-    # the supervision tree's reaper accounting).
+    # leak on the InstanceSubscriptionManager and an in-flight HTTP poll
+    # owner outlives the worker.
     if state.ws_strategy, do: WsStrategy.stop(state.ws_strategy)
     if state.http_strategy, do: HttpStrategy.stop(state.http_strategy)
     :ok
@@ -307,11 +311,8 @@ defmodule Lasso.BlockSync.Worker do
     {:noreply, state}
   end
 
-  # HTTP strategy poll timer
-  def handle_info({:http_strategy, :poll, instance_id, generation}, state)
-      when instance_id == state.instance_id and state.http_strategy != nil do
-    {:ok, new_http_state} = HttpStrategy.handle_message({:poll, generation}, state.http_strategy)
-    {:noreply, %{state | http_strategy: new_http_state}}
+  def handle_info({:block_sync_round, round_pid, ref, round_interval_ms}, state) do
+    {:noreply, answer_round(state, round_pid, ref, round_interval_ms)}
   end
 
   def handle_info(
@@ -328,10 +329,11 @@ defmodule Lasso.BlockSync.Worker do
     {:noreply, %{state | http_strategy: new_http_state}}
   end
 
-  def handle_info({:http_strategy, :poll, instance_id, _generation}, state)
-      when instance_id == state.instance_id and state.http_strategy == nil do
-    {:noreply, state}
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{round_ref: ref} = state) do
+    {:noreply, rejoin_round(%{state | round_ref: nil})}
   end
+
+  def handle_info(:rejoin_round, state), do: {:noreply, rejoin_round(state)}
 
   def handle_info({:DOWN, _ref, :process, _pid, _reason} = message, state)
       when state.http_strategy != nil do
@@ -446,6 +448,22 @@ defmodule Lasso.BlockSync.Worker do
   end
 
   ## Private Functions
+
+  defp answer_round(%{http_strategy: nil} = state, round_pid, ref, _round_interval_ms) do
+    send(round_pid, {:round_answer, ref, state.instance_id, nil, :skipped})
+    state
+  end
+
+  defp answer_round(%{http_strategy: http} = state, round_pid, ref, round_interval_ms) do
+    with true <- HttpStrategy.due?(http, System.system_time(:millisecond), round_interval_ms),
+         {:polling, http} <- HttpStrategy.poll(http, {round_pid, ref}) do
+      %{state | http_strategy: http}
+    else
+      _not_due_or_busy ->
+        send(round_pid, {:round_answer, ref, state.instance_id, http.poll_interval_ms, :skipped})
+        state
+    end
+  end
 
   # First successful block-height after a (re)start clears the
   # restart counter so a worker that runs healthy for any meaningful
@@ -775,7 +793,7 @@ defmodule Lasso.BlockSync.Worker do
 
   defp set_http_interval(%{http_strategy: http} = state, interval)
        when not is_nil(http) and is_integer(interval) and interval > 0 do
-    %{state | http_strategy: HttpStrategy.set_poll_interval(http, interval)}
+    join_round(%{state | http_strategy: HttpStrategy.set_poll_interval(http, interval)}, interval)
   end
 
   defp set_http_interval(state, interval) when is_integer(interval) and interval > 0 do
@@ -793,11 +811,31 @@ defmodule Lasso.BlockSync.Worker do
       poll_interval_ms: interval
     )
 
-    %{
-      state
-      | mode: if(state.ws_strategy, do: :http_with_ws, else: :http_only),
-        http_strategy: http_state
-    }
+    join_round(
+      %{
+        state
+        | mode: if(state.ws_strategy, do: :http_with_ws, else: :http_only),
+          http_strategy: http_state
+      },
+      interval
+    )
+  end
+
+  defp rejoin_round(%{http_strategy: %{poll_interval_ms: interval}} = state),
+    do: join_round(state, interval)
+
+  defp rejoin_round(state), do: state
+
+  defp join_round(state, interval) do
+    case Round.join(state.chain_id, interval) do
+      {:ok, round_pid} ->
+        if state.round_ref, do: Process.demonitor(state.round_ref, [:flush])
+        %{state | round_ref: Process.monitor(round_pid)}
+
+      {:error, _unavailable} ->
+        Process.send_after(self(), :rejoin_round, @round_rejoin_ms)
+        state
+    end
   end
 
   defp add_ws_subscription(state) do
@@ -945,16 +983,7 @@ defmodule Lasso.BlockSync.Worker do
             else: state.config.poll_interval_ms
       end
 
-    previous_interval = state.http_strategy && state.http_strategy.poll_interval_ms
-    state = set_http_interval(state, interval)
-
-    if state.http_strategy &&
-         ((is_integer(previous_interval) and interval < previous_interval) or
-            (is_nil(previous_interval) and state.http_reduced)) do
-      %{state | http_strategy: HttpStrategy.poll_now(state.http_strategy)}
-    else
-      state
-    end
+    set_http_interval(state, interval)
   end
 
   defp schedule_policy_refresh(%{policy_timer_ref: ref} = state) when not is_nil(ref) do

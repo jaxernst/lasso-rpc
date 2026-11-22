@@ -161,6 +161,9 @@ defmodule Lasso.Application do
         # DynamicSupervisor for per-instance BlockSync workers
         {DynamicSupervisor, name: Lasso.BlockSync.DynamicSupervisor, strategy: :one_for_one},
 
+        # DynamicSupervisor for per-chain BlockSync head rounds
+        {DynamicSupervisor, name: Lasso.BlockSync.RoundSupervisor, strategy: :one_for_one},
+
         # DynamicSupervisor for per-instance supervisors (shared CBs)
         {DynamicSupervisor,
          name: Lasso.Providers.InstanceDynamicSupervisor, strategy: :one_for_one},

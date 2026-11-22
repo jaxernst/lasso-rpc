@@ -480,6 +480,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
              :below_height,
              :behind_mark,
              :within_credit,
+             :within_round_band,
+             :unmeasured,
              :cadence_unknown,
              :observation_stale,
              :no_observation

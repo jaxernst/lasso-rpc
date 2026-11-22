@@ -282,7 +282,6 @@ defmodule Lasso.Providers.HeadEvidenceTest do
     {:ok, strategy} =
       HttpStrategy.start(chain_id, shared,
         parent: self(),
-        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: fn ^shared, ^chain_id -> {:ok, profile_a, "shared"} end,
         poll_runner: fn plan ->
@@ -291,8 +290,7 @@ defmodule Lasso.Providers.HeadEvidenceTest do
         end
       )
 
-    assert_receive {:http_strategy, :poll, ^shared, generation}
-    assert {:ok, strategy} = HttpStrategy.handle_message({:poll, generation}, strategy)
+    assert {:polling, strategy} = HttpStrategy.poll(strategy)
     assert_receive {:poll_started, owner, plan}
     assert plan.profile == profile_a
     assert Enum.map(plan.head_references_at_poll_start, & &1.height) == [100, 100]

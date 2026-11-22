@@ -6,30 +6,37 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   A selection phase captures its evidence once from the scope's head snapshot,
   which carries every scope transport's latest observation and is refreshed when
   observations are written: the observations, the scope mark, the band and the
-  chain's cadence. The mark is the highest fresh observation in the scope, from
-  any instance or transport. When the snapshot has a qualified reference, a
-  fresh observation more than the band above it, after crediting the blocks the
-  chain could have produced between the two observations, is an outlier and
-  cannot be the mark. `assess/2` is pure over that capture:
+  chain's cadence. `assess/2` is pure over that capture:
 
   - `:against` needs a fresh observation at the qualified reference height
     with a different block hash, or:
-  - `:supports` needs fresh evidence at or above the target height;
-  - `:against` needs fresh evidence that stays short of the target even when
-    credited with the blocks the chain could have produced since it was
-    observed, until the mark's observation for a moving head or until capture
-    for a fixed height, at the fastest cadence the chain has shown, or at twice the
-    configured rate until cadence is measured; without either, an exact request
-    height uses the observed height while moving-head and recovery requirements
-    remain unknown;
+  - for a moving head, a route is measured only by its chain's head round
+    (`Lasso.BlockSync.Round`), which polls every HTTP head upstream in the same
+    tick. A route is compared only with the scope's other HTTP routes in the
+    same round, and only in a round with at least three of them. Its lag is
+    their highest height, ignoring heights more than the band above their lower
+    median, less its own. `:against` needs a lag above the band in the latest
+    such round the route answered, while that round is as fresh as the route's
+    observations; `:supports` needs a measured route at or above the target.
+    Routes no round measured, such as WebSocket routes and routes without
+    background head observations, are `:unknown`. A passive observation between
+    rounds can raise the mark but never clears a measured lag; only the route's
+    next round does;
+  - for a fixed height, `:supports` needs fresh evidence at or above it, and
+    `:against` needs fresh evidence that stays short of it even when credited
+    with the blocks the chain could have produced since it was observed, at the
+    fastest cadence the chain has shown, or at twice the configured rate until
+    cadence is measured; without either, an exact request height uses the
+    observed height while a recovery height remains unknown;
   - everything else is `:unknown`.
 
-  The target is the requirement's height, or the mark minus the band for a
-  moving head. A verdict orders routes inside their availability tier and never
-  excludes one.
+  The mark is the highest fresh observation from a route its round did not find
+  more than the band above the lower median. The target is the requirement's
+  height, or the mark minus the band for a moving head. A verdict orders routes
+  inside their availability tier and never excludes one.
   """
 
-  alias Lasso.BlockSync.Observation
+  alias Lasso.BlockSync.{Observation, Registry, Round}
   alias Lasso.Observations.{HeadCadence, HeadComparison, HeadSnapshot}
   alias Lasso.RPC.{ExecutionEnvelope, RequestAnalysis, RoutingPlan}
 
@@ -62,6 +69,8 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
           | :branch_conflict
           | :behind_mark
           | :within_credit
+          | :within_round_band
+          | :unmeasured
           | :cadence_unknown
           | :observation_stale
           | :no_observation
@@ -76,7 +85,9 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
           observed_at_ms: integer(),
           block_hash: String.t() | nil,
           fresh?: boolean(),
-          branch_conflict?: boolean()
+          branch_conflict?: boolean(),
+          lag: integer() | nil,
+          outlier?: boolean()
         }
   @type mark :: %{
           height: non_neg_integer(),
@@ -153,15 +164,18 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   defp build(plan, requirement, head_snapshot, now_ms) do
     reference_hash = qualified_reference_hash(head_snapshot, now_ms)
+    band = HeadComparison.agreement_blocks(plan.head_scope.policy)
+
+    rounds = if requirement == :at_head, do: scope_rounds(plan, band), else: []
 
     evidence =
-      Map.new(route_heads(plan, now_ms), fn {route, head} ->
+      Map.new(route_heads(plan, rounds, now_ms), fn {route, head} ->
         {route, Map.put(head, :branch_conflict?, branch_conflict?(head, reference_hash))}
       end)
 
     capture = %__MODULE__{
       requirement: requirement,
-      band: HeadComparison.agreement_blocks(plan.head_scope.policy),
+      band: band,
       cadence:
         HeadCadence.with_seed(
           nil,
@@ -172,38 +186,88 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
       evidence: evidence
     }
 
-    if requirement == :at_head do
-      reference = qualified_reference(head_snapshot, now_ms)
-
-      {outliers, candidates} =
-        split_outliers(evidence, reference, capture, plan.head_scope.policy.block_time_ms)
-
-      %{
-        capture
-        | mark: candidates |> Enum.max_by(&{&1.height, &1.observed_at_ms}, fn -> nil end),
-          outliers: Enum.sort_by(outliers, & &1.height, :desc)
-      }
-    else
-      capture
-    end
+    if requirement == :at_head, do: with_mark(capture), else: capture
   end
 
   # Freshness is the observation layer's verdict, which honours an
   # observation's own longer window such as a slow HTTP poll interval.
-  defp route_heads(plan, now_ms) do
+  defp route_heads(plan, rounds, now_ms) do
     for provider <- plan.providers,
         transport <- provider.transports,
         {fresh?, observation} <- [read_head(plan.chain_id, provider, transport, now_ms)],
-        into: %{},
-        do:
-          {{provider.instance_id, transport},
-           %{
-             height: observation.height,
-             observed_at_ms: observation.observed_at_ms,
-             block_hash: normalize_hash(observation.metadata[:hash]),
-             fresh?: fresh?
-           }}
+        into: %{} do
+      {lag, outlier?} = round_lag(rounds, provider, transport, now_ms)
+
+      {{provider.instance_id, transport},
+       %{
+         height: observation.height,
+         observed_at_ms: observation.observed_at_ms,
+         block_hash: normalize_hash(observation.metadata[:hash]),
+         fresh?: fresh?,
+         lag: lag,
+         outlier?: outlier?
+       }}
+    end
   end
+
+  # The chain's recent rounds restricted to this scope's HTTP routes, so one profile's
+  # upstreams never judge another's. In each round with enough of them, heights more than
+  # the band above their lower median are outliers, and the top is the highest of the rest.
+  defp scope_rounds(plan, band) do
+    scope = for provider <- plan.providers, :http in provider.transports, do: provider.instance_id
+    min_heights = Round.min_heights()
+
+    for round <- Registry.get_rounds(plan.chain_id),
+        heights <- [Map.take(round.heights, scope)],
+        map_size(heights) >= min_heights do
+      sorted = heights |> Map.values() |> Enum.sort()
+      ceiling = Enum.at(sorted, div(length(sorted) - 1, 2)) + band
+
+      %{
+        started_at_ms: round.started_at_ms,
+        heights: heights,
+        ceiling: ceiling,
+        top: sorted |> Enum.take_while(&(&1 <= ceiling)) |> List.last()
+      }
+    end
+  end
+
+  # A route's lag in the latest scope round it answered while that round is as fresh as
+  # its own observations, so a route that errors or skips a round keeps its last verdict.
+  defp round_lag(rounds, provider, :http, now_ms) do
+    freshness_ms = Map.fetch!(provider.head_freshness_ms, :http)
+
+    rounds
+    |> Enum.take_while(&(now_ms - &1.started_at_ms <= freshness_ms))
+    |> Enum.find_value({nil, false}, fn round ->
+      case Map.fetch(round.heights, provider.instance_id) do
+        {:ok, height} -> {round.top - height, height > round.ceiling}
+        :error -> nil
+      end
+    end)
+  end
+
+  defp round_lag(_rounds, _provider, :ws, _now_ms), do: {nil, false}
+
+  # The mark is the highest fresh observation from a route its last round did not find
+  # to be an outlier, so passive client reads between rounds can still raise it.
+  defp with_mark(capture) do
+    {outliers, candidates} =
+      for({route, %{fresh?: true} = head} <- capture.evidence, do: {route, head})
+      |> Enum.split_with(fn {_route, head} -> head.outlier? end)
+
+    %{
+      capture
+      | mark:
+          candidates
+          |> Enum.map(&mark/1)
+          |> Enum.max_by(&{&1.height, &1.observed_at_ms}, fn -> nil end),
+        outliers: outliers |> Enum.map(&mark/1) |> Enum.sort_by(& &1.height, :desc)
+    }
+  end
+
+  defp mark({route, head}),
+    do: %{route: route, height: head.height, observed_at_ms: head.observed_at_ms}
 
   defp read_head(chain_id, provider, transport, now_ms) do
     case Observation.read_transport(
@@ -239,52 +303,6 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   defp branch_conflict?(_head, _reference), do: false
 
-  defp qualified_reference(%HeadSnapshot{} = snapshot, now_ms) do
-    with true <- now_ms <= snapshot.valid_through_ms,
-         {:ok, reference} <- HeadSnapshot.reference(snapshot) do
-      %{
-        height: reference.height,
-        observed_at_ms: reference.observed_at_ms || snapshot.computed_at_ms
-      }
-    else
-      _unqualified -> nil
-    end
-  end
-
-  defp qualified_reference(_unavailable, _now_ms), do: nil
-
-  # Without a qualified reference the raw maximum stands, so two disagreeing
-  # providers can still be judged. Unlike `against`, the outlier test may fall
-  # back to the comparison policy's block time: it only protects the mark.
-  defp split_outliers(evidence, reference, capture, fallback_block_time_ms) do
-    fresh =
-      for {route, %{fresh?: true} = observation} <- evidence,
-          do: %{
-            route: route,
-            height: observation.height,
-            observed_at_ms: observation.observed_at_ms
-          }
-
-    case reference do
-      nil ->
-        {[], fresh}
-
-      reference ->
-        Enum.split_with(fresh, fn observation ->
-          elapsed_ms = max(observation.observed_at_ms - reference.observed_at_ms, 0)
-
-          credit =
-            credit(capture, elapsed_ms) ||
-              HeadCadence.credit_blocks(
-                HeadCadence.resolve(nil, fallback_block_time_ms),
-                elapsed_ms
-              )
-
-          observation.height > reference.height + capture.band + credit
-        end)
-    end
-  end
-
   @doc "The verdict and its reason for one route under the captured evidence."
   @spec assess(t(), route()) :: {verdict(), reason()}
   def assess(%__MODULE__{} = capture, route) do
@@ -296,45 +314,41 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
-  # A moving requirement has no mark when every fresh head is an outlier above the
-  # qualified reference; with no target to judge against, those routes keep strategy order.
-  defp judge(capture, observation) do
+  # Only a round judges a moving-head route, so a newer passive observation may raise the
+  # mark but never clears a lag the round measured.
+  defp judge(%__MODULE__{requirement: :at_head} = capture, observation) do
     target = target_height(capture)
 
     cond do
-      is_nil(target) ->
-        {:unknown, :no_observation}
+      is_nil(observation.lag) -> {:unknown, :unmeasured}
+      observation.lag > capture.band -> {:against, :behind_mark}
+      is_nil(target) -> {:unknown, :no_observation}
+      observation.height >= target -> {:supports, :within_band}
+      true -> {:unknown, :within_round_band}
+    end
+  end
 
+  defp judge(capture, observation) do
+    target = target_height(capture)
+    age_ms = max(capture.captured_at_ms - observation.observed_at_ms, 0)
+
+    cond do
       observation.height >= target ->
-        {:supports, supports_reason(capture.requirement)}
+        {:supports, :at_or_above_height}
 
       is_nil(capture.cadence.credit_block_time_ms) ->
         without_cadence(capture.requirement)
 
-      observation.height + credit(capture, credit_ms(capture, observation)) < target ->
-        {:against, against_reason(capture.requirement)}
+      observation.height + HeadCadence.credit_blocks(capture.cadence, age_ms) < target ->
+        {:against, :below_height}
 
       true ->
         {:unknown, :within_credit}
     end
   end
 
-  # The mark ages with the route, so a moving head credits only the gap between the two
-  # observations; a fixed height credits the observation's full age.
-  defp credit_ms(%__MODULE__{requirement: :at_head, mark: mark}, observation),
-    do: max(mark.observed_at_ms - observation.observed_at_ms, 0)
-
-  defp credit_ms(capture, observation),
-    do: max(capture.captured_at_ms - observation.observed_at_ms, 0)
-
   defp without_cadence({:request_height, _height}), do: {:against, :below_height}
-  defp without_cadence(_requirement), do: {:unknown, :cadence_unknown}
-
-  defp supports_reason(:at_head), do: :within_band
-  defp supports_reason(_height), do: :at_or_above_height
-
-  defp against_reason(:at_head), do: :behind_mark
-  defp against_reason(_height), do: :below_height
+  defp without_cadence({:recovery_height, _height}), do: {:unknown, :cadence_unknown}
 
   @doc "The height a route must have reached: the requirement's, or the mark minus the band."
   @spec target_height(t()) :: non_neg_integer() | nil
@@ -343,9 +357,6 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   def target_height(%__MODULE__{requirement: :at_head, mark: mark, band: band}),
     do: max(mark.height - band, 0)
-
-  defp credit(%__MODULE__{cadence: cadence}, elapsed_ms),
-    do: HeadCadence.credit_blocks(cadence, elapsed_ms)
 
   @doc """
   The route's ordering class with its verdict and reason. Only evidence against

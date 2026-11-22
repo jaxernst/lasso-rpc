@@ -342,11 +342,8 @@ defmodule Lasso.TwoProviderWsFailoverTest do
 
         :ok = Fleet.script(a, "eth_blockNumber", [{:hold, :probation}], {:answer, hex(102)})
 
-        {:ok, poll} =
-          HttpStrategy.start(chain, instance, initial_delay_ms: 0, poll_interval_ms: 60_000)
-
-        assert_receive {:http_strategy, :poll, ^instance, generation}, 1_000
-        {:ok, poll} = HttpStrategy.handle_message({:poll, generation}, poll)
+        {:ok, poll} = HttpStrategy.start(chain, instance, poll_interval_ms: 60_000)
+        {:polling, poll} = HttpStrategy.poll(poll)
         a_pid = a.pid
         assert_receive {:fleet, ^a_pid, %{transport: :http, action: {:hold, :probation}}}, 2_000
         poll

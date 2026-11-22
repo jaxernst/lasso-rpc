@@ -226,7 +226,8 @@ Lasso.Application
 **BlockSync.Worker** (`Lasso.BlockSync.Worker`)
 
 - Per-(chain, instance_id) GenServer tracking block heights
-- Polls via HTTP or subscribes via WS depending on provider capabilities
+- Polls via HTTP when its chain's round asks, or subscribes via WS, depending
+  on provider capabilities
 - Fan-out broadcasts to all profiles using this instance
 - Replaces per-(profile, provider_id) workers (migrated from profile-scoped to instance-scoped)
 
@@ -432,6 +433,8 @@ Lasso tracks blockchain state using HTTP polling as a reliable foundation with o
 **HTTP Polling** (Always Running):
 
 - Bounded observation delay (`probe_interval_ms`)
+- Polls every upstream on a chain in the same round, so heights compare
+  without converting time into blocks
 - Captures available reference evidence before HTTP polls
 - Resilient to WebSocket failures
 
@@ -463,6 +466,14 @@ Per-provider GenServer managing block height tracking:
 
 - `:http_only` - HTTP polling only
 - `:http_with_ws` - HTTP + WebSocket subscription
+
+**BlockSync.Round** (`Lasso.BlockSync.Round`)
+
+- Per-chain GenServer under `Lasso.BlockSync.RoundSupervisor` that asks every
+  Worker on the chain to poll in the same tick and records the heights of each
+  round with at least three answers
+- Sends no requests itself; each poll runs in its Worker's disposable owner
+  process, so one upstream's failure costs only that upstream's answer
 
 **BlockSync.Registry** (`Lasso.BlockSync.Registry`)
 

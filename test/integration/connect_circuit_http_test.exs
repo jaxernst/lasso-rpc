@@ -160,11 +160,8 @@ defmodule Lasso.ConnectCircuitHTTPTest do
     Agent.update(ctx.hold, fn _ -> true end)
     instance = elem(breaker, 0)
 
-    {:ok, poll} =
-      HttpStrategy.start(ctx.chain, instance, initial_delay_ms: 0, poll_interval_ms: 60_000)
-
-    assert_receive {:http_strategy, :poll, ^instance, generation}, 1_000
-    {:ok, poll} = HttpStrategy.handle_message({:poll, generation}, poll)
+    {:ok, poll} = HttpStrategy.start(ctx.chain, instance, poll_interval_ms: 60_000)
+    {:polling, poll} = HttpStrategy.poll(poll)
     assert_receive {:held_head_poll, "a", held}, 2_000
 
     requester = fn scope, chain, method, params, opts ->

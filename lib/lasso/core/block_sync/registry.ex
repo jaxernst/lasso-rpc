@@ -12,6 +12,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
+  - `{:head_rounds, chain_id}` => the chain's latest recorded head rounds, newest
+    first
 
   ## Freshness
 
@@ -33,6 +35,9 @@ defmodule Lasso.BlockSync.Registry do
   @default_freshness_ms 30_000
   @cache_retries 4
   @observation_retries 4
+
+  @typedoc "One head round's heights by instance, and when it started."
+  @type head_round :: %{started_at_ms: integer(), heights: %{String.t() => non_neg_integer()}}
 
   ## Client API
 
@@ -115,6 +120,27 @@ defmodule Lasso.BlockSync.Registry do
       :ok
     else
       :ignored
+    end
+  end
+
+  @doc """
+  Records a head round ahead of the chain's earlier rounds and keeps the newest
+  `keep`. Only the chain's `Lasso.BlockSync.Round` writes them, so the update
+  needs no coordination.
+  """
+  @spec put_round(pos_integer(), head_round(), pos_integer()) :: :ok
+  def put_round(chain_id, round, keep) do
+    rounds = Enum.take([round | get_rounds(chain_id)], keep)
+    :ets.insert(@table, {{:head_rounds, chain_id}, rounds})
+    :ok
+  end
+
+  @doc "The chain's recorded head rounds, newest first."
+  @spec get_rounds(pos_integer()) :: [head_round()]
+  def get_rounds(chain_id) do
+    case :ets.lookup(@table, {:head_rounds, chain_id}) do
+      [{_key, rounds}] -> rounds
+      [] -> []
     end
   end
 
@@ -346,6 +372,7 @@ defmodule Lasso.BlockSync.Registry do
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
     :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
+    :ets.delete(@table, {:head_rounds, chain_id})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
     :ets.delete(@table, {:head_revision, chain_id})

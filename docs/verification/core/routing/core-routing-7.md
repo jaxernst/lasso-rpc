@@ -1,6 +1,6 @@
 # core-routing-7
 
-- `core-routing-7` A read that needs the current head prefers a route with fresh evidence of the current head over a route proven behind, in every strategy order. Historical reads, hash lookups by block, tags such as `finalized`, and writes keep strategy order, so a slightly lagging provider still serves the blocks it has. A deferred route stays available when the current route fails.
+- `core-routing-7` A read that needs the current head prefers a route its head round measured at the current head over a route the round measured behind, in every strategy order, and keeps that preference while client head reads refresh the other routes' observations. Historical reads, hash lookups by block, tags such as `finalized`, and writes keep strategy order, so a slightly lagging provider still serves the blocks it has. A deferred route stays available when the current route fails.
 
 [Area and shared preconditions](README.md).
 
@@ -8,9 +8,9 @@ Guard: `harness/test/head_freshness_test.exs` uses real HTTP RPC and owned fixtu
 
 ## Driving it through surfaces
 
-Configure an owned file profile with two fixture upstreams in priority order and `selection.max_lag_blocks: 10`, which still loads and has no effect. Pin `eth_blockNumber` to each upstream with `?provider_override=`: the primary answers 9,950 and the alternate 10,000. Those client answers are the head evidence.
+Configure an owned file profile with three fixture upstreams in priority order, background observations on, `monitoring.http_heads_interval_ms: 600000` and `selection.max_lag_blocks: 10`, which still loads and has no effect. The primary answers `eth_blockNumber` with 9,950 and both alternates with 10,000. The head round that polls all three when the profile opens is the head evidence, and its long interval keeps later rounds out of the counted sends.
 
-Require the alternate to serve `latest` and omitted-selector state reads (`eth_getBalance`, `eth_call`, `eth_estimateGas`, `eth_getTransactionCount`), `eth_blockNumber`, `eth_getTransactionReceipt`, and `eth_getLogs` ranges whose upper bound is `latest`, omitted or above the primary's head. Require the primary to serve numeric reads at 9,000, `eth_call` at `finalized`, `eth_getBlockByHash`, a range ending at 9,000, and `eth_sendRawTransaction`. Then make the alternate return 503 for a `latest` read and require the primary's answer after one send to each upstream.
+Require an alternate to serve `latest` and omitted-selector state reads (`eth_getBalance`, `eth_call`, `eth_estimateGas`, `eth_getTransactionCount`), `eth_blockNumber`, `eth_getTransactionReceipt`, and `eth_getLogs` ranges whose upper bound is `latest`, omitted or above the primary's head. Require the primary to serve numeric reads at 9,000, `eth_call` at `finalized`, `eth_getBlockByHash`, a range ending at 9,000, and `eth_sendRawTransaction`. Then make both alternates return 503 for a `latest` read and require the primary's answer after one send to each upstream. Finally, with a 20 ms `block_time_ms` and the primary 50 blocks behind, pin `eth_blockNumber` reads to an alternate for a second and require every `latest` read in that time to avoid the primary: the round's measured lag holds while the primary's own observation ages.
 
 - **core-routing-7.** Require the upstream named above for each request, counted from fixture sends between cursors.
 

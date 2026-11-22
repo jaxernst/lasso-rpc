@@ -27,7 +27,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     assert {:ok, 0x188FC2E} = HttpStrategy.decode_poll_response(response)
   end
 
-  test "polling uses one unlinked owner and applies interval changes to the next timer", %{
+  test "a round poll uses one unlinked owner and answers the round with its height", %{
     instance_id: instance_id
   } do
     test_pid = self()
@@ -43,14 +43,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
-        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile-b", "provider-b"} end,
         poll_runner: runner
       )
 
-    assert_receive {:http_strategy, :poll, ^instance_id, generation}
-    assert {:ok, state} = HttpStrategy.handle_message({:poll, generation}, state)
+    round = make_ref()
+    assert {:polling, state} = HttpStrategy.poll(state, {self(), round})
     assert_receive {:poll_started, owner_pid, plan}
 
     assert owner_pid == state.poll_owner_pid
@@ -60,15 +59,12 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     assert plan.caller_pid == self()
     assert plan.deadline_us - plan.started_at_us == 3_000_000
     refute owner_pid in elem(Process.info(self(), :links), 1)
-    assert state.timer_ref == nil
-    assert state.poll_generation == nil
 
-    assert {:ok, unchanged} = HttpStrategy.handle_message({:poll, generation}, state)
+    assert {:busy, unchanged} = HttpStrategy.poll(state)
     assert unchanged.poll_owner_pid == owner_pid
 
     state = HttpStrategy.set_poll_interval(state, 1_234)
     assert state.poll_interval_ms == 1_234
-    assert state.timer_ref == nil
     assert state.poll_owner_pid == owner_pid
 
     earliest_observed_at_ms = System.system_time(:millisecond)
@@ -106,26 +102,19 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     assert latency_ms == max(div(completed_at_us - plan.started_at_us, 1_000), 0)
     assert state.last_poll_time == owner_observed_at_ms
     assert state.poll_owner_pid == nil
-    assert is_reference(state.timer_ref)
-    assert is_integer(Process.read_timer(state.timer_ref))
-
-    {:messages, messages} = Process.info(self(), :messages)
-
-    refute Enum.any?(messages, fn
-             {:http_strategy, :poll, ^instance_id, _generation} -> true
-             _other -> false
-           end)
+    assert_receive {:round_answer, ^round, ^instance_id, 1_234, {:ok, 42}}
 
     HttpStrategy.stop(state)
   end
 
-  test "an owner crash is local and schedules exactly one later poll", %{instance_id: instance_id} do
+  test "an owner crash is local and answers the round without a height", %{
+    instance_id: instance_id
+  } do
     test_pid = self()
 
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
-        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile-a", "provider-a"} end,
         poll_runner: fn _plan ->
@@ -134,8 +123,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
         end
       )
 
-    assert_receive {:http_strategy, :poll, ^instance_id, generation}
-    assert {:ok, state} = HttpStrategy.handle_message({:poll, generation}, state)
+    round = make_ref()
+    assert {:polling, state} = HttpStrategy.poll(state, {self(), round})
     assert_receive {:poll_blocked, owner_pid}
     assert owner_pid == state.poll_owner_pid
 
@@ -151,8 +140,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
 
     assert state.consecutive_failures == 1
     assert state.poll_owner_pid == nil
-    assert is_reference(state.timer_ref)
-    assert is_integer(Process.read_timer(state.timer_ref))
+    assert_receive {:round_answer, ^round, ^instance_id, 10_000, :error}
     HttpStrategy.stop(state)
   end
 
@@ -162,7 +150,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
-        initial_delay_ms: 0,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile-a", "provider-a"} end,
         poll_runner: fn _plan ->
           send(test_pid, {:poll_blocked, self()})
@@ -170,8 +157,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
         end
       )
 
-    assert_receive {:http_strategy, :poll, ^instance_id, generation}
-    assert {:ok, state} = HttpStrategy.handle_message({:poll, generation}, state)
+    assert {:polling, state} = HttpStrategy.poll(state)
     assert_receive {:poll_blocked, owner_pid}
     death_ref = Process.monitor(owner_pid)
 
@@ -187,7 +173,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, strategy} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
-        initial_delay_ms: 0,
         route_resolver: fn ^instance_id, 1 -> {:ok, "profile", "provider"} end,
         poll_runner: fn _plan ->
           send(test_pid, {:poll_blocked, self()})
@@ -205,10 +190,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
       auth_scope: :system
     }
 
-    assert_receive {:http_strategy, :poll, ^instance_id, generation}
-
     assert {:noreply, worker} =
-             Worker.handle_info({:http_strategy, :poll, instance_id, generation}, worker)
+             Worker.handle_info({:block_sync_round, self(), make_ref(), 0}, worker)
 
     assert_receive {:poll_blocked, owner_pid}
 
@@ -217,8 +200,14 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
 
     assert status.http_status.poll_inflight
     assert worker.http_strategy.poll_owner_pid == owner_pid
-    assert HttpStrategy.poll_now(worker.http_strategy).poll_owner_pid == owner_pid
     refute owner_pid in elem(Process.info(self(), :links), 1)
+
+    round = make_ref()
+
+    assert {:noreply, ^worker} =
+             Worker.handle_info({:block_sync_round, self(), round, 0}, worker)
+
+    assert_receive {:round_answer, ^round, ^instance_id, _interval_ms, :skipped}
 
     send(owner_pid, :release)
     HttpStrategy.stop(worker.http_strategy)
@@ -244,14 +233,12 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
     {:ok, state} =
       HttpStrategy.start(1, instance_id,
         parent: self(),
-        initial_delay_ms: 0,
         poll_interval_ms: 10_000,
         route_resolver: resolver,
         poll_runner: runner
       )
 
-    assert_receive {:http_strategy, :poll, ^instance_id, first_generation}
-    assert {:ok, state} = HttpStrategy.handle_message({:poll, first_generation}, state)
+    assert {:polling, state} = HttpStrategy.poll(state)
     assert_receive {:captured_plan, first_owner, first_plan}
     assert {first_plan.profile, first_plan.provider_id} == {"profile-1", "provider-1"}
 
@@ -266,9 +253,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
                state
              )
 
-    Process.cancel_timer(state.timer_ref)
-    second_generation = state.poll_generation
-    assert {:ok, state} = HttpStrategy.handle_message({:poll, second_generation}, state)
+    assert {:polling, state} = HttpStrategy.poll(state)
     assert_receive {:captured_plan, second_owner, second_plan}
 
     assert {second_plan.profile, second_plan.provider_id} == {"profile-2", "provider-2"}
@@ -276,43 +261,5 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategyTest do
 
     HttpStrategy.stop(state)
     refute Process.alive?(second_owner)
-  end
-
-  test "initial polls are deterministically staggered without delaying a full interval" do
-    delays =
-      for index <- 1..256 do
-        HttpStrategy.initial_poll_delay_ms(1, "startup-instance-#{index}", 15_000)
-      end
-
-    assert Enum.all?(delays, &(&1 in 0..1_999))
-    assert length(Enum.uniq(delays)) > 220
-    assert Enum.min(delays) < 100
-    assert Enum.max(delays) > 1_900
-
-    assert HttpStrategy.initial_poll_delay_ms(1, "stable-instance", 15_000) ==
-             HttpStrategy.initial_poll_delay_ms(1, "stable-instance", 15_000)
-
-    assert HttpStrategy.initial_poll_delay_ms(1, "short-interval", 25) in 0..24
-  end
-
-  test "the production default schedules the first poll at its deterministic offset" do
-    instance_id =
-      Enum.find_value(1..1_000, fn index ->
-        candidate = "delayed-startup-instance-#{index}"
-
-        if HttpStrategy.initial_poll_delay_ms(1, candidate, 15_000) >= 500,
-          do: candidate
-      end)
-
-    expected_delay_ms = HttpStrategy.initial_poll_delay_ms(1, instance_id, 15_000)
-    {:ok, state} = HttpStrategy.start(1, instance_id, parent: self())
-    remaining_ms = Process.read_timer(state.timer_ref)
-
-    assert is_integer(remaining_ms)
-    assert remaining_ms > 0
-    assert remaining_ms <= expected_delay_ms
-    refute_receive {:http_strategy, :poll, ^instance_id, _generation}, 5
-
-    HttpStrategy.stop(state)
   end
 end
