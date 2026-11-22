@@ -45,22 +45,23 @@ and the lower route is deferred when its gap to the higher one exceeds the
 band. A profile with fewer than two upstreams with background observations on a
 chain gets no lag verdict there, so its moving-head reads keep strategy order.
 A round counts every answer that arrives before its poll deadline, even after
-the next round has started. Each upstream keeps its latest round, so a route
-that errors or skips a round keeps its last measured lag until that round is
-older than the freshness window of the route's own head observations, and
-another profile's rounds never replace it. When an upstream switches between
-`newHeads` and HTTP polling, or its `newHeads` head moves backward, its earlier
-answers are dropped and a round starts at once, so its verdict comes from the
-feed it now uses.
+the next round has started. A round with at least two of a profile's upstreams
+records each one's lag for that profile; a round with fewer leaves the
+profile's lags as they are, so another profile's rounds never replace them. A
+route that errors or skips a round keeps its last measured lag until that
+measurement is older than the freshness window of the route's own head
+observations. When an upstream switches between `newHeads` and HTTP polling, or
+its `newHeads` head moves backward, a round starts at once, so the change is
+measured without waiting for the next tick.
 
-A profile with background observations off keeps strategy order even when
-another profile observes the same upstreams, and so do unobserved and stale
-routes. A read at a fixed block defers a route whose fresh observation stays
-short of that block even after crediting the blocks the chain could have
-produced since. A fresh route that reports the qualified reference height on a
-different block hash is deferred the same way. Deferral never excludes a route,
-so when every current route fails or lacks the method, a lagging route still
-serves.
+A profile with background observations off gets no round lag, so its
+moving-head reads keep strategy order even when another profile observes the
+same upstreams, and so do unobserved and stale routes. A read at a fixed block,
+in any profile, defers a route whose fresh observation stays short of that
+block even after crediting the blocks the chain could have produced since. A
+fresh route that reports the qualified reference height on a different block
+hash is deferred the same way. Deferral never excludes a route, so when every
+current route fails or lacks the method, a lagging route still serves.
 
 What a request needs comes from its own parameters:
 

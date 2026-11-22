@@ -367,7 +367,7 @@ defmodule Lasso.BlockSync.Worker do
     new_ws_state = WsStrategy.handle_new_head(state.ws_strategy, payload, received_at)
 
     if state.http_reduced and regressed?(state.ws_strategy, new_ws_state),
-      do: Round.reset(state.chain_id, state.instance_id)
+      do: Round.start_now(state.chain_id)
 
     {:noreply, refresh_http_policy(%{state | ws_strategy: new_ws_state})}
   end
@@ -482,8 +482,7 @@ defmodule Lasso.BlockSync.Worker do
     end
   end
 
-  # A fed head below the last one means the upstream's earlier round answers no longer
-  # describe it, so its round starts over.
+  # A fed head below the last one is measured in a round at once, not at the next tick.
   defp regressed?(%{last_height: previous}, %{last_height: height})
        when is_integer(previous) and is_integer(height),
        do: height < previous
@@ -979,7 +978,7 @@ defmodule Lasso.BlockSync.Worker do
   defp reduce_http_polling(state) do
     reduced_interval = state.config.ws_active_poll_interval_ms
     state = refresh_http_policy(%{state | http_reduced: true})
-    Round.reset(state.chain_id, state.instance_id)
+    Round.start_now(state.chain_id)
 
     Logger.debug("HTTP polling reduced (WS active)",
       chain_id: state.chain_id,
@@ -995,7 +994,7 @@ defmodule Lasso.BlockSync.Worker do
   defp restore_http_polling(state) do
     normal_interval = state.config.poll_interval_ms
     state = refresh_http_policy(%{state | http_reduced: false})
-    Round.reset(state.chain_id, state.instance_id)
+    Round.start_now(state.chain_id)
 
     Logger.debug("HTTP polling restored to normal",
       chain_id: state.chain_id,

@@ -12,8 +12,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
-  - `{:head_round, chain_id, provider_id}` => the latest head round the upstream
-    answered
+  - `{:head_lags, chain_id, profile}` => the profile scope's id and the round lag
+    last measured for each of its upstreams
 
   ## Freshness
 
@@ -30,14 +30,15 @@ defmodule Lasso.BlockSync.Registry do
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
   alias Lasso.Observations.{HeadComparison, HeadObservation, HeadScope, HeadSnapshot}
   alias Lasso.Providers.{Catalog, HeadEvidence}
+  alias Lasso.RPC.RoutingPlan
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
   @cache_retries 4
   @observation_retries 4
 
-  @typedoc "One head round's heights by instance, and when it started."
-  @type head_round :: %{started_at_ms: integer(), heights: %{String.t() => non_neg_integer()}}
+  @typedoc "An upstream's lag behind its scope in a head round, and when that round started."
+  @type head_lag :: %{lag: integer(), outlier?: boolean(), measured_at_ms: integer()}
 
   ## Client API
 
@@ -124,49 +125,48 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
-  Records a head round as the latest of each upstream that answered it, unless
-  that upstream already holds a newer one. Only the chain's
-  `Lasso.BlockSync.Round` writes rounds, so the check needs no coordination.
+  Records the lags a head round measured for a profile scope's upstreams. Each
+  upstream keeps its newest lag, and an upstream the round did not measure keeps
+  the one it has. Lags measured for an earlier version of the scope are dropped.
+  Only the chain's `Lasso.BlockSync.Round` writes lags, so the merge needs no
+  coordination.
   """
-  @spec put_round(pos_integer(), head_round()) :: :ok
-  def put_round(chain_id, %{started_at_ms: started_at_ms, heights: heights} = round) do
-    entries =
-      for instance_id <- Map.keys(heights),
-          key <- [{:head_round, chain_id, instance_id}],
-          not newer_round?(key, started_at_ms),
-          do: {key, round}
+  @spec put_head_lags(HeadScope.t(), %{String.t() => head_lag()}) :: :ok
+  def put_head_lags(%HeadScope{} = scope, lags) do
+    held = get_head_lags(scope)
 
-    :ets.insert(@table, entries)
+    lags =
+      Map.merge(held, lags, fn _instance_id, held, new ->
+        if new.measured_at_ms >= held.measured_at_ms, do: new, else: held
+      end)
+
+    :ets.insert(@table, {head_lags_key(scope), scope.scope_id, lags})
     :ok
   end
 
-  @doc "The latest head round of each listed upstream that has one."
-  @spec get_rounds(pos_integer(), [String.t()]) :: [head_round()]
-  def get_rounds(chain_id, instance_ids) do
-    for instance_id <- instance_ids,
-        [{_key, round}] <- [:ets.lookup(@table, {:head_round, chain_id, instance_id})],
-        do: round
+  @doc "The round lags measured for the scope's upstreams."
+  @spec get_head_lags(HeadScope.t()) :: %{String.t() => head_lag()}
+  def get_head_lags(%HeadScope{scope_id: scope_id} = scope) do
+    case :ets.lookup(@table, head_lags_key(scope)) do
+      [{_key, ^scope_id, lags}] -> lags
+      _none_or_earlier_scope -> %{}
+    end
   end
 
-  @doc """
-  Removes an upstream's answers from every recorded round on the chain, so its
-  next verdict comes only from rounds it answers from here on.
-  """
-  @spec forget_round_answers(pos_integer(), String.t()) :: :ok
-  def forget_round_answers(chain_id, instance_id) do
-    :ets.delete(@table, {:head_round, chain_id, instance_id})
+  @doc "Drops the round lags of every scope the published routing plans no longer hold."
+  @spec retain_head_lags(%{{String.t(), pos_integer()} => RoutingPlan.t()}) :: :ok
+  def retain_head_lags(routing_plans) do
+    current = MapSet.new(routing_plans, fn {_key, plan} -> plan.head_scope.scope_id end)
 
-    for {key, %{heights: heights} = round} <-
-          :ets.match_object(@table, {{:head_round, chain_id, :_}, :_}),
-        Map.has_key?(heights, instance_id),
-        do: :ets.insert(@table, {key, %{round | heights: Map.delete(heights, instance_id)}})
+    for [chain_id, profile, scope_id] <-
+          :ets.match(@table, {{:head_lags, :"$1", :"$2"}, :"$3", :_}),
+        not MapSet.member?(current, scope_id),
+        do: :ets.delete(@table, {:head_lags, chain_id, profile})
 
     :ok
   end
 
-  defp newer_round?(key, started_at_ms) do
-    match?([{_key, %{started_at_ms: held}}] when held > started_at_ms, :ets.lookup(@table, key))
-  end
+  defp head_lags_key(scope), do: {:head_lags, scope.chain_id, scope.profile_id}
 
   @doc """
   Get the stored height for a specific provider.
@@ -396,7 +396,7 @@ defmodule Lasso.BlockSync.Registry do
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
     :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
-    :ets.match_delete(@table, {{:head_round, chain_id, :_}, :_})
+    :ets.match_delete(@table, {{:head_lags, chain_id, :_}, :_, :_})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
     :ets.delete(@table, {:head_revision, chain_id})
@@ -416,7 +416,6 @@ defmodule Lasso.BlockSync.Registry do
     :ets.delete(@table, {:height, chain_id, provider_id})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :http})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :ws})
-    :ets.delete(@table, {:head_round, chain_id, provider_id})
     next_head_revision(chain_id)
 
     :ets.match_delete(

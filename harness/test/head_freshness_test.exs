@@ -226,6 +226,109 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     end
   end
 
+  test "a profile keeps its measured lag while its upstreams answer other profiles' rounds apart" do
+    [primary, peer, other_a, other_b] =
+      fleets = fleets!("freshness-apart", [@behind, @current, @current, @behind])
+
+    try do
+      slow = open!([primary, peer])
+
+      try do
+        lead(slow, [primary, peer])
+
+        # Each fast profile defers its own lagging route, which shows a round of just its
+        # two upstreams closed.
+        for routes <- [[primary, other_a], [other_b, peer]] do
+          fast = open!(routes, %{"monitoring" => %{"http_heads_interval_ms" => 1_000}})
+
+          try do
+            lead(fast, routes)
+          after
+            Tenant.close!(fast)
+          end
+        end
+
+        assert [sent] = sends(slow, [primary, peer], "eth_getBalance", [@address, "latest"])
+        assert sent == peer.name
+      after
+        Tenant.close!(slow)
+      end
+    after
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  test "a lag stands while the lagging route's newHeads head steps back and forth" do
+    [primary, peer] = fleets = fleets!("freshness-ws", [@behind, @current])
+
+    try do
+      tenant =
+        open!(fleets, %{"monitoring" => %{"http_heads_interval_ms" => 1_000}}, %{
+          primary.name => %{"ws_url" => primary.ws_url, "subscribe_new_heads" => true}
+        })
+
+      try do
+        subscription = subscription!(primary)
+        Fleet.notify(subscription, head(@behind))
+        lead(tenant, fleets)
+
+        # The peer's polls never answer, so no round can measure the primary again.
+        Fleet.script(peer, "eth_blockNumber", [], {:respond, fn _ -> {:hold, make_ref()} end})
+        deadline = System.monotonic_time(:millisecond) + 2_000
+
+        try do
+          Stream.repeatedly(fn ->
+            for height <- [@behind + 1, @behind] do
+              Fleet.notify(subscription, head(height))
+              assert [sent] = sends(tenant, fleets, "eth_getBalance", [@address, "latest"])
+              assert sent == peer.name
+            end
+          end)
+          |> Stream.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
+          |> Stream.run()
+        after
+          for %{action: {:hold, token}} <- Fleet.drain(peer),
+              do: Fleet.release(peer, token, {:answer, hex(@current)})
+        end
+      after
+        Tenant.close!(tenant)
+      end
+    after
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  test "one upstream switching to newHeads leaves the others' verdicts as measured" do
+    [primary, _outlier, witness] =
+      fleets = fleets!("freshness-switch", [@current, 1_000_000, @current])
+
+    try do
+      tenant =
+        open!(fleets, %{}, %{
+          witness.name => %{"ws_url" => witness.ws_url, "subscribe_new_heads" => true}
+        })
+
+      try do
+        Settle.await("the first round polls every upstream", fn ->
+          if Enum.all?(fleets, &(head_polls(&1) >= 1)), do: {:ok, :polled}
+        end)
+
+        Fleet.notify(subscription!(witness), head(@current))
+        deadline = System.monotonic_time(:millisecond) + 1_500
+
+        Stream.repeatedly(fn ->
+          assert sends(tenant, fleets, "eth_getBalance", [@address, "latest"]) == [primary.name]
+        end)
+        |> Stream.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
+        |> Stream.run()
+      after
+        Tenant.close!(tenant)
+      end
+    after
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
   # Three upstreams by default, so the round's outlier rule applies. The round polls each
   # once when the tenant opens; its long interval keeps later rounds out of the sends.
   defp world(action, opts \\ []) do
@@ -254,7 +357,7 @@ defmodule Lasso.Harness.HeadFreshnessTest do
   end
 
   # A retired lag limit still loads and no longer excludes the lagging route.
-  defp open!(fleets, chain \\ %{}) do
+  defp open!(fleets, chain \\ %{}, providers \\ %{}) do
     Tenant.open!(fleets,
       chain:
         Map.merge(
@@ -264,9 +367,25 @@ defmodule Lasso.Harness.HeadFreshnessTest do
           },
           chain
         ),
-      providers: Map.new(fleets, &{&1.name, %{"background_observations" => true}})
+      providers:
+        Map.new(fleets, fn fleet ->
+          {fleet.name,
+           Map.merge(%{"background_observations" => true}, Map.get(providers, fleet.name, %{}))}
+        end)
     )
   end
+
+  defp subscription!(fleet) do
+    Settle.await("the newHeads subscription opens", fn ->
+      case Enum.find(Fleet.drain(fleet), &(&1.request["method"] == "eth_subscribe")) do
+        nil -> :waiting
+        report -> {:ok, report}
+      end
+    end)
+  end
+
+  defp head(height),
+    do: %{"number" => hex(height), "timestamp" => hex(System.system_time(:second))}
 
   defp lead(tenant, [primary | _current] = fleets) do
     Settle.await("a round defers the lagging primary for latest reads", fn ->

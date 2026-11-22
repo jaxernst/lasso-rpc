@@ -13,17 +13,21 @@ defmodule Lasso.BlockSync.Round do
   the shortest interval its answers report, and soon after a worker joins with
   a new interval.
 
-  A round with at least two heights becomes the latest recorded round of every
-  upstream that answered it, in `Lasso.BlockSync.Registry`. A lone height has
-  nothing to be compared with, so a round with fewer records nothing and the
-  upstream keeps its earlier round. Rounds sample physical instances, so one
-  round serves every profile on the chain;
-  `Lasso.RPC.Selection.HeadSuitability` compares each route only with its own
-  profile's routes in the same round.
+  When a round closes, it judges each profile scope on the chain, from the
+  catalog's current routing plans, that has at least two of its head-observing
+  upstreams in the round. Each of those upstreams gets that scope's lag: the
+  highest of the scope's heights less its own. With three or more heights, a
+  height more than the scope's agreement band above their lower median is an
+  outlier and ignored. Two heights cannot show which one is wrong, so the higher
+  one is the mark. The lags go to `Lasso.BlockSync.Registry` for
+  `Lasso.RPC.Selection.HeadSuitability`. A scope with fewer answers keeps the
+  lags it has, so neither another profile's rounds nor an upstream that errors
+  or skips replaces a verdict, and an answer from an upstream the catalog no
+  longer routes judges nothing.
 
-  When an upstream switches between `newHeads` and HTTP polling, `reset/2`
-  removes its answers from recorded and open rounds and starts a round at once,
-  so its next verdict comes from the feed it now uses.
+  `start_now/1` starts a round at once, so an upstream that switches between
+  `newHeads` and HTTP polling, or whose `newHeads` head moves backward, is
+  measured without waiting for the next tick.
 
   Rounds run under their own supervisor. A round never sends a request itself,
   and a crashed round loses only the rounds in flight: it restarts, asks every
@@ -36,6 +40,8 @@ defmodule Lasso.BlockSync.Round do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Core.Support.DynamicSupervisorCall
+  alias Lasso.Observations.HeadComparison
+  alias Lasso.Providers.Catalog
 
   @supervisor Lasso.BlockSync.RoundSupervisor
   @join_settle_ms 250
@@ -57,20 +63,11 @@ defmodule Lasso.BlockSync.Round do
     end
   end
 
-  @doc """
-  Forgets an upstream's round answers after it switches head feeds and starts a
-  round now.
-  """
-  @spec reset(pos_integer(), String.t()) :: :ok | {:error, term()}
-  def reset(chain_id, instance_id) do
-    with {:ok, pid} <- ensure_started(chain_id) do
-      GenServer.cast(pid, {:reset, instance_id})
-    end
+  @doc "Starts a round on the chain now, without moving its tick."
+  @spec start_now(pos_integer()) :: :ok | {:error, term()}
+  def start_now(chain_id) do
+    with {:ok, pid} <- ensure_started(chain_id), do: GenServer.cast(pid, :start_now)
   end
-
-  @doc "The fewest heights a round, or a profile's share of one, can judge."
-  @spec min_heights() :: pos_integer()
-  def min_heights, do: @min_heights
 
   @spec start_link(pos_integer()) :: GenServer.on_start()
   def start_link(chain_id), do: GenServer.start_link(__MODULE__, chain_id, name: via(chain_id))
@@ -102,21 +99,7 @@ defmodule Lasso.BlockSync.Round do
     {:noreply, schedule(state, @join_settle_ms)}
   end
 
-  def handle_cast({:reset, instance_id}, state) do
-    BlockSyncRegistry.forget_round_answers(state.chain_id, instance_id)
-
-    open =
-      Map.new(state.open, fn {ref, round} ->
-        {ref,
-         %{
-           round
-           | waiting: MapSet.delete(round.waiting, instance_id),
-             heights: Map.delete(round.heights, instance_id)
-         }}
-      end)
-
-    {:noreply, open(%{state | open: open})}
-  end
+  def handle_cast(:start_now, state), do: {:noreply, open(state)}
 
   @impl true
   def handle_info({:tick, ref}, %{tick_ref: ref} = state) do
@@ -128,8 +111,6 @@ defmodule Lasso.BlockSync.Round do
     {:noreply, open(state)}
   end
 
-  # Only an upstream the round is still waiting on can answer it, so an answer
-  # from before a reset is ignored.
   def handle_info({:round_answer, ref, instance_id, interval_ms, result}, state)
       when is_map_key(state.open, ref) do
     round = Map.fetch!(state.open, ref)
@@ -186,13 +167,7 @@ defmodule Lasso.BlockSync.Round do
 
   defp close(state, ref) do
     {round, open} = Map.pop!(state.open, ref)
-
-    if map_size(round.heights) >= @min_heights do
-      BlockSyncRegistry.put_round(state.chain_id, %{
-        started_at_ms: round.started_at_ms,
-        heights: round.heights
-      })
-    end
+    judge(state.chain_id, round)
 
     state = %{
       state
@@ -205,6 +180,43 @@ defmodule Lasso.BlockSync.Round do
       do: schedule(state, max(round.started_at_ms + state.interval_ms - now_ms(), 0)),
       else: state
   end
+
+  defp judge(chain_id, %{heights: heights} = round) when map_size(heights) >= @min_heights do
+    for plan <- routing_plans(chain_id),
+        scope_heights <- [Map.take(heights, voters(plan))],
+        map_size(scope_heights) >= @min_heights do
+      band = HeadComparison.agreement_blocks(plan.head_scope.policy)
+      BlockSyncRegistry.put_head_lags(plan.head_scope, lags(scope_heights, band, round))
+    end
+
+    :ok
+  end
+
+  defp judge(_chain_id, _round), do: :ok
+
+  defp voters(plan),
+    do: for(provider <- plan.providers, provider.observes_heads?, do: provider.instance_id)
+
+  defp routing_plans(chain_id) do
+    case Catalog.snapshot() do
+      %{routing_plans: plans} -> for {{_profile, ^chain_id}, plan} <- plans, do: plan
+      _unpublished -> []
+    end
+  end
+
+  defp lags(heights, band, round) do
+    sorted = heights |> Map.values() |> Enum.sort()
+    ceiling = ceiling(sorted, band)
+    top = sorted |> Enum.take_while(&(&1 <= ceiling)) |> List.last()
+
+    Map.new(heights, fn {instance_id, height} ->
+      {instance_id,
+       %{lag: top - height, outlier?: height > ceiling, measured_at_ms: round.started_at_ms}}
+    end)
+  end
+
+  defp ceiling([_low, high], _band), do: high
+  defp ceiling(sorted, band), do: Enum.at(sorted, div(length(sorted) - 1, 2)) + band
 
   defp now_ms, do: System.system_time(:millisecond)
 

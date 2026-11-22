@@ -472,10 +472,11 @@ Per-provider GenServer managing block height tracking:
 - Per-chain GenServer under `Lasso.BlockSync.RoundSupervisor` that asks every
   Worker on the chain for its head in the same tick: its `newHeads` head while
   that feeds it, otherwise an HTTP poll
-- Closes each round at its own poll deadline, so rounds overlap, and records a
-  round with at least two answers as the latest of each upstream that answered
-- Drops an upstream's answers and starts a round at once when its head feed
-  switches or its `newHeads` head moves backward
+- Closes each round at its own poll deadline, so rounds overlap, and judges
+  each profile with at least two of its head-observing upstreams in the round,
+  recording their lags for that profile; other profiles keep the lags they have
+- Starts a round at once when an upstream's head feed switches or its
+  `newHeads` head moves backward
 - Sends no requests itself; each poll runs in its Worker's disposable owner
   process, so one upstream's failure costs only that upstream's answer
 
@@ -515,11 +516,12 @@ detects an observed branch conflict, not canonical ancestry across heights.
 
 Selection captures each route's latest observation once per request and judges
 it against what the request needs: a numeric block, the moving head, or
-nothing. For the moving head, a route is deferred when its upstream's latest
-head round found it more than the agreement band behind the other upstreams
-its profile observes; a newer passive observation never clears that. For a
-numeric block, a route is deferred when its fresh observation stays short of
-the block even after crediting the blocks the chain could have produced since.
+nothing. For the moving head, a route is deferred when the latest head round
+that judged its profile found its upstream more than the agreement band behind
+the other upstreams that profile observes; a newer passive observation never
+clears that. For a numeric block, a route is deferred when its fresh
+observation stays short of the block even after crediting the blocks the chain
+could have produced since.
 A route fresh at the qualified reference height on a different hash is
 deferred too. Deferral stays within the route's health tier and never excludes
 it; see [Head freshness](ROUTING.md#head-freshness). Operator
