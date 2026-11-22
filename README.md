@@ -2,38 +2,50 @@
 <img width="1600" height="600" alt="image" src="https://github.com/user-attachments/assets/b6ad3157-1118-4d8b-878d-1b023303eefd" />
 </h1>
 
-### One smart RPC endpoint for all your nodes and providers.
+### Smart RPC routing for all your nodes and providers.
 
 [![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/badge/release-v0.9.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.9.0)
 [![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](LICENSE.md)
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](#documentation)
-[![Telegram](https://img.shields.io/badge/telegram-join%20chat-26A5E4?style=flat-square&labelColor=19202E&logo=telegram&logoColor=white)](https://t.me/+79pFERTlZPIzZTZh)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 
-Lasso wrangles your nodes and RPC providers into one fast, resilient, observable
-JSON-RPC endpoint. It measures every upstream by kind of request and transport, sends each
-request to the provider best able to serve it, and routes around outages, rate
-limits, and lagging nodes before your users notice. WebSocket subscriptions
-survive provider failures, and every routing decision is visible. A provider
-needs only a URL: Lasso [learns its limits](docs/ROUTING.md#learned-provider-limits)
-from live traffic.
+Lasso wrangles your nodes and RPC providers into one fast, resilient, and observable
+JSON-RPC endpoint. It adapts to transient failures, unifies inconsistent RPC semantics,
+and learns the optimal path for your app's RPC workload. Use it to aggregate all your RPC
+infra and tune your RPC throughput and performance
+[without redeploys](docs/DEPLOYMENT.md#custom-profiles-and-credentials).
 
-Point your client at a Lasso URL instead of a provider's. No SDK, no client
-library, no application changes.
+Express routing controls right in the RPC endpoint path:
 
-Self-hosted, Apache-2.0, and built on Elixir/OTP. The bundled public pool covers
-Ethereum, Base, and Arbitrum (mainnet and Sepolia), plus Optimism, Unichain,
-World Chain, and Robinhood Chain, with no API keys, so you can try it in one
-command. Add any EVM chain and your own providers in YAML.
+```
+/rpc/load-balanced/ethereum  -> spread requests across healthy providers (the default)
+/rpc/fastest/ethereum        -> route to the fastest provider by latency per method type and transport
+/rpc/balanced-fast/ethereum  -> load balance between the fastest options
+/rpc/priority/ethereum       -> fixed provider priority and fallback order
+```
+
+Build custom routing pools for all your environments and configure each to optimize for
+its workload:
+
+```
+/rpc/profile/prod/fastest/ethereum     -> subscribe_new_heads: true, http_heads_interval_ms: 2000
+/rpc/profile/staging/priority/ethereum -> subscribe_new_heads: false, background_observations: false
+```
+
+Run your own Lasso proxy, deploy it to your own infra, or use hosted, edge-routed custom
+RPC profiles at [lasso.sh](https://lasso.sh).
+
+Apache-2.0 core built on Elixir/OTP. The bundled public pool aggregates public providers
+across Ethereum, Base, Arbitrum, Optimism, Robinhood Chain, and more.
+
+Add any additional EVM chain and your own providers in YAML, and Lasso will learn methods
+and capabilities to route requests optimally.
 
 [Quick Start](#quick-start) · [Use it from your app](#use-it-from-your-app) ·
 [Configuration](#configuration) · [Endpoints](#endpoints) ·
 [How it works](#how-it-works) · [Migration guide](docs/MIGRATION.md) ·
 [Documentation](#documentation) · [Support](SUPPORT.md)
-
-
-Or get instant access to free curated RPC or hosted BYOK RPC profiles at [lasso.sh](https://lasso.sh)
 
 ## Why Lasso
 
