@@ -85,8 +85,9 @@ chains:
 ### HTTP chain identity
 
 The configured `chain_id` is the expected identity of every provider on that
-chain. Background HTTP `eth_chainId` probes reject mismatched or malformed
-results. Once observed, that rejection blocks HTTP dispatch even while the
+chain. A background HTTP `eth_chainId` probe that returns a readable, different
+chain ID rejects the provider. An empty, null or malformed answer is an ordinary
+probe failure and leaves identity as it was. Once observed, a rejection blocks HTTP dispatch even while the
 provider's circuit is closed; requests can fail over to another eligible route.
 A later matching probe clears the identity rejection without resetting circuit
 state. Transport errors, rate limits, and JSON-RPC errors cannot clear it.
