@@ -221,6 +221,8 @@ Orders reliable upstreams by a weighted random permutation over each upstream's 
 **Configuration**:
 - `BALANCED_FAST_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
 
+**Evidence lifetime**: a route's family evidence expires for ranking five minutes after its last comparable observation. Each consecutive failure after the first doubles that lifetime, up to an hour, and a success resets it. A route that never answers is therefore re-sampled a few times a day instead of every five minutes.
+
 Opaque server and vendor errors are ambiguous: replay-safe reads may fall back without a health penalty or success evidence, while unsafe requests return the original error without replay. The execution-fact codec writes major version 2 and also reads ordinary version-1 facts; version 1 cannot express ambiguous response semantics.
 
 ### Priority

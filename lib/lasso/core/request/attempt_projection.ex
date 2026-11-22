@@ -24,6 +24,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @control_retries 4
   @probation_deliveries 32
   @routing_evidence_max_age_us 300_000_000
+  @failing_evidence_max_age_us 3_600_000_000
   @latency_ewma_weight 8
   @reliability_ewma_weight 8
   @qualified_reliability 0.75
@@ -1586,7 +1587,7 @@ defmodule Lasso.RPC.AttemptProjection do
         qualified_row?(row, now_us) ->
           :qualified
 
-        routing_evidence_stale?(row.observed_at_us, now_us) ->
+        row_stale?(row, now_us) ->
           :stale
 
         not reliable_row?(row) ->
@@ -1620,7 +1621,7 @@ defmodule Lasso.RPC.AttemptProjection do
   defp qualified_row?(%{observed_at_us: nil}, _now_us), do: false
 
   defp qualified_row?(row, now_us) do
-    not routing_evidence_stale?(row.observed_at_us, now_us) and row.usable_successes >= 3 and
+    not row_stale?(row, now_us) and row.usable_successes >= 3 and
       is_number(row.recent_success_probability) and reliable_row?(row)
   end
 
@@ -1685,6 +1686,19 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp routing_evidence_stale?(observed_at_us, now_us),
     do: now_us - observed_at_us >= @routing_evidence_max_age_us
+
+  # Stale evidence makes a route a sampling candidate again. Each consecutive failure after the
+  # first doubles how long a failing route's evidence stays current, up to an hour, so a route
+  # that never answers is re-sampled a few times a day; any success resets the count.
+  defp row_stale?(%{observed_at_us: observed_at_us, consecutive_failures: failures}, now_us) do
+    max_age_us =
+      min(
+        @routing_evidence_max_age_us * 2 ** min(max(failures - 1, 0), 4),
+        @failing_evidence_max_age_us
+      )
+
+    now_us - observed_at_us >= max_age_us
+  end
 
   defp diagnostic_attempt?(%__MODULE__{qualification: :policy_rejected}), do: true
   defp diagnostic_attempt?(%__MODULE__{fact: fact}), do: diagnostic_attempt?(fact)
