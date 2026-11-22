@@ -34,7 +34,7 @@ defmodule Lasso.Providers.Catalog do
 
   require Logger
 
-  alias Lasso.Config.{ChainConfig, ConfigStore}
+  alias Lasso.Config.{ChainConfig, ConfigStore, ObservationConfig}
   alias Lasso.Providers.{HeadEvidence, InstanceId, ProviderHeaders}
   alias Lasso.RPC.{BoundedIdentifier, RoutingPlan}
 
@@ -503,7 +503,9 @@ defmodule Lasso.Providers.Catalog do
           priority: provider.priority,
           capabilities: provider.capabilities,
           archival: provider.archival,
-          subscribe_new_heads: subscribe_new_heads
+          subscribe_new_heads: subscribe_new_heads,
+          observes_heads?:
+            ObservationConfig.resolve(chain_config, provider).background_observations
         }
       end)
 
@@ -556,6 +558,7 @@ defmodule Lasso.Providers.Catalog do
           capabilities: provider.capabilities,
           archival: provider.archival,
           subscribe_new_heads: provider.subscribe_new_heads,
+          observes_heads?: provider.observes_heads?,
           head_freshness_ms: route_head_freshness_ms(chain_config),
           transports: available_transports(config)
         }

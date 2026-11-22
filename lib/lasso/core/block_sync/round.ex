@@ -1,24 +1,32 @@
 defmodule Lasso.BlockSync.Round do
   @moduledoc """
-  One chain's head round. Every HTTP head poll on the chain runs in the same
-  tick, so the heights the upstreams report can be compared as they stand,
-  without converting time into blocks.
+  One chain's head round. Every upstream on the chain reports its head in the
+  same tick, so the heights can be compared as they stand, without converting
+  time into blocks.
 
-  Each tick asks every BlockSync worker on the chain to poll. A worker polls
-  when its own interval falls due and it is not rate limited, and answers with
-  the height, an error, or a skip. The round closes when every worker has
-  answered or the poll deadline passes. It ticks at the shortest interval its
-  answers report, and soon after a worker joins with a new interval.
+  Each tick asks every BlockSync worker on the chain for its head. A worker fed
+  by a live `newHeads` subscription answers at once with its latest head. Any
+  other worker polls HTTP when its own interval falls due and it is not rate
+  limited, and answers with the height, an error, or a skip. Each round closes
+  when every worker has answered or its poll deadline passes, so a slow answer
+  still counts after the next tick has opened another round. The chain ticks at
+  the shortest interval its answers report, and soon after a worker joins with
+  a new interval.
 
-  A round with at least three heights is recorded in
-  `Lasso.BlockSync.Registry` with the chain's few latest rounds. With fewer it
-  records nothing, because two heights cannot show which one is wrong. Rounds
-  sample physical instances, so one round serves every profile on the chain;
+  A round with at least two heights becomes the latest recorded round of every
+  upstream that answered it, in `Lasso.BlockSync.Registry`. A lone height has
+  nothing to be compared with, so a round with fewer records nothing and the
+  upstream keeps its earlier round. Rounds sample physical instances, so one
+  round serves every profile on the chain;
   `Lasso.RPC.Selection.HeadSuitability` compares each route only with its own
   profile's routes in the same round.
 
+  When an upstream switches between `newHeads` and HTTP polling, `reset/2`
+  removes its answers from recorded and open rounds and starts a round at once,
+  so its next verdict comes from the feed it now uses.
+
   Rounds run under their own supervisor. A round never sends a request itself,
-  and a crashed round loses only the tick in flight: it restarts, asks every
+  and a crashed round loses only the rounds in flight: it restarts, asks every
   worker again and relearns its interval from their answers. Workers monitor
   their round and join again when it stops, so polling resumes even after the
   supervisor itself restarts.
@@ -33,11 +41,9 @@ defmodule Lasso.BlockSync.Round do
   @join_settle_ms 250
   # The HTTP poll deadline, plus time for the answer to arrive.
   @answer_window_ms 3_500
-  @min_heights 3
-  # Enough rounds to span a route's head freshness at the default head interval.
-  @kept_rounds 4
+  @min_heights 2
 
-  defstruct [:chain_id, :interval_ms, :tick_ref, :open]
+  defstruct [:chain_id, :interval_ms, :tick_ref, open: %{}]
 
   @doc """
   Starts the chain's round if needed and schedules a round for the joining
@@ -48,6 +54,17 @@ defmodule Lasso.BlockSync.Round do
     with {:ok, pid} <- ensure_started(chain_id) do
       GenServer.cast(pid, {:join, interval_ms})
       {:ok, pid}
+    end
+  end
+
+  @doc """
+  Forgets an upstream's round answers after it switches head feeds and starts a
+  round now.
+  """
+  @spec reset(pos_integer(), String.t()) :: :ok | {:error, term()}
+  def reset(chain_id, instance_id) do
+    with {:ok, pid} <- ensure_started(chain_id) do
+      GenServer.cast(pid, {:reset, instance_id})
     end
   end
 
@@ -80,43 +97,67 @@ defmodule Lasso.BlockSync.Round do
   end
 
   @impl true
-  # A join lets an open round collect its answers before the next one starts.
   def handle_cast({:join, interval_ms}, state) do
     state = %{state | interval_ms: min(state.interval_ms || interval_ms, interval_ms)}
-    {:noreply, schedule(state, max(@join_settle_ms, answer_time_left(state)))}
+    {:noreply, schedule(state, @join_settle_ms)}
+  end
+
+  def handle_cast({:reset, instance_id}, state) do
+    BlockSyncRegistry.forget_round_answers(state.chain_id, instance_id)
+
+    open =
+      Map.new(state.open, fn {ref, round} ->
+        {ref,
+         %{
+           round
+           | waiting: MapSet.delete(round.waiting, instance_id),
+             heights: Map.delete(round.heights, instance_id)
+         }}
+      end)
+
+    {:noreply, open(%{state | open: open})}
   end
 
   @impl true
   def handle_info({:tick, ref}, %{tick_ref: ref} = state) do
-    state = %{close(state) | tick_ref: nil}
-    state = if state.interval_ms, do: schedule(state, state.interval_ms), else: state
+    state =
+      if state.interval_ms,
+        do: schedule(state, state.interval_ms),
+        else: %{state | tick_ref: nil}
+
     {:noreply, open(state)}
   end
 
-  def handle_info(
-        {:round_answer, ref, instance_id, interval_ms, result},
-        %{open: %{ref: ref}} = state
-      ) do
-    open =
-      state.open
-      |> Map.update!(:waiting, &MapSet.delete(&1, instance_id))
-      |> Map.update!(:intervals, &if(interval_ms, do: [interval_ms | &1], else: &1))
-      |> Map.update!(:heights, &record_height(&1, instance_id, result))
+  # Only an upstream the round is still waiting on can answer it, so an answer
+  # from before a reset is ignored.
+  def handle_info({:round_answer, ref, instance_id, interval_ms, result}, state)
+      when is_map_key(state.open, ref) do
+    round = Map.fetch!(state.open, ref)
 
-    state = %{state | open: open}
-    {:noreply, if(MapSet.size(open.waiting) == 0, do: close(state), else: state)}
+    if MapSet.member?(round.waiting, instance_id) do
+      round = %{
+        round
+        | waiting: MapSet.delete(round.waiting, instance_id),
+          intervals: if(interval_ms, do: [interval_ms | round.intervals], else: round.intervals),
+          heights: record_height(round.heights, instance_id, result)
+      }
+
+      state = put_in(state.open[ref], round)
+      {:noreply, if(MapSet.size(round.waiting) == 0, do: close(state, ref), else: state)}
+    else
+      {:noreply, state}
+    end
   end
 
-  def handle_info({:close, ref}, %{open: %{ref: ref}} = state), do: {:noreply, close(state)}
+  def handle_info({:close, ref}, state) when is_map_key(state.open, ref),
+    do: {:noreply, close(state, ref)}
+
   def handle_info(_late_or_unknown, state), do: {:noreply, state}
 
   defp record_height(heights, instance_id, {:ok, height}),
     do: Map.put(heights, instance_id, height)
 
   defp record_height(heights, _instance_id, _error_or_skip), do: heights
-
-  defp answer_time_left(%{open: nil}), do: 0
-  defp answer_time_left(%{open: open}), do: open.started_at_ms + @answer_window_ms - now_ms()
 
   defp schedule(state, delay_ms) do
     ref = make_ref()
@@ -133,35 +174,35 @@ defmodule Lasso.BlockSync.Round do
 
     Process.send_after(self(), {:close, ref}, @answer_window_ms)
 
-    %{
-      state
-      | open: %{
-          ref: ref,
-          started_at_ms: now_ms(),
-          waiting: MapSet.new(workers, &elem(&1, 0)),
-          intervals: [],
-          heights: %{}
-        }
+    round = %{
+      started_at_ms: now_ms(),
+      waiting: MapSet.new(workers, &elem(&1, 0)),
+      intervals: [],
+      heights: %{}
     }
+
+    put_in(state.open[ref], round)
   end
 
-  defp close(%{open: nil} = state), do: state
+  defp close(state, ref) do
+    {round, open} = Map.pop!(state.open, ref)
 
-  defp close(%{open: open} = state) do
-    if map_size(open.heights) >= @min_heights do
-      round = %{started_at_ms: open.started_at_ms, heights: open.heights}
-      BlockSyncRegistry.put_round(state.chain_id, round, @kept_rounds)
+    if map_size(round.heights) >= @min_heights do
+      BlockSyncRegistry.put_round(state.chain_id, %{
+        started_at_ms: round.started_at_ms,
+        heights: round.heights
+      })
     end
 
     state = %{
       state
-      | open: nil,
-        interval_ms: Enum.min(open.intervals, fn -> state.interval_ms end)
+      | open: open,
+        interval_ms: Enum.min(round.intervals, fn -> state.interval_ms end)
     }
 
     # A first round learns the interval from its answers.
     if is_nil(state.tick_ref) and state.interval_ms,
-      do: schedule(state, max(open.started_at_ms + state.interval_ms - now_ms(), 0)),
+      do: schedule(state, max(round.started_at_ms + state.interval_ms - now_ms(), 0)),
       else: state
   end
 

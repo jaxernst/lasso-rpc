@@ -12,8 +12,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
-  - `{:head_rounds, chain_id}` => the chain's latest recorded head rounds, newest
-    first
+  - `{:head_round, chain_id, provider_id}` => the latest head round the upstream
+    answered
 
   ## Freshness
 
@@ -124,24 +124,48 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
-  Records a head round ahead of the chain's earlier rounds and keeps the newest
-  `keep`. Only the chain's `Lasso.BlockSync.Round` writes them, so the update
-  needs no coordination.
+  Records a head round as the latest of each upstream that answered it, unless
+  that upstream already holds a newer one. Only the chain's
+  `Lasso.BlockSync.Round` writes rounds, so the check needs no coordination.
   """
-  @spec put_round(pos_integer(), head_round(), pos_integer()) :: :ok
-  def put_round(chain_id, round, keep) do
-    rounds = Enum.take([round | get_rounds(chain_id)], keep)
-    :ets.insert(@table, {{:head_rounds, chain_id}, rounds})
+  @spec put_round(pos_integer(), head_round()) :: :ok
+  def put_round(chain_id, %{started_at_ms: started_at_ms, heights: heights} = round) do
+    entries =
+      for instance_id <- Map.keys(heights),
+          key <- [{:head_round, chain_id, instance_id}],
+          not newer_round?(key, started_at_ms),
+          do: {key, round}
+
+    :ets.insert(@table, entries)
     :ok
   end
 
-  @doc "The chain's recorded head rounds, newest first."
-  @spec get_rounds(pos_integer()) :: [head_round()]
-  def get_rounds(chain_id) do
-    case :ets.lookup(@table, {:head_rounds, chain_id}) do
-      [{_key, rounds}] -> rounds
-      [] -> []
-    end
+  @doc "The latest head round of each listed upstream that has one."
+  @spec get_rounds(pos_integer(), [String.t()]) :: [head_round()]
+  def get_rounds(chain_id, instance_ids) do
+    for instance_id <- instance_ids,
+        [{_key, round}] <- [:ets.lookup(@table, {:head_round, chain_id, instance_id})],
+        do: round
+  end
+
+  @doc """
+  Removes an upstream's answers from every recorded round on the chain, so its
+  next verdict comes only from rounds it answers from here on.
+  """
+  @spec forget_round_answers(pos_integer(), String.t()) :: :ok
+  def forget_round_answers(chain_id, instance_id) do
+    :ets.delete(@table, {:head_round, chain_id, instance_id})
+
+    for {key, %{heights: heights} = round} <-
+          :ets.match_object(@table, {{:head_round, chain_id, :_}, :_}),
+        Map.has_key?(heights, instance_id),
+        do: :ets.insert(@table, {key, %{round | heights: Map.delete(heights, instance_id)}})
+
+    :ok
+  end
+
+  defp newer_round?(key, started_at_ms) do
+    match?([{_key, %{started_at_ms: held}}] when held > started_at_ms, :ets.lookup(@table, key))
   end
 
   @doc """
@@ -372,7 +396,7 @@ defmodule Lasso.BlockSync.Registry do
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
     :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
-    :ets.delete(@table, {:head_rounds, chain_id})
+    :ets.match_delete(@table, {{:head_round, chain_id, :_}, :_})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
     :ets.delete(@table, {:head_revision, chain_id})
@@ -392,6 +416,7 @@ defmodule Lasso.BlockSync.Registry do
     :ets.delete(@table, {:height, chain_id, provider_id})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :http})
     :ets.delete(@table, {:head_observation, chain_id, provider_id, :ws})
+    :ets.delete(@table, {:head_round, chain_id, provider_id})
     next_head_revision(chain_id)
 
     :ets.match_delete(

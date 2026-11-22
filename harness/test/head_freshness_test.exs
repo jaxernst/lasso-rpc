@@ -93,36 +93,147 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     )
   end
 
-  # Three upstreams so the round's outlier rule can judge them. The round polls each once
-  # when the tenant opens; its long interval keeps later rounds out of the sends.
-  defp world(action, opts \\ []) do
-    behind = Keyword.get(opts, :behind, @behind)
+  test "a two-route profile defers its lagging primary until a round finds it caught up" do
+    world(
+      fn tenant, [primary, _current] = fleets ->
+        lead(tenant, fleets)
+        Fleet.script(primary, "eth_blockNumber", [], {:answer, hex(@current)})
 
-    fleets =
-      for {name, height} <- [
-            {"freshness-primary", behind},
-            {"freshness-current", @current},
-            {"freshness-current-2", @current}
-          ] do
-        fleet = Fleet.start!(self(), name)
-        Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(height)})
-        fleet
-      end
+        Settle.await("the next round returns latest reads to the caught-up primary", fn ->
+          case sends(tenant, fleets, "eth_getBalance", [@address, "latest"]) do
+            [name] = sent when name == primary.name -> {:ok, sent}
+            other -> other
+          end
+        end)
+      end,
+      upstreams: 2,
+      behind: @current - 50,
+      chain: %{"monitoring" => %{"http_heads_interval_ms" => 1_000}}
+    )
+  end
+
+  test "another profile's rounds leave a profile's measured lag in place" do
+    slow = fleets!("freshness-slow", [@behind, @current, @current])
+    fast = fleets!("freshness-fast", [@current, @current, @current])
 
     try do
-      # A retired lag limit still loads and no longer excludes the lagging route.
-      tenant =
-        Tenant.open!(fleets,
-          chain:
-            Map.merge(
-              %{
-                "selection" => %{"max_lag_blocks" => 10},
-                "monitoring" => %{"http_heads_interval_ms" => 600_000}
-              },
-              Keyword.get(opts, :chain, %{})
-            ),
-          providers: Map.new(fleets, &{&1.name, %{"background_observations" => true}})
-        )
+      slow_tenant = open!(slow)
+
+      try do
+        lead(slow_tenant, slow)
+        fast_tenant = open!(fast, %{"monitoring" => %{"http_heads_interval_ms" => 1_000}})
+
+        try do
+          Settle.await(
+            "the other profile's upstreams answer five rounds",
+            fn -> if Enum.all?(fast, &(head_polls(&1) >= 5)), do: {:ok, :polled} end,
+            10_000
+          )
+
+          assert [sent] = sends(slow_tenant, slow, "eth_getBalance", [@address, "latest"])
+          assert sent != hd(slow).name
+          assert Enum.all?(slow, &(head_polls(&1) == 1))
+        after
+          Tenant.close!(fast_tenant)
+        end
+      after
+        Tenant.close!(slow_tenant)
+      end
+    after
+      Enum.each(slow ++ fast, &Fleet.stop/1)
+    end
+  end
+
+  test "a measured lag lasts as long as the route's head observations, not three probes" do
+    world(
+      fn tenant, [primary | _current] = fleets ->
+        lead(tenant, fleets)
+        deadline = System.monotonic_time(:millisecond) + 4_000
+
+        Stream.repeatedly(fn ->
+          assert [sent] = sends(tenant, fleets, "eth_getBalance", [@address, "latest"])
+          assert sent != primary.name
+        end)
+        |> Stream.take_while(fn _ -> System.monotonic_time(:millisecond) < deadline end)
+        |> Stream.run()
+
+        assert Enum.all?(fleets, &(head_polls(&1) == 1))
+      end,
+      chain: %{
+        "monitoring" => %{"probe_interval_ms" => 1_000, "http_heads_interval_ms" => 10_000}
+      }
+    )
+  end
+
+  test "a profile with background observations off keeps strategy order on judged upstreams" do
+    [primary | _current] = fleets = fleets!("freshness-shared", [@behind, @current, @current])
+
+    try do
+      heads_off = Tenant.open!(fleets)
+
+      try do
+        observed = open!(fleets)
+
+        try do
+          lead(observed, fleets)
+
+          assert sends(heads_off, fleets, "eth_getBalance", [@address, "latest"]) == [
+                   primary.name
+                 ]
+        after
+          Tenant.close!(observed)
+        end
+      after
+        Tenant.close!(heads_off)
+      end
+    after
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  test "a round counts answers that arrive after the next tick" do
+    [primary | current] = fleets = fleets!("freshness-late", [@behind, @current, @current])
+
+    for fleet <- current,
+        do:
+          Fleet.script(fleet, "eth_blockNumber", [], {:respond, fn _ -> {:hold, make_ref()} end})
+
+    release = fn ->
+      for fleet <- current,
+          %{action: {:hold, token}} <- Fleet.drain(fleet),
+          do: Fleet.release(fleet, token, {:answer, hex(@current)})
+    end
+
+    try do
+      tenant = open!(fleets, %{"monitoring" => %{"http_heads_interval_ms" => 1_000}})
+
+      try do
+        # The primary's second poll belongs to the next tick, which opens while the current
+        # routes still owe the first round their answers.
+        Settle.await("the next tick opens while the first round waits", fn ->
+          if head_polls(primary) >= 2 and Enum.all?(current, &(head_polls(&1) >= 1)),
+            do: {:ok, :waiting}
+        end)
+
+        release.()
+        lead(tenant, fleets)
+      after
+        Tenant.close!(tenant)
+      end
+    after
+      release.()
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  # Three upstreams by default, so the round's outlier rule applies. The round polls each
+  # once when the tenant opens; its long interval keeps later rounds out of the sends.
+  defp world(action, opts \\ []) do
+    heights = [Keyword.get(opts, :behind, @behind), @current, @current]
+    fleets = fleets!("freshness", Enum.take(heights, Keyword.get(opts, :upstreams, 3)))
+
+    try do
+      tenant = open!(fleets, Keyword.get(opts, :chain, %{}))
 
       try do
         action.(tenant, fleets)
@@ -132,6 +243,29 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     after
       Enum.each(fleets, &Fleet.stop/1)
     end
+  end
+
+  defp fleets!(prefix, heights) do
+    for {height, i} <- Enum.with_index(heights) do
+      fleet = Fleet.start!(self(), "#{prefix}-#{i}")
+      Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(height)})
+      fleet
+    end
+  end
+
+  # A retired lag limit still loads and no longer excludes the lagging route.
+  defp open!(fleets, chain \\ %{}) do
+    Tenant.open!(fleets,
+      chain:
+        Map.merge(
+          %{
+            "selection" => %{"max_lag_blocks" => 10},
+            "monitoring" => %{"http_heads_interval_ms" => 600_000}
+          },
+          chain
+        ),
+      providers: Map.new(fleets, &{&1.name, %{"background_observations" => true}})
+    )
   end
 
   defp lead(tenant, [primary | _current] = fleets) do
@@ -156,6 +290,9 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     assert response.status == 200
     Enum.map(reports, & &1.fleet)
   end
+
+  defp head_polls(fleet),
+    do: Enum.count(Fleet.drain(fleet), &(&1.request["method"] == "eth_blockNumber"))
 
   defp hex(height), do: "0x" <> String.downcase(Integer.to_string(height, 16))
 end

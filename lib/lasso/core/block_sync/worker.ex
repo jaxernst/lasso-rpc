@@ -3,8 +3,9 @@ defmodule Lasso.BlockSync.Worker do
   Per-instance GenServer that orchestrates block sync strategies.
 
   Each unique provider instance gets one Worker that:
-  1. Polls HTTP heads in its chain's `Lasso.BlockSync.Round` when a profile
-     requests periodic head observations
+  1. Answers its chain's `Lasso.BlockSync.Round` with its `newHeads` head while
+     that feed is live, and otherwise with an HTTP poll when a profile requests
+     periodic head observations
   2. Optionally runs WS subscription for real-time updates
   3. Reports heights to BlockSync.Registry
   4. Fan-out broadcasts to all profiles referencing this instance
@@ -364,6 +365,10 @@ defmodule Lasso.BlockSync.Worker do
       )
       when instance_id == state.instance_id and state.ws_strategy != nil and is_map(payload) do
     new_ws_state = WsStrategy.handle_new_head(state.ws_strategy, payload, received_at)
+
+    if state.http_reduced and regressed?(state.ws_strategy, new_ws_state),
+      do: Round.reset(state.chain_id, state.instance_id)
+
     {:noreply, refresh_http_policy(%{state | ws_strategy: new_ws_state})}
   end
 
@@ -449,21 +454,62 @@ defmodule Lasso.BlockSync.Worker do
 
   ## Private Functions
 
-  defp answer_round(%{http_strategy: nil} = state, round_pid, ref, _round_interval_ms) do
-    send(round_pid, {:round_answer, ref, state.instance_id, nil, :skipped})
-    state
-  end
+  # While newHeads feeds the worker, its latest head answers at once, and a due
+  # HTTP poll only refreshes HTTP evidence.
+  defp answer_round(state, round_pid, ref, round_interval_ms) do
+    case fed_height(state) do
+      nil ->
+        case poll_due(state, {round_pid, ref}, round_interval_ms) do
+          {:polling, state} ->
+            state
 
-  defp answer_round(%{http_strategy: http} = state, round_pid, ref, round_interval_ms) do
-    with true <- HttpStrategy.due?(http, System.system_time(:millisecond), round_interval_ms),
-         {:polling, http} <- HttpStrategy.poll(http, {round_pid, ref}) do
-      %{state | http_strategy: http}
-    else
-      _not_due_or_busy ->
-        send(round_pid, {:round_answer, ref, state.instance_id, http.poll_interval_ms, :skipped})
-        state
+          {:idle, state} ->
+            send(
+              round_pid,
+              {:round_answer, ref, state.instance_id, http_interval(state), :skipped}
+            )
+
+            state
+        end
+
+      height ->
+        send(
+          round_pid,
+          {:round_answer, ref, state.instance_id, http_interval(state), {:ok, height}}
+        )
+
+        state |> poll_due(nil, round_interval_ms) |> elem(1)
     end
   end
+
+  # A fed head below the last one means the upstream's earlier round answers no longer
+  # describe it, so its round starts over.
+  defp regressed?(%{last_height: previous}, %{last_height: height})
+       when is_integer(previous) and is_integer(height),
+       do: height < previous
+
+  defp regressed?(_previous, _current), do: false
+
+  defp fed_height(%{http_reduced: true, ws_strategy: %{last_height: height}})
+       when is_integer(height),
+       do: height
+
+  defp fed_height(_state), do: nil
+
+  defp poll_due(%{http_strategy: nil} = state, _answer_to, _round_interval_ms),
+    do: {:idle, state}
+
+  defp poll_due(%{http_strategy: http} = state, answer_to, round_interval_ms) do
+    with true <- HttpStrategy.due?(http, System.system_time(:millisecond), round_interval_ms),
+         {:polling, http} <- HttpStrategy.poll(http, answer_to) do
+      {:polling, %{state | http_strategy: http}}
+    else
+      _not_due_or_busy -> {:idle, state}
+    end
+  end
+
+  defp http_interval(%{http_strategy: nil}), do: nil
+  defp http_interval(%{http_strategy: http}), do: http.poll_interval_ms
 
   # First successful block-height after a (re)start clears the
   # restart counter so a worker that runs healthy for any meaningful
@@ -933,6 +979,7 @@ defmodule Lasso.BlockSync.Worker do
   defp reduce_http_polling(state) do
     reduced_interval = state.config.ws_active_poll_interval_ms
     state = refresh_http_policy(%{state | http_reduced: true})
+    Round.reset(state.chain_id, state.instance_id)
 
     Logger.debug("HTTP polling reduced (WS active)",
       chain_id: state.chain_id,
@@ -948,6 +995,7 @@ defmodule Lasso.BlockSync.Worker do
   defp restore_http_polling(state) do
     normal_interval = state.config.poll_interval_ms
     state = refresh_http_policy(%{state | http_reduced: false})
+    Round.reset(state.chain_id, state.instance_id)
 
     Logger.debug("HTTP polling restored to normal",
       chain_id: state.chain_id,

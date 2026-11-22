@@ -11,17 +11,20 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   - `:against` needs a fresh observation at the qualified reference height
     with a different block hash, or:
   - for a moving head, a route is measured only by its chain's head round
-    (`Lasso.BlockSync.Round`), which polls every HTTP head upstream in the same
-    tick. A route is compared only with the scope's other HTTP routes in the
-    same round, and only in a round with at least three of them. Its lag is
-    their highest height, ignoring heights more than the band above their lower
-    median, less its own. `:against` needs a lag above the band in the latest
-    such round the route answered, while that round is as fresh as the route's
-    observations; `:supports` needs a measured route at or above the target.
-    Routes no round measured, such as WebSocket routes and routes without
-    background head observations, are `:unknown`. A passive observation between
-    rounds can raise the mark but never clears a measured lag; only the route's
-    next round does;
+    (`Lasso.BlockSync.Round`), which takes every upstream's head in the same
+    tick: its `newHeads` head while that feeds it, otherwise an HTTP poll. Both
+    of an upstream's routes take its verdict. A route is compared only with the
+    upstreams of the scope's routes that observe heads, in the newest round
+    where at least one of them answered beside it. Its lag is their highest
+    height less its own; with three or more, heights more than the band above
+    their lower median are ignored as outliers. Two heights cannot show which
+    one is wrong, so neither is an outlier and the lower one lags the higher.
+    `:against` needs a lag above the band, while that round is no older than
+    the route's own observation freshness window; `:supports` needs a measured
+    route at or above the target. Routes no round measured, such as routes
+    whose profile turns background observations off, are `:unknown`. A passive
+    observation between rounds can raise the mark but never clears a measured
+    lag; only the upstream's next round does;
   - for a fixed height, `:supports` needs fresh evidence at or above it, and
     `:against` needs fresh evidence that stays short of it even when credited
     with the blocks the chain could have produced since it was observed, at the
@@ -31,7 +34,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   - everything else is `:unknown`.
 
   The mark is the highest fresh observation from a route its round did not find
-  more than the band above the lower median. The target is the requirement's
+  to be an outlier. The target is the requirement's
   height, or the mark minus the band for a moving head. A verdict orders routes
   inside their availability tier and never excludes one.
   """
@@ -190,13 +193,15 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   end
 
   # Freshness is the observation layer's verdict, which honours an
-  # observation's own longer window such as a slow HTTP poll interval.
+  # observation's own longer window such as a slow HTTP poll interval. A
+  # route's round lag expires on the same window.
   defp route_heads(plan, rounds, now_ms) do
     for provider <- plan.providers,
         transport <- provider.transports,
         {fresh?, observation} <- [read_head(plan.chain_id, provider, transport, now_ms)],
         into: %{} do
-      {lag, outlier?} = round_lag(rounds, provider, transport, now_ms)
+      {lag, outlier?} =
+        round_lag(rounds, provider.instance_id, observation.stale_after_ms, now_ms)
 
       {{provider.instance_id, transport},
        %{
@@ -210,18 +215,28 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
-  # The chain's recent rounds restricted to this scope's HTTP routes, so one profile's
-  # upstreams never judge another's. In each round with enough of them, heights more than
-  # the band above their lower median are outliers, and the top is the highest of the rest.
+  # The latest rounds of this scope's observed upstreams, newest first and restricted to
+  # them, so neither another profile's upstreams nor its polling judge this one's. In each
+  # round with enough of them, heights above the ceiling are outliers, and the top is the
+  # highest of the rest.
   defp scope_rounds(plan, band) do
-    scope = for provider <- plan.providers, :http in provider.transports, do: provider.instance_id
+    scope =
+      for provider <- plan.providers,
+          provider.observes_heads?,
+          uniq: true,
+          do: provider.instance_id
+
     min_heights = Round.min_heights()
 
-    for round <- Registry.get_rounds(plan.chain_id),
+    for round <-
+          plan.chain_id
+          |> Registry.get_rounds(scope)
+          |> Enum.uniq()
+          |> Enum.sort_by(& &1.started_at_ms, :desc),
         heights <- [Map.take(round.heights, scope)],
         map_size(heights) >= min_heights do
       sorted = heights |> Map.values() |> Enum.sort()
-      ceiling = Enum.at(sorted, div(length(sorted) - 1, 2)) + band
+      ceiling = ceiling(sorted, band)
 
       %{
         started_at_ms: round.started_at_ms,
@@ -232,24 +247,25 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
-  # A route's lag in the latest scope round it answered while that round is as fresh as
-  # its own observations, so a route that errors or skips a round keeps its last verdict.
-  defp round_lag(rounds, provider, :http, now_ms) do
-    freshness_ms = Map.fetch!(provider.head_freshness_ms, :http)
+  # Two heights cannot show which one is wrong, so the higher one is the ceiling.
+  defp ceiling([_low, high], _band), do: high
+  defp ceiling(sorted, band), do: Enum.at(sorted, div(length(sorted) - 1, 2)) + band
 
+  # A route's lag in the newest scope round its upstream answered, while that round is
+  # within the route's freshness window, so a route that errors or skips a round keeps
+  # its last verdict.
+  defp round_lag(rounds, instance_id, freshness_ms, now_ms) do
     rounds
     |> Enum.take_while(&(now_ms - &1.started_at_ms <= freshness_ms))
     |> Enum.find_value({nil, false}, fn round ->
-      case Map.fetch(round.heights, provider.instance_id) do
+      case Map.fetch(round.heights, instance_id) do
         {:ok, height} -> {round.top - height, height > round.ceiling}
         :error -> nil
       end
     end)
   end
 
-  defp round_lag(_rounds, _provider, :ws, _now_ms), do: {nil, false}
-
-  # The mark is the highest fresh observation from a route its last round did not find
+  # The mark is the highest fresh observation from a route its round did not find
   # to be an outlier, so passive client reads between rounds can still raise it.
   defp with_mark(capture) do
     {outliers, candidates} =
