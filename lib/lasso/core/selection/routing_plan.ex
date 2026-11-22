@@ -21,6 +21,7 @@ defmodule Lasso.RPC.RoutingPlan do
           required(:capabilities) => map() | nil,
           required(:archival) => boolean(),
           required(:subscribe_new_heads) => boolean(),
+          required(:observes_heads?) => boolean(),
           required(:transports) => [:http | :ws],
           required(:head_freshness_ms) => %{http: pos_integer(), ws: pos_integer()}
         }

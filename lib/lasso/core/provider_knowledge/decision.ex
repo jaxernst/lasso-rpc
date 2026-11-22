@@ -35,10 +35,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     :target_height,
     :band,
     :cadence,
-    :mark,
-    :omitted_evidence,
-    :outlier,
-    :omitted_outliers
+    :omitted_evidence
   ]
 
   @spec orders(list(), list(), list(), boolean()) :: map()
@@ -345,7 +342,16 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
         :evidence,
         Enum.map(
           evidence,
-          &Map.take(&1, [:baseline_position, :verdict, :reason, :reached, :height, :age_ms])
+          &Map.take(&1, [
+            :baseline_position,
+            :verdict,
+            :reason,
+            :reached,
+            :height,
+            :age_ms,
+            :lag,
+            :lag_age_ms
+          ])
         )
       )
 
@@ -431,17 +437,14 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
            requirement: requirement,
            band: band,
            evidence: evidence,
-           omitted_evidence: omitted,
-           omitted_outliers: omitted_outliers
+           omitted_evidence: omitted
          } = d
        )
        when requirement in [:request_height, :recovery_height, :at_head] and is_integer(band) and
               band >= 0 and is_list(evidence) and length(evidence) <= 2 and
-              is_integer(omitted) and omitted >= 0 and is_integer(omitted_outliers) and
-              omitted_outliers >= 0 do
+              is_integer(omitted) and omitted >= 0 do
     valid_common?(d) and is_map(Map.get(d, :orders)) and
-      optional_count?(Map.get(d, :target_height)) and valid_mark?(Map.get(d, :mark)) and
-      valid_outlier?(Map.get(d, :outlier)) and valid_cadence?(Map.get(d, :cadence)) and
+      optional_count?(Map.get(d, :target_height)) and valid_cadence?(Map.get(d, :cadence)) and
       Enum.all?(evidence, &valid_head_evidence?/1)
   end
 
@@ -454,22 +457,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
 
   defp valid_cadence?(_cadence), do: false
 
-  defp valid_mark?(nil), do: true
-
-  defp valid_mark?(%{height: height, age_ms: age}),
-    do: is_integer(height) and height >= 0 and is_integer(age) and age >= 0
-
-  defp valid_mark?(_mark), do: false
-
-  defp valid_outlier?(nil), do: true
-
-  defp valid_outlier?(%{baseline_position: position, height: height, age_ms: age}),
-    do:
-      optional_count?(position) and is_integer(height) and height >= 0 and is_integer(age) and
-        age >= 0
-
-  defp valid_outlier?(_outlier), do: false
-
   defp valid_head_evidence?(
          %{baseline_position: position, verdict: verdict, reason: reason, reached: reached} =
            evidence
@@ -480,11 +467,15 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
              :below_height,
              :behind_mark,
              :within_credit,
+             :unmeasured,
              :cadence_unknown,
              :observation_stale,
              :no_observation
-           ] and optional_count?(Map.get(evidence, :height)) and
-           optional_count?(Map.get(evidence, :age_ms))
+           ] and
+           Enum.all?(
+             [:height, :age_ms, :lag, :lag_age_ms],
+             &optional_count?(Map.get(evidence, &1))
+           )
 
   defp valid_head_evidence?(_evidence), do: false
 

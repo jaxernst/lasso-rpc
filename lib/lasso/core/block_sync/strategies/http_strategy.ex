@@ -1,9 +1,12 @@
 defmodule Lasso.BlockSync.Strategies.HttpStrategy do
   @moduledoc """
-  HTTP polling strategy for block sync.
+  HTTP head polling for block sync.
 
-  Polls `eth_blockNumber` at a configurable interval and reports block heights
-  to the parent Worker. Each poll uses one immutable profile and provider route.
+  Polls `eth_blockNumber` when its chain's `Lasso.BlockSync.Round` asks and the
+  instance's own interval is due, then reports the height to the parent Worker
+  and the outcome to the round. Each poll uses one immutable profile and
+  provider route and runs in a disposable owner process, so a crash in one
+  upstream's request fails only that poll.
 
   ## Health Writes
 
@@ -22,7 +25,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   require Logger
 
-  alias Lasso.BlockSync.{Observation, Registry}
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Support.{CircuitBreaker, ErrorClassification}
   alias Lasso.JSONRPC.Error, as: JError
@@ -33,7 +35,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @default_poll_interval_ms 15_000
   @default_timeout_ms 3_000
-  @max_initial_stagger_ms 2_000
   @max_consecutive_failures 3
   @degraded_threshold 2
   @unhealthy_threshold 5
@@ -52,7 +53,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       :deadline_us,
       :head_references_at_poll_start
     ]
-    defstruct @enforce_keys
+    defstruct @enforce_keys ++ [:answer_to]
 
     @type t :: %__MODULE__{
             profile: String.t(),
@@ -62,7 +63,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
             caller_pid: pid(),
             started_at_us: integer(),
             deadline_us: integer(),
-            head_references_at_poll_start: [HeadReference.t()]
+            head_references_at_poll_start: [HeadReference.t()],
+            answer_to: {pid(), reference()} | nil
           }
   end
 
@@ -84,8 +86,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     :chain_id,
     :parent,
     :poll_interval_ms,
-    :timer_ref,
-    :poll_generation,
     :poll_owner_id,
     :poll_owner_pid,
     :poll_owner_ref,
@@ -95,7 +95,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     :head_reference_resolver,
     :consecutive_failures,
     :last_height,
-    :last_poll_time
+    :last_poll_time,
+    :last_poll_started_ms
   ]
 
   @type t :: %__MODULE__{
@@ -103,8 +104,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
           chain_id: pos_integer(),
           parent: pid(),
           poll_interval_ms: non_neg_integer(),
-          timer_ref: reference() | nil,
-          poll_generation: reference() | nil,
           poll_owner_id: reference() | nil,
           poll_owner_pid: pid() | nil,
           poll_owner_ref: reference() | nil,
@@ -116,54 +115,29 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
                                       [HeadReference.t()]),
           consecutive_failures: non_neg_integer(),
           last_height: non_neg_integer() | nil,
-          last_poll_time: integer() | nil
+          last_poll_time: integer() | nil,
+          last_poll_started_ms: integer() | nil
         }
 
   ## Strategy Callbacks
 
   @impl true
   def start(chain_id, instance_id, opts) do
-    parent = Keyword.get(opts, :parent, self())
-    poll_interval = Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms)
-
-    initial_delay_ms =
-      case Keyword.get_lazy(opts, :initial_delay_ms, fn ->
-             initial_poll_delay_ms(chain_id, instance_id, poll_interval)
-           end) do
-        delay_ms when is_integer(delay_ms) and delay_ms >= 0 ->
-          delay_ms
-
-        invalid ->
-          raise ArgumentError, "initial_delay_ms must be non-negative, got: #{inspect(invalid)}"
-      end
-
-    state = %__MODULE__{
-      instance_id: instance_id,
-      chain_id: chain_id,
-      parent: parent,
-      poll_interval_ms: poll_interval,
-      consecutive_failures: 0,
-      last_height: nil,
-      last_poll_time: nil,
-      timer_ref: nil,
-      poll_generation: nil,
-      poll_owner_id: nil,
-      poll_owner_pid: nil,
-      poll_owner_ref: nil,
-      poll_plan: nil,
-      poll_runner: Keyword.get(opts, :poll_runner, &run_poll/1),
-      route_resolver: Keyword.get(opts, :route_resolver, &resolve_route/2),
-      head_reference_resolver: Keyword.get(opts, :head_reference_resolver, &head_references/3)
-    }
-
-    state = schedule_poll(state, initial_delay_ms)
-
-    {:ok, state}
+    {:ok,
+     %__MODULE__{
+       instance_id: instance_id,
+       chain_id: chain_id,
+       parent: Keyword.get(opts, :parent, self()),
+       poll_interval_ms: Keyword.get(opts, :poll_interval_ms, @default_poll_interval_ms),
+       consecutive_failures: 0,
+       poll_runner: Keyword.get(opts, :poll_runner, &run_poll/1),
+       route_resolver: Keyword.get(opts, :route_resolver, &resolve_route/2),
+       head_reference_resolver: Keyword.get(opts, :head_reference_resolver, &head_references/3)
+     }}
   end
 
   @impl true
-  def stop(%__MODULE__{timer_ref: ref, poll_owner_pid: owner_pid, poll_owner_ref: owner_ref}) do
-    if ref, do: Process.cancel_timer(ref)
+  def stop(%__MODULE__{poll_owner_pid: owner_pid, poll_owner_ref: owner_ref}) do
     if owner_ref, do: Process.demonitor(owner_ref, [:flush])
     if is_pid(owner_pid) and Process.alive?(owner_pid), do: Process.exit(owner_pid, :kill)
     :ok
@@ -191,23 +165,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @impl true
   def handle_message(
-        {:poll, generation},
-        %__MODULE__{poll_generation: generation, poll_owner_pid: nil} = state
-      ) do
-    state = %{state | timer_ref: nil, poll_generation: nil}
-    cooldown = InstanceState.read_rate_limit(state.instance_id, :http).remaining_ms || 0
-    delay_ms = max(cooldown, client_observation_delay_ms(state, System.system_time(:millisecond)))
-
-    if delay_ms > 0 do
-      {:ok, schedule_poll(state, delay_ms)}
-    else
-      {:ok, start_poll_owner(state)}
-    end
-  end
-
-  def handle_message({:poll, _stale_generation}, %__MODULE__{} = state), do: {:ok, state}
-
-  def handle_message(
         {:poll_result, owner_id, owner_pid, result_or_outcome},
         %__MODULE__{
           poll_owner_id: owner_id,
@@ -217,14 +174,11 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         } = state
       ) do
     Process.demonitor(owner_ref, [:flush])
-    outcome = normalize_poll_outcome(result_or_outcome)
-    next_delay_ms = next_poll_delay_ms(outcome.result, state.poll_interval_ms)
 
     state =
       state
       |> clear_poll_owner()
-      |> apply_poll_result(outcome, plan)
-      |> schedule_poll(next_delay_ms)
+      |> apply_poll_result(result_or_outcome, plan)
 
     {:ok, state}
   end
@@ -237,7 +191,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       state
       |> clear_poll_owner()
       |> apply_poll_result({:error, {:poll_owner_exit, reason}}, plan)
-      |> schedule_poll(state.poll_interval_ms)
 
     {:ok, state}
   end
@@ -246,81 +199,42 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     {:ok, state}
   end
 
-  @spec poll_now(t()) :: t()
-  def poll_now(%__MODULE__{poll_owner_pid: owner_pid} = state) when is_pid(owner_pid),
-    do: state
-
-  def poll_now(%__MODULE__{} = state) do
-    if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-    schedule_poll(%{state | timer_ref: nil, poll_generation: nil}, 0)
+  @doc """
+  Whether a round that ticks every `round_interval_ms` should poll this instance
+  now: its own interval falls due within half a round and no rate-limit cooldown
+  is running.
+  """
+  @spec due?(t(), integer(), non_neg_integer()) :: boolean()
+  def due?(%__MODULE__{} = state, now_ms, round_interval_ms) do
+    (InstanceState.read_rate_limit(state.instance_id, :http).remaining_ms || 0) == 0 and
+      (is_nil(state.last_poll_started_ms) or
+         now_ms - state.last_poll_started_ms >=
+           state.poll_interval_ms - div(round_interval_ms, 2))
   end
+
+  @doc """
+  Starts a poll unless one is in flight. When `answer_to` names a round, the
+  outcome is sent to it as `{:round_answer, ref, instance_id, interval_ms, result}`.
+  """
+  @spec poll(t(), {pid(), reference()} | nil) :: {:polling | :busy, t()}
+  def poll(state, answer_to \\ nil)
+
+  def poll(%__MODULE__{poll_owner_pid: owner_pid} = state, _answer_to) when is_pid(owner_pid),
+    do: {:busy, state}
+
+  def poll(%__MODULE__{} = state, answer_to), do: {:polling, start_poll_owner(state, answer_to)}
 
   @spec set_poll_interval(t(), pos_integer()) :: t()
   def set_poll_interval(%__MODULE__{} = state, interval_ms)
-      when is_integer(interval_ms) and interval_ms > 0 do
-    state = %{state | poll_interval_ms: interval_ms}
-
-    if state.poll_owner_pid do
-      state
-    else
-      if state.timer_ref, do: Process.cancel_timer(state.timer_ref)
-      schedule_poll(state, interval_ms)
-    end
-  end
+      when is_integer(interval_ms) and interval_ms > 0,
+      do: %{state | poll_interval_ms: interval_ms}
 
   ## Private Functions
 
-  @doc "Remaining routine-poll delay covered by fresh HTTP client evidence."
-  @spec client_observation_delay_ms(t(), integer()) :: non_neg_integer()
-  def client_observation_delay_ms(%{consecutive_failures: failures}, _now_ms) when failures > 0,
-    do: 0
+  defp start_poll_owner(state, answer_to) do
+    state = %{state | last_poll_started_ms: System.system_time(:millisecond)}
 
-  def client_observation_delay_ms(state, now_ms) do
-    case Registry.get_observation(state.chain_id, state.instance_id, :http) do
-      {:ok,
-       %HeadObservation{
-         observed_at_ms: observed_at_ms,
-         attributes: %{collection: :client, evidence_freshness_ms: freshness_ms}
-       }}
-      when is_integer(freshness_ms) and freshness_ms > 0 and observed_at_ms <= now_ms ->
-        policy_freshness =
-          Observation.stale_after_ms(state.instance_id, state.chain_id, :http)
-
-        max(
-          0,
-          min(state.poll_interval_ms, min(freshness_ms, policy_freshness)) -
-            (now_ms - observed_at_ms)
-        )
-
-      _ ->
-        0
-    end
-  end
-
-  defp schedule_poll(state, delay_ms) do
-    generation = make_ref()
-
-    ref =
-      Process.send_after(
-        state.parent,
-        {:http_strategy, :poll, state.instance_id, generation},
-        delay_ms
-      )
-
-    %{state | timer_ref: ref, poll_generation: generation}
-  end
-
-  @doc false
-  @spec initial_poll_delay_ms(pos_integer(), String.t(), pos_integer()) :: non_neg_integer()
-  def initial_poll_delay_ms(chain_id, instance_id, poll_interval_ms)
-      when is_integer(chain_id) and chain_id > 0 and is_binary(instance_id) and
-             is_integer(poll_interval_ms) and poll_interval_ms > 0 do
-    stagger_window_ms = min(poll_interval_ms, @max_initial_stagger_ms)
-    :erlang.phash2({chain_id, instance_id}, stagger_window_ms)
-  end
-
-  defp start_poll_owner(state) do
-    case build_poll_plan(state, state.parent) do
+    case build_poll_plan(state, state.parent, answer_to) do
       {:ok, plan} ->
         parent = state.parent
         instance_id = state.instance_id
@@ -350,8 +264,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
       {:error, reason} ->
         state
-        |> apply_poll_result({:error, reason}, nil)
-        |> schedule_poll(state.poll_interval_ms)
+        |> apply_poll_result({:error, reason}, %{answer_to: answer_to})
     end
   end
 
@@ -363,7 +276,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     kind, reason -> {:error, {kind, reason}}
   end
 
-  defp build_poll_plan(state, caller_pid) do
+  defp build_poll_plan(state, caller_pid, answer_to) do
     started_at_us = System.monotonic_time(:microsecond)
     started_at_ms = System.system_time(:millisecond)
 
@@ -379,7 +292,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
          started_at_us: started_at_us,
          deadline_us: started_at_us + @default_timeout_ms * 1_000,
          head_references_at_poll_start:
-           state.head_reference_resolver.(state.instance_id, state.chain_id, started_at_ms)
+           state.head_reference_resolver.(state.instance_id, state.chain_id, started_at_ms),
+         answer_to: answer_to
        }}
     end
   end
@@ -429,11 +343,16 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   defp apply_poll_result(state, result, plan) do
     outcome = normalize_poll_outcome(result)
+    answer_round(state, plan, outcome.result)
 
     latency_ms =
-      if plan,
-        do: max(div(outcome.completed_at_us - plan.started_at_us, 1_000), 0),
-        else: 0
+      case plan do
+        %PollPlan{started_at_us: started_at_us} ->
+          max(div(outcome.completed_at_us - started_at_us, 1_000), 0)
+
+        _no_plan ->
+          0
+      end
 
     case outcome.result do
       {:ok, height} ->
@@ -445,7 +364,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
             observed_at_ms: outcome.observed_at_ms,
             latency_ms: latency_ms,
             sample_interval_ms: state.poll_interval_ms,
-            poll_references: if(plan, do: plan.head_references_at_poll_start, else: [])
+            poll_references: Map.get(plan, :head_references_at_poll_start, [])
           })
 
         send(state.parent, {:head_observation, observation})
@@ -471,6 +390,18 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         |> Map.put(:last_poll_time, outcome.observed_at_ms)
     end
   end
+
+  defp answer_round(state, %{answer_to: {round_pid, ref}}, result) do
+    sample =
+      case result do
+        {:ok, height} -> {:ok, height}
+        {:error, _reason} -> :error
+      end
+
+    send(round_pid, {:round_answer, ref, state.instance_id, state.poll_interval_ms, sample})
+  end
+
+  defp answer_round(_state, _plan, _result), do: :ok
 
   defp normalize_poll_outcome(%PollOutcome{} = outcome), do: outcome
 
@@ -543,11 +474,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
     max(valid_retry_after_ms(retry_after_ms), floor_ms)
   end
-
-  defp next_poll_delay_ms({:error, %JError{category: :rate_limit} = error}, poll_interval_ms),
-    do: rate_limit_ttl_ms(error, poll_interval_ms)
-
-  defp next_poll_delay_ms(_result, poll_interval_ms), do: poll_interval_ms
 
   defp valid_retry_after_ms(value) when is_integer(value) and value > 0, do: value
   defp valid_retry_after_ms(_value), do: 30_000

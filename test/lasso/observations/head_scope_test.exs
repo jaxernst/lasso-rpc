@@ -10,8 +10,8 @@ defmodule Lasso.Observations.HeadScopeTest do
   }
 
   test "scope identity is independent of provider ordering and duplicates" do
-    left = HeadScope.new("public", 1, ["b", "a", "a"], @policy)
-    right = HeadScope.new("public", 1, ["a", "b"], @policy)
+    left = HeadScope.new("public", 1, ["b", "a", "a"], [], @policy)
+    right = HeadScope.new("public", 1, ["a", "b"], [], @policy)
 
     assert left.instance_ids == ["a", "b"]
     assert left.scope_id == right.scope_id
@@ -19,23 +19,23 @@ defmodule Lasso.Observations.HeadScopeTest do
   end
 
   test "comparison policy is part of scope identity" do
-    left = HeadScope.new("public", 1, ["a", "b"], @policy)
-    right = HeadScope.new("public", 1, ["a", "b"], %{@policy | agreement_window_ms: 3_000})
+    left = HeadScope.new("public", 1, ["a", "b"], [], @policy)
+    right = HeadScope.new("public", 1, ["a", "b"], [], %{@policy | agreement_window_ms: 3_000})
 
     refute left.scope_id == right.scope_id
     refute left.cache_key == right.cache_key
   end
 
   test "identical upstreams in different profiles have distinct scope identities" do
-    public = HeadScope.new("public", 1, ["shared"], @policy)
-    private = HeadScope.new("private", 1, ["shared"], @policy)
+    public = HeadScope.new("public", 1, ["shared"], [], @policy)
+    private = HeadScope.new("private", 1, ["shared"], [], @policy)
 
     refute public.scope_id == private.scope_id
     refute public.cache_key == private.cache_key
   end
 
   test "scoped comparison excludes unrelated physical upstreams" do
-    scope = HeadScope.new("private", 1, ["a", "b"], @policy)
+    scope = HeadScope.new("private", 1, ["a", "b"], [], @policy)
 
     observations =
       for {instance_id, height} <- [{"a", 100}, {"b", 100}, {"other", 200}] do

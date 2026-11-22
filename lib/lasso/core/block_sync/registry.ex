@@ -12,6 +12,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
+  - `{:head_lags, chain_id, profile, scope_id}` => the publication that opened the
+    row and the round lag last measured for each of its upstreams
 
   ## Freshness
 
@@ -28,11 +30,23 @@ defmodule Lasso.BlockSync.Registry do
   alias Lasso.Core.BlockSync.BlockTimeMeasurement
   alias Lasso.Observations.{HeadComparison, HeadObservation, HeadScope, HeadSnapshot}
   alias Lasso.Providers.{Catalog, HeadEvidence}
+  alias Lasso.RPC.RoutingPlan
 
   @table :block_sync_registry
   @default_freshness_ms 30_000
   @cache_retries 4
   @observation_retries 4
+
+  @typedoc """
+  An upstream's lag in blocks behind its scope's mark in a head round, the
+  round's place in `next_sequence/0` order, and the wall-clock time it started,
+  which expires the lag on the same clock as the route's head observations.
+  """
+  @type head_lag :: %{
+          lag: non_neg_integer(),
+          round: pos_integer(),
+          measured_at_ms: integer()
+        }
 
   ## Client API
 
@@ -119,6 +133,74 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
+  The next value of the node-wide sequence that orders head rounds and lag row
+  publications. Every value is unique and greater than any earlier one.
+  """
+  @spec next_sequence() :: pos_integer()
+  def next_sequence, do: System.unique_integer([:monotonic, :positive])
+
+  @doc """
+  Records the lags a head round measured for a published scope's upstreams. The
+  write replaces only the row it read, and keeps only lags from rounds opened
+  after that row's publication, so a round delayed across publications can't
+  recreate a retired scope or carry an earlier verdict into a later publication
+  of the same scope. Each upstream keeps the lag of its latest round, and an
+  upstream the round did not measure keeps the one it has.
+  """
+  @spec put_head_lags(HeadScope.t(), %{String.t() => head_lag()}) :: :ok
+  def put_head_lags(%HeadScope{} = scope, lags) do
+    key = head_lags_key(scope)
+
+    with [{^key, publication, held}] <- :ets.lookup(@table, key) do
+      measured = Map.filter(lags, fn {_instance_id, lag} -> lag.round > publication end)
+
+      lags =
+        Map.merge(held, measured, fn _instance_id, held, new ->
+          if new.round > held.round, do: new, else: held
+        end)
+
+      :ets.select_replace(@table, [
+        {{key, publication, :_}, [], [{{{:const, key}, publication, {:const, lags}}}]}
+      ])
+    end
+
+    :ok
+  end
+
+  @doc "The round lags measured for the scope's upstreams."
+  @spec get_head_lags(HeadScope.t()) :: %{String.t() => head_lag()}
+  def get_head_lags(%HeadScope{} = scope) do
+    case :ets.lookup(@table, head_lags_key(scope)) do
+      [{_key, _publication, lags}] -> lags
+      [] -> %{}
+    end
+  end
+
+  @doc """
+  Opens a lag row for each head scope the published routing plans hold and
+  deletes the rows of scopes they no longer hold. A scope that stays published
+  keeps its row and lags.
+  """
+  @spec publish_head_lags(%{{String.t(), pos_integer()} => RoutingPlan.t()}) :: :ok
+  def publish_head_lags(routing_plans) do
+    publication = next_sequence()
+    current = MapSet.new(routing_plans, fn {_key, plan} -> plan.head_scope.scope_id end)
+
+    for {_key, %{head_scope: scope}} <- routing_plans,
+        do: :ets.insert_new(@table, {head_lags_key(scope), publication, %{}})
+
+    for [chain_id, profile, scope_id] <-
+          :ets.match(@table, {{:head_lags, :"$1", :"$2", :"$3"}, :_, :_}),
+        not MapSet.member?(current, scope_id),
+        do: :ets.delete(@table, {:head_lags, chain_id, profile, scope_id})
+
+    :ok
+  end
+
+  defp head_lags_key(scope),
+    do: {:head_lags, scope.chain_id, scope.profile_id, scope.scope_id}
+
+  @doc """
   Get the stored height for a specific provider.
 
   Returns `{:ok, {height, timestamp, source, metadata}}` or `{:error, :not_found}`.
@@ -197,7 +279,7 @@ defmodule Lasso.BlockSync.Registry do
   @doc "Clear scoped snapshot rows after an atomic catalog generation swap."
   @spec clear_scoped_head_snapshots() :: :ok
   def clear_scoped_head_snapshots do
-    :ets.match_delete(@table, {{:head_snapshot_scope, :_, :_, :_, :_, :_, :_}, :_, :_, :_})
+    :ets.match_delete(@table, {{:head_snapshot_scope, :_, :_, :_, :_, :_, :_, :_}, :_, :_, :_})
     :ok
   rescue
     ArgumentError -> :ok
@@ -346,13 +428,14 @@ defmodule Lasso.BlockSync.Registry do
   def clear_chain(chain_id) when is_integer(chain_id) and chain_id > 0 do
     :ets.match_delete(@table, {{:height, chain_id, :_}, :_})
     :ets.match_delete(@table, {{:head_observation, chain_id, :_, :_}, :_})
+    :ets.match_delete(@table, {{:head_lags, chain_id, :_, :_}, :_, :_})
     :ets.delete(@table, {:block_time, chain_id})
     :ets.delete(@table, consensus_key(chain_id))
     :ets.delete(@table, {:head_revision, chain_id})
 
     :ets.match_delete(
       @table,
-      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_}, :_, :_, :_}
+      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_, :_}, :_, :_, :_}
     )
 
     :ok
@@ -369,7 +452,7 @@ defmodule Lasso.BlockSync.Registry do
 
     :ets.match_delete(
       @table,
-      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_}, :_, :_, :_}
+      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_, :_}, :_, :_, :_}
     )
 
     revision = next_consensus_revision(chain_id)

@@ -108,7 +108,7 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 | `probe_interval_ms` | integer | `max(2 * block_time_ms, 5000)`, or 12000 without `block_time_ms` | Legacy fallback for the HTTP head-poll interval. |
 | `lag_alert_threshold_blocks` | integer | 3 | Dashboard lag status threshold for qualified profile-scoped transport evidence; this setting does not emit lag warning logs. |
 | `background_observations` | boolean | true | Enable periodic head polling, chain-identity probes, and configured `newHeads` observation. Client requests remain separate, and a routed request that times out still schedules one probe of that upstream. |
-| `http_heads_interval_ms` | integer | `probe_interval_ms` | Normal HTTP head-poll interval; `0` disables periodic head polling. |
+| `http_heads_interval_ms` | integer | `probe_interval_ms` | Normal HTTP head-poll interval; `0` disables periodic head polling. A chain polls its upstreams together in one round at the shortest interval its upstreams request, and each upstream polls in the rounds where its own interval is due. An upstream fed by `newHeads` answers each round with its latest head instead of polling. |
 | `http_backup_interval_ms` | integer | 3 × normal interval | HTTP head-poll interval while WebSocket head evidence is fresh; `0` disables backup polling. |
 | `chain_identity_interval_ms` | integer | 1800000 (30 min) | Interval for `eth_chainId` probes; `0` disables periodic identity probes. A routed request that times out still schedules one probe of its upstream, so liveness does not wait for this interval. |
 | `evidence_freshness_ms` | integer | 30000–60000 from block time | Freshness window for retained head evidence. |

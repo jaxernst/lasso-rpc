@@ -226,7 +226,8 @@ Lasso.Application
 **BlockSync.Worker** (`Lasso.BlockSync.Worker`)
 
 - Per-(chain, instance_id) GenServer tracking block heights
-- Polls via HTTP or subscribes via WS depending on provider capabilities
+- Polls via HTTP when its chain's round asks, or subscribes via WS, depending
+  on provider capabilities
 - Fan-out broadcasts to all profiles using this instance
 - Replaces per-(profile, provider_id) workers (migrated from profile-scoped to instance-scoped)
 
@@ -432,6 +433,8 @@ Lasso tracks blockchain state using HTTP polling as a reliable foundation with o
 **HTTP Polling** (Always Running):
 
 - Bounded observation delay (`probe_interval_ms`)
+- Polls every upstream on a chain in the same round, so heights describe the
+  same moment apart from when each answer lands
 - Captures available reference evidence before HTTP polls
 - Resilient to WebSocket failures
 
@@ -463,6 +466,22 @@ Per-provider GenServer managing block height tracking:
 
 - `:http_only` - HTTP polling only
 - `:http_with_ws` - HTTP + WebSocket subscription
+
+**BlockSync.Round** (`Lasso.BlockSync.Round`)
+
+- Per-chain GenServer under `Lasso.BlockSync.RoundSupervisor` that asks every
+  Worker on the chain for its head in the same tick: its `newHeads` head while
+  that feeds it, otherwise an HTTP poll
+- Closes each round at its own poll deadline, so rounds overlap, and judges
+  each profile with at least two of its head-observing upstreams in the round,
+  recording their lags for that profile; other profiles keep the lags they have
+- Measures each lag against the round's mark, crediting an upstream that
+  answered before the mark with the whole blocks its configured
+  `block_time_ms` fits in between; measured cadence is not consulted
+- Starts a round at once when an upstream's head feed switches or its
+  `newHeads` head moves backward
+- Sends no requests itself; each poll runs in its Worker's disposable owner
+  process, so one upstream's failure costs only that upstream's answer
 
 **BlockSync.Registry** (`Lasso.BlockSync.Registry`)
 
@@ -500,10 +519,14 @@ detects an observed branch conflict, not canonical ancestry across heights.
 
 Selection captures each route's latest observation once per request and judges
 it against what the request needs: a numeric block, the moving head, or
-nothing. The moving-head target is the highest fresh observation less the
-agreement band. A route proven short of its target, or fresh at the qualified
-reference height on a different hash, is deferred within its health tier and
-never excluded; see [Head freshness](ROUTING.md#head-freshness). Operator
+nothing. For the moving head, a route is deferred when the latest head round
+that judged its profile found its upstream more than the agreement band behind
+that round's mark; passive observations never change that verdict. For a
+numeric block, a route is deferred when its fresh observation stays short of
+the block even after crediting the blocks the chain could have produced since.
+A route fresh at the qualified reference height on a different hash is
+deferred too. Deferral stays within the route's health tier and never excludes
+it; see [Head freshness](ROUTING.md#head-freshness). Operator
 assessment is separate: the dashboard compares HTTP observations with the
 reference captured before their poll and WebSocket observations with the
 current qualified reference, using `monitoring.lag_alert_threshold_blocks`. A

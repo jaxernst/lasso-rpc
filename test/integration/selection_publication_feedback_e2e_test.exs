@@ -99,14 +99,9 @@ defmodule Lasso.RPC.SelectionPublicationFeedbackE2ETest do
     ChainIdentity.record(ChainIdentity.capture(instance, snapshot), :verified)
 
     assert {:ok, poller} =
-             HttpStrategy.start(chain, instance,
-               parent: self(),
-               initial_delay_ms: 600_000,
-               poll_interval_ms: 600_000
-             )
+             HttpStrategy.start(chain, instance, parent: self(), poll_interval_ms: 600_000)
 
-    Process.cancel_timer(poller.timer_ref)
-    assert {:ok, active} = HttpStrategy.handle_message({:poll, poller.poll_generation}, poller)
+    assert {:polling, active} = HttpStrategy.poll(poller)
     on_exit(fn -> HttpStrategy.stop(active) end)
     assert active.poll_plan.provider_id == "identity"
 

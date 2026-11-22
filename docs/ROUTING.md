@@ -23,18 +23,58 @@ The pipeline ensures that healthy providers receive preference while recovering 
 
 ## Head freshness
 
-A request that needs the chain's moving head prefers routes with fresh evidence
-that they are at it. Each route's latest HTTP and WebSocket head observation,
-from background polling, `newHeads` or a client's own head reads, is compared
-with the highest fresh observation in the profile, less the agreement band: the
-blocks the chain produces in two seconds at its `block_time_ms`, from 1 to 20.
-The band is the same span of time on a 250 ms chain and a 12 s chain. A route proven short of that
-target after crediting the blocks it could have produced between its
-observation and the freshest one is deferred behind the others in its health tier. A fresh route that reports the
-qualified reference height on a different block hash is deferred the same way.
-Unobserved and stale routes keep their strategy position. Deferral never
-excludes a route, so when every current route fails or lacks the method, a
-lagging route still serves.
+A request that needs the chain's moving head prefers routes measured at it.
+Background head observations run in rounds: once per head interval, every
+upstream on a chain is asked for its head in the same tick. An upstream fed by a
+live `newHeads` subscription answers with its latest head and needs no poll; any
+other is polled over HTTP. A route is compared with the other upstreams its
+profile observes in that round, and an upstream's HTTP and WebSocket routes
+share its verdict. The round's mark is their highest height; with three or more
+upstreams, a height more than the agreement band above their lower median is an
+outlier and cannot be the mark. A route's lag is the mark less its own height.
+Answers land at different moments, since an HTTP poll may take up to its 3 s
+deadline, so a route that answered before the mark is also credited with the
+whole blocks its `block_time_ms` fits between the two answers. The credit
+assumes the chain makes blocks at its configured `block_time_ms` and never
+consults measured cadence, so it is exactly as good as that setting: on a chain
+that runs faster than configured, an early answer can still look up to the
+difference behind, and the band absorbs small drift. The band is the blocks the chain produces in two seconds at its `block_time_ms`,
+from 1 to 20, the same span of time on a 250 ms chain and a 12 s chain. A route
+whose lag exceeds the band is deferred behind the others in its health tier
+until a later round measures it within the band. Client head reads and
+`newHeads` events between rounds never change a route's moving-head verdict.
+
+A round judges a profile's routes only when at least two of its upstreams
+answered. Two heights cannot show which one is wrong, so the higher one is the
+mark, and the lower route is deferred when its lag exceeds the band. A profile
+with fewer than two upstreams with background observations on a chain gets no
+lag verdict there, so its moving-head reads keep strategy order.
+A round counts every answer that arrives before its poll deadline, even after
+the next round has started. A round with at least two of a profile's upstreams
+records each one's lag for that profile; a round with fewer leaves the
+profile's lags as they are, so another profile's rounds never replace them.
+Changing a profile's upstreams, which of them have background observations on,
+or its `block_time_ms` starts it with no lags, even when the change restores an
+earlier configuration. Only a round that starts after the change records lags
+for it, and a round starts before it asks any upstream for a head, so neither an
+answer given before the change nor a lag measured against other upstreams is
+ever read. Until a round that started after the change has heights from at
+least two of the profile's observing upstreams, the profile has no lag verdict,
+and its moving-head reads keep strategy order as they do with no stored lag. A
+route that errors or skips a round keeps its last measured lag until that
+measurement is older than the freshness window of the route's own head
+observations. When an upstream switches between `newHeads` and HTTP polling, or
+its `newHeads` head moves backward, a round starts at once, so the change is
+measured without waiting for the next tick.
+
+A profile with background observations off gets no round lag, so its
+moving-head reads keep strategy order even when another profile observes the
+same upstreams, and so do unobserved and stale routes. A read at a fixed block,
+in any profile, defers a route whose fresh observation stays short of that
+block even after crediting the blocks the chain could have produced since. A
+fresh route that reports the qualified reference height on a different block
+hash is deferred the same way. Deferral never excludes a route, so when every
+current route fails or lacks the method, a lagging route still serves.
 
 What a request needs comes from its own parameters:
 
