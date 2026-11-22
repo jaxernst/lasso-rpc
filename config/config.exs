@@ -18,11 +18,6 @@ config :opentelemetry,
 
 config :opentelemetry_exporter, otlp_protocol: :http_protobuf
 
-config :lasso, :routing_exploration,
-  enabled: false,
-  sample_every: 100,
-  disabled_profiles: []
-
 config :lasso, :block_publication_repo, Lasso.BlockPublication.Repo
 
 # Configure Phoenix

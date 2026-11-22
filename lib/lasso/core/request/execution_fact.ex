@@ -115,7 +115,7 @@ defmodule Lasso.RPC.AttemptIdentity do
           circuit_epoch: non_neg_integer(),
           execution_safety: atom(),
           classified_by: :registry | :signed_bytes | :default,
-          attempt_kind: :ordinary | :exploration,
+          attempt_kind: :ordinary,
           routing_intent: binary(),
           workload_key: binary(),
           request_budget_ms: non_neg_integer(),
@@ -182,8 +182,7 @@ defmodule Lasso.RPC.AttemptIdentity do
         ]),
       attempt_kind:
         ExecutionFact.member!(Map.get(identity, :attempt_kind, :ordinary), :attempt_kind, [
-          :ordinary,
-          :exploration
+          :ordinary
         ]),
       routing_intent: ExecutionFact.bounded!(identity.routing_intent, :routing_intent),
       workload_key: ExecutionFact.bounded!(identity.workload_key, :workload_key),
@@ -200,9 +199,6 @@ defmodule Lasso.RPC.AttemptIdentity do
     if normalized.candidate_admission_count == 0 or
          normalized.dispatch_count > normalized.candidate_admission_count,
        do: raise(ArgumentError, "attempt counts are incoherent")
-
-    if normalized.attempt_kind == :exploration and normalized.execution_safety != :replay_safe,
-      do: raise(ArgumentError, "exploration requires replay-safe execution")
 
     normalized
   end

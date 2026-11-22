@@ -115,29 +115,33 @@ defmodule Lasso.RPC.ExecutionFact.CodecTest do
     assert {:ok, ^fact} = old_wire |> Jason.encode!() |> Codec.decode()
   end
 
-  test "version two retains exploration and ambiguity while version one remains ordinary" do
-    exploration =
-      AttemptTerminal.Deadline.new(%{identity() | attempt_kind: :exploration}, :dispatched, 100)
-
+  test "version two retains ambiguity and an ordinary attempt kind while version one remains ordinary" do
     ambiguous =
       AttemptTerminal.Response.new(identity(), :application_error, 100,
         error_code: -32_000,
         error_category: :ambiguous
       )
 
-    for fact <- [exploration, ambiguous] do
-      encoded = Codec.encode!(fact)
+    encoded = Codec.encode!(ambiguous)
 
-      assert %{"version" => %{"major" => 2}, "identity" => %{"attempt_kind" => _}} =
-               Jason.decode!(encoded)
+    assert %{"version" => %{"major" => 2}, "identity" => %{"attempt_kind" => "ordinary"}} =
+             Jason.decode!(encoded)
 
-      assert {:ok, ^fact} = Codec.decode(encoded)
+    assert {:ok, ^ambiguous} = Codec.decode(encoded)
 
-      downgraded = Jason.decode!(encoded) |> put_in(["version", "major"], 1) |> Jason.encode!()
-      assert {:error, :invalid_fact} = Codec.decode(downgraded)
-    end
+    downgraded = Jason.decode!(encoded) |> put_in(["version", "major"], 1) |> Jason.encode!()
+    assert {:error, :invalid_fact} = Codec.decode(downgraded)
 
     ordinary = AttemptTerminal.Deadline.new(identity(), :dispatched, 100)
+
+    retired_kind =
+      ordinary
+      |> Codec.encode!()
+      |> Jason.decode!()
+      |> put_in(["identity", "attempt_kind"], "exploration")
+      |> Jason.encode!()
+
+    assert {:error, :invalid_fact} = Codec.decode(retired_kind)
 
     old_wire =
       ordinary

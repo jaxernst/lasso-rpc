@@ -64,10 +64,7 @@ provider_knowledge_effect_modes =
 
 config :lasso,
        :provider_knowledge_effect_modes,
-       Map.merge(provider_knowledge_effect_modes, %{
-         quota_exhaustion: :off,
-         response_latency: :off
-       })
+       Map.put(provider_knowledge_effect_modes, :quota_exhaustion, :off)
 
 config :lasso, :claim_audit_mode, :off
 

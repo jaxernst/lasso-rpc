@@ -1915,7 +1915,7 @@ defmodule Lasso.RPC.RequestPipelineIntegrationTest do
           circuit_epoch: 1,
           execution_safety: :replay_safe,
           routing_intent: "fastest",
-          workload_key: "client",
+          workload_key: "client_state",
           request_budget_ms: 100,
           candidate_admission_count: 1,
           dispatch_count: 1

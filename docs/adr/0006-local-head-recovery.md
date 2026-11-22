@@ -47,12 +47,10 @@ produce a hint with an unknown hash until a higher height arrives.
 
 RPCs only read local ETS. A recovered height above the captured local floor
 prefers providers with fresh observations at or above that height. Static and
-ranked candidate groups are stably partitioned, including lazily resolved
-groups. Core currently retains one observation per upstream instance; preference
+ranked candidate groups are stably partitioned. Core currently retains one observation per upstream instance; preference
 requires that stored observation to match the candidate transport. Missing or
 overwritten transport evidence leaves normal fallback ordering available. Existing health/rate-limit tiers, capability checks and explicit provider
-overrides retain precedence. A cached fastest winner is reused only when its
-observation meets the recovered target. Preference does not move a later deferred
+overrides retain precedence. Preference does not move a later deferred
 group ahead of an earlier group and does not apply to arbitrary custom strategy
 lists; these are best-effort limitations rather than extra selection machinery.
 

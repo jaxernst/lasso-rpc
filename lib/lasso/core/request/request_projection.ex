@@ -688,45 +688,6 @@ defmodule Lasso.RPC.RequestProjection do
 
   defp public_learning_decision(nil, _selected), do: nil
 
-  defp public_learning_decision(
-         %{kind: :response_latency, evidence: evidence} = decision,
-         selected
-       ) do
-    previous = Map.get(evidence, decision.baseline_at_change)
-    proposed = Map.get(evidence, decision.proposed_at_change)
-
-    if is_map(previous) and is_map(proposed) do
-      first = %{
-        kind: :response_latency,
-        mode: decision.mode,
-        origin_profile: Map.get(decision, :origin_profile),
-        budget_result: :no_extra_dispatch,
-        counterfactual: :unobserved,
-        rank: decision.changed_at + 1,
-        resource: public_learning_resource(Map.get(decision, :resource)),
-        source: :local,
-        baseline_p95_us: previous.p95_us,
-        proposed_p95_us: proposed.p95_us,
-        baseline_accepted_samples: previous.accepted_samples,
-        proposed_accepted_samples: proposed.accepted_samples,
-        evidence_age_ms: max(previous.age_ms, proposed.age_ms),
-        selected_proposal?:
-          decision.changed_at == 0 and decision.mode == :on and
-            selected == decision.proposed_at_change
-      }
-
-      latest = public_learning_decision(Map.get(decision, :latest), selected)
-      count = Map.get(decision, :intervention_count, 1)
-      retained = if latest, do: 2, else: 1
-
-      first
-      |> LearningDecision.public_observation(decision)
-      |> Map.put(:intervention_count, count)
-      |> Map.put(:omitted_interventions, max(count - retained, 0))
-      |> maybe_put_latest(latest)
-    end
-  end
-
   defp public_learning_decision(%{kind: kind} = decision, selected)
        when kind in [:method_refusal, :span_limit] do
     decision
@@ -827,16 +788,6 @@ defmodule Lasso.RPC.RequestProjection do
 
   defp maybe_put_latest(first, nil), do: first
   defp maybe_put_latest(first, latest), do: Map.put(first, :latest, latest)
-
-  defp public_learning_resource(%{
-         historical_resource: resource,
-         historical_height: height
-       })
-       when resource in [nil, :blocks, :balance, :state, :logs, :receipts, :proofs, :traces] and
-              (is_nil(height) or (is_integer(height) and height >= 0)),
-       do: %{historical_resource: resource, historical_height: height}
-
-  defp public_learning_resource(_resource), do: nil
 
   @spec deliver(t()) :: :ok
   def deliver(%__MODULE__{} = event) do

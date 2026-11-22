@@ -23,11 +23,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   def mode(kind, profile) when kind in @kinds,
     do: resolve(kind, profile, [:off, :on], &global_mode/1)
 
-  @doc "Resolves local latency selection independently of capability deferral modes."
-  @spec response_latency_mode(String.t()) :: mode()
-  def response_latency_mode(profile),
-    do: resolve(:response_latency, profile, [:off, :shadow, :on], &global_mode/1)
-
   defp resolve(kind, profile, allowed, global_fun) do
     override = profile_override(kind, profile)
 
@@ -69,24 +64,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     end
   end
 
-  @doc "A cached winner is usable only while current serving effects allow it first."
-  @spec cached_winner_eligible?(term(), term(), binary(), map()) :: boolean()
-  def cached_winner_eligible?(descriptor, plan, method, context) do
-    active_constraint? =
-      Enum.any?(@kinds, &(mode(&1, plan.profile) == :on)) and
-        is_map(
-          learned_deferral(
-            descriptor,
-            effect_scope(descriptor, plan, method, context),
-            plan,
-            method,
-            context
-          )
-        )
-
-    not active_constraint?
-  end
-
   @doc """
   Orders one batch of descriptors by head suitability and learned deferral in
   one precedence step, and captures the decisions that changed it.
@@ -96,14 +73,11 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   follow; the returned set names them so they can wait behind the rest of their
   availability tier. Shadow-mode effects never change the order.
   """
-  @spec order_with_decision(list(), term(), binary(), map(), boolean()) ::
+  @spec order_with_decision(list(), term(), binary(), map()) ::
           {list(), MapSet.t(HeadSuitability.route()), [map()]}
-  def order_with_decision(descriptors, plan, method, context, complete? \\ true)
+  def order_with_decision([], _plan, _method, _context), do: {[], MapSet.new(), []}
 
-  def order_with_decision([], _plan, _method, _context, _complete?),
-    do: {[], MapSet.new(), []}
-
-  def order_with_decision(descriptors, plan, method, context, complete?) do
+  def order_with_decision(descriptors, plan, method, context) do
     historical_mode = mode(:historical_depth, plan.profile)
     head = Map.get(context, :head_suitability)
 
@@ -153,7 +127,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
           into: MapSet.new(),
           do: Decision.route(descriptor)
 
-    order = %{baseline: descriptors, applied: applied, complete?: complete?}
+    order = %{baseline: descriptors, applied: applied}
 
     if Enum.any?(learned, &is_map/1) do
       head_only = entries |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 0))
@@ -172,26 +146,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
     {applied, deferred, decisions}
   end
-
-  @doc "Captures a head-against route queued while ranked batches remain pending."
-  @spec head_bucket_decision(term(), term(), map()) :: map() | nil
-  def head_bucket_decision(descriptor, plan, %{head_suitability: head}) when not is_nil(head) do
-    {class, verdict, reason} = HeadSuitability.classify(head, Decision.route(descriptor))
-
-    if class == 2 do
-      head_decision(
-        head,
-        [{descriptor, class, false, {verdict, reason}}],
-        plan,
-        %{baseline: [descriptor], applied: [descriptor], complete?: false},
-        true
-      )
-      |> Map.put(:order_scope, :deferred_bucket)
-      |> Decision.capture()
-    end
-  end
-
-  def head_bucket_decision(_descriptor, _plan, _context), do: nil
 
   defp learned_deferrals(entries, historical_mode, plan, method, context) do
     if Enum.any?(@kinds, &(mode(&1, plan.profile) == :on)) do
@@ -232,7 +186,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         hints: Enum.take(hints, 2),
         omitted_hints: max(length(hints) - 2, 0),
         order_scope: :materialized_candidates,
-        orders: Decision.orders(order.baseline, proposed, order.applied, order.complete?)
+        orders: Decision.orders(order.baseline, proposed, order.applied)
       }
     end
   end
@@ -262,8 +216,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
           Decision.orders(
             order.baseline,
             Enum.map(ordinary ++ deferred, &elem(&1, 0)),
-            order.applied,
-            order.complete?
+            order.applied
           )
       }
     end
@@ -290,7 +243,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
           hints: Enum.take(hints, 2),
           omitted_hints: max(length(hints) - 2, 0),
           order_scope: :materialized_candidates,
-          orders: Decision.orders(order.baseline, proposed, order.applied, order.complete?)
+          orders: Decision.orders(order.baseline, proposed, order.applied)
         }
       end
     end
@@ -324,17 +277,15 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   # Recorded when head suitability moved a route relative to the order learned
   # deferral alone would apply. Routes are named by baseline position to stay
   # within the frame budget.
-  defp head_decision(head, entries, plan, order, bucket_deferral? \\ false)
+  defp head_decision(nil, _entries, _plan, _order), do: nil
 
-  defp head_decision(nil, _entries, _plan, _order, _bucket_deferral?), do: nil
-
-  defp head_decision(head, entries, plan, order, bucket_deferral?) do
+  defp head_decision(head, entries, plan, order) do
     learned_only =
       entries
       |> Enum.sort_by(fn {_descriptor, _class, learned?, _verdict} -> is_map(learned?) end)
       |> Enum.map(&elem(&1, 0))
 
-    if bucket_deferral? or learned_only != order.applied do
+    if learned_only != order.applied do
       positions = Decision.route_positions(order.baseline)
 
       proposed =
@@ -374,7 +325,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         evidence: Enum.take(evidence, @max_head_evidence),
         omitted_evidence: max(length(evidence) - @max_head_evidence, 0),
         order_scope: :materialized_candidates,
-        orders: Decision.orders(order.baseline, proposed, order.applied, order.complete?)
+        orders: Decision.orders(order.baseline, proposed, order.applied)
       }
     end
   end
@@ -470,8 +421,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   def shadow_proposals(_descriptors, _plan, _method, _context), do: []
-
-  defp learned_deferral(descriptor, scope, plan, method, context, kinds \\ @kinds)
 
   defp learned_deferral(_descriptor, nil, _plan, _method, _context, _kinds), do: nil
 

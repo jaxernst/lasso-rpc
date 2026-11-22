@@ -101,7 +101,6 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
     assert cursor.filters.head_snapshot.qualification == :qualified
     assert {:ok, %{provider_id: ^majority_a}, _} = CandidateCursor.next(cursor)
 
-    # A cached fastest hint must be assessed against the complete route set.
     # The minority is fastest, but it is on a conflicting branch.
     generation = Catalog.active_generation()
     now_us = System.monotonic_time(:microsecond)
@@ -147,8 +146,6 @@ defmodule Lasso.RPC.HeadBranchRoutingTest do
     end
 
     minority_id = Catalog.lookup_instance_id(profile, chain, minority)
-    scope = AttemptProjection.scope_state(profile, chain)
-    assert %{route: {^minority_id, :ws}} = AttemptProjection.fastest_winner(scope)
 
     fastest =
       Selection.select_channel_candidates(profile, chain, "eth_blockNumber",

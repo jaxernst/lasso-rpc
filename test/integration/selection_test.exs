@@ -292,6 +292,16 @@ defmodule Lasso.RPC.SelectionTest do
         assert :ok = AttemptProjection.apply_control(event)
       end
 
+      record_selection_successes(
+        chain,
+        profile,
+        "a_slow",
+        generation,
+        now_us,
+        1_000_000,
+        "system_basic"
+      )
+
       # Public's own background probes may also populate its system partition.
       poller_scope = AttemptProjection.scope_state("poller-profile", chain, generation)
       assert AttemptProjection.route_state(poller_scope, instance_id, :http, "system_basic")
@@ -799,12 +809,7 @@ defmodule Lasso.RPC.SelectionTest do
       end
 
       for {method, workload, winner} <- cases do
-        scope = AttemptProjection.scope_state(profile, chain)
-
-        assert %{route: {instance, :http}} =
-                 AttemptProjection.fastest_winner(scope, String.to_existing_atom(workload))
-
-        assert instance == Catalog.lookup_instance_id(profile, chain, winner)
+        instance = Catalog.lookup_instance_id(profile, chain, winner)
 
         assert {:ok, %{provider_id: ^winner}, _} =
                  CandidateCursor.next(
@@ -860,7 +865,7 @@ defmodule Lasso.RPC.SelectionTest do
       end
     end
 
-    test "fastest winner is rechecked against learned rate limits at cursor admission", %{
+    test "a learned rate limit tiers the quickest fastest route behind its fallback", %{
       chain: chain
     } do
       profile = "public"
@@ -889,17 +894,9 @@ defmodule Lasso.RPC.SelectionTest do
         "fallback",
         generation,
         now_us + 10,
-        20_000,
+        100_000,
         "client_basic"
       )
-
-      cursor =
-        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
-          strategy: :fastest,
-          transport: :http
-        )
-
-      assert hd(cursor.candidate_labels) == "winner:http"
 
       winner_instance = Catalog.lookup_instance_id(profile, chain, "winner")
 
@@ -915,12 +912,19 @@ defmodule Lasso.RPC.SelectionTest do
                  )
                )
 
+      cursor =
+        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
+          strategy: :fastest,
+          transport: :http
+        )
+
+      assert hd(cursor.candidate_labels) == "winner:http"
       assert {:ok, %{provider_id: "fallback"}, cursor} = CandidateCursor.next(cursor)
       assert {:ok, %{provider_id: "winner"}, cursor} = CandidateCursor.next(cursor)
       assert :done = CandidateCursor.next(cursor)
     end
 
-    test "a higher recovered head bypasses a lagging fastest winner while retaining fallbacks", %{
+    test "a higher recovered head bypasses a lagging fastest route while retaining fallbacks", %{
       chain: chain
     } do
       profile = "public"
@@ -933,7 +937,7 @@ defmodule Lasso.RPC.SelectionTest do
       generation = Catalog.active_generation()
       now_us = System.monotonic_time(:microsecond)
 
-      for {id, latency, height} <- [{"winner", 10_000, 99}, {"ahead", 20_000, 100}] do
+      for {id, latency, height} <- [{"winner", 10_000, 99}, {"ahead", 100_000, 100}] do
         record_selection_successes(
           chain,
           profile,
@@ -1026,87 +1030,6 @@ defmodule Lasso.RPC.SelectionTest do
       assert {:ok, %{provider_id: "behind"}, _} = CandidateCursor.next(cursor)
     end
 
-    test "fastest winner defers construction of fallback candidates", %{chain: chain} do
-      profile = "public"
-
-      setup_providers([
-        %{id: "winner", priority: 10, behavior: :healthy, profile: profile},
-        %{id: "fallback_a", priority: 20, behavior: :healthy, profile: profile},
-        %{id: "fallback_b", priority: 30, behavior: :healthy, profile: profile}
-      ])
-
-      generation = Catalog.active_generation()
-      now_us = System.monotonic_time(:microsecond)
-
-      record_selection_successes(
-        chain,
-        profile,
-        "winner",
-        generation,
-        now_us,
-        10_000,
-        "client_basic"
-      )
-
-      record_selection_successes(
-        chain,
-        profile,
-        "fallback_a",
-        generation,
-        now_us + 10,
-        20_000,
-        "client_basic"
-      )
-
-      record_selection_successes(
-        chain,
-        profile,
-        "fallback_b",
-        generation,
-        now_us + 20,
-        30_000,
-        "client_basic"
-      )
-
-      cursor =
-        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
-          strategy: :fastest,
-          transport: :http
-        )
-
-      assert cursor.candidate_labels == ["winner:http"]
-      assert length(cursor.descriptors) == 1
-      assert cursor.deferred_ranking.entries == []
-      assert is_function(cursor.deferred_ranking.resolver, 0)
-
-      large_params = Enum.to_list(1..50_000)
-
-      large_cursor =
-        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
-          strategy: :fastest,
-          transport: :http,
-          params: large_params
-        )
-
-      {:env, resolver_environment} =
-        Function.info(large_cursor.deferred_ranking.resolver, :env)
-
-      refute Enum.any?(resolver_environment, &(&1 == large_params))
-      assert :erts_debug.flat_size(resolver_environment) < 5_000
-
-      assert {:ok, %{provider_id: "winner"}, cursor} = CandidateCursor.next(cursor)
-      assert {:ok, %{provider_id: "fallback_a"}, cursor} = CandidateCursor.next(cursor)
-
-      assert cursor.candidate_labels == [
-               "winner:http",
-               "fallback_a:http",
-               "fallback_b:http"
-             ]
-
-      assert {:ok, %{provider_id: "fallback_b"}, cursor} = CandidateCursor.next(cursor)
-      assert :done = CandidateCursor.next(cursor)
-    end
-
     test "ranked cursors tier a provider rate-limited after ranking", %{chain: chain} do
       profile = "public"
 
@@ -1141,86 +1064,7 @@ defmodule Lasso.RPC.SelectionTest do
       assert :done = CandidateCursor.next(cursor)
     end
 
-    test "fastest defers cold-route priors until qualified candidates are exhausted", %{
-      chain: chain
-    } do
-      profile = "public"
-
-      setup_providers([
-        %{id: "qualified", priority: 10, behavior: :healthy, profile: profile},
-        %{id: "cold_slow", priority: 20, behavior: :healthy, profile: profile},
-        %{id: "cold_fast", priority: 30, behavior: :healthy, profile: profile}
-      ])
-
-      generation = Catalog.active_generation()
-      now_us = System.monotonic_time(:microsecond)
-
-      record_selection_successes(
-        chain,
-        profile,
-        "qualified",
-        generation,
-        now_us,
-        20_000,
-        "client_basic"
-      )
-
-      record_selection_successes(
-        chain,
-        profile,
-        "cold_slow",
-        generation,
-        now_us + 10,
-        80_000,
-        "system_basic"
-      )
-
-      cursor =
-        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
-          strategy: :fastest,
-          transport: :http,
-          request_origin: :client
-        )
-
-      assert cursor.candidate_labels == ["qualified:http"]
-
-      assert {:ok, %{provider_id: "qualified"}, cursor} = CandidateCursor.next(cursor)
-
-      record_selection_successes(
-        chain,
-        profile,
-        "cold_fast",
-        generation,
-        now_us + 20,
-        10_000,
-        "system_basic"
-      )
-
-      assert {:ok, %{provider_id: "cold_fast"}, cursor} = CandidateCursor.next(cursor)
-      assert {:ok, %{provider_id: "cold_slow"}, cursor} = CandidateCursor.next(cursor)
-      assert :done = CandidateCursor.next(cursor)
-
-      gated_cursor =
-        Selection.select_channel_candidates(profile, chain, "eth_blockNumber",
-          strategy: :fastest,
-          transport: :http,
-          request_origin: :client
-        )
-
-      assert {:ok, %{provider_id: "qualified"}, gated_cursor} =
-               CandidateCursor.next(gated_cursor)
-
-      cold_fast_instance = Catalog.lookup_instance_id(profile, chain, "cold_fast")
-      set_circuit_snapshot(cold_fast_instance, :open)
-
-      assert {:ok, %{provider_id: "cold_slow"}, gated_cursor} =
-               CandidateCursor.next(gated_cursor)
-
-      assert :done = CandidateCursor.next(gated_cursor)
-      set_circuit_snapshot(cold_fast_instance, :closed)
-    end
-
-    test "fastest deferred routes retain exclusion and snapshot fences", %{chain: chain} do
+    test "fastest cursors retain exclusion and snapshot fences", %{chain: chain} do
       profile = "public"
 
       setup_providers([
@@ -1232,15 +1076,17 @@ defmodule Lasso.RPC.SelectionTest do
       generation = Catalog.active_generation()
       now_us = System.monotonic_time(:microsecond)
 
-      record_selection_successes(
-        chain,
-        profile,
-        "qualified",
-        generation,
-        now_us,
-        20_000,
-        "client_basic"
-      )
+      for {id, latency} <- [{"qualified", 20_000}, {"excluded", 200_000}, {"remaining", 200_000}] do
+        record_selection_successes(
+          chain,
+          profile,
+          id,
+          generation,
+          now_us,
+          latency,
+          "client_basic"
+        )
+      end
 
       cursor =
         Selection.select_channel_candidates(profile, chain, "eth_blockNumber",

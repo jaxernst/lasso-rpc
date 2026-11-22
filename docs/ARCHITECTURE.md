@@ -605,7 +605,7 @@ ProbeCoordinator implements exponential backoff for degraded instances to reduce
 
 **:fastest**
 
-- Lowest recent successful mean among reliability-qualified upstream instances
+- The balanced-fast permutation at exponent 8: the quickest measured upstream takes nearly all traffic, and one unproven upstream per request still earns a sample
 - Reads published routing-evidence summaries rather than BenchmarkStore lifetime averages
 
 **:balanced_fast** (default)

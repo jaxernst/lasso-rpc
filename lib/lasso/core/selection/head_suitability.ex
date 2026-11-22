@@ -310,20 +310,4 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   end
 
   def reached?(%__MODULE__{} = capture, route), do: match?({:supports, _}, assess(capture, route))
-
-  @doc """
-  Whether a route is in the best class among the candidate routes, which a
-  cached winner must be before it may be returned ahead of ranking. Routes are
-  enumerated only when the route itself is not in the first class, so callers
-  may pass a lazy stream.
-  """
-  @spec leads?(t() | nil, route(), Enumerable.t()) :: boolean()
-  def leads?(nil, _route, _routes), do: true
-
-  def leads?(%__MODULE__{} = capture, route, routes) do
-    case class(capture, route) do
-      0 -> true
-      class -> Enum.all?(routes, &(class(capture, &1) >= class))
-    end
-  end
 end

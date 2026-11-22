@@ -156,7 +156,6 @@ defmodule Lasso.RPC.RequestContext do
   defstruct request_id: nil,
             routing_capture: nil,
             send_phase: :providers,
-            exploration_token: nil,
             account_id: nil,
             chain_id: nil,
             method: nil,
