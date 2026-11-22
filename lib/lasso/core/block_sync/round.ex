@@ -182,11 +182,11 @@ defmodule Lasso.BlockSync.Round do
   end
 
   defp judge(chain_id, %{heights: heights} = round) when map_size(heights) >= @min_heights do
-    for plan <- routing_plans(chain_id),
-        scope_heights <- [Map.take(heights, voters(plan))],
+    for scope <- head_scopes(chain_id),
+        scope_heights <- [Map.take(heights, scope.observer_ids)],
         map_size(scope_heights) >= @min_heights do
-      band = HeadComparison.agreement_blocks(plan.head_scope.policy)
-      BlockSyncRegistry.put_head_lags(plan.head_scope, lags(scope_heights, band, round))
+      band = HeadComparison.agreement_blocks(scope.policy)
+      BlockSyncRegistry.put_head_lags(scope, lags(scope_heights, band, round))
     end
 
     :ok
@@ -194,12 +194,9 @@ defmodule Lasso.BlockSync.Round do
 
   defp judge(_chain_id, _round), do: :ok
 
-  defp voters(plan),
-    do: for(provider <- plan.providers, provider.observes_heads?, do: provider.instance_id)
-
-  defp routing_plans(chain_id) do
+  defp head_scopes(chain_id) do
     case Catalog.snapshot() do
-      %{routing_plans: plans} -> for {{_profile, ^chain_id}, plan} <- plans, do: plan
+      %{routing_plans: plans} -> for {{_profile, ^chain_id}, plan} <- plans, do: plan.head_scope
       _unpublished -> []
     end
   end

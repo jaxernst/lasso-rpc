@@ -571,6 +571,7 @@ defmodule Lasso.Providers.Catalog do
         profile,
         chain_id,
         Enum.map(providers, & &1.instance_id),
+        for(provider <- providers, provider.observes_heads?, do: provider.instance_id),
         HeadEvidence.policy(chain_config.block_time_ms)
       )
 

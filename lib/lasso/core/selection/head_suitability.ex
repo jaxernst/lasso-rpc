@@ -196,8 +196,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
         transport <- provider.transports,
         {fresh?, observation} <- [read_head(plan.chain_id, provider, transport, now_ms)],
         into: %{} do
-      {lag, outlier?} =
-        round_lag(provider.observes_heads? and lags[provider.instance_id], observation, now_ms)
+      {lag, outlier?} = round_lag(lags[provider.instance_id], observation, now_ms)
 
       {{provider.instance_id, transport},
        %{

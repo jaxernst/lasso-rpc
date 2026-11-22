@@ -12,8 +12,8 @@ defmodule Lasso.BlockSync.Registry do
   - `{:height, chain_id, provider_id}` => `{height, timestamp_ms, source, metadata}`
   - `{:head_observation, chain_id, provider_id, transport}` => `%HeadObservation{}`
   - `{:block_time, chain_id}` => `%BlockTimeMeasurement{}`
-  - `{:head_lags, chain_id, profile}` => the profile scope's id and the round lag
-    last measured for each of its upstreams
+  - `{:head_lags, chain_id, profile}` => the profile's published scope id and the
+    round lag last measured for each of its upstreams
 
   ## Freshness
 
@@ -125,22 +125,23 @@ defmodule Lasso.BlockSync.Registry do
   end
 
   @doc """
-  Records the lags a head round measured for a profile scope's upstreams. Each
-  upstream keeps its newest lag, and an upstream the round did not measure keeps
-  the one it has. Lags measured for an earlier version of the scope are dropped.
-  Only the chain's `Lasso.BlockSync.Round` writes lags, so the merge needs no
-  coordination.
+  Records the lags a head round measured for a profile scope's upstreams, while
+  the published catalog still routes that profile with that scope. Each upstream
+  keeps its newest lag, and an upstream the round did not measure keeps the one
+  it has. Only the chain's `Lasso.BlockSync.Round` writes lags, so the merge
+  needs no coordination.
   """
   @spec put_head_lags(HeadScope.t(), %{String.t() => head_lag()}) :: :ok
   def put_head_lags(%HeadScope{} = scope, lags) do
-    held = get_head_lags(scope)
+    if published?(scope) do
+      lags =
+        Map.merge(get_head_lags(scope), lags, fn _instance_id, held, new ->
+          if new.measured_at_ms >= held.measured_at_ms, do: new, else: held
+        end)
 
-    lags =
-      Map.merge(held, lags, fn _instance_id, held, new ->
-        if new.measured_at_ms >= held.measured_at_ms, do: new, else: held
-      end)
+      :ets.insert(@table, {head_lags_key(scope), scope.scope_id, lags})
+    end
 
-    :ets.insert(@table, {head_lags_key(scope), scope.scope_id, lags})
     :ok
   end
 
@@ -153,7 +154,11 @@ defmodule Lasso.BlockSync.Registry do
     end
   end
 
-  @doc "Drops the round lags of every scope the published routing plans no longer hold."
+  @doc """
+  Drops the round lags of every scope the published routing plans no longer
+  hold. A row is deleted only while it still carries the retired scope, so lags
+  a round records for the profile's new scope meanwhile stay.
+  """
   @spec retain_head_lags(%{{String.t(), pos_integer()} => RoutingPlan.t()}) :: :ok
   def retain_head_lags(routing_plans) do
     current = MapSet.new(routing_plans, fn {_key, plan} -> plan.head_scope.scope_id end)
@@ -161,9 +166,23 @@ defmodule Lasso.BlockSync.Registry do
     for [chain_id, profile, scope_id] <-
           :ets.match(@table, {{:head_lags, :"$1", :"$2"}, :"$3", :_}),
         not MapSet.member?(current, scope_id),
-        do: :ets.delete(@table, {:head_lags, chain_id, profile})
+        do: :ets.match_delete(@table, {{:head_lags, chain_id, profile}, scope_id, :_})
 
     :ok
+  end
+
+  # A round that judged a plan the catalog has since replaced or removed records nothing.
+  defp published?(%HeadScope{scope_id: scope_id} = scope) do
+    case Catalog.snapshot() do
+      %{routing_plans: plans} ->
+        match?(
+          %{head_scope: %{scope_id: ^scope_id}},
+          Map.get(plans, {scope.profile_id, scope.chain_id})
+        )
+
+      _unpublished ->
+        false
+    end
   end
 
   defp head_lags_key(scope), do: {:head_lags, scope.chain_id, scope.profile_id}
@@ -247,7 +266,7 @@ defmodule Lasso.BlockSync.Registry do
   @doc "Clear scoped snapshot rows after an atomic catalog generation swap."
   @spec clear_scoped_head_snapshots() :: :ok
   def clear_scoped_head_snapshots do
-    :ets.match_delete(@table, {{:head_snapshot_scope, :_, :_, :_, :_, :_, :_}, :_, :_, :_})
+    :ets.match_delete(@table, {{:head_snapshot_scope, :_, :_, :_, :_, :_, :_, :_}, :_, :_, :_})
     :ok
   rescue
     ArgumentError -> :ok
@@ -403,7 +422,7 @@ defmodule Lasso.BlockSync.Registry do
 
     :ets.match_delete(
       @table,
-      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_}, :_, :_, :_}
+      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_, :_}, :_, :_, :_}
     )
 
     :ok
@@ -420,7 +439,7 @@ defmodule Lasso.BlockSync.Registry do
 
     :ets.match_delete(
       @table,
-      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_}, :_, :_, :_}
+      {{:head_snapshot_scope, :_, chain_id, :_, :_, :_, :_, :_}, :_, :_, :_}
     )
 
     revision = next_consensus_revision(chain_id)
