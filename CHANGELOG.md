@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- BNB Smart Chain (`/rpc/bsc`) and Tempo (`/rpc/tempo`) in the bundled public profile, from keyless endpoints that passed two qualification passes. Evidence is in `docs/evidence/public-template/56.md` and `4217.md`.
+
+### Changed
+
+- Routes that name no strategy, such as `/rpc/:chain`, `/rpc/profile/:profile/:chain` and their WebSocket equivalents, now use `balanced-fast`, which spreads load while favoring the quickest providers. `load-balanced` stays available by name. To keep the old default, set `config :lasso, :provider_selection_strategy, :load_balanced`.
+
 ## [0.9.0] - 2026-11-21
 
 ### Added

@@ -18,9 +18,9 @@ infra and tune your RPC throughput and performance without redeploys.
 Express routing controls right in the RPC endpoint path:
 
 ```
-/rpc/load-balanced/ethereum  -> spread requests across healthy providers (the default)
+/rpc/balanced-fast/ethereum  -> spread load, weighted toward the fastest providers (the default)
 /rpc/fastest/ethereum        -> route to the fastest provider by latency per method type and transport
-/rpc/balanced-fast/ethereum  -> spread load, weighted toward the fastest providers
+/rpc/load-balanced/ethereum  -> spread requests evenly across healthy providers
 /rpc/priority/ethereum       -> your provider priority and fallback order
 ```
 
