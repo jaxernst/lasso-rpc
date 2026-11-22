@@ -741,7 +741,9 @@ chains:
       lag_alert_threshold_blocks: 20
 
     selection:
-      archival_threshold: 128 # ~1 min at 450 ms blocks
+      # No BSC endpoint here is archival, so the cutoff is the deepest measured
+      # state window (PublicNode, 10,000 blocks, ~75 min).
+      archival_threshold: 10000
 
     websocket:
       subscribe_new_heads: true
@@ -756,7 +758,7 @@ chains:
 
     # None of these endpoints served state at genesis, so none is archival.
     providers:
-      # Served state 10,000 blocks behind the head; older reads need a token.
+      # Served state 10,000 blocks behind the head; 100,000 blocks back needs a token.
       - id: "bsc_publicnode"
         name: "PublicNode BNB Smart Chain"
         priority: 2
@@ -768,6 +770,15 @@ chains:
           unsupported_categories: [debug, trace, txpool, filters]
           limits:
             max_block_range: 496
+            max_block_age: 10000
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
 
       # The BNB Chain dataseed nodes serve state for about the last 64 blocks and
       # answer every log query with a -32005 "limit exceeded" error.
@@ -778,6 +789,16 @@ chains:
         archival: false
         capabilities:
           unsupported_methods: ["eth_getLogs"]
+          limits:
+            max_block_age: 64
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
 
       - id: "bsc_defibit"
         name: "Defibit Dataseed"
@@ -786,6 +807,16 @@ chains:
         archival: false
         capabilities:
           unsupported_methods: ["eth_getLogs"]
+          limits:
+            max_block_age: 64
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
 
       - id: "bsc_ninicoin"
         name: "Ninicoin Dataseed"
@@ -794,6 +825,16 @@ chains:
         archival: false
         capabilities:
           unsupported_methods: ["eth_getLogs"]
+          limits:
+            max_block_age: 64
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
 
   # ──────────────────────────────────────────────────────────────────────────
   # TEMPO
@@ -842,8 +883,8 @@ chains:
           limits:
             max_block_range: 98
 
-      # Serves recent blocks only: state and log reads 100 blocks behind the head
-      # were refused as archive requests.
+      # Serves recent blocks only: state reads 64 blocks behind the head worked
+      # and 100 blocks back were refused as archive requests.
       - id: "tempo_publicnode"
         name: "PublicNode Tempo"
         priority: 4
@@ -853,6 +894,16 @@ chains:
         archival: false
         capabilities:
           unsupported_categories: [debug, trace, txpool, filters]
+          limits:
+            max_block_age: 64
+            block_age_methods:
+              [
+                eth_call,
+                eth_getBalance,
+                eth_getCode,
+                eth_getStorageAt,
+                eth_getTransactionCount,
+              ]
 
   # ──────────────────────────────────────────────────────────────────────────
   # ETHEREUM SEPOLIA (Testnet)
