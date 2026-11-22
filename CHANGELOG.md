@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Routes that name no strategy, such as `/rpc/:chain`, `/rpc/profile/:profile/:chain` and their WebSocket equivalents, now use `balanced-fast`, which spreads load while favoring the quickest providers. `load-balanced` stays available by name. To keep the old default, set `config :lasso, :provider_selection_strategy, :load_balanced`.
+- A chain whose profile sets no head-poll interval now polls heads every `max(2 * block_time_ms, 5000)` ms, or 12 s without `block_time_ms`, instead of a fixed 12 s. Periodic `eth_chainId` identity checks run every 30 minutes instead of on every head poll. A routed request that times out still schedules a probe of its upstream, so a hung upstream still leaves rotation. Set `monitoring.chain_identity_interval_ms` to keep a shorter identity interval.
 
 ## [0.9.0] - 2026-11-21
 

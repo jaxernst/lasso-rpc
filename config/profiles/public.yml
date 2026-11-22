@@ -196,7 +196,6 @@ chains:
     block_time_ms: 2000
 
     monitoring:
-      probe_interval_ms: 5000 # ~2.5x block time for L2
       lag_alert_threshold_blocks: 5
 
     selection:
@@ -316,7 +315,6 @@ chains:
     block_time_ms: 100
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 50
 
     selection:
@@ -409,7 +407,6 @@ chains:
     block_time_ms: 250
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 15
 
     selection:
@@ -488,7 +485,6 @@ chains:
     block_time_ms: 2000
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 5
 
     selection:
@@ -592,7 +588,6 @@ chains:
     block_time_ms: 1000
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 10
 
     selection:
@@ -674,7 +669,6 @@ chains:
     block_time_ms: 2000
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 5
 
     selection:
@@ -737,7 +731,6 @@ chains:
     block_time_ms: 450
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 20
 
     selection:
@@ -845,7 +838,6 @@ chains:
     block_time_ms: 540
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 10
 
     selection:
@@ -998,7 +990,6 @@ chains:
     block_time_ms: 2000
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 5
 
     selection:
@@ -1066,7 +1057,6 @@ chains:
     block_time_ms: 250
 
     monitoring:
-      probe_interval_ms: 5000
       lag_alert_threshold_blocks: 15
 
     selection:
