@@ -5,7 +5,6 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
 
   alias Lasso.RPC.ProviderKnowledge.Learners.{
     HistoricalDepth,
-    LocalResponseLatency,
     MethodRefusal,
     OutcomeStatistics,
     SpanBracket
@@ -635,21 +634,14 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
     publish_prediction(learner, key, projection)
   end
 
-  defp refresh_prediction(learner, table, {_, _, dimension} = key)
-       when learner in [LocalResponseLatency, OutcomeStatistics] do
+  defp refresh_prediction(OutcomeStatistics = learner, table, {_, _, {_, method, shape}} = key) do
     projection =
       case prediction_state(table, :local, key) do
         nil ->
           nil
 
         state ->
-          query =
-            case {learner, dimension} do
-              {LocalResponseLatency, _} -> {:response_latency, dimension}
-              {OutcomeStatistics, {_, method, shape}} -> {:outcome_stats, {method, shape}}
-            end
-
-          for hint <- learner.hints(state, query) do
+          for hint <- learner.hints(state, {:outcome_stats, {method, shape}}) do
             Map.merge(hint, %{epoch: state.epoch, source: :local})
           end
           |> List.first()

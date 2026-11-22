@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - Bounded read exploration and its `config :lasso, :routing_exploration` settings. Both adaptive strategies now sample unproven routes in their ranking. The `exploration` attempt kind is gone from execution facts, whose version-2 wire shape is otherwise unchanged.
-- The `response_latency` provider-knowledge effect mode, which reordered `fastest` results and has no ranking to act on once `fastest` samples routes itself.
+- The response-latency learner and its `response_latency` provider-knowledge effect mode. The mode reordered `fastest` results and has nothing to reorder now that `fastest` samples routes itself.
 
 ### Fixed
 
