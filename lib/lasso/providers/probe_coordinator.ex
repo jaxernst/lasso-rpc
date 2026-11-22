@@ -560,15 +560,17 @@ defmodule Lasso.Providers.ProbeCoordinator do
           {:error, reason} -> {:identity_error, reason}
         end
 
+      # Only a readable chain ID can prove the wrong chain; a malformed answer is an ordinary
+      # failure and retries on the failure backoff instead of waiting for the next identity check.
       {:ok, _} ->
-        {:identity_error, "unexpected JSON-RPC response shape"}
+        {:error, "unexpected JSON-RPC response shape"}
 
       {:error, _} ->
-        {:identity_error, "invalid JSON response"}
+        {:error, "invalid JSON response"}
     end
   end
 
-  defp classify_response_body(_, _chain_id), do: {:identity_error, "empty response body"}
+  defp classify_response_body(_, _chain_id), do: {:error, "empty response body"}
 
   defp rate_limit_in_body?(body) when is_binary(body) do
     lower = String.downcase(body)

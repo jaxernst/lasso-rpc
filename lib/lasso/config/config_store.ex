@@ -2396,6 +2396,8 @@ defmodule Lasso.Config.ConfigStore do
       probe_interval_ms:
         Map.get(attrs, :probe_interval_ms) || Map.get(attrs, "probe_interval_ms") ||
           Lasso.Config.MonitoringDefaults.default_probe_interval_ms(block_time_ms),
+      chain_identity_interval_ms:
+        Lasso.Config.ObservationConfig.new_defaults(block_time_ms).chain_identity_interval_ms,
       lag_alert_threshold_blocks:
         Map.get(attrs, :lag_alert_threshold_blocks) ||
           Map.get(attrs, "lag_alert_threshold_blocks") ||
