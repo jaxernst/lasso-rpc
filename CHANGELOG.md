@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- BNB Smart Chain (`/rpc/bsc`) and Tempo (`/rpc/tempo`) in the bundled public profile, from keyless endpoints that passed two qualification passes. Evidence is in `docs/evidence/public-template/56.md` and `4217.md`.
+
+### Changed
+
+- Routes that name no strategy, such as `/rpc/:chain`, `/rpc/profile/:profile/:chain` and their WebSocket equivalents, now use `balanced-fast`, which spreads load while favoring the quickest providers. `load-balanced` stays available by name. To keep the old default, set `config :lasso, :provider_selection_strategy, :load_balanced`.
+
 ## [0.9.0] - 2026-11-21
 
 ### Added
@@ -34,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A release starts with no environment variables. Without `RELEASE_COOKIE` or `CLUSTER_DNS_QUERY` it runs without Erlang distribution, so it opens no EPMD or distribution port and never uses the cookie written into the release at build time, which every copy of the same build shares. Unless `LASSO_NODE_ID` and `SECRET_KEY_BASE` are set, such a node uses the node ID `local` and generates `SECRET_KEY_BASE` per boot (dashboard sessions end at restart). It reads the profiles the release now carries in `config/profiles` and writes benchmark snapshots under `RELEASE_TMP`. A distributed node still requires `SECRET_KEY_BASE` and `LASSO_NODE_ID`. See [Launching a Native Release](docs/DEPLOYMENT.md#launching-a-native-release).
 - **Behavior change for native releases started without `RELEASE_COOKIE`**, as the deployment guide showed: such a node ran Erlang distribution with the build-time cookie and now runs without it, so `lasso reload`, `rpc`, `remote`, `stop`, `restart` and `pid` exit with a message that distribution is off. Set `RELEASE_COOKIE` when starting the node and when running these commands, or restart the node to apply profile changes; `lasso check-config` is unaffected. Container images, including the source `compose.yml` and `./run-docker.sh`, are built without the release's `env.sh` template and keep their current distribution behavior.
 - `vm.args` no longer fixes the scheduler count to the cores of the machine that built the release; the VM uses the cores, and any CPU quota, of the machine it runs on. The flags that restated OTP 28 defaults (`-smp auto`, `+t 1048576`, `+P 1048576`, `net_ticktime 60` and `prevent_overlapping_partitions true`) are removed. Container images never used this file, so they are unaffected.
+- Requests whose URL names no strategy (`/rpc/:chain`, `/rpc/profile/:profile/:chain`, `/ws/rpc/:chain` and `/ws/rpc/profile/:profile/:chain`) route with `balanced-fast` instead of `load-balanced`. This changes behaviour for those URLs: providers with lower recent latency receive more of the traffic, where `load-balanced` spread it evenly regardless of latency. URLs that name a strategy are unchanged. To keep the previous behaviour, route through `/rpc/load-balanced/:chain` (or `/rpc/profile/:profile/load-balanced/:chain` and the WebSocket equivalents), or set `config :lasso, :provider_selection_strategy, :load_balanced`. See [Default Strategy](docs/CONFIGURATION.md#default-strategy).
 - Requests that need the chain's latest block prefer providers with a current head, under every strategy. A request's need comes from its own parameters: a `latest` selector, the upper bound of a log or trace range (an omitted one means `latest`), an omitted optional selector on reads such as `eth_call` and `eth_getBalance`, and lookups by transaction hash. A provider whose observed head is behind the profile's freshest head by more than the agreement band (about two seconds of blocks) is tried after the others, and so is one reporting the agreed head height on a different block hash. Historical reads at a fixed block, block-hash lookups, `finalized` and `safe` reads and writes keep strategy order, so a provider a few blocks behind still serves the blocks it has. No provider is excluded: when the current ones fail, a lagging one still answers. Head reads routed through Lasso count as observations, so this works with background polling off. See [Head freshness](docs/ROUTING.md#head-freshness).
 
 ### Removed

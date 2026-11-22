@@ -21,9 +21,9 @@ slug: chainstack
 #
 # Routing: Chainstack is priority 1 on every chain, with keyless public
 # fallbacks at lower priority for rate limits, outages, eth_getLogs ranges
-# above the Chainstack cap, and archive reads. The default load-balanced
-# strategy uses priority only as a tiebreaker, so keep Chainstack primary with
-# the priority strategy. As its own profile, route through
+# above the Chainstack cap, and archive reads. The default balanced-fast
+# strategy orders by measured latency and ignores priority, so keep Chainstack
+# primary with the priority strategy. As its own profile, route through
 # /rpc/profile/chainstack/priority/:chain, or through
 # /rpc/profile/chainstack/:chain with the node-wide
 # `config :lasso, :provider_selection_strategy, :priority`.

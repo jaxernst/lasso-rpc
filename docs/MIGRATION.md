@@ -35,7 +35,7 @@ limits instead of relying on failover to discover them in production.
 | HTTP endpoint | `url` | Use `${ENV_VAR}` substitution for credential-bearing values. |
 | WebSocket endpoint | `ws_url` | Qualify subscriptions independently from HTTP. |
 | Authorization or custom headers sent upstream | `api_key`, `headers`, or `auth_headers` | These authenticate Lasso to an upstream; they do not authenticate clients to Lasso. |
-| Ordered primary and fallback | Provider `priority` plus the `:priority` application strategy | The shipped default is `load_balanced`; use `/rpc/priority/:chain` to select priority explicitly. |
+| Ordered primary and fallback | Provider `priority` plus the `:priority` application strategy | The shipped default is `balanced_fast`; use `/rpc/priority/:chain` to select priority explicitly. |
 | Even/random pool | `/rpc/load-balanced/:chain` | This is bounded randomized ordering, not exact traffic shares or quota-aware weighting. |
 | Latency routing | `/rpc/fastest/:chain` or `/rpc/balanced-fast/:chain` | Rankings use successful-attempt evidence and still apply health/capability filtering. |
 | Per-backend method restrictions | `capabilities.unsupported_methods`, `unsupported_categories`, and `limits` | Declare known restrictions before canary traffic. |

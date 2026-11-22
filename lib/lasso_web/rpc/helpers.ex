@@ -10,22 +10,6 @@ defmodule LassoWeb.RPC.Helpers do
   alias Lasso.Config.ConfigStore
 
   @doc """
-  Returns the configured default provider selection strategy.
-
-  This reads from application configuration with a fallback to `:load_balanced`.
-
-  ## Examples
-
-      iex> LassoWeb.RPC.Helpers.default_provider_strategy()
-      :load_balanced
-
-  """
-  @spec default_provider_strategy() :: atom()
-  def default_provider_strategy do
-    Application.get_env(:lasso, :provider_selection_strategy, :load_balanced)
-  end
-
-  @doc """
   Normalizes strategy tokens from params/routes into strategy atoms.
   """
   @spec normalize_strategy_token(String.t() | nil) ::
