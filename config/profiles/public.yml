@@ -729,6 +729,132 @@ chains:
           unsupported_methods: ["eth_getLogs", "eth_getBlockReceipts"]
 
   # ──────────────────────────────────────────────────────────────────────────
+  # BNB SMART CHAIN
+  # ──────────────────────────────────────────────────────────────────────────
+  bsc:
+    chain_id: 56
+    name: "BNB Smart Chain"
+    block_time_ms: 450
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 20
+
+    selection:
+      archival_threshold: 128 # ~1 min at 450 ms blocks
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 10000
+      failover:
+        max_backfill_blocks: 256
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#F0B90B"
+      size: md
+
+    # None of these endpoints served state at genesis, so none is archival.
+    providers:
+      # Served state 10,000 blocks behind the head; older reads need a token.
+      - id: "bsc_publicnode"
+        name: "PublicNode BNB Smart Chain"
+        priority: 2
+        url: "https://bsc-rpc.publicnode.com"
+        ws_url: "wss://bsc-rpc.publicnode.com"
+        subscribe_new_heads: true
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+          limits:
+            max_block_range: 496
+
+      # The BNB Chain dataseed nodes serve state for about the last 64 blocks and
+      # answer every log query with a -32005 "limit exceeded" error.
+      - id: "bsc_bnbchain"
+        name: "BNB Chain Dataseed"
+        priority: 3
+        url: "https://bsc-dataseed2.bnbchain.org"
+        archival: false
+        capabilities:
+          unsupported_methods: ["eth_getLogs"]
+
+      - id: "bsc_defibit"
+        name: "Defibit Dataseed"
+        priority: 4
+        url: "https://bsc-dataseed1.defibit.io"
+        archival: false
+        capabilities:
+          unsupported_methods: ["eth_getLogs"]
+
+      - id: "bsc_ninicoin"
+        name: "Ninicoin Dataseed"
+        priority: 5
+        url: "https://bsc-dataseed1.ninicoin.io"
+        archival: false
+        capabilities:
+          unsupported_methods: ["eth_getLogs"]
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # TEMPO
+  # ──────────────────────────────────────────────────────────────────────────
+  tempo:
+    chain_id: 4217
+    name: "Tempo"
+    block_time_ms: 540
+
+    monitoring:
+      probe_interval_ms: 5000
+      lag_alert_threshold_blocks: 10
+
+    selection:
+      archival_threshold: 2250 # ~20 min at 540 ms blocks
+
+    websocket:
+      subscribe_new_heads: true
+      new_heads_timeout_ms: 10000
+      failover:
+        max_backfill_blocks: 100
+        backfill_timeout_ms: 30000
+
+    ui-topology:
+      color: "#FF6B35"
+      size: md
+
+    # archival: true marks endpoints that served state at block 1 in two
+    # separate checks; false marks endpoints with pruned history.
+    providers:
+      # Served every log span we measured, so no range limit is declared.
+      - id: "tempo_tempo"
+        name: "Tempo"
+        priority: 2
+        url: "https://rpc.mainnet.tempo.xyz"
+        ws_url: "wss://rpc.mainnet.tempo.xyz"
+        subscribe_new_heads: true
+        archival: true
+
+      - id: "tempo_drpc"
+        name: "dRPC Tempo"
+        priority: 3
+        url: "https://tempo.drpc.org"
+        archival: true
+        capabilities:
+          limits:
+            max_block_range: 98
+
+      # Serves recent blocks only: state and log reads 100 blocks behind the head
+      # were refused as archive requests.
+      - id: "tempo_publicnode"
+        name: "PublicNode Tempo"
+        priority: 4
+        url: "https://tempo-rpc.publicnode.com"
+        ws_url: "wss://tempo-rpc.publicnode.com"
+        subscribe_new_heads: true
+        archival: false
+        capabilities:
+          unsupported_categories: [debug, trace, txpool, filters]
+
+  # ──────────────────────────────────────────────────────────────────────────
   # ETHEREUM SEPOLIA (Testnet)
   # ──────────────────────────────────────────────────────────────────────────
   ethereum-sepolia:

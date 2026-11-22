@@ -36,7 +36,7 @@ Run your own Lasso proxy, deploy it to your own infra, or use hosted, edge-route
 RPC profiles at [lasso.sh](https://lasso.sh).
 
 Apache-2.0 core built on Elixir/OTP. The bundled public pool aggregates public providers
-across Ethereum, Base, Arbitrum, Optimism, Robinhood Chain, and more.
+across Ethereum, Base, Arbitrum, BSC, Tempo, Robinhood Chain, and more.
 
 Add any additional EVM chain and your own providers in YAML, and Lasso will learn each
 provider's method, history and log-range limits from live traffic.
