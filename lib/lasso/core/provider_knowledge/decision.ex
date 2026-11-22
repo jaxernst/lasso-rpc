@@ -342,7 +342,16 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
         :evidence,
         Enum.map(
           evidence,
-          &Map.take(&1, [:baseline_position, :verdict, :reason, :reached, :height, :age_ms])
+          &Map.take(&1, [
+            :baseline_position,
+            :verdict,
+            :reason,
+            :reached,
+            :height,
+            :age_ms,
+            :lag,
+            :lag_age_ms
+          ])
         )
       )
 

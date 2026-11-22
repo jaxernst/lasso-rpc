@@ -34,9 +34,11 @@ upstreams, a height more than the agreement band above their lower median is an
 outlier and cannot be the mark. A route's lag is the mark less its own height.
 Answers land at different moments, since an HTTP poll may take up to its 3 s
 deadline, so a route that answered before the mark is also credited with the
-blocks the chain could have produced in between, at twice the rate its
-`block_time_ms` gives. Answering early never makes a route look behind. The
-band is the blocks the chain produces in two seconds at its `block_time_ms`,
+whole blocks its `block_time_ms` fits between the two answers. The credit
+assumes the chain makes blocks at its configured `block_time_ms` and never
+consults measured cadence, so it is exactly as good as that setting: on a chain
+that runs faster than configured, an early answer can still look up to the
+difference behind, and the band absorbs small drift. The band is the blocks the chain produces in two seconds at its `block_time_ms`,
 from 1 to 20, the same span of time on a 250 ms chain and a 12 s chain. A route
 whose lag exceeds the band is deferred behind the others in its health tier
 until a later round measures it within the band. Client head reads and

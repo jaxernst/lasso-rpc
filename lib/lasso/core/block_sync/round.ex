@@ -19,14 +19,14 @@ defmodule Lasso.BlockSync.Round do
   three or more heights, a height more than the scope's agreement band above
   their lower median is an outlier and cannot be the mark. Two heights cannot
   show which one is wrong, so the higher one is the mark. Each upstream's lag is
-  the mark less its own height, less the blocks the chain could produce between
-  its answer and the mark's earliest answer, at twice the scope's configured
-  block rate. An upstream that answers early is never behind for it, and no lag
-  is below zero. The lags go to `Lasso.BlockSync.Registry` for
-  `Lasso.RPC.Selection.HeadSuitability`. A scope with fewer answers keeps the
-  lags it has, so neither another profile's rounds nor an upstream that errors
-  or skips replaces a verdict, and an answer from an upstream the catalog no
-  longer routes judges nothing.
+  the mark less its own height, less the whole blocks the scope's configured
+  block time fits between its answer and the mark's earliest answer, and never
+  below zero. Measured cadence is not consulted, so the credit is as good as the
+  configured block time; the band absorbs the rest. The lags go to
+  `Lasso.BlockSync.Registry` for `Lasso.RPC.Selection.HeadSuitability`. A scope
+  with fewer answers keeps the lags it has, so neither another profile's rounds
+  nor an upstream that errors or skips replaces a verdict, and an answer from an
+  upstream the catalog no longer routes judges nothing.
 
   `start_now/1` starts a round at once, so an upstream that switches between
   `newHeads` and HTTP polling, or whose `newHeads` head moves backward, is
@@ -43,7 +43,7 @@ defmodule Lasso.BlockSync.Round do
 
   alias Lasso.BlockSync.Registry, as: BlockSyncRegistry
   alias Lasso.Core.Support.DynamicSupervisorCall
-  alias Lasso.Observations.{HeadCadence, HeadComparison}
+  alias Lasso.Observations.HeadComparison
   alias Lasso.Providers.Catalog
 
   @supervisor Lasso.BlockSync.RoundSupervisor
@@ -209,7 +209,6 @@ defmodule Lasso.BlockSync.Round do
   end
 
   defp lags(answers, policy, round) do
-    cadence = HeadCadence.with_seed(nil, policy.block_time_ms)
     ceiling = answers |> Map.values() |> Enum.map(&elem(&1, 0)) |> Enum.sort() |> ceiling(policy)
 
     {mark, mark_at} =
@@ -219,7 +218,7 @@ defmodule Lasso.BlockSync.Round do
       |> Enum.min_by(fn {height, at} -> {-height, at} end)
 
     Map.new(answers, fn {instance_id, {height, at}} ->
-      early_blocks = HeadCadence.credit_blocks(cadence, max(mark_at - at, 0))
+      early_blocks = div(max(mark_at - at, 0), policy.block_time_ms)
 
       {instance_id,
        %{

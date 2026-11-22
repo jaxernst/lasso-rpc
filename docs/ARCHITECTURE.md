@@ -476,7 +476,8 @@ Per-provider GenServer managing block height tracking:
   each profile with at least two of its head-observing upstreams in the round,
   recording their lags for that profile; other profiles keep the lags they have
 - Measures each lag against the round's mark, crediting an upstream that
-  answered before the mark with the blocks the chain could produce in between
+  answered before the mark with the whole blocks its configured
+  `block_time_ms` fits in between; measured cadence is not consulted
 - Starts a round at once when an upstream's head feed switches or its
   `newHeads` head moves backward
 - Sends no requests itself; each poll runs in its Worker's disposable owner

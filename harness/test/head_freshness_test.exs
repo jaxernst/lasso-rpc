@@ -226,15 +226,16 @@ defmodule Lasso.Harness.HeadFreshnessTest do
     end
   end
 
-  test "a round never finds a route behind for answering before its peers" do
-    # 250 ms blocks make the band 8 blocks. The early route answers at once; its peers' polls
-    # land 2.8 s later, 11 blocks on, beside a laggard 20 blocks behind them. A third peer keeps
-    # the peers the round's majority, so their height is the mark.
-    heights = [@current - 9, @current, @current + 11, @current + 11, @current + 11]
-    [_laggard, early | _peers] = fleets = fleets!("freshness-skew", heights)
+  test "a round credits an early answer with the blocks it missed and no more" do
+    # 250 ms blocks make the band 8 blocks. The early route and a laggard 20 blocks below it
+    # answer at once; three peers' polls land 2.8 s later, 11 blocks on, so their height is
+    # the mark. Only the 11 blocks the gap fits are credited, which clears the early route and
+    # leaves the laggard 20 behind.
+    heights = [@current - 20, @current, @current + 11, @current + 11, @current + 11]
+    [_laggard, early | peers] = fleets = fleets!("freshness-skew", heights)
 
     for {fleet, height} <- Enum.zip(fleets, heights),
-        fleet != early,
+        fleet in peers,
         do:
           Fleet.script(fleet, "eth_blockNumber", [], {:respond, fn _ -> late(fleet, height) end})
 
