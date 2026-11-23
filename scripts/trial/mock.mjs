@@ -1,12 +1,16 @@
 // Deterministic EVM JSON-RPC mock upstreams (chain id 137 unless set per instance, one block every 2 s).
 // Usage: node mock.mjs <config.json>
-// config: { log: "path.jsonl", control_port: N, instances: [{ name, port, chain_id, latency_ms, jitter,
+// config: { log: "path.jsonl", control_port: N, token: "run identity", instances: [{ name, port, chain_id, latency_ms, jitter,
 //           behind, stall, rate_429, refuse_methods, hang, send_timeout, max_range, range_error, seed }] }
 // max_range caps the blocks one eth_getLogs call may span (to - from + 1). A wider range gets
 // range_error, a JSON-RPC error whose message may contain {cap}.
+// The log has one "call" line per request item when it arrives and one "outcome" line
+// (ok, error, 429 or hang) per item, both keyed by instance and call number.
 import http from "node:http";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import { pathToFileURL } from "node:url";
+import { txHash } from "./tx.mjs";
 
 export const START_MS = Date.parse("2026-11-20T00:00:00Z");
 export const BLOCK_MS = 2000;
@@ -189,10 +193,9 @@ class Instance {
       }
       case "eth_sendRawTransaction": {
         const raw = String(params[0]).toLowerCase();
-        const txHash = "0x" + crypto.createHash("sha256").update(raw).digest("hex");
         if (this.sent.has(raw)) return err(-32000, "already known");
         this.sent.add(raw);
-        return ok(txHash);
+        return ok(txHash(raw));
       }
       default: return err(-32601, `the method ${method} does not exist/is not available`);
     }
@@ -205,20 +208,25 @@ class Instance {
     const isSend = items.some((r) => r?.method === "eth_sendRawTransaction");
     const throttled = this.cfg.rate_429 > 0 && this.rand() < this.cfg.rate_429;
     const hang = this.cfg.hang || (this.cfg.send_timeout && isSend);
-    const log = (outcomeOf) => items.forEach((r, i) => this.log.write(JSON.stringify({ t, inst: this.cfg.name, m: r?.method,
-      tag: tagOf(r?.method, r?.params), id: r?.id ?? null, batch: Array.isArray(parsed) ? items.length : 0, outcome: outcomeOf(i),
-      ua: httpReq.headers["user-agent"], p: JSON.stringify(r?.params ?? []).slice(0, 240) }) + "\n"));
-    if (hang) return log(() => "hang"); // accept the request, never answer
-    if (throttled) log(() => "429");
+    const calls = items.map((r) => {
+      const call = (this.calls = (this.calls ?? 0) + 1);
+      this.log.write(JSON.stringify({ kind: "call", t, inst: this.cfg.name, call, m: r?.method, tag: tagOf(r?.method, r?.params), id: r?.id ?? null,
+        batch: Array.isArray(parsed) ? items.length : 0, ua: httpReq.headers["user-agent"], p: JSON.stringify(r?.params ?? []).slice(0, 240) }) + "\n");
+      return call;
+    });
+    const outcome = (outcomeOf) => calls.forEach((call, i) =>
+      this.log.write(JSON.stringify({ kind: "outcome", t: Date.now(), inst: this.cfg.name, call, outcome: outcomeOf(i) }) + "\n"));
+    if (hang) return outcome(() => "hang"); // accept the request, never answer
     setTimeout(() => {
       if (throttled) {
+        outcome(() => "429");
         res.writeHead(429, { "content-type": "application/json", "retry-after": "1" });
         return res.end(JSON.stringify({ jsonrpc: "2.0", id: items[0]?.id ?? null, error: { code: 429, message: "Too Many Requests" } }));
       }
       const out = parsed === null ? { jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } }
         : Array.isArray(parsed) ? parsed.map((r) => this.handle(r)) : this.handle(parsed);
       const outs = Array.isArray(out) ? out : [out];
-      log((i) => (outs[i]?.error ? "error" : "ok"));
+      outcome((i) => (outs[i]?.error ? "error" : "ok"));
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(out));
     }, this.delay());
@@ -235,31 +243,40 @@ class Instance {
     this.server.requestTimeout = 0;
     this.server.headersTimeout = 0;
     this.server.keepAliveTimeout = 65_000;
-    this.server.listen(this.cfg.port, "127.0.0.1");
+    return listenOn(this.server, this.cfg.port);
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Resolves once the server is bound; a port already in use ends the process.
+function listenOn(server, port) {
+  return new Promise((resolve) => {
+    server.once("error", (e) => { console.error(`mock: cannot listen on ${port}: ${e.code || e.message}`); process.exit(1); });
+    server.listen(port, "127.0.0.1", resolve);
+  });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const cfg = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
   const log = fs.createWriteStream(cfg.log, { flags: "a" });
+  log.on("error", () => {});
   const instances = Object.fromEntries(cfg.instances.map((c) => [c.name, new Instance(c, log)]));
-  Object.values(instances).forEach((i) => i.listen());
-  if (cfg.control_port) {
-    http.createServer((req, res) => {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", () => {
-        const m = req.url.match(/^\/config\/([^/?]+)/);
-        if (req.method === "POST" && m && instances[m[1]]) {
-          Object.assign(instances[m[1]].cfg, JSON.parse(body || "{}"));
-          res.writeHead(200, { "content-type": "application/json" });
-          return res.end(JSON.stringify(instances[m[1]].cfg));
-        }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(Object.fromEntries(Object.entries(instances).map(([k, v]) => [k, v.cfg]))));
-      });
-    }).listen(cfg.control_port, "127.0.0.1");
-  }
+  await Promise.all(Object.values(instances).map((i) => i.listen()));
+  // The control port opens last and names the run, so a caller knows every instance is bound
+  // and that it is talking to its own mock process.
+  const control = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const m = req.url.match(/^\/config\/([^/?]+)/);
+      res.writeHead(200, { "content-type": "application/json" });
+      if (req.method === "POST" && m && instances[m[1]]) {
+        Object.assign(instances[m[1]].cfg, JSON.parse(body || "{}"));
+        return res.end(JSON.stringify(instances[m[1]].cfg));
+      }
+      res.end(JSON.stringify({ token: cfg.token ?? null, instances: Object.fromEntries(Object.entries(instances).map(([k, v]) => [k, v.cfg])) }));
+    });
+  });
+  await listenOn(control, cfg.control_port);
   const stop = () => log.end(() => process.exit(0));
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);

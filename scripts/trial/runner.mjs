@@ -7,9 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import os from "node:os";
+import net from "node:net";
+import { fileURLToPath } from "node:url";
 import { trueHead } from "./mock.mjs";
+import { signedTransfer, txHash } from "./tx.mjs";
 
-const KIT = path.dirname(new URL(import.meta.url).pathname);
+const KIT = path.dirname(fileURLToPath(import.meta.url));
 const PORT_BASE = Number(process.env.PORT_BASE || 43000);
 const BLOCK = 60;
 
@@ -133,7 +136,7 @@ function methodSequence(n) {
   });
 }
 
-function buildRequest(seq, method) {
+function buildRequest(seq, method, nonce) {
   const H = headNow();
   const s = pad(seq, 10);
   const id = seq + 1;
@@ -143,7 +146,7 @@ function buildRequest(seq, method) {
     case "eth_call": return { id, method, params: [{ to: "0x00000000000000000000000000000000c0ffee01", data: "0x70a08231" + s.padStart(64, "0") }, "latest"] };
     case "eth_getLogs": return getLogs(seq, H - 100, H - 1);
     case "eth_getTransactionReceipt": return { id, method, params: ["0x" + pad(H - 3, 16) + s.padStart(48, "0")] };
-    case "eth_sendRawTransaction": return { id, method, params: ["0x02f8" + crypto.createHash("sha256").update(`tx-${RUN_ID}-${seq}`).digest("hex") + pad(seq, 8)] };
+    case "eth_sendRawTransaction": return { id, method, params: [signedTransfer({ chainId: CHAINS[0], nonce }).raw] };
     default: return { id, method, params: [] };
   }
 }
@@ -167,6 +170,8 @@ function servedBlock(method, result) {
 }
 
 // ---------- process management ----------
+// Every child starts in its own process group, and cleanup signals the whole group, so a
+// server that outlives the shell or script that launched it still stops.
 const children = [];
 function start(cmd, args, opts, logFile) {
   const out = fs.openSync(logFile, "a");
@@ -175,14 +180,47 @@ function start(cmd, args, opts, logFile) {
   children.push(child);
   return child;
 }
+const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 async function stop(child, graceMs = 10_000) {
-  if (!child || child.exitCode !== null || child.signalCode) return;
-  const gone = new Promise((r) => child.once("exit", r));
+  if (!child || !groupAlive(child.pid)) return;
   try { process.kill(-child.pid, "SIGTERM"); } catch {}
-  const t = await Promise.race([gone.then(() => "exited"), sleep(graceMs).then(() => "timeout")]);
-  if (t === "timeout") { try { process.kill(-child.pid, "SIGKILL"); } catch {} await Promise.race([gone, sleep(3000)]); }
+  for (const deadline = now() + graceMs; groupAlive(child.pid) && now() < deadline;) await sleep(100);
+  if (!groupAlive(child.pid)) return;
+  try { process.kill(-child.pid, "SIGKILL"); } catch {}
+  for (const deadline = now() + 3000; groupAlive(child.pid) && now() < deadline;) await sleep(100);
 }
-process.on("SIGINT", async () => { for (const c of children) await stop(c, 2000); process.exit(130); });
+let exiting = false;
+for (const [signal, code] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  process.on(signal, async () => {
+    if (exiting) return;
+    exiting = true;
+    await Promise.all(children.map((c) => stop(c, 2000)));
+    process.exit(code);
+  });
+}
+
+// A port is free when nothing accepts a connection on it and this process can bind it.
+function portFree(port) {
+  const accepts = new Promise((resolve) => {
+    const sock = net.connect({ port, host: "127.0.0.1" });
+    sock.setTimeout(500, () => { sock.destroy(); resolve(false); });
+    sock.once("connect", () => { sock.destroy(); resolve(true); });
+    sock.once("error", () => resolve(false));
+  });
+  const binds = new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.once("error", () => resolve(false));
+    srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+  });
+  return Promise.all([accepts, binds]).then(([a, b]) => !a && b);
+}
+async function assertPortsFree(c) {
+  const ports = REAL ? [] : [...CHAINS.flatMap((_, k) => upstreamPorts(c, k)), c.control];
+  if (c.proxy === "lasso") ports.push(c.port, c.dist, c.closed);
+  const busy = [];
+  for (const p of ports) if (!(await portFree(p))) busy.push(p);
+  if (busy.length) throw new Error(`ports in use: ${busy.join(", ")}. Another run may hold this PORT_BASE; pick another.`);
+}
 
 function processTree(rootPid) {
   const rows = execFileSync("ps", ["-A", "-o", "pid=,ppid=,rss=,time=,comm="], { encoding: "utf8" }).trim().split("\n")
@@ -208,10 +246,22 @@ async function startMocks(name, c, dir) {
     const ports = upstreamPorts(c, k);
     return scenario.up.map((u, i) => ({ name: instName(k, i), port: ports[i], chain_id: chainId, jitter: JITTER, seed: SEED * 31 + k * 3 + i, ...u }));
   }).filter((u) => !u.closed);
-  const cfg = { log: path.join(dir, "upstream.jsonl"), control_port: c.control, instances };
+  const token = `${RUN_ID}/${name}/${crypto.randomBytes(8).toString("hex")}`;
+  const cfg = { log: path.join(dir, "upstream.jsonl"), control_port: c.control, token, instances };
   fs.writeFileSync(path.join(dir, "mock-config.json"), JSON.stringify(cfg, null, 2));
   const child = start(process.execPath, [path.join(KIT, "mock.mjs"), path.join(dir, "mock-config.json")], {}, path.join(dir, "mock.log"));
-  for (let i = 0; i < 50; i++) { try { await fetch(`http://127.0.0.1:${c.control}/`); return child; } catch { await sleep(100); } }
+  for (const deadline = now() + 10_000; now() < deadline;) {
+    if (child.exitCode !== null) throw new Error(`mock exited: ${fs.readFileSync(path.join(dir, "mock.log"), "utf8").trim().slice(-300)}`);
+    try {
+      const r = await fetch(`http://127.0.0.1:${c.control}/`, { signal: AbortSignal.timeout(1000) });
+      const body = await r.json();
+      if (body.token === token) return child;
+      throw new Error(`control port ${c.control} answers for another run (${body.token})`);
+    } catch (e) {
+      if (String(e.message).startsWith("control port")) throw e;
+      await sleep(100);
+    }
+  }
   throw new Error("mock did not start for " + name);
 }
 
@@ -252,13 +302,13 @@ function startProxy(name, c, dir) {
 }
 
 // Lasso is healthy when its health route answers. A reader's endpoint is healthy once it
-// answers eth_chainId through to the mocks, for up to ENDPOINT_WAIT_S seconds.
+// answers eth_chainId through to the mocks. Either gets ENDPOINT_WAIT_S seconds (default 120).
 async function waitHealthy(c, child) {
   const deadline = now() + Number(process.env.ENDPOINT_WAIT_S || 120) * 1000;
   for (;;) {
     if (child && child.exitCode !== null) throw new Error("proxy exited during startup");
+    if (now() > deadline) throw new Error(c.proxy === "endpoint" ? "ENDPOINT_URL did not answer eth_chainId" : "proxy did not become healthy");
     if (c.proxy === "endpoint") {
-      if (now() > deadline) throw new Error("ENDPOINT_URL did not answer eth_chainId");
       try { const r = await postJson(process.env.ENDPOINT_URL, { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }, 2000); if (r.json?.result) return now(); } catch {}
       await sleep(500);
       continue;
@@ -304,12 +354,12 @@ function makeSender(name, c) {
 // Builds the schedule: [{ at_ms, seq, method }]. Reads at RATE per second, sends either as a
 // burst of `broadcast` at RATE per second or every `sends_every_ms` alongside the reads.
 function schedule() {
-  if (scenario.broadcast) return Array.from({ length: scenario.broadcast }, (_, i) => ({ at: (i * 1000) / RATE, seq: i, method: "eth_sendRawTransaction" }));
+  if (scenario.broadcast) return Array.from({ length: scenario.broadcast }, (_, i) => ({ at: (i * 1000) / RATE, seq: i, method: "eth_sendRawTransaction", nonce: i }));
   const n = DURATION_S * RATE;
   const reads = methodSequence(n).map((m, i) => ({ at: (i * 1000) / RATE, seq: i, method: m }));
   if (!scenario.sends_every_ms) return reads;
   const sends = Array.from({ length: Math.floor((DURATION_S * 1000) / scenario.sends_every_ms) }, (_, k) =>
-    ({ at: k * scenario.sends_every_ms + 100, seq: 100_000 + k, method: "eth_sendRawTransaction" }));
+    ({ at: k * scenario.sends_every_ms + 100, seq: 100_000 + k, method: "eth_sendRawTransaction", nonce: k }));
   return [...reads, ...sends].sort((a, b) => a.at - b.at);
 }
 
@@ -339,10 +389,10 @@ async function pollRealHead() {
   return setInterval(poll, 1000);
 }
 
-async function runWorkload(name, c, dir, meta) {
+async function runWorkload(name, c, dir, meta, startAt) {
   const send = makeSender(name, c);
-  const headTimer = REAL ? await pollRealHead() : null;
   const rec = fs.createWriteStream(path.join(dir, "client.jsonl"));
+  await sleep(startAt - now());
   const runStart = now();
   const switching = scenario.switch ? applySwitch(c, meta, runStart) : null;
 
@@ -358,17 +408,20 @@ async function runWorkload(name, c, dir, meta) {
       const headAtRecv = REAL ? realHead : trueHead(tRecv);
       const result = r.json && !Array.isArray(r.json) ? r.json.result : undefined;
       const error = r.json && !Array.isArray(r.json) ? r.json.error : undefined;
-      const ok = r.status === 200 && result !== undefined && !error;
-      const served = ok ? servedBlock(method, result) : null;
+      // rpc_ok: a JSON-RPC result arrived. ok: that result also passed the checks below.
+      const rpcOk = r.status === 200 && result !== undefined && !error;
       let dataProblem = null;
-      if (ok && method === "eth_getTransactionReceipt" && result === null) dataProblem = "null_receipt";
-      if (!REAL && ok && method === "eth_getLogs" && req.expectLogs) {
+      if (rpcOk && method === "eth_getTransactionReceipt" && result === null) dataProblem = "null_receipt";
+      if (!REAL && rpcOk && method === "eth_getLogs" && req.expectLogs) {
         const exp = Math.floor(req.expectLogs.to / 10) - Math.floor((req.expectLogs.from - 1) / 10);
         if (!Array.isArray(result) || result.length !== exp) dataProblem = `logs_${Array.isArray(result) ? result.length : "x"}_of_${exp}`;
       }
-      if (ok && method === "eth_chainId" && result !== hex(CHAINS[0])) dataProblem = "wrong_chain";
+      if (rpcOk && method === "eth_chainId" && result !== hex(CHAINS[0])) dataProblem = "wrong_chain";
+      if (rpcOk && method === "eth_sendRawTransaction" && result !== txHash(req.params[0])) dataProblem = "wrong_tx_hash";
+      const ok = rpcOk && !dataProblem;
+      const served = ok ? servedBlock(method, result) : null;
       rec.write(JSON.stringify({ seq, method, tag, ...extra, t_send: tSend, t_recv: tRecv, latency_ms: tRecv - tSend, since_ready_ms: tSend - runStart,
-        status: r.status, ok, error: error ? { code: error.code, message: String(error.message).slice(0, 160) } : (ok ? undefined : (r.text ?? "non-jsonrpc")),
+        status: r.status, rpc_ok: rpcOk, ok, error: error ? { code: error.code, message: String(error.message).slice(0, 160) } : (ok ? undefined : (r.text ?? "non-jsonrpc")),
         served_block: served, head_at_send: headAtSend, head_at_recv: headAtRecv, lag_blocks: served !== null ? headAtRecv - served : null,
         data_problem: dataProblem, winner: r.winner, result: method === "eth_sendRawTransaction" ? result : undefined }) + "\n");
       return ok;
@@ -376,7 +429,7 @@ async function runWorkload(name, c, dir, meta) {
       const tRecv = now();
       const cause = e?.cause?.code || e?.name || String(e);
       rec.write(JSON.stringify({ seq, method, tag, ...extra, t_send: tSend, t_recv: tRecv, latency_ms: tRecv - tSend, since_ready_ms: tSend - runStart,
-        status: 0, ok: false, error: cause, head_at_send: headAtSend }) + "\n");
+        status: 0, rpc_ok: false, ok: false, error: cause, head_at_send: headAtSend }) + "\n");
       return false;
     });
   };
@@ -402,16 +455,15 @@ async function runWorkload(name, c, dir, meta) {
   } else {
     const plan = schedule();
     const pending = [];
-    for (const { at, seq, method } of plan) {
+    for (const { at, seq, method, nonce } of plan) {
       const wait = runStart + at - now();
       if (wait > 0) await sleep(wait);
-      pending.push(sendOne(buildRequest(seq, method)));
+      pending.push(sendOne(buildRequest(seq, method, nonce)));
     }
     await Promise.all(pending);
     if (plan.some((p) => p.method === "eth_sendRawTransaction")) await sleep(5000);
     requests = plan.length;
   }
-  if (headTimer) clearInterval(headTimer);
   if (switching) await switching;
   await new Promise((r) => rec.end(r));
   return { run_start: runStart, run_end: now(), requests };
@@ -444,46 +496,65 @@ async function idleRun(name, c, dir, child) {
   return { start_to_first_success_ms: first - t0, start_to_all_chains_ms: last - t0, idle_start: idleStart, idle_end: now() };
 }
 
-async function runCandidate(name) {
+// Every candidate is prepared (mocks up, proxy healthy) before any workload starts, then all
+// workloads start at the same moment.
+async function prepare(name) {
   const c = CANDIDATES[name];
   const dir = path.join(OUT, name);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const meta = { scenario: scenarioName, candidate: name, run_id: RUN_ID, rate: RATE, duration_s: DURATION_S, jitter: JITTER, seed: SEED,
-    upstreams: scenario.up, chains: CHAINS, switch_at_s: scenario.switch_at_s ?? null, switch: scenario.switch ?? null, then: scenario.then ?? null, block_pattern: process.env.BLOCK_PATTERN ?? null, sends_every_ms: scenario.sends_every_ms ?? null, backfill: scenario.backfill ?? null };
-  let mock, proxy;
+  const meta = { scenario: scenarioName, candidate: name, run_id: RUN_ID, rate: RATE, duration_s: DURATION_S, jitter: JITTER, seed: SEED, real: Boolean(REAL),
+    upstreams: scenario.up, chains: CHAINS, switch_at_s: scenario.switch_at_s ?? null, switch: scenario.switch ?? null, then: scenario.then ?? null,
+    block_pattern: process.env.BLOCK_PATTERN ?? null, sends_every_ms: scenario.sends_every_ms ?? null, backfill: scenario.backfill ?? null };
+  const ctx = { name, c, dir, meta, mock: null, proxy: null };
   try {
-    mock = await startMocks(name, c, dir);
+    await assertPortsFree(c);
+    ctx.mock = await startMocks(name, c, dir);
     meta.mock_ready = now();
-    meta.load_avg_start = os.loadavg().map((x) => +x.toFixed(2));
     if (c.proxy) {
-      proxy = startProxy(name, c, dir);
-      meta.proxy_started = proxy?.startedAt ?? now();
-      meta.proxy_pid = proxy?.pid ?? null;
+      ctx.proxy = startProxy(name, c, dir);
+      meta.proxy_started = ctx.proxy?.startedAt ?? now();
+      meta.proxy_pid = ctx.proxy?.pid ?? null;
       if (c.proxy === "endpoint") printEndpointUpstreams(c);
-      if (scenario.idle_s) {
-        Object.assign(meta, await idleRun(name, c, dir, proxy));
-      } else {
-        meta.healthy_at = await waitHealthy(c, proxy);
+      if (!scenario.idle_s) {
+        meta.healthy_at = await waitHealthy(c, ctx.proxy);
         meta.start_to_healthy_ms = meta.healthy_at - meta.proxy_started;
-        const s0 = proxy && processTree(proxy.pid);
-        Object.assign(meta, await runWorkload(name, c, dir, meta));
-        const s1 = proxy && processTree(proxy.pid);
-        if (proxy) meta.resources_during_run = { rss_mb_end: +(s1.rss_kb / 1024).toFixed(1), cpu_s: +(s1.cpu_s - s0.cpu_s).toFixed(2) };
       }
-    } else {
-      Object.assign(meta, await runWorkload(name, c, dir, meta));
     }
   } catch (e) {
     meta.error = String(e?.stack || e);
-  } finally {
-    await stop(proxy);
-    await stop(mock, 3000);
-    meta.stopped_at = now();
-    meta.load_avg_end = os.loadavg().map((x) => +x.toFixed(2));
-    fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   }
+  return ctx;
+}
+
+async function execute({ name, c, dir, meta, proxy }, startAt) {
+  if (meta.error) return;
+  try {
+    meta.load_avg_start = os.loadavg().map((x) => +x.toFixed(2));
+    if (scenario.idle_s) return Object.assign(meta, await idleRun(name, c, dir, proxy));
+    const s0 = proxy && processTree(proxy.pid);
+    Object.assign(meta, await runWorkload(name, c, dir, meta, startAt));
+    const s1 = proxy && processTree(proxy.pid);
+    if (proxy) meta.resources_during_run = { rss_mb_end: +(s1.rss_kb / 1024).toFixed(1), cpu_s: +(s1.cpu_s - s0.cpu_s).toFixed(2) };
+  } catch (e) {
+    meta.error = String(e?.stack || e);
+  }
+}
+
+async function finish({ name, dir, meta, mock, proxy }) {
+  await stop(proxy);
+  await stop(mock, 3000);
+  meta.stopped_at = now();
+  meta.load_avg_end = os.loadavg().map((x) => +x.toFixed(2));
+  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(meta, null, 2));
   console.log(`${RUN_ID} ${name} done${meta.error ? " ERROR " + meta.error : ""}`);
 }
 
-await Promise.all(candNames.map(runCandidate));
+fs.writeFileSync(path.join(OUT, "run.json"), JSON.stringify({ scenario: scenarioName, candidates: candNames, duration_s: DURATION_S }, null, 2));
+const headTimer = REAL ? await pollRealHead() : null;
+const ctxs = await Promise.all(candNames.map(prepare));
+const startAt = now() + 250;
+await Promise.all(ctxs.map((ctx) => execute(ctx, startAt)));
+if (headTimer) clearInterval(headTimer);
+await Promise.all(ctxs.map(finish));
+process.exit(ctxs.some((ctx) => ctx.meta.error) ? 1 : 0);

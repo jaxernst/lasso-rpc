@@ -1,11 +1,13 @@
 // Reads <results>/<run>/<candidate>/ and writes results.json plus tables.md into <results>.
 // Runs named <scenario>-r<N> are repeats of one scenario; the Repeats section reports their spread.
+// Rates and means keep full precision in results.json; only the tables round.
 // Usage: node analyze.mjs [results dir]
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import { fileURLToPath } from "node:url";
 
-const KIT = path.dirname(new URL(import.meta.url).pathname);
+const KIT = path.dirname(fileURLToPath(import.meta.url));
 const RES = path.resolve(process.argv[2] || process.env.RESULTS_DIR || path.join(KIT, "results", "runs"));
 const SEND = "eth_sendRawTransaction";
 const UNTAGGED_CLIENT = ["eth_chainId", "eth_blockNumber", "eth_gasPrice"];
@@ -21,7 +23,16 @@ function readJsonl(f) {
 }
 const pct = (xs, p) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.ceil((p / 100) * s.length) - 1)]; };
 const r1 = (x) => (x === null || x === undefined || Number.isNaN(x) ? null : Math.round(x * 10) / 10);
-const r3 = (x) => (x === null || x === undefined || Number.isNaN(x) ? null : Math.round(x * 1000) / 1000);
+const mean = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+// One record per upstream call, from its arrival line, with the outcome line joined on. A call
+// whose outcome never got written (the mock stopped first) is "unanswered".
+function upstreamCalls(lines) {
+  const outcomes = new Map(lines.filter((l) => l.kind === "outcome").map((l) => [`${l.inst}:${l.call}`, l.outcome]));
+  return lines.filter((l) => l.kind === "call").map((l) => ({ ...l, outcome: outcomes.get(`${l.inst}:${l.call}`) ?? "unanswered" }));
+}
+// A client failure is either an error from the endpoint or a result that failed validation.
+const errorKey = (r) => (r.rpc_ok ? `invalid result: ${r.data_problem}`
+  : typeof r.error === "object" && r.error ? `${r.error.code} ${String(r.error.message).slice(0, 70)}` : `${r.status} ${r.error}`);
 const count = (xs, key) => xs.reduce((a, x) => { const k = key(x); a[k] = (a[k] || 0) + 1; return a; }, {});
 
 function latencyStats(recs) {
@@ -30,7 +41,7 @@ function latencyStats(recs) {
 }
 function windowStats(recs) {
   const ok = recs.filter((r) => r.ok);
-  return { requests: recs.length, success_rate: recs.length ? r3(ok.length / recs.length) : null, latency_success: latencyStats(ok), latency_all: latencyStats(recs) };
+  return { requests: recs.length, success_rate: recs.length ? ok.length / recs.length : null, latency_success: latencyStats(ok), latency_all: latencyStats(recs) };
 }
 const inWindow = (recs, from, to) => recs.filter((r) => r.since_ready_ms >= from && r.since_ready_ms < to);
 function series(recs, stepMs, endMs) {
@@ -45,9 +56,9 @@ function sendStats(sends, byTag, switchMs) {
   const firstInst = count(sends, (r) => ((byTag.get(r.tag) || []).sort((a, b) => a.t - b.t)[0] || {}).inst || "none");
   const out = {
     txs: sends.length, client_success: sends.filter((r) => r.ok).length, upstreams_reached_histogram: count(reach, (x) => x),
-    max_upstreams_reached: reach.length ? Math.max(...reach) : 0, mean_upstreams_reached: r3(reach.reduce((a, b) => a + b, 0) / (reach.length || 1)),
+    max_upstreams_reached: reach.length ? Math.max(...reach) : 0, mean_upstreams_reached: mean(reach),
     total_upstream_sends: total.reduce((a, b) => a + b, 0), max_sends_one_tx: total.length ? Math.max(...total) : 0, first_upstream: firstInst,
-    latency_all: latencyStats(sends), errors: count(sends.filter((r) => !r.ok), (r) => (typeof r.error === "object" && r.error ? `${r.error.code} ${String(r.error.message).slice(0, 60)}` : `${r.status} ${r.error}`)),
+    latency_all: latencyStats(sends), errors: count(sends.filter((r) => !r.ok), errorKey),
     per_30s: series(sends, 30_000, Math.max(...sends.map((r) => r.since_ready_ms)) + 1),
   };
   if (switchMs !== undefined) {
@@ -62,7 +73,7 @@ function sendStats(sends, byTag, switchMs) {
 function analyzeCandidate(dir) {
   const meta = JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8"));
   const all = readJsonl(path.join(dir, "client.jsonl")).sort((a, b) => a.seq - b.seq);
-  const up = readJsonl(path.join(dir, "upstream.jsonl"));
+  const up = upstreamCalls(readJsonl(path.join(dir, "upstream.jsonl")));
   const out = { candidate: meta.candidate, meta: { start_to_healthy_ms: meta.start_to_healthy_ms ?? null, resources_during_run: meta.resources_during_run ?? null,
     load_avg_start: meta.load_avg_start ?? null, load_avg_end: meta.load_avg_end ?? null, switch_since_ready_ms: meta.switch_since_ready_ms ?? null, error: meta.error ?? null } };
 
@@ -74,7 +85,7 @@ function analyzeCandidate(dir) {
     const rss = res.samples.map((s) => s.rss_mb);
     out.idle = {
       minutes: r1(mins), chains: meta.chains?.length ?? 1, start_to_first_success_ms: res.start_to_first_success_ms, start_to_all_chains_ms: res.start_to_all_chains_ms ?? null,
-      total_upstream_calls: idle.length, calls_per_minute: r1(idle.length / mins), calls_per_upstream_per_minute: r3(idle.length / mins / new Set(idle.map((u) => u.inst)).size),
+      total_upstream_calls: idle.length, calls_per_minute: r1(idle.length / mins), calls_per_upstream_per_minute: idle.length / mins / new Set(idle.map((u) => u.inst)).size,
       by_upstream: count(idle, (u) => u.inst), by_method: count(idle, (u) => u.m),
       rss_mb: { first: rss[0], last: rss[rss.length - 1], max: Math.max(...rss), median: pct(rss, 50) },
       cpu_pct: { mean: r1(cpu.reduce((a, b) => a + b, 0) / cpu.length), p50: pct(cpu, 50), max: Math.max(...cpu) },
@@ -106,18 +117,19 @@ function analyzeCandidate(dir) {
       last_60s: windowStats(client.filter((r) => r.since_ready_ms >= switchMs + 60_000)),
     };
   }
-  out.errors = count(client.filter((x) => !x.ok), (r) => (typeof r.error === "object" && r.error ? `${r.error.code} ${String(r.error.message).slice(0, 70)}` : `${r.status} ${r.error}`));
+  out.errors = count(client.filter((x) => !x.ok), errorKey);
   out.failures_by_method = count(client.filter((x) => !x.ok), (r) => r.method);
 
   // Upstream fan-out for tagged client requests (exact: tag appears only in client traffic).
+  // Real endpoints have no mock logs, so these are unavailable there.
   const tagged = client.filter((r) => r.tag);
   const fan = tagged.map((r) => (byTag.get(r.tag) || []).length);
   const servedBy = {};
   for (const r of tagged) for (const u of byTag.get(r.tag) || []) { const k = `${u.inst}:${u.outcome}`; servedBy[k] = (servedBy[k] || 0) + 1; }
-  out.tagged = { requests: tagged.length, upstream_calls: fan.reduce((a, b) => a + b, 0), calls_per_request: r3(fan.reduce((a, b) => a + b, 0) / (tagged.length || 1)),
-    fanout_histogram: count(fan, (x) => x), by_upstream_outcome: servedBy };
-  if (switchMs !== undefined) {
-    const t = (rs) => { const f = rs.map((r) => (byTag.get(r.tag) || []).length); return r3(f.reduce((a, b) => a + b, 0) / (f.length || 1)); };
+  out.tagged = meta.real ? { requests: tagged.length, upstream_calls: null, calls_per_request: null, fanout_histogram: null, by_upstream_outcome: null }
+    : { requests: tagged.length, upstream_calls: fan.reduce((a, b) => a + b, 0), calls_per_request: mean(fan), fanout_histogram: count(fan, (x) => x), by_upstream_outcome: servedBy };
+  if (switchMs !== undefined && !meta.real) {
+    const t = (rs) => mean(rs.map((r) => (byTag.get(r.tag) || []).length));
     out.tagged.calls_per_request_before_switch = t(tagged.filter((r) => r.since_ready_ms < switchMs));
     out.tagged.calls_per_request_after_switch = t(tagged.filter((r) => r.since_ready_ms >= switchMs));
   }
@@ -134,7 +146,7 @@ function analyzeCandidate(dir) {
   let max = -Infinity, back = 0, backGt1 = 0;
   for (const r of byRecv) { if (r.served_block < max) { back++; if (max - r.served_block > 1) backGt1++; } max = Math.max(max, r.served_block); }
   const lags = withBlock.map((r) => r.lag_blocks);
-  out.freshness = { reads_with_block: withBlock.length, stale_reads: stale.length, stale_rate: withBlock.length ? r3(stale.length / withBlock.length) : null, stale_by_method: count(stale, (r) => r.method),
+  out.freshness = { reads_with_block: withBlock.length, stale_reads: stale.length, stale_rate: withBlock.length ? stale.length / withBlock.length : null, stale_by_method: count(stale, (r) => r.method),
     max_lag_blocks: lags.length ? Math.max(...lags) : null, backwards_any: back, backwards_gt1: backGt1 };
   if (switchMs !== undefined) {
     const rate = (recs) => { const n = recs.length; return { n, stale: recs.filter((r) => r.lag_blocks > 1).length }; };
@@ -146,8 +158,8 @@ function analyzeCandidate(dir) {
   if (meta.backfill) {
     const passes = Object.values(client.reduce((a, r) => { (a[r.pass] ||= []).push(r); return a; }, {}));
     const wall = passes.map((p) => Math.max(...p.map((r) => r.t_recv)) - Math.min(...p.map((r) => r.t_send)));
-    out.backfill = { ...meta.backfill, windows: client.length, windows_ok: client.filter((r) => r.ok && !r.data_problem).length, passes: passes.length,
-      complete_passes: passes.filter((p) => p.every((r) => r.ok && !r.data_problem)).length, pass_wall_ms: { p50: pct(wall, 50), max: wall.length ? Math.max(...wall) : null } };
+    out.backfill = { ...meta.backfill, windows: client.length, windows_ok: client.filter((r) => r.ok).length, passes: passes.length,
+      complete_passes: passes.filter((p) => p.every((r) => r.ok)).length, pass_wall_ms: { p50: pct(wall, 50), max: wall.length ? Math.max(...wall) : null } };
   }
   if (client.some((r) => r.winner)) out.race_winners = count(client.filter((x) => x.winner), (r) => r.winner);
   return out;
@@ -164,22 +176,24 @@ for (const run of runNames) {
 
 // ---------- Markdown ----------
 const f = (x, d = "") => (x === null || x === undefined ? "n/a" : `${x}${d}`);
+const f3 = (x) => (x === null || x === undefined ? "n/a" : String(Math.round(x * 1000) / 1000));
 const pc = (x) => (x === null || x === undefined ? "n/a" : `${(x * 100).toFixed(1)}%`);
 const hist = (h) => Object.entries(h).map(([k, v]) => `${k}: ${v}`).join(", ");
 const READ_HEAD = "| candidate | success | success 0-30 s | success after 30 s | first success ms | p50 | p95 | p99 | max | upstream calls per tagged request | stale reads | backwards (>1 block) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+const failedRow = (c, a) => `| ${c} | failed: ${(a.meta.error ?? "no client records").split("\n")[0].slice(0, 100)} |\n`;
 const readRow = (c, a) => {
-  if (!a.overall) return `| ${c} | error: ${a.meta.error?.slice(0, 80)} |\n`;
+  if (!a.overall || a.meta.error) return failedRow(c, a);
   const l = a.overall.latency_success;
-  return `| ${c} | ${pc(a.overall.success_rate)} | ${pc(a.first_30s.success_rate)} | ${pc(a.after_30s.success_rate)} | ${f(a.first_success_ms)} | ${f(l.p50)} | ${f(l.p95)} | ${f(l.p99)} | ${f(l.max)} | ${f(a.tagged.calls_per_request)} | ${a.freshness.stale_reads} (${pc(a.freshness.stale_rate)}) | ${a.freshness.backwards_any} (${a.freshness.backwards_gt1}) |\n`;
+  return `| ${c} | ${pc(a.overall.success_rate)} | ${pc(a.first_30s.success_rate)} | ${pc(a.after_30s.success_rate)} | ${f(a.first_success_ms)} | ${f(l.p50)} | ${f(l.p95)} | ${f(l.p99)} | ${f(l.max)} | ${f3(a.tagged.calls_per_request)} | ${a.freshness.stale_reads} (${pc(a.freshness.stale_rate)}) | ${a.freshness.backwards_any} (${a.freshness.backwards_gt1}) |\n`;
 };
 const BACKFILL_HEAD = "| candidate | windows ok | complete passes | upstream calls per window | window p50 / p95 ms | pass wall time p50 / max s | upstream calls by upstream and outcome | client errors |\n|---|---|---|---|---|---|---|---|\n";
 const secs = (ms) => (ms === null || ms === undefined ? "n/a" : (ms / 1000).toFixed(1));
 const backfillRow = (c, a) => {
-  if (!a.backfill) return `| ${c} | error: ${a.meta.error?.slice(0, 80)} |\n`;
+  if (!a.backfill || a.meta.error) return failedRow(c, a);
   const b = a.backfill, l = a.overall.latency_success;
-  const outcomes = Object.entries(a.tagged.by_upstream_outcome).sort().map(([k, v]) => `${k} ${v}`).join(", ");
-  const errs = Object.entries({ ...a.errors, ...a.data_problems }).map(([k, v]) => `${k}: ${v}`).join("; ") || "none";
-  return `| ${c} | ${b.windows_ok}/${b.windows} (${pc(b.windows_ok / b.windows)}) | ${b.complete_passes}/${b.passes} | ${f(a.tagged.calls_per_request)} | ${f(l.p50)} / ${f(l.p95)} | ${secs(b.pass_wall_ms.p50)} / ${secs(b.pass_wall_ms.max)} | ${outcomes} | ${errs} |\n`;
+  const outcomes = Object.entries(a.tagged.by_upstream_outcome ?? {}).sort().map(([k, v]) => `${k} ${v}`).join(", ");
+  const errs = Object.entries(a.errors).map(([k, v]) => `${k}: ${v}`).join("; ") || "none";
+  return `| ${c} | ${b.windows_ok}/${b.windows} (${pc(b.windows_ok / b.windows)}) | ${b.complete_passes}/${b.passes} | ${f3(a.tagged.calls_per_request)} | ${f(l.p50)} / ${f(l.p95)} | ${secs(b.pass_wall_ms.p50)} / ${secs(b.pass_wall_ms.max)} | ${outcomes} | ${errs} |\n`;
 };
 const SEND_HEAD = "| candidate | client success | upstreams reached per tx (histogram) | max reached | total upstream sends | first upstream per tx | p50 / max latency ms |\n|---|---|---|---|---|---|---|\n";
 const sendRow = (c, b) => `| ${c} | ${b.client_success}/${b.txs} | ${hist(b.upstreams_reached_histogram)} | ${b.max_upstreams_reached} | ${b.total_upstream_sends} | ${hist(b.first_upstream)} | ${f(b.latency_all.p50)} / ${f(b.latency_all.max)} |\n`;
@@ -227,29 +241,41 @@ for (const [run, cands] of Object.entries(results.scenarios)) {
     md += "\nReads around the fault switch (10 s windows start 30 s and 90 s after the switch):\n\n| candidate | before switch | after switch | 30-40 s after | 90-100 s after | last 60 s | calls per tagged request before / after |\n|---|---|---|---|---|---|---|\n";
     for (const [c, a] of Object.entries(cands)) {
       const s = a.switch; if (!s) continue;
-      md += `| ${c} | ${pc(s.before.success_rate)} | ${pc(s.after.success_rate)} | ${pc(s.plus30_10s.success_rate)} | ${pc(s.plus90_10s.success_rate)} | ${pc(s.last_60s.success_rate)} | ${f(a.tagged.calls_per_request_before_switch)} / ${f(a.tagged.calls_per_request_after_switch)} |\n`;
+      md += `| ${c} | ${pc(s.before.success_rate)} | ${pc(s.after.success_rate)} | ${pc(s.plus30_10s.success_rate)} | ${pc(s.plus90_10s.success_rate)} | ${pc(s.last_60s.success_rate)} | ${f3(a.tagged.calls_per_request_before_switch)} / ${f3(a.tagged.calls_per_request_after_switch)} |\n`;
     }
   }
 }
 
-// Repeats: runs named <scenario>-r<N>.
+// Repeats: runs named <scenario>-r<N>. run.sh writes plan.json with the repeat count and the
+// runner writes run.json with the candidates it was asked for, so a missing or failed run
+// marks its group incomplete instead of dropping out of the comparison.
+const readJson = (f) => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null);
+const plan = readJson(path.join(RES, "plan.json"));
 const groups = {};
-for (const run of Object.keys(results.scenarios)) { const m = run.match(/^(.+)-r\d+$/); if (m) (groups[m[1]] ||= []).push(run); }
+for (const run of runNames) { const m = run.match(/^(.+)-r(\d+)$/); if (m) (groups[m[1]] ||= new Set()).add(run); }
+for (const s of plan?.scenarios ?? []) for (let i = 1; i <= plan.repeats; i++) (groups[s] ||= new Set()).add(`${s}-r${i}`);
 results.repeats = {};
-if (Object.keys(groups).length) {
+const repeatGroups = Object.entries(groups).map(([s, runs]) => [s, [...runs].sort((a, b) => a.localeCompare(b, "en", { numeric: true }))])
+  .filter(([, runs]) => !runs.some((r) => Object.values(results.scenarios[r] ?? {}).some((a) => a.idle)));
+if (repeatGroups.length) {
   md += "\n## Repeats\n\nEach cell is the lowest and highest value across repeats. A row agrees when success and stale reads stay within " +
     `${TOLERANCE.success_pp} percentage point, p50 and p95 within the larger of ${TOLERANCE.latency_ms} ms and ${TOLERANCE.latency_frac * 100}% of the lowest value, ` +
-    `and upstream calls per request within ${TOLERANCE.calls_per_request}.\n`;
+    `and upstream calls per request within ${TOLERANCE.calls_per_request}. A row is incomplete when any repeat is missing or failed.\n`;
   const range = (xs) => { const v = xs.filter((x) => x !== null && x !== undefined); return v.length ? { min: Math.min(...v), max: Math.max(...v) } : null; };
   const show = (r, fmt) => (r ? (r.min === r.max ? fmt(r.min) : `${fmt(r.min)} to ${fmt(r.max)}`) : "n/a");
-  for (const [s, runs] of Object.entries(groups)) {
-    const cands = [...new Set(runs.flatMap((r) => Object.keys(results.scenarios[r])))].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+  for (const [s, runs] of repeatGroups) {
+    const asked = new Set(runs.flatMap((r) => [...(readJson(path.join(RES, r, "run.json"))?.candidates ?? []), ...Object.keys(results.scenarios[r] ?? {})]));
+    const cands = [...(asked.size ? asked : plan?.candidates ?? [])].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
     md += `\n### ${s} (${runs.length} ${runs.length === 1 ? "run" : "runs"})\n\n| candidate | success | p50 ms | p95 ms | stale reads | upstream calls per request | agree |\n|---|---|---|---|---|---|---|\n`;
     results.repeats[s] = {};
     for (const c of cands) {
-      const rs = runs.map((r) => results.scenarios[r][c]).filter((a) => a?.overall);
+      const status = runs.map((r) => {
+        const a = results.scenarios[r]?.[c];
+        return { run: r, a, problem: !a ? "missing" : a.meta.error || !a.overall ? "failed" : null };
+      });
+      const rs = status.filter((x) => !x.problem).map((x) => x.a);
       const spread = {
-        runs: rs.length, success: range(rs.map((a) => a.overall.success_rate)), p50: range(rs.map((a) => a.overall.latency_success.p50)),
+        runs: runs.length, valid_runs: rs.length, success: range(rs.map((a) => a.overall.success_rate)), p50: range(rs.map((a) => a.overall.latency_success.p50)),
         p95: range(rs.map((a) => a.overall.latency_success.p95)), stale: range(rs.map((a) => a.freshness.stale_rate)), calls_per_request: range(rs.map((a) => a.tagged.calls_per_request)),
       };
       const width = (r) => (r ? r.max - r.min - 1e-9 : 0);
@@ -258,10 +284,12 @@ if (Object.keys(groups).length) {
         width(spread.success) * 100 > TOLERANCE.success_pp && "success", !latOk(spread.p50) && "p50", !latOk(spread.p95) && "p95",
         width(spread.stale) * 100 > TOLERANCE.stale_pp && "stale", width(spread.calls_per_request) > TOLERANCE.calls_per_request && "calls",
       ].filter(Boolean);
-      spread.agree = rs.length < 2 ? null : misses.length === 0;
+      const problems = status.filter((x) => x.problem).map((x) => `${x.run.replace(`${s}-`, "")} ${x.problem}`);
+      spread.incomplete = problems;
+      spread.agree = problems.length || runs.length < 2 ? null : misses.length === 0;
       results.repeats[s][c] = spread;
-      const agree = rs.length < 2 ? "one run" : misses.length ? `no: ${misses.join(", ")}` : "yes";
-      md += `| ${c} | ${show(spread.success, pc)} | ${show(spread.p50, f)} | ${show(spread.p95, f)} | ${show(spread.stale, pc)} | ${show(spread.calls_per_request, f)} | ${agree} |\n`;
+      const agree = problems.length ? `incomplete: ${problems.join(", ")}` : runs.length < 2 ? "one run" : misses.length ? `no: ${misses.join(", ")}` : "yes";
+      md += `| ${c} | ${show(spread.success, pc)} | ${show(spread.p50, f)} | ${show(spread.p95, f)} | ${show(spread.stale, pc)} | ${show(spread.calls_per_request, f3)} | ${agree} |\n`;
     }
   }
 }

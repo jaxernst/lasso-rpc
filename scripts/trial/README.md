@@ -1,6 +1,6 @@
 # Routing trial kit
 
-Runs a wallet-like JSON-RPC workload against mock upstreams whose faults you control, through Lasso and through baselines, and reports success, latency, freshness and upstream calls for each. Every candidate in a scenario runs at the same time with its own mock upstreams and ports, so upstream logs never mix. One command reruns the set and reports how much repeats disagree.
+Runs a wallet-like JSON-RPC workload against mock upstreams whose faults you control, through Lasso and through baselines, and reports success, latency, freshness and upstream calls for each. Every candidate in a scenario gets its own mock upstreams and ports, so upstream logs never mix. All candidates are started and checked healthy first, then their workloads start at the same moment. One command reruns the set and reports how much repeats disagree.
 
 ## Requirements
 
@@ -67,7 +67,7 @@ ENDPOINT_URL=http://127.0.0.1:8080/your/chain/path scripts/trial/run.sh
 
 For each run the kit starts the mocks, prints their URLs, waits up to `ENDPOINT_WAIT_S` (default 120) seconds for `ENDPOINT_URL` to answer `eth_chainId`, then sends the workload. A scenario may leave an upstream closed (S1) or hanging (S2), so make sure your endpoint answers `eth_chainId` while up3 alone is healthy.
 
-An endpoint you start by hand keeps whatever it learned in earlier scenarios, while Lasso starts fresh each run. To give it the same treatment, set `ENDPOINT_CMD` to a shell command that starts it in the foreground. The kit runs the command after the mocks are up, with the upstream URLs in `TRIAL_UPSTREAMS` (comma-separated), records its memory and CPU, and stops it after the run.
+An endpoint you start by hand keeps whatever it learned in earlier scenarios, while Lasso starts fresh each run. To give it the same treatment, set `ENDPOINT_CMD` to a shell command that starts it in the foreground. The kit runs the command after the mocks are up, with the upstream URLs in `TRIAL_UPSTREAMS` (comma-separated), records its memory and CPU, and stops it after the run. Stopping signals the command's whole process group, so a server it started in the background stops too.
 
 ## Scenarios
 
@@ -86,7 +86,7 @@ Upstreams are up1, up2 and up3. Latencies have 20% uniform jitter. Read scenario
 | S5 | up1 20 ms refuses `eth_getLogs` and `eth_getTransactionReceipt`; up2 60 ms; up3 120 ms | reads |
 | S6 | 20, 60, 120 ms | reads |
 | S8 | 20, 60, 120 ms | none for 10 minutes; background upstream calls, CPU and memory |
-| S9a | 20, 60, 120 ms | 50 distinct `eth_sendRawTransaction` at 5 per second |
+| S9a | 20, 60, 120 ms | 50 `eth_sendRawTransaction` at 5 per second |
 | S9b | up1 20 ms accepts sends and never answers them; up2 60 ms; up3 120 ms | 50 sends at 5 per second |
 | S9s | as S9b | reads plus one send every 2 s |
 | S9m | 20, 60, 120 ms; at 60 s up1 starts hanging on sends | reads plus one send every 2 s |
@@ -111,9 +111,15 @@ The client backfills like an indexer. Every 6 s a pass starts that reads 100,000
 
 The mocks share one deterministic chain: a block every 2 s from a fixed epoch, hashes derived from the block number, and a log at every tenth block. All instances agree, and balance, nonce and `eth_call` results encode the block they were served at, so the kit can tell how stale each answer was. Each request's params carry a unique tag that the mock logs, which gives exact upstream calls per client request.
 
+Sends are real EIP-1559 transfers: 0 value to a fixed address, signed with a fixed test key (the keccak-256 of `lasso routing trial kit test key`) for the scenario's chain id, with nonces counting up from 0. `tx.mjs` builds them with `node:crypto` only, and they match a common EVM library byte for byte. The mock answers a send with the transaction's keccak-256 hash.
+
+### Success
+
+A request succeeds when a JSON-RPC result arrives and passes the kit's checks: a receipt is not null, `eth_getLogs` returns one log per tenth block in the range, `eth_chainId` names the scenario's chain, and a send returns the transaction's hash. A result that fails a check counts as a failure, listed as `invalid result` in the errors. `client.jsonl` keeps both: `rpc_ok` for any result, `ok` for a checked one. Success rates, latencies and repeat spreads use `ok`.
+
 ## Repeats
 
-`run.sh` names each run `<scenario>-r<N>`, and `analyze.mjs` adds a Repeats section: for each scenario and candidate, the lowest and highest success, p50, p95, stale reads and upstream calls per request across repeats.
+`run.sh` names each run `<scenario>-r<N>`, and `analyze.mjs` adds a Repeats section: for each scenario and candidate, the lowest and highest success, p50, p95, stale reads and upstream calls per request across repeats. Comparisons use unrounded values. A row whose repeats include a missing or failed run says "incomplete" and which run, rather than comparing the rest. `run.sh` keeps going after a failed run and exits nonzero at the end. Idle scenarios have no repeat rows.
 
 Repeats agree when every spread (highest minus lowest) stays within:
 
@@ -146,7 +152,7 @@ The scenarios are built so the differences they show are larger than these bound
 
 ## Changing faults by hand
 
-Each candidate's mock process has a control port at `PORT_BASE + 60 * i + 49`, where `i` is the candidate's place in this list, from 0: `endpoint`, `direct`, `race2`, `lasso`, `lasso-fastest`, `lasso-bf`. `GET /` returns every instance's settings; `POST /config/<instance>` merges JSON into one instance:
+Each candidate's mock process has a control port at `PORT_BASE + 60 * i + 49`, where `i` is the candidate's place in this list, from 0: `endpoint`, `direct`, `race2`, `lasso`, `lasso-fastest`, `lasso-bf`. `GET /` returns the run's identity token and every instance's settings; `POST /config/<instance>` merges JSON into one instance:
 
 ```sh
 curl -X POST localhost:43049/config/up1 -d '{"hang": true}'
@@ -162,12 +168,15 @@ UPSTREAMS=https://rpc-a.example,https://rpc-b.example,https://rpc-c.example CHAI
   node scripts/trial/runner.mjs R direct,race2,lasso-fastest,lasso-bf 180
 ```
 
-`direct` uses the first URL and `race2` the first two. The workload takes its head from polling the first URL once a second. Without mocks the tables report success, errors and latency only; upstream calls and stale reads need the mock logs and clock. Each candidate sends 900 requests in 3 minutes (`race2` sends that to two endpoints), so mind rate limits.
+`direct` uses the first URL and `race2` the first two. The workload takes its head from polling the first URL once a second. Without mocks the tables report success, errors and latency only. Upstream calls and stale reads need the mock logs and clock, so they show as n/a and stay out of repeat checks. Each candidate sends 900 requests in 3 minutes (`race2` sends that to two endpoints), so mind rate limits.
 
 The URLs are written into the configuration files under `results/`. If they contain keys, remove those files before sharing results. The runner prints the same warning.
 
 ## Output
 
-`results/<run>/<candidate>/` holds `client.jsonl` (one line per client request), `upstream.jsonl` (one line per upstream request, with outcome `ok`, `error`, `429` or `hang`), `meta.json`, `proxy.log`, `mock.log`, and `resources.json` for idle scenarios. `analyze.mjs` reads `.jsonl.gz` files too.
+Before a run starts, the kit checks that every port the candidate will use is free, including ports meant to stay closed, and that the mock answering its control port is the one it just started. A busy port fails the run.
+
+
+`results/<run>/<candidate>/` holds `client.jsonl` (one line per client request), `upstream.jsonl` (a `call` line when each upstream request arrives and an `outcome` line, `ok`, `error`, `429` or `hang`, when it is settled; a call with no outcome line counts as `unanswered`), `meta.json`, `proxy.log`, `mock.log`, and `resources.json` for idle scenarios. `analyze.mjs` reads `.jsonl.gz` files too.
 
 In the tables, a read is stale when its block is 2 or more blocks older than the true head when the answer arrived. "Backwards" counts answers older than one received earlier (in brackets, older by more than one block). Upstream calls per tagged request count every upstream call that carried the request's tag, including retries and hedges.
