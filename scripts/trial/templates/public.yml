@@ -1,0 +1,12 @@
+---
+name: Public RPC
+slug: public
+---
+# Lasso requires a public profile at startup. This one points at a closed local
+# port, so the trial makes no external calls.
+chains:
+  chain_1:
+    chain_id: 1
+    providers:
+      - id: "unused_local"
+        url: "http://127.0.0.1:{{CLOSED}}"

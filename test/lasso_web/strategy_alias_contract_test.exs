@@ -11,7 +11,9 @@ defmodule LassoWeb.StrategyAliasContractTest do
   # Files that name balanced-fast only to emit or display it, never to read a caller's choice.
   @emit_only %{
     "lib/lasso_web/components/simulator_controls.ex" => "dashboard buttons send canonical names",
-    "lib/lasso_web/dashboard/endpoint_helpers.ex" => "dashboard labels"
+    "lib/lasso_web/dashboard/endpoint_helpers.ex" => "dashboard labels",
+    "scripts/trial/README.md" => "trial kit candidate table",
+    "scripts/trial/runner.mjs" => "trial kit sends the canonical route"
   }
 
   test "HTTP routes and socket paths accept the alias wherever they accept balanced-fast" do
