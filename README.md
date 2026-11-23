@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/jaxernst/lasso-rpc/actions/workflows/ci.yml?query=branch%3Amain)
 [![Release](https://img.shields.io/badge/release-v0.9.0-19202E?style=flat-square&labelColor=19202E)](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.9.0)
-[![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-19202E?style=flat-square&labelColor=19202E)](LICENSE.md)  
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](#documentation)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 
