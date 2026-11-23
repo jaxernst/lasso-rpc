@@ -1028,7 +1028,7 @@ defmodule Lasso.RPC.AttemptProjection do
     expiry_ms = div(observed_at_us, 1_000) + retry_after_ms
     replace_expiry? = row.rate_limit_expiry_ms == 0 or expiry_ms >= row.rate_limit_expiry_ms
 
-    updated = %{
+    %{
       row
       | rate_limit_expiry_ms: if(replace_expiry?, do: expiry_ms, else: row.rate_limit_expiry_ms),
         rate_limit_retry_after_ms:
@@ -1036,16 +1036,6 @@ defmodule Lasso.RPC.AttemptProjection do
         rate_limit_observed_at_us: max_floor(row.rate_limit_observed_at_us, observed_at_us),
         total_rate_limits: increment(row.total_rate_limits)
     }
-
-    if observed_at_us >= row.observed_at_us do
-      %{
-        updated
-        | recent_success_probability:
-            recent_success_probability(row.recent_success_probability, 0.0)
-      }
-    else
-      updated
-    end
   end
 
   defp apply_aggregate(row, %{kind: :neutral}), do: row
