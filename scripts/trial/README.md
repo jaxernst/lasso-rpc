@@ -142,7 +142,7 @@ The scenarios are built so the differences they show are larger than these bound
 | `ENDPOINT_WAIT_S` | how long to wait for your endpoint to answer (default 120). |
 | `CANDIDATES` | comma-separated candidates for `run.sh` (default `direct,race2,lasso,lasso-fastest,lasso-bf`). |
 | `REPEATS`, `DURATION` | `run.sh` repeats (default 3) and seconds per scenario (default 180). |
-| `OUT` | `run.sh` results directory (default `scripts/trial/results/<UTC time>`). |
+| `OUT` | `run.sh` results directory (default `scripts/trial/results/<UTC time>`). It must not exist yet; `run.sh` refuses an existing one. |
 | `PORT_BASE` | first port the kit uses (default 43000). It uses 60 ports per candidate, 360 in all. |
 | `RUN_ID`, `RESULTS_DIR` | `runner.mjs` run name (default: the scenario and the UTC time) and parent directory (default `scripts/trial/results/runs`). The runner refuses a run directory that already exists. |
 | `IDLE_S` | overrides the 600 s idle length of S8 and S10. |

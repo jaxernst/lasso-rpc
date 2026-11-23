@@ -22,7 +22,11 @@ if [ -z "${CANDIDATES:-}" ]; then
   if [ -n "${ENDPOINT_URL:-}" ]; then CANDIDATES="$CANDIDATES,endpoint"; fi
 fi
 OUT="${OUT:-$KIT/results/$(date -u +%Y%m%dT%H%M%SZ)}"
-mkdir -p "$OUT"
+mkdir -p "$(dirname "$OUT")"
+if ! mkdir "$OUT" 2>/dev/null; then
+  echo "results directory already exists: $OUT (set OUT to a new path)" >&2
+  exit 1
+fi
 json_list() { printf '%s' "$1" | tr ', ' '\n\n' | sed '/^$/d; s/.*/"&"/' | paste -sd, -; }
 printf '{"scenarios": [%s], "candidates": [%s], "repeats": %s, "duration_s": %s}\n' \
   "$(json_list "$SCENARIOS")" "$(json_list "$CANDIDATES")" "$REPEATS" "$DURATION" > "$OUT/plan.json"
