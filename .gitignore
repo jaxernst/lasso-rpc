@@ -53,3 +53,6 @@ deployment/.env.staging
 
 # Python verification tools
 __pycache__/
+
+# Trial kit results
+/scripts/trial/results/
