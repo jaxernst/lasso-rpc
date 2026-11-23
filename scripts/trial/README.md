@@ -139,7 +139,7 @@ The scenarios are built so the differences they show are larger than these bound
 | `LASSO_REL` | Lasso release directory. Needed for `lasso*` candidates. |
 | `ENDPOINT_URL` | your endpoint's URL. Needed for `endpoint`; when it is set, `run.sh` adds `endpoint` to the default candidates. |
 | `ENDPOINT_CMD` | optional command that starts your endpoint for each run. |
-| `ENDPOINT_WAIT_S` | how long to wait for your endpoint to answer (default 120). |
+| `ENDPOINT_WAIT_S` | how long to wait for a started proxy, your endpoint or the first `UPSTREAMS` URL to answer (default 120). |
 | `CANDIDATES` | comma-separated candidates for `run.sh` (default `direct,race2,lasso,lasso-fastest,lasso-bf`). |
 | `REPEATS`, `DURATION` | `run.sh` repeats (default 3) and seconds per scenario (default 180). |
 | `OUT` | `run.sh` results directory (default `scripts/trial/results/<UTC time>`). It must not exist yet; `run.sh` refuses an existing one. |
@@ -152,11 +152,11 @@ The scenarios are built so the differences they show are larger than these bound
 
 ## Changing faults by hand
 
-Each candidate's mock process has a control port at `PORT_BASE + 60 * i + 49`, where `i` is the candidate's place in this list, from 0: `endpoint`, `direct`, `race2`, `lasso`, `lasso-fastest`, `lasso-bf`. `GET /` returns the run's identity token and every instance's settings; `POST /config/<instance>` merges JSON into one instance:
+Each candidate's mock process has a control port at `PORT_BASE + 60 * i + 49`, where `i` is the candidate's place in this list, from 0: `endpoint`, `direct`, `race2`, `lasso`, `lasso-fastest`, `lasso-bf`. `GET /` returns the run's identity token and every instance's settings; `POST /config/<instance>` merges JSON into one instance. With the default `PORT_BASE`, the `lasso` candidate's control port is 43229:
 
 ```sh
-curl -X POST localhost:43049/config/up1 -d '{"hang": true}'
-curl -X POST localhost:43049/config/up1 -d '{"hang": false, "behind": 5, "rate_429": 0.3}'
+curl -X POST localhost:43229/config/up1 -d '{"hang": true}'
+curl -X POST localhost:43229/config/up1 -d '{"hang": false, "behind": 5, "rate_429": 0.3}'
 ```
 
 Settings: `latency_ms`, `jitter`, `behind` (blocks), `stall` (freeze the head), `rate_429` (fraction), `refuse_methods` (list), `hang`, `send_timeout` (hang on sends only), `max_range` (`eth_getLogs` block cap), `range_error` (`{code, message}`, `{cap}` in the message is replaced), `chain_id`. Timed switches in S2m, S4m, S9m and S11 use the same endpoint.

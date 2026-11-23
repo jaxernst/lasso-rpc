@@ -90,7 +90,7 @@ const candNames = scenario.idle_s ? requested.filter((n) => CANDIDATES[n].proxy 
 if (candNames.length < requested.length) console.log(`${scenarioName} is idle; skipping ${requested.filter((n) => !candNames.includes(n)).join(", ")}`);
 const DURATION_S = Number(durArg || 180);
 const RUN_ID = process.env.RUN_ID || `${scenarioName}-${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}`;
-const OUT = path.join(process.env.RESULTS_DIR || path.join(KIT, "results", "runs"), RUN_ID);
+const OUT = path.resolve(process.env.RESULTS_DIR || path.join(KIT, "results", "runs"), RUN_ID);
 // Claim the run directory before anything else, so a repeated RUN_ID never touches the earlier run.
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 try { fs.mkdirSync(OUT); } catch (e) {
@@ -200,9 +200,14 @@ function start(cmd, args, opts, logFile) {
   const out = fs.openSync(logFile, "a");
   const child = spawn(cmd, args, { ...opts, detached: true, stdio: ["ignore", out, out] });
   child.startedAt = now();
+  // A child that fails to start (missing executable) reports through startupFailure, so its
+  // candidate records the error and the run still cleans up.
+  child.once("error", (e) => { child.spawnError = e; });
   children.push(child);
   return child;
 }
+const startupFailure = (child) =>
+  child?.spawnError ? `process failed to start: ${child.spawnError.message}` : child && child.exitCode !== null ? "proxy exited during startup" : null;
 const groupAlive = (pid) => { try { process.kill(-pid, 0); return true; } catch (e) { return e.code === "EPERM"; } };
 async function stop(child, graceMs = 10_000) {
   if (!child || !groupAlive(child.pid)) return;
@@ -302,7 +307,7 @@ function lassoProfile(c) {
 
 function startProxy(name, c, dir) {
   if (c.proxy === "lasso") {
-    const rel = requireEnv("LASSO_REL");
+    const rel = path.resolve(requireEnv("LASSO_REL"));
     const data = path.join(dir, "lasso-data");
     fs.mkdirSync(path.join(data, "config/profiles"), { recursive: true });
     fs.mkdirSync(path.join(data, "benchmark_snapshots"), { recursive: true });
@@ -329,7 +334,8 @@ function startProxy(name, c, dir) {
 async function waitHealthy(c, child) {
   const deadline = now() + Number(process.env.ENDPOINT_WAIT_S || 120) * 1000;
   for (;;) {
-    if (child && child.exitCode !== null) throw new Error("proxy exited during startup");
+    const failure = startupFailure(child);
+    if (failure) throw new Error(failure);
     if (now() > deadline) throw new Error(c.proxy === "endpoint" ? "ENDPOINT_URL did not answer eth_chainId" : "proxy did not become healthy");
     if (c.proxy === "endpoint") {
       try { const r = await postJson(process.env.ENDPOINT_URL, { jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }, 2000); if (r.json?.result) return now(); } catch {}
@@ -412,7 +418,12 @@ async function pollRealHead() {
       try { const b = await rpc("eth_getBlockByNumber", [hex(n), false]); if (b?.transactions?.length) return (realTxs = b.transactions.slice(0, 50)); } catch {}
     }
   };
-  while (realHead === null) { await poll(); if (realHead === null) await sleep(1000); }
+  const deadline = now() + Number(process.env.ENDPOINT_WAIT_S || 120) * 1000;
+  while (realHead === null) {
+    if (now() > deadline) throw new Error("the first UPSTREAMS URL returned no eth_blockNumber");
+    await poll();
+    if (realHead === null) await sleep(1000);
+  }
   await findTxs();
   if (!realTxs.length) throw new Error("found no transactions in the 20 blocks below the head of the first UPSTREAMS URL");
   const heads = setInterval(poll, 1000);
@@ -501,8 +512,12 @@ async function idleRun(name, c, dir, child) {
   // Time from process start to first successful RPC response on every chain, then pure idle.
   const t0 = child.startedAt;
   const firstOk = {};
+  const deadline = now() + Number(process.env.ENDPOINT_WAIT_S || 120) * 1000;
   for (const chain of CHAINS) {
     while (!firstOk[chain]) {
+      const failure = startupFailure(child);
+      if (failure) throw new Error(failure);
+      if (now() > deadline) throw new Error(`no successful eth_blockNumber on chain ${chain}`);
       try { const r = await postJson(`http://127.0.0.1:${c.port}${routeFor(c, chain)}`, { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }, 2000);
         if (r.status === 200 && r.json?.result) firstOk[chain] = now(); } catch {}
       if (!firstOk[chain]) await sleep(50);
