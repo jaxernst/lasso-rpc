@@ -74,10 +74,12 @@ function analyzeCandidate(dir) {
   const meta = JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8"));
   const all = readJsonl(path.join(dir, "client.jsonl")).sort((a, b) => a.seq - b.seq);
   const up = upstreamCalls(readJsonl(path.join(dir, "upstream.jsonl")));
-  const out = { candidate: meta.candidate, meta: { start_to_healthy_ms: meta.start_to_healthy_ms ?? null, resources_during_run: meta.resources_during_run ?? null,
+  const kind = meta.idle_s ? "idle" : meta.backfill ? "backfill" : "workload";
+  const out = { candidate: meta.candidate, kind, meta: { start_to_healthy_ms: meta.start_to_healthy_ms ?? null, resources_during_run: meta.resources_during_run ?? null,
     load_avg_start: meta.load_avg_start ?? null, load_avg_end: meta.load_avg_end ?? null, switch_since_ready_ms: meta.switch_since_ready_ms ?? null, error: meta.error ?? null } };
 
-  if (meta.idle_start) {
+  if (kind === "idle") {
+    if (meta.error || !meta.idle_start) return out;
     const res = JSON.parse(fs.readFileSync(path.join(dir, "resources.json"), "utf8"));
     const idle = up.filter((u) => u.t >= meta.idle_start && u.t <= meta.idle_end);
     const mins = (meta.idle_end - meta.idle_start) / 60000;
@@ -139,16 +141,17 @@ function analyzeCandidate(dir) {
   out.untagged = { upstream_by_method: count(inRun, (u) => u.m), client_by_method: count(client.filter((x) => !x.tag), (r) => r.method),
     background_only_methods: Object.fromEntries(Object.entries(count(inRun, (u) => u.m)).filter(([m]) => !UNTAGGED_CLIENT.includes(m))) };
 
-  // Freshness.
+  // Freshness. Real endpoints have no mock clock, so it is unavailable there.
   const withBlock = client.filter((r) => r.ok && r.served_block !== null && r.served_block !== undefined);
   const stale = withBlock.filter((r) => r.lag_blocks > 1);
   const byRecv = [...withBlock].sort((a, b) => a.t_recv - b.t_recv);
   let max = -Infinity, back = 0, backGt1 = 0;
   for (const r of byRecv) { if (r.served_block < max) { back++; if (max - r.served_block > 1) backGt1++; } max = Math.max(max, r.served_block); }
   const lags = withBlock.map((r) => r.lag_blocks);
-  out.freshness = { reads_with_block: withBlock.length, stale_reads: stale.length, stale_rate: withBlock.length ? stale.length / withBlock.length : null, stale_by_method: count(stale, (r) => r.method),
-    max_lag_blocks: lags.length ? Math.max(...lags) : null, backwards_any: back, backwards_gt1: backGt1 };
-  if (switchMs !== undefined) {
+  out.freshness = meta.real ? { reads_with_block: null, stale_reads: null, stale_rate: null, stale_by_method: null, max_lag_blocks: null, backwards_any: null, backwards_gt1: null }
+    : { reads_with_block: withBlock.length, stale_reads: stale.length, stale_rate: withBlock.length ? stale.length / withBlock.length : null, stale_by_method: count(stale, (r) => r.method),
+      max_lag_blocks: lags.length ? Math.max(...lags) : null, backwards_any: back, backwards_gt1: backGt1 };
+  if (switchMs !== undefined && !meta.real) {
     const rate = (recs) => { const n = recs.length; return { n, stale: recs.filter((r) => r.lag_blocks > 1).length }; };
     out.freshness.before_switch = rate(withBlock.filter((r) => r.since_ready_ms < switchMs));
     out.freshness.after_switch_10s = Array.from({ length: 12 }, (_, i) => rate(inWindow(withBlock, switchMs + i * 10_000, switchMs + (i + 1) * 10_000)));
@@ -180,11 +183,12 @@ const f3 = (x) => (x === null || x === undefined ? "n/a" : String(Math.round(x *
 const pc = (x) => (x === null || x === undefined ? "n/a" : `${(x * 100).toFixed(1)}%`);
 const hist = (h) => Object.entries(h).map(([k, v]) => `${k}: ${v}`).join(", ");
 const READ_HEAD = "| candidate | success | success 0-30 s | success after 30 s | first success ms | p50 | p95 | p99 | max | upstream calls per tagged request | stale reads | backwards (>1 block) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+const failed = (a) => Boolean(a.meta.error) || (a.kind === "idle" ? !a.idle : !a.overall);
 const failedRow = (c, a) => `| ${c} | failed: ${(a.meta.error ?? "no client records").split("\n")[0].slice(0, 100)} |\n`;
 const readRow = (c, a) => {
   if (!a.overall || a.meta.error) return failedRow(c, a);
-  const l = a.overall.latency_success;
-  return `| ${c} | ${pc(a.overall.success_rate)} | ${pc(a.first_30s.success_rate)} | ${pc(a.after_30s.success_rate)} | ${f(a.first_success_ms)} | ${f(l.p50)} | ${f(l.p95)} | ${f(l.p99)} | ${f(l.max)} | ${f3(a.tagged.calls_per_request)} | ${a.freshness.stale_reads} (${pc(a.freshness.stale_rate)}) | ${a.freshness.backwards_any} (${a.freshness.backwards_gt1}) |\n`;
+  const l = a.overall.latency_success, fr = a.freshness;
+  return `| ${c} | ${pc(a.overall.success_rate)} | ${pc(a.first_30s.success_rate)} | ${pc(a.after_30s.success_rate)} | ${f(a.first_success_ms)} | ${f(l.p50)} | ${f(l.p95)} | ${f(l.p99)} | ${f(l.max)} | ${f3(a.tagged.calls_per_request)} | ${fr.stale_reads === null ? "n/a" : `${fr.stale_reads} (${pc(fr.stale_rate)})`} | ${fr.backwards_any === null ? "n/a" : `${fr.backwards_any} (${fr.backwards_gt1})`} |\n`;
 };
 const BACKFILL_HEAD = "| candidate | windows ok | complete passes | upstream calls per window | window p50 / p95 ms | pass wall time p50 / max s | upstream calls by upstream and outcome | client errors |\n|---|---|---|---|---|---|---|---|\n";
 const secs = (ms) => (ms === null || ms === undefined ? "n/a" : (ms / 1000).toFixed(1));
@@ -201,22 +205,25 @@ const sendRow = (c, b) => `| ${c} | ${b.client_success}/${b.txs} | ${hist(b.upst
 let md = "";
 for (const [run, cands] of Object.entries(results.scenarios)) {
   md += `\n### ${run}\n\n`;
-  const first = Object.values(cands)[0];
-  if (first?.idle) {
+  const entries = Object.entries(cands);
+  const kind = entries[0]?.[1].kind;
+  if (kind === "idle") {
     md += "| candidate | chains | start to first success | start to all chains | idle upstream calls/min | per upstream per min | methods (10 min) | RSS MB median (max) | CPU % mean (max) |\n|---|---|---|---|---|---|---|---|---|\n";
-    for (const [c, a] of Object.entries(cands)) {
+    for (const [c, a] of entries) {
       const i = a.idle;
-      md += `| ${c} | ${i.chains} | ${i.start_to_first_success_ms} ms | ${f(i.start_to_all_chains_ms, " ms")} | ${i.calls_per_minute} | ${i.calls_per_upstream_per_minute} | ${Object.entries(i.by_method).map(([k, v]) => `${k} ${v}`).join(", ")} | ${i.rss_mb.median} (${i.rss_mb.max}) | ${i.cpu_pct.mean} (${i.cpu_pct.max}) |\n`;
+      md += failed(a) ? failedRow(c, a)
+        : `| ${c} | ${i.chains} | ${i.start_to_first_success_ms} ms | ${f(i.start_to_all_chains_ms, " ms")} | ${i.calls_per_minute} | ${f3(i.calls_per_upstream_per_minute)} | ${Object.entries(i.by_method).map(([k, v]) => `${k} ${v}`).join(", ")} | ${i.rss_mb.median} (${i.rss_mb.max}) | ${i.cpu_pct.mean} (${i.cpu_pct.max}) |\n`;
     }
     continue;
   }
-  if (Object.values(cands).some((a) => a.backfill)) {
+  if (kind === "backfill") {
     md += BACKFILL_HEAD;
-    for (const [c, a] of Object.entries(cands)) md += backfillRow(c, a);
+    for (const [c, a] of entries) md += backfillRow(c, a);
     continue;
   }
-  const onlySends = Object.values(cands).every((a) => a.broadcast && a.broadcast.txs === a.overall?.requests);
-  if (!onlySends) { md += READ_HEAD; for (const [c, a] of Object.entries(cands)) md += readRow(c, a); }
+  const good = entries.filter(([, a]) => !failed(a)).map(([, a]) => a);
+  const onlySends = good.length > 0 && good.every((a) => a.broadcast && a.broadcast.txs === a.overall.requests);
+  if (!onlySends) { md += READ_HEAD; for (const [c, a] of entries) md += readRow(c, a); }
   if (Object.values(cands).some((a) => a.freshness?.after_switch_10s?.some((w) => w.stale))) {
     md += "\nStale reads of reads with a block, before the switch and per 10 s after it:\n\n| candidate | before | " + Array.from({ length: 12 }, (_, i) => `+${i * 10} s`).join(" | ") + " |\n|---|---|" + "---|".repeat(12) + "\n";
     for (const [c, a] of Object.entries(cands)) if (a.freshness?.after_switch_10s) md += `| ${c} | ${a.freshness.before_switch.stale}/${a.freshness.before_switch.n} | ${a.freshness.after_switch_10s.map((w) => `${w.stale}/${w.n}`).join(" | ")} |\n`;
@@ -224,7 +231,7 @@ for (const [run, cands] of Object.entries(results.scenarios)) {
   if (Object.values(cands).some((a) => a.broadcast)) {
     if (!onlySends) md += "\nSends:\n\n";
     md += SEND_HEAD;
-    for (const [c, a] of Object.entries(cands)) if (a.broadcast) md += sendRow(c, a.broadcast);
+    for (const [c, a] of entries) md += failed(a) ? (onlySends ? failedRow(c, a) : "") : a.broadcast ? sendRow(c, a.broadcast) : "";
     const withWindows = Object.entries(cands).filter(([, a]) => a.broadcast && !onlySends);
     if (withWindows.length) {
       const sw = withWindows.some(([, a]) => a.broadcast.after_switch_30s);
@@ -256,7 +263,7 @@ for (const run of runNames) { const m = run.match(/^(.+)-r(\d+)$/); if (m) (grou
 for (const s of plan?.scenarios ?? []) for (let i = 1; i <= plan.repeats; i++) (groups[s] ||= new Set()).add(`${s}-r${i}`);
 results.repeats = {};
 const repeatGroups = Object.entries(groups).map(([s, runs]) => [s, [...runs].sort((a, b) => a.localeCompare(b, "en", { numeric: true }))])
-  .filter(([, runs]) => !runs.some((r) => Object.values(results.scenarios[r] ?? {}).some((a) => a.idle)));
+  .filter(([, runs]) => !runs.some((r) => Object.values(results.scenarios[r] ?? {}).some((a) => a.kind === "idle")));
 if (repeatGroups.length) {
   md += "\n## Repeats\n\nEach cell is the lowest and highest value across repeats. A row agrees when success and stale reads stay within " +
     `${TOLERANCE.success_pp} percentage point, p50 and p95 within the larger of ${TOLERANCE.latency_ms} ms and ${TOLERANCE.latency_frac * 100}% of the lowest value, ` +

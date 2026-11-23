@@ -26,6 +26,9 @@ export const trueHead = (now = Date.now()) => BASE_BLOCK + (BURST ? burstHead(no
 const hex = (n) => "0x" + BigInt(n).toString(16);
 const word = (n) => "0x" + BigInt(n).toString(16).padStart(64, "0");
 const blockHash = (n) => "0x" + crypto.createHash("sha256").update("block:" + n).digest("hex");
+// Each block holds one transaction. Its hash starts with the block number, which is how
+// eth_getTransactionReceipt knows where any harness hash was mined.
+const blockTxHash = (n) => "0x" + BigInt(n).toString(16).padStart(16, "0") + crypto.createHash("sha256").update("tx:" + n).digest("hex").slice(0, 48);
 const blockTimestamp = (n) => Math.floor((START_MS + (n - BASE_BLOCK) * BLOCK_MS) / 1000);
 const ZERO32 = "0x" + "0".repeat(64);
 const ZERO20 = "0x" + "0".repeat(40);
@@ -49,7 +52,8 @@ function block(n, full) {
     receiptsRoot: "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
     miner: ZERO20, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x", size: "0x220",
     gasLimit: hex(30_000_000), gasUsed: "0x0", timestamp: hex(blockTimestamp(n)),
-    transactions: full ? [] : [], uncles: [], baseFeePerGas: hex(30_000_000_000), mixHash: ZERO32,
+    transactions: full ? [{ hash: blockTxHash(n), blockHash: blockHash(n), blockNumber: hex(n), transactionIndex: "0x0", from: ZERO20, to: ZERO20,
+      nonce: "0x0", value: "0x0", gas: hex(21000), gasPrice: hex(30_000_000_000), input: "0x", type: "0x0" }] : [blockTxHash(n)], uncles: [], baseFeePerGas: hex(30_000_000_000), mixHash: ZERO32,
     withdrawals: [], withdrawalsRoot: "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421",
   };
 }
@@ -174,7 +178,7 @@ class Instance {
         for (let n = from; n <= to; n++) {
           if (n % 10 !== 0) continue;
           logs.push({ address: f.address ?? ZERO20, topics: [ZERO32], data: word(n), blockNumber: hex(n), blockHash: blockHash(n),
-            transactionHash: "0x" + crypto.createHash("sha256").update("tx:" + n).digest("hex"), transactionIndex: "0x0", logIndex: "0x0", removed: false });
+            transactionHash: blockTxHash(n), transactionIndex: "0x0", logIndex: "0x0", removed: false });
         }
         return ok(logs);
       }

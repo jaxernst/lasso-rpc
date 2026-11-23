@@ -109,13 +109,13 @@ The client backfills like an indexer. Every 6 s a pass starts that reads 100,000
 
 ### Mock chain
 
-The mocks share one deterministic chain: a block every 2 s from a fixed epoch, hashes derived from the block number, and a log at every tenth block. All instances agree, and balance, nonce and `eth_call` results encode the block they were served at, so the kit can tell how stale each answer was. Each request's params carry a unique tag that the mock logs, which gives exact upstream calls per client request.
+The mocks share one deterministic chain: a block every 2 s from a fixed epoch, hashes derived from the block number, one transaction per block, and a log at every tenth block. All instances agree, and balance, nonce and `eth_call` results encode the block they were served at, so the kit can tell how stale each answer was. Each request's params carry a unique tag that the mock logs, which gives exact upstream calls per client request.
 
 Sends are real EIP-1559 transfers: 0 value to a fixed address, signed with a fixed test key (the keccak-256 of `lasso routing trial kit test key`) for the scenario's chain id, with nonces counting up from 0. `tx.mjs` builds them with `node:crypto` only, and they match a common EVM library byte for byte. The mock answers a send with the transaction's keccak-256 hash.
 
 ### Success
 
-A request succeeds when a JSON-RPC result arrives and passes the kit's checks: a receipt is not null, `eth_getLogs` returns one log per tenth block in the range, `eth_chainId` names the scenario's chain, and a send returns the transaction's hash. A result that fails a check counts as a failure, listed as `invalid result` in the errors. `client.jsonl` keeps both: `rpc_ok` for any result, `ok` for a checked one. Success rates, latencies and repeat spreads use `ok`.
+A request succeeds when a JSON-RPC result arrives and passes the kit's checks: a receipt is not null, `eth_getLogs` returns exactly one log for every tenth block in the range, each from the requested address, with no duplicates, gaps or blocks outside the range, `eth_chainId` names the scenario's chain, and a send returns the transaction's hash. A result that fails a check counts as a failure, listed as `invalid result` in the errors. `client.jsonl` keeps both: `rpc_ok` for any result, `ok` for a checked one. Success rates, latencies and repeat spreads use `ok`.
 
 ## Repeats
 
@@ -144,7 +144,7 @@ The scenarios are built so the differences they show are larger than these bound
 | `REPEATS`, `DURATION` | `run.sh` repeats (default 3) and seconds per scenario (default 180). |
 | `OUT` | `run.sh` results directory (default `scripts/trial/results/<UTC time>`). |
 | `PORT_BASE` | first port the kit uses (default 43000). It uses 60 ports per candidate, 360 in all. |
-| `RUN_ID`, `RESULTS_DIR` | `runner.mjs` run name (default: the scenario) and parent directory (default `scripts/trial/results/runs`). |
+| `RUN_ID`, `RESULTS_DIR` | `runner.mjs` run name (default: the scenario and the UTC time) and parent directory (default `scripts/trial/results/runs`). The runner refuses a run directory that already exists. |
 | `IDLE_S` | overrides the 600 s idle length of S8 and S10. |
 | `BLOCK_PATTERN` | `burst` makes the mock chain alternate 10 s of 250 ms blocks with 10 s of 2 s blocks. |
 | `LASSO_PROBE_MS`, `LASSO_MONITORING` | Lasso `monitoring` settings for the trial chain; the second takes JSON. Unset leaves Lasso's defaults. |
@@ -168,7 +168,7 @@ UPSTREAMS=https://rpc-a.example,https://rpc-b.example,https://rpc-c.example CHAI
   node scripts/trial/runner.mjs R direct,race2,lasso-fastest,lasso-bf 180
 ```
 
-`direct` uses the first URL and `race2` the first two. The workload takes its head from polling the first URL once a second. Without mocks the tables report success, errors and latency only. Upstream calls and stale reads need the mock logs and clock, so they show as n/a and stay out of repeat checks. Each candidate sends 900 requests in 3 minutes (`race2` sends that to two endpoints), so mind rate limits.
+`direct` uses the first URL and `race2` the first two. The workload takes its head from polling the first URL once a second, and its receipt reads use transactions mined at least 3 blocks below that head, refreshed every 15 s. Without mocks the tables report success, errors and latency only. Upstream calls, stale reads and backwards answers need the mock logs and clock, so they show as n/a and stay out of repeat checks. To try this mode without public endpoints, start `node scripts/trial/mock.mjs <config.json>` yourself and pass its URLs as `UPSTREAMS` with `CHAIN_ID=137`. Each candidate sends 900 requests in 3 minutes (`race2` sends that to two endpoints), so mind rate limits.
 
 The URLs are written into the configuration files under `results/`. If they contain keys, remove those files before sharing results. The runner prints the same warning.
 

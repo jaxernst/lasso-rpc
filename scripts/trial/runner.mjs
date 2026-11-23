@@ -89,9 +89,14 @@ for (const n of requested) if (!CANDIDATES[n]) throw new Error("unknown candidat
 const candNames = scenario.idle_s ? requested.filter((n) => CANDIDATES[n].proxy === "lasso") : requested;
 if (candNames.length < requested.length) console.log(`${scenarioName} is idle; skipping ${requested.filter((n) => !candNames.includes(n)).join(", ")}`);
 const DURATION_S = Number(durArg || 180);
-const RUN_ID = process.env.RUN_ID || scenarioName;
+const RUN_ID = process.env.RUN_ID || `${scenarioName}-${new Date().toISOString().replace(/[-:]|\.\d+/g, "")}`;
 const OUT = path.join(process.env.RESULTS_DIR || path.join(KIT, "results", "runs"), RUN_ID);
-fs.mkdirSync(OUT, { recursive: true });
+// Claim the run directory before anything else, so a repeated RUN_ID never touches the earlier run.
+fs.mkdirSync(path.dirname(OUT), { recursive: true });
+try { fs.mkdirSync(OUT); } catch (e) {
+  if (e.code === "EEXIST") throw new Error(`${OUT} already exists; choose another RUN_ID or RESULTS_DIR`);
+  throw e;
+}
 const REAL = process.env.UPSTREAMS ? process.env.UPSTREAMS.split(",").map((u) => u.trim()).filter(Boolean) : null;
 if (Boolean(REAL) !== Boolean(scenario.real)) throw new Error("scenario R needs UPSTREAMS, and UPSTREAMS works only with scenario R");
 if (REAL) console.error("warning: R mode writes the UPSTREAMS URLs into configuration files under " + OUT + ". Remove any keys before sharing results.");
@@ -100,6 +105,8 @@ const CHAINS = REAL ? [Number(requireEnv("CHAIN_ID"))] : scenario.chains ?? [137
 const BLOCK_TIME_MS = Number(process.env.BLOCK_TIME_MS || 2000);
 // With real endpoints the head comes from polling the first upstream; with mocks it is the mock clock.
 let realHead = null;
+// Transaction hashes mined a few blocks below the real head, for the receipt reads in R.
+let realTxs = [];
 const headNow = () => (REAL ? realHead : trueHead());
 
 function requireEnv(name) {
@@ -145,10 +152,26 @@ function buildRequest(seq, method, nonce) {
     case "eth_getTransactionCount": return { id, method, params: ["0xa1" + s.padStart(38, "0"), "latest"] };
     case "eth_call": return { id, method, params: [{ to: "0x00000000000000000000000000000000c0ffee01", data: "0x70a08231" + s.padStart(64, "0") }, "latest"] };
     case "eth_getLogs": return getLogs(seq, H - 100, H - 1);
-    case "eth_getTransactionReceipt": return { id, method, params: ["0x" + pad(H - 3, 16) + s.padStart(48, "0")] };
+    case "eth_getTransactionReceipt": return { id, method, params: [REAL ? realTxs[seq % realTxs.length] : "0x" + pad(H - 3, 16) + s.padStart(48, "0")] };
     case "eth_sendRawTransaction": return { id, method, params: [signedTransfer({ chainId: CHAINS[0], nonce }).raw] };
     default: return { id, method, params: [] };
   }
+}
+// The mock chain has exactly one log at every tenth block. A result must hold one log for each
+// such block in the range, from the requested address, and nothing else.
+function checkLogs(result, req) {
+  if (!Array.isArray(result)) return "logs_not_array";
+  const { from, to } = req.expectLogs;
+  const address = req.params[0].address.toLowerCase();
+  const seen = new Set();
+  for (const log of result) {
+    const n = typeof log?.blockNumber === "string" ? Number(BigInt(log.blockNumber)) : NaN;
+    if (!(n >= from && n <= to) || n % 10 !== 0) return "logs_wrong_block";
+    if (String(log.address).toLowerCase() !== address) return "logs_wrong_address";
+    if (seen.has(n)) return "logs_duplicate";
+    seen.add(n);
+  }
+  return seen.size === Math.floor(to / 10) - Math.floor((from - 1) / 10) ? null : "logs_missing";
 }
 function getLogs(seq, from, to) {
   return { id: seq + 1, method: "eth_getLogs", params: [{ address: "0x10" + pad(seq, 10).padStart(38, "0"), fromBlock: hex(from), toBlock: hex(to) }], expectLogs: { from, to } };
@@ -382,11 +405,19 @@ async function applySwitch(c, meta, runStart) {
 }
 
 async function pollRealHead() {
-  const poll = async () => {
-    try { const r = await postJson(REAL[0], { jsonrpc: "2.0", id: 1, method: "eth_blockNumber", params: [] }, 5000); if (r.json?.result) realHead = Number(BigInt(r.json.result)); } catch {}
+  const rpc = async (method, params) => (await postJson(REAL[0], { jsonrpc: "2.0", id: 1, method, params }, 5000)).json?.result;
+  const poll = async () => { try { const h = await rpc("eth_blockNumber", []); if (h) realHead = Number(BigInt(h)); } catch {} };
+  const findTxs = async () => {
+    for (let n = realHead - 3; n > realHead - 23; n--) {
+      try { const b = await rpc("eth_getBlockByNumber", [hex(n), false]); if (b?.transactions?.length) return (realTxs = b.transactions.slice(0, 50)); } catch {}
+    }
   };
   while (realHead === null) { await poll(); if (realHead === null) await sleep(1000); }
-  return setInterval(poll, 1000);
+  await findTxs();
+  if (!realTxs.length) throw new Error("found no transactions in the 20 blocks below the head of the first UPSTREAMS URL");
+  const heads = setInterval(poll, 1000);
+  const txs = setInterval(findTxs, 15_000);
+  return { stop: () => { clearInterval(heads); clearInterval(txs); } };
 }
 
 async function runWorkload(name, c, dir, meta, startAt) {
@@ -412,10 +443,7 @@ async function runWorkload(name, c, dir, meta, startAt) {
       const rpcOk = r.status === 200 && result !== undefined && !error;
       let dataProblem = null;
       if (rpcOk && method === "eth_getTransactionReceipt" && result === null) dataProblem = "null_receipt";
-      if (!REAL && rpcOk && method === "eth_getLogs" && req.expectLogs) {
-        const exp = Math.floor(req.expectLogs.to / 10) - Math.floor((req.expectLogs.from - 1) / 10);
-        if (!Array.isArray(result) || result.length !== exp) dataProblem = `logs_${Array.isArray(result) ? result.length : "x"}_of_${exp}`;
-      }
+      if (!REAL && rpcOk && method === "eth_getLogs" && req.expectLogs) dataProblem = checkLogs(result, req);
       if (rpcOk && method === "eth_chainId" && result !== hex(CHAINS[0])) dataProblem = "wrong_chain";
       if (rpcOk && method === "eth_sendRawTransaction" && result !== txHash(req.params[0])) dataProblem = "wrong_tx_hash";
       const ok = rpcOk && !dataProblem;
@@ -501,9 +529,8 @@ async function idleRun(name, c, dir, child) {
 async function prepare(name) {
   const c = CANDIDATES[name];
   const dir = path.join(OUT, name);
-  fs.rmSync(dir, { recursive: true, force: true });
-  fs.mkdirSync(dir, { recursive: true });
-  const meta = { scenario: scenarioName, candidate: name, run_id: RUN_ID, rate: RATE, duration_s: DURATION_S, jitter: JITTER, seed: SEED, real: Boolean(REAL),
+  fs.mkdirSync(dir);
+  const meta = { scenario: scenarioName, candidate: name, run_id: RUN_ID, rate: RATE, duration_s: DURATION_S, jitter: JITTER, seed: SEED, real: Boolean(REAL), idle_s: scenario.idle_s ?? null,
     upstreams: scenario.up, chains: CHAINS, switch_at_s: scenario.switch_at_s ?? null, switch: scenario.switch ?? null, then: scenario.then ?? null,
     block_pattern: process.env.BLOCK_PATTERN ?? null, sends_every_ms: scenario.sends_every_ms ?? null, backfill: scenario.backfill ?? null };
   const ctx = { name, c, dir, meta, mock: null, proxy: null };
@@ -551,10 +578,10 @@ async function finish({ name, dir, meta, mock, proxy }) {
 }
 
 fs.writeFileSync(path.join(OUT, "run.json"), JSON.stringify({ scenario: scenarioName, candidates: candNames, duration_s: DURATION_S }, null, 2));
-const headTimer = REAL ? await pollRealHead() : null;
+const realPoller = REAL ? await pollRealHead() : null;
 const ctxs = await Promise.all(candNames.map(prepare));
 const startAt = now() + 250;
 await Promise.all(ctxs.map((ctx) => execute(ctx, startAt)));
-if (headTimer) clearInterval(headTimer);
+realPoller?.stop();
 await Promise.all(ctxs.map(finish));
 process.exit(ctxs.some((ctx) => ctx.meta.error) ? 1 : 0);
