@@ -117,8 +117,8 @@ curl --fail http://localhost:4000/api/health
 Open **<http://localhost:4000/dashboard>**. The prebuilt image supports Linux AMD64
 and ARM64; no source checkout or build tools required.
 
-Without Docker, download the standalone archive for Linux x86_64, Linux aarch64
-or macOS on Apple silicon from the
+Without Docker on Linux, download the standalone archive for x86_64 or aarch64
+from the
 [v0.9.0 release](https://github.com/jaxernst/lasso-rpc/releases/tag/v0.9.0). It
 runs without Erlang, Docker or environment variables and serves the bundled
 profiles on port 4000:
@@ -128,6 +128,11 @@ gh release download v0.9.0 --repo jaxernst/lasso-rpc --pattern 'lasso-*-linux-x8
 tar -xzf lasso-*-linux-x86_64.tar.gz
 lasso/bin/lasso start
 ```
+
+On macOS, run the Docker image. The macOS archive for Apple silicon is unsigned
+and meant for bundling Lasso inside another application's install. If macOS
+blocks a copy downloaded in a browser, clear the quarantine flag on the
+downloaded file before unpacking it: `xattr -d com.apple.quarantine <file>`.
 
 See [Standalone Archives](docs/DEPLOYMENT.md#standalone-archives) for each
 platform's requirements, checksums and build provenance.
