@@ -9,7 +9,6 @@ defmodule Lasso.RPC.ProviderKnowledge do
 
   alias Lasso.RPC.ProviderKnowledge.Learners.{
     HistoricalDepth,
-    LocalResponseLatency,
     MethodRefusal,
     OutcomeStatistics,
     SpanBracket
@@ -25,7 +24,6 @@ defmodule Lasso.RPC.ProviderKnowledge do
     do:
       Application.get_env(:lasso, :provider_knowledge_learners, [
         OutcomeStatistics,
-        LocalResponseLatency,
         MethodRefusal,
         SpanBracket,
         HistoricalDepth
@@ -195,43 +193,6 @@ defmodule Lasso.RPC.ProviderKnowledge do
 
   @spec outcome_stats(map()) :: {:ok, map()} | :unknown
   def outcome_stats(scope), do: read_hint(scope, :outcome_stats, Map.get(scope, :dimension, :all))
-
-  @doc "Reads qualified successful-response latency for an exact bounded method on this node."
-  @spec response_latency(map()) :: {:ok, map()} | :unknown
-  def response_latency(
-        %{
-          subject: subject,
-          profile: profile,
-          chain_id: chain_id,
-          partition: partition,
-          instance_id: instance_id,
-          method: method
-        } = scope
-      )
-      when is_binary(subject) and is_binary(profile) and is_integer(chain_id) and
-             is_binary(instance_id) and is_binary(method) do
-    method_key = BoundedIdentifier.encode(method)
-
-    dimension =
-      {BoundedIdentifier.encode(Atom.to_string(Node.self())),
-       BoundedIdentifier.encode(instance_id), method_key}
-
-    key = {subject, partition, dimension}
-    target = {profile, chain_id, subject}
-
-    with true <- is_binary(method_key),
-         {:ok, %{epoch: epoch} = hint} <-
-           ReadModel.prediction(LocalResponseLatency, key),
-         true <- epoch == Persistence.adapter().epoch(target),
-         true <- allowed_learning?(scope, :response_latency, dimension),
-         true <- epoch == Persistence.adapter().epoch(target) do
-      {:ok, Map.merge(hint, %{source: :local, epoch: epoch})}
-    else
-      _ -> :unknown
-    end
-  end
-
-  def response_latency(_scope), do: :unknown
 
   @doc """
   Adapts captured operator and probe capability facts to the knowledge read interface.

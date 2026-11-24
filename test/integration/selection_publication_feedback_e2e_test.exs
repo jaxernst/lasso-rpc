@@ -410,10 +410,8 @@ defmodule Lasso.RPC.SelectionPublicationFeedbackE2ETest do
           :routing_control_scope,
           :routing_control,
           :routing_system_prior,
-          :routing_fastest_winner,
           :routing_family,
-          :routing_system_family,
-          :routing_fastest_family
+          :routing_system_family
         ],
         chain in Tuple.to_list(key) do
       row

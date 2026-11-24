@@ -305,7 +305,7 @@ for the dispatch-budget and recovered-head-preference boundaries.
 
 For upgrades from v0.5.1, rename `LW_BETA` to `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); the old variable is no longer read, and startup logs a warning when it is set. Existing `latency-weighted` URLs and `strategy` values remain permanent aliases.
 
-**Balanced Fast** — Weighted random ordering of reliable upstreams by their best latency evidence: client samples in the method family, else the same family's system prior. One reliable upstream with no latency evidence yet competes in each ranking at the weight of the quickest, so it earns samples instead of being starved; upstreams with recent failures follow the reliable ones. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. See [balanced fast](ROUTING.md#balanced-fast). `latency-weighted` is an alias.
+**Balanced Fast** — Weighted random ordering of reliable upstreams by their best latency evidence: client samples in the method family, else the same family's system prior. One reliable upstream with no latency evidence yet competes in each ranking at 1/8 of the quickest's weight, so it earns samples instead of being starved; upstreams with recent failures follow the reliable ones. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. See [balanced fast](ROUTING.md#balanced-fast). `latency-weighted` is an alias.
 
 ### Health-Based Tiering
 
@@ -364,28 +364,6 @@ Unsupported methods and categories keep a provider out of a request while
 another provider supports the method. When none does, Lasso tries the
 unsupported providers as a last resort instead of refusing the request. `max_block_age` reads the request's block number parameter, so
 it has no effect on `eth_getLogs`; use `max_block_range` for log queries. Startup and reload now reject `block_age_methods` entries without a readable block number parameter, including previously accepted `eth_getLogs` entries.
-
-## Read Exploration Policy
-
-Bounded read exploration is disabled by default. Operators may enable it in
-Elixir application configuration for adaptive routing experiments:
-
-```elixir
-config :lasso, :routing_exploration,
-  enabled: false,
-  sample_every: 100,
-  disabled_profiles: []
-```
-
-`enabled: true` opts in. `sample_every` is a positive integer denominator; 100
-samples eligible reads with 1% probability before admission and cooldown
-checks. `disabled_profiles` contains canonical file-profile IDs whose requests
-must use ordinary routing. These are operator controls, not request URL
-parameters. Fixed limits still apply: one active attempt per node/profile/
-chain/family, a one-second interval, ten-/thirty-second route cooldowns, at
-least 500 ms remaining, and a maximum attempt deadline of 100 ms or ten
-percent of the remaining request time. See [routing](ROUTING.md#bounded-read-exploration)
-for eligibility, fallback, censoring and telemetry semantics.
 
 ## Provider Credentials
 
@@ -551,7 +529,7 @@ inspection remains available. Application configuration uses
 `:historical_depth` and `:span_limit` keys. Runtime environment values populate
 that map at boot. No profile schema or database migration is required.
 
-Quota-exhaustion and response-latency effects remain off. Claim auditing also
+The quota-exhaustion effect remains off. Claim auditing also
 remains off. The three settled effects accept no `shadow` mode. Knowledge uses
 node-local memory, no durable knowledge store, and no background model service.
 See [routing](ROUTING.md#learned-provider-limits) for evidence and safety rules.

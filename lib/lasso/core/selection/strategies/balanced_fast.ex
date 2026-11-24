@@ -4,11 +4,15 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
   quickest providers. Upstreams with recent failure evidence follow, ordered the same way.
 
   Weights are dimensionless latency ratios over the best current evidence each upstream has:
-  client samples, else the same family's system prior. One upstream with no latency evidence
-  joins each group's permutation at the weight of the quickest, so it earns a sample instead of
-  being starved; the group's other unmeasured upstreams follow its permutation, then stale ones.
-  Sampling uses exponential-race keys, which produces a correct weighted permutation without a
-  weight floor or hidden success-rate multiplier.
+  client samples, else the same family's system prior, raised to an exponent. This strategy
+  uses 3.0 (`:balanced_fast_beta`); `Fastest` ranks through `rank/6` at a sharper exponent.
+
+  An upstream is unproven when it has no latency evidence or only stale evidence. One unproven
+  upstream joins each group's permutation at 1/8 of the quickest's weight, so it earns a sample
+  instead of being starved and a route whose evidence expired is challenged again, while one that
+  only fails costs a small share of first picks; the group's other unproven upstreams follow its
+  permutation. Sampling uses exponential-race keys, which produces a correct weighted
+  permutation without a weight floor or hidden success-rate multiplier.
   """
 
   @behaviour Lasso.RPC.Strategy
@@ -16,6 +20,7 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
   alias Lasso.RPC.{RoutingEvidence, StrategyContext}
 
   @default_beta 3.0
+  @unproven_weight 1 / 8
 
   @impl true
   def prepare_context(_profile, chain_id, _method, timeout) do
@@ -24,6 +29,16 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
 
   @impl true
   def rank_channels(channels, _method, ctx, profile, chain_id) do
+    beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
+    rank(channels, ctx, profile, chain_id, :balanced_fast, beta)
+  end
+
+  @doc """
+  Ranks channels by the weighted latency permutation at exponent `beta`, reporting an
+  availability degradation under `strategy` when no channel is qualified.
+  """
+  @spec rank([map()], StrategyContext.t(), binary(), pos_integer(), atom(), number()) :: [map()]
+  def rank(channels, ctx, profile, chain_id, strategy, beta) do
     summaries =
       ctx.routing_summaries ||
         RoutingEvidence.batch_get_summaries(profile, channels, chain_id, ctx.workload_key)
@@ -31,7 +46,7 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
     if not Enum.any?(channels, &RoutingEvidence.qualified?(summary(summaries, &1))) do
       RoutingEvidence.emit_availability_degradation(
         profile,
-        :balanced_fast,
+        strategy,
         chain_id,
         ctx.workload_key,
         length(channels)
@@ -41,29 +56,27 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
     {unreliable, reliable} =
       Enum.split_with(channels, &match?(%{state: :unreliable}, summary(summaries, &1)))
 
-    weighted_available(reliable, summaries) ++ weighted_available(unreliable, summaries)
+    weighted_available(reliable, summaries, beta) ++
+      weighted_available(unreliable, summaries, beta)
   end
 
-  defp weighted_available(channels, summaries) do
-    {stale, current} =
-      Enum.split_with(channels, &match?(%{state: :stale}, summary(summaries, &1)))
-
-    {measured, unmeasured} = Enum.split_with(current, &measured?(summary(summaries, &1)))
-    # One unmeasured upstream per request competes with the measured ones, so this ranking never
+  defp weighted_available(channels, summaries, beta) do
+    {measured, unproven} = Enum.split_with(channels, &measured?(summary(summaries, &1)))
+    # One unproven upstream per request competes with the measured ones, so this ranking never
     # puts two unproven upstreams ahead of a proven one in the same group.
-    {sampled, deferred} = unmeasured |> Enum.shuffle() |> Enum.split(1)
-    beta = Application.get_env(:lasso, :balanced_fast_beta, @default_beta)
+    {sampled, deferred} = unproven |> Enum.shuffle() |> Enum.split(1)
     latencies = Enum.map(measured, &summary(summaries, &1).successful_mean_latency_ms)
 
     measured
     |> Enum.zip(relative_weights(latencies, beta))
-    |> Enum.concat(Enum.map(sampled, &{&1, 1.0}))
+    |> Enum.concat(Enum.map(sampled, &{&1, @unproven_weight}))
     |> weighted_permutation()
     |> Enum.concat(deferred)
-    |> Enum.concat(Enum.shuffle(stale))
   end
 
-  # As in qualification, a zero mean is not a usable latency measurement.
+  # Stale evidence no longer measures the route. As in qualification, a zero mean is not a usable
+  # latency measurement.
+  defp measured?(%{state: :stale}), do: false
   defp measured?(%{successful_mean_latency_ms: mean}) when is_number(mean), do: mean > 0
   defp measured?(_summary), do: false
 

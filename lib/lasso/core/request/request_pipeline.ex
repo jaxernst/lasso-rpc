@@ -61,7 +61,6 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.RPC.RequestOptions
   alias Lasso.RPC.Response.{Capacity, Success}
   alias Lasso.RPC.RoutingEvidence.Workload
-  alias Lasso.RPC.Selection.Exploration
 
   # Type definitions
   @type chain_id :: pos_integer()
@@ -427,7 +426,6 @@ defmodule Lasso.RPC.RequestPipeline do
       end
 
     {selected, remaining, candidate_labels, ctx} = prepare_candidates(candidates, ctx)
-    {selected, remaining, ctx} = maybe_explore(selected, remaining, ctx)
 
     ctx =
       RequestContext.mark_selection_end(ctx,
@@ -435,35 +433,8 @@ defmodule Lasso.RPC.RequestPipeline do
         selected: selected
       )
 
-    try do
-      execute_selected(selected, remaining, ctx, caller_guard, source)
-    after
-      Exploration.release(ctx.exploration_token)
-    end
+    execute_selected(selected, remaining, ctx, caller_guard, source)
   end
-
-  defp maybe_explore(selected, remaining, ctx) do
-    selection_opts =
-      routing_selection_options(ctx) ++
-        case remaining do
-          %CandidateCursor{effect_context: %{head_suitability: head}} -> [head_suitability: head]
-          _other -> []
-        end
-
-    case Exploration.select(selected, ctx, selection_opts) do
-      {:ok, exploratory, token} ->
-        remaining = prepend_candidate(remaining, selected)
-        {exploratory, remaining, %{ctx | exploration_token: token}}
-
-      :skip ->
-        {selected, remaining, ctx}
-    end
-  end
-
-  defp prepend_candidate(%CandidateCursor{} = cursor, channel),
-    do: CandidateCursor.prepend(cursor, channel)
-
-  defp prepend_candidate(channels, channel) when is_list(channels), do: [channel | channels]
 
   defp execute_selected(selected, remaining, ctx, caller_guard, candidates) do
     case request_open(ctx, caller_guard) do
@@ -937,16 +908,7 @@ defmodule Lasso.RPC.RequestPipeline do
        when is_binary(instance_id) do
     breaker_id = {instance_id, channel.transport}
 
-    case CircuitBreaker.admit(breaker_id, candidate_deadline(channel, ctx)) do
-      {:ok, %AdmissionReceipt{kind: :half_open} = receipt}
-      when not is_nil(ctx.exploration_token) ->
-        if Exploration.matches?(ctx.exploration_token, channel) do
-          abandon_unclaimed(receipt)
-          attempt_channels(rest_channels, ctx, [], caller_guard)
-        else
-          admit_shared_capacity(channel, instance_id, rest_channels, ctx, receipt, caller_guard)
-        end
-
+    case CircuitBreaker.admit(breaker_id, ctx.execution_envelope.deadline_us) do
       {:ok, receipt} ->
         admit_shared_capacity(
           channel,
@@ -1034,24 +996,15 @@ defmodule Lasso.RPC.RequestPipeline do
          receipt,
          caller_guard
        ) do
-    reserved_at_us = System.monotonic_time(:microsecond)
-
-    if Exploration.matches?(ctx.exploration_token, channel) and
-         (not Exploration.current?(ctx.exploration_token) or
-            candidate_deadline(channel, ctx) - reserved_at_us < 25_000) do
-      abandon_unclaimed(receipt)
-      attempt_channels(rest_channels, ctx, [], caller_guard)
-    else
-      reserve_current_channel(
-        channel,
-        instance_id,
-        rest_channels,
-        ctx,
-        receipt,
-        caller_guard,
-        reserved_at_us
-      )
-    end
+    reserve_current_channel(
+      channel,
+      instance_id,
+      rest_channels,
+      ctx,
+      receipt,
+      caller_guard,
+      System.monotonic_time(:microsecond)
+    )
   end
 
   defp reserve_current_channel(
@@ -1078,15 +1031,13 @@ defmodule Lasso.RPC.RequestPipeline do
             do: envelope.deadline_us,
             else: reserved_at_us + attempt_timeout_ms * 1_000
 
-        attempt_deadline_us = min(candidate_deadline(channel, ctx), allocated_deadline_us)
-
         execute_owned_channel(
           channel,
           instance_id,
           rest_channels,
           %{ctx | execution_envelope: envelope},
           receipt,
-          attempt_deadline_us,
+          allocated_deadline_us,
           caller_guard
         )
 
@@ -1094,12 +1045,6 @@ defmodule Lasso.RPC.RequestPipeline do
         abandon_unclaimed(receipt)
         handle_dispatch_rejection(rest_channels, ctx, reason, caller_guard)
     end
-  end
-
-  defp candidate_deadline(channel, ctx) do
-    if Exploration.matches?(ctx.exploration_token, channel),
-      do: min(ctx.execution_envelope.deadline_us, ctx.exploration_token.attempt_deadline_us),
-      else: ctx.execution_envelope.deadline_us
   end
 
   defp fallback_channel_available?(%CandidateCursor{} = cursor),
@@ -1258,9 +1203,6 @@ defmodule Lasso.RPC.RequestPipeline do
     ctx = %{ctx | terminal_attempt_projection: projection}
     :ok = ClaimAudit.census(outcome, ctx, channel)
 
-    if Exploration.matches?(ctx.exploration_token, channel),
-      do: Exploration.complete(ctx.exploration_token, outcome.fact, qualification)
-
     handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision)
   end
 
@@ -1417,11 +1359,6 @@ defmodule Lasso.RPC.RequestPipeline do
       circuit_epoch: receipt.epoch,
       execution_safety: envelope.execution_safety,
       classified_by: envelope.classified_by,
-      attempt_kind:
-        if(Exploration.matches?(ctx.exploration_token, channel),
-          do: :exploration,
-          else: :ordinary
-        ),
       routing_intent: Atom.to_string(ctx.opts.strategy),
       workload_key: origin_workload_key(ctx),
       request_budget_ms: envelope.original_timeout_ms,

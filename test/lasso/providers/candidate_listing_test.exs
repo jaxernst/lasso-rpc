@@ -86,39 +86,6 @@ defmodule Lasso.Providers.CandidateListingTest do
       assert Map.has_key?(candidate, :rate_limited)
     end
 
-    test "fastest winner candidates defer canonical route reads until cursor admission" do
-      {:ok, plan} = Catalog.get_routing_plan(Catalog.snapshot(), @profile, @chain)
-
-      fastest =
-        CandidateListing.list_fastest_candidates_from_plan(plan, %{protocol: :http})
-
-      assert length(fastest) == 3
-
-      assert Enum.all?(fastest, fn candidate ->
-               candidate.routing_states == %{http: nil, ws: nil} and
-                 candidate.circuit_state == %{http: :deferred, ws: :deferred}
-             end)
-
-      captured_scope =
-        plan.profile
-        |> AttemptProjection.scope_state(plan.chain_id, plan.generation)
-        |> Map.put(:degraded?, false)
-
-      captured =
-        CandidateListing.list_fastest_candidates_from_plan(
-          plan,
-          %{protocol: :http},
-          captured_scope
-        )
-
-      assert Enum.all?(captured, &(not &1.learned_feedback_degraded?))
-
-      [rankable | _] =
-        CandidateListing.list_rankable_candidates_from_plan(plan, %{protocol: :http})
-
-      assert is_map(rankable.routing_states.http)
-    end
-
     test "does not read or expose a disconnected WebSocket route" do
       candidate =
         @profile

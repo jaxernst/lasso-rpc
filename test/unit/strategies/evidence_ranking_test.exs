@@ -22,7 +22,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     :ok
   end
 
-  test "fastest ranks only qualified recent evidence ahead of stale lifetime-like data" do
+  test "fastest counts stale evidence as unproven and samples one unproven route per request" do
     channels = channels(["stale", "slow", "fast", "unknown"])
 
     put_summaries(%{
@@ -32,14 +32,27 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     })
 
     ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
+    :rand.seed(:exsss, {11, 12, 13})
 
-    assert ["fast", "slow", "stale", "unknown"] ==
-             channels
-             |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
-             |> Enum.map(& &1.provider_id)
+    rankings =
+      for _ <- 1..200 do
+        channels
+        |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
+        |> Enum.map(& &1.provider_id)
+      end
+
+    for ranked <- rankings do
+      assert Enum.sort(ranked) == ["fast", "slow", "stale", "unknown"]
+      assert List.last(ranked) in ["stale", "unknown"]
+      assert Enum.count(Enum.take_while(ranked, &(&1 != "fast")), &(&1 != "slow")) <= 1
+    end
+
+    sampled_first = rankings |> Enum.map(&hd/1) |> Enum.frequencies()
+    assert sampled_first["stale"] > 0
+    assert sampled_first["unknown"] > 0
   end
 
-  test "fastest falls back to mean and identity when p95 is unavailable" do
+  test "fastest weights measured routes by mean latency at exponent eight" do
     channels = channels(["b", "a", "c"])
 
     put_summaries(%{
@@ -49,11 +62,17 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
     })
 
     ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
+    :rand.seed(:exsss, {21, 22, 23})
+    samples = 10_000
 
-    assert ["c", "a", "b"] ==
-             channels
-             |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
-             |> Enum.map(& &1.provider_id)
+    c_first =
+      Enum.count(1..samples, fn _ ->
+        [first | _] = Fastest.rank_channels(channels, "eth_getBalance", ctx, "public", 1)
+        first.provider_id == "c"
+      end)
+
+    # P(c first) = 1 / (1 + 2 * 0.8^8), about 0.749; exponent 3 would give about 0.494.
+    assert_in_delta c_first / samples, 1 / (1 + 2 * :math.pow(0.8, 8)), 0.02
   end
 
   test "fastest preserves availability and counts degradation when nothing qualifies" do
@@ -64,44 +83,34 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
 
     ranked = Fastest.rank_channels(channels, "eth_getBalance", ctx, "public", 1)
 
-    assert Enum.map(ranked, & &1.provider_id) == ["a", "b"]
+    assert Enum.sort(Enum.map(ranked, & &1.provider_id)) == ["a", "b"]
     assert degradation_count(:fastest) == before_count + 1
   end
 
-  test "system priors order cold routes but never outrank client-qualified evidence" do
+  test "a system prior ranks a cold route by the same latency weights as client evidence" do
     channels = channels(["slow-client", "fast-prior"])
 
     prior =
       summary("fast-prior", :unqualified, 10.0, nil)
       |> Map.merge(%{comparable_attempts: 0, usable_successes: 0, support_source: :system_prior})
 
-    put_summaries(%{
-      {"slow-client-instance", :http} => summary("slow-client", :qualified, 100.0, nil),
-      {"fast-prior-instance", :http} => prior
-    })
-
-    ctx = Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
-
-    assert ["slow-client", "fast-prior"] ==
-             channels
-             |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
-             |> Enum.map(& &1.provider_id)
-
     cold_ctx = %{
-      ctx
+      Fastest.prepare_context("public", 1, "eth_getBalance", 5_000)
       | routing_summaries: %{
-          {"slow-client-instance", :http} => %{
-            summary("slow-client", :unqualified, 80.0, nil)
-            | comparable_attempts: 0
-          },
+          {"slow-client-instance", :http} => summary("slow-client", :qualified, 100.0, nil),
           {"fast-prior-instance", :http} => prior
         }
     }
 
-    assert ["fast-prior", "slow-client"] ==
-             channels
-             |> Fastest.rank_channels("eth_getBalance", cold_ctx, "public", 1)
-             |> Enum.map(& &1.provider_id)
+    :rand.seed(:exsss, {31, 32, 33})
+
+    # A tenfold gap at exponent eight leaves the slower route first about once in 10^8 draws.
+    for _ <- 1..100 do
+      assert ["fast-prior", "slow-client"] ==
+               channels
+               |> Fastest.rank_channels("eth_getBalance", cold_ctx, "public", 1)
+               |> Enum.map(& &1.provider_id)
+    end
   end
 
   test "missing direct control rows preserve live candidates through degradation" do
@@ -113,6 +122,7 @@ defmodule Lasso.RPC.Strategies.EvidenceRankingTest do
              channels
              |> Fastest.rank_channels("eth_getBalance", ctx, "public", 1)
              |> Enum.map(& &1.provider_id)
+             |> Enum.sort()
 
     assert degradation_count(:fastest) == before_count
 

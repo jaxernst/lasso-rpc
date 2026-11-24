@@ -177,9 +177,9 @@ capacity awareness, or cluster-global balancing.
 **URL**: `/rpc/fastest/:chain`
 **Module**: `Lasso.RPC.Strategies.Fastest`
 
-Orders reliability-qualified upstream instances by recent mean successful-attempt latency. Evidence is local to the routing node and keyed by a bounded registered workload key rather than arbitrary RPC method strings.
+Ranks with the balanced-fast permutation below at exponent 8 instead of 3, so the quickest measured upstream takes nearly all traffic. At a twofold latency gap the slower of two upstreams ranks first in about one request in 257; at a tenfold gap, about one in 10^8. Every request runs the full ranking. Evidence is local to the routing node and keyed by a bounded registered workload key rather than arbitrary RPC method strings.
 
-Client and system attempts use separate fixed method families: basic, state, logs, trace, transaction, and subscription. Unknown methods share one fallback partition. A successful `eth_blockNumber` read can qualify the basic family but does not qualify `eth_getBalance` or `eth_getLogs`; system observations can seed cold-start ordering in their family but cannot qualify client traffic. Exploration remains disabled unless an operator explicitly enables its bounded policy below.
+Client and system attempts use separate fixed method families: basic, state, logs, trace, transaction, and subscription. Unknown methods share one fallback partition. A successful `eth_blockNumber` read can qualify the basic family but does not qualify `eth_getBalance` or `eth_getLogs`; system observations can seed ordering in their family but cannot qualify client traffic.
 
 **Use When**:
 - Latency is the primary concern
@@ -187,12 +187,12 @@ Client and system attempts use separate fixed method families: basic, state, log
 - The method being called is latency-sensitive (e.g., `eth_getBlockByNumber`)
 
 **Behavior**:
-- Ranks qualified upstreams by recent successful mean latency (lowest first)
-- Uses successful p95 and deterministic identity to break equal-mean ties
+- One unproven upstream per request, with no latency evidence in the family or only stale evidence, competes at 1/8 of the quickest's weight. A slow first winner cannot hold a family: against one measured upstream, an untried upstream gets about one first pick in nine until it has a sample, and an upstream whose evidence expired is challenged again. An upstream that never answers costs the same small share
+- Weighs a measured upstream that has not qualified, including one known only from its system prior, by its mean like a qualified one; client samples replace the prior once they exist
+- Orders upstreams with unreliable evidence after the others, as in balanced-fast
 - Never uses lifetime averages for routing
 - Preserves all live candidates and emits an availability degradation when none qualifies
-- Orders unqualified upstreams after the qualified ones in two groups: first those whose evidence is not unreliable, then the unreliable ones (three consecutive failures, or recent success probability below 0.75, in evidence that has not gone stale). Each group is ordered by prior latency, then provider and transport identity. When no upstream is qualified the same order ranks all of them, so this ranking places an unreliable upstream behind every upstream that is not
-- Still subject to health tiering (closed-circuit providers preferred)
+- Makes no switching-margin or measured-p95 promise; live admission and health tiering still apply afterwards
 
 ### Balanced Fast
 
@@ -212,50 +212,18 @@ Orders reliable upstreams by a weighted random permutation over each upstream's 
   weight = (best_mean / candidate_mean)^beta
   ```
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
-- Places upstreams in this order: (1) a weighted permutation of the upstreams with current latency evidence plus one picked at random from those with none, which weighs as much as the quickest so it earns a sample instead of being starved; (2) the remaining upstreams with no latency evidence; (3) upstreams whose evidence is stale; (4) upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75), ordered among themselves the same way
+- Places upstreams in this order: (1) a weighted permutation of the upstreams with current latency evidence plus one picked at random from the unproven ones, those with no latency evidence or only evidence that has gone stale, which weighs as much as the quickest so it earns a sample instead of being starved and an expired upstream is retried rather than left last; (2) the remaining unproven upstreams, shuffled; (3) upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75), ordered among themselves the same way
 - Applies reliability as a boundary, not a weight multiplier
-- Bounds the ranking, not every dispatch order: among upstreams that are not unreliable, at most one unmeasured upstream ranks ahead of those with current latency evidence, but health tiering runs afterwards and can move a measured upstream with a half-open circuit behind unmeasured ones
+- Bounds the ranking, not every dispatch order: among upstreams that are not unreliable, at most one unproven upstream ranks ahead of those with current latency evidence, but health tiering runs afterwards and can move a measured upstream with a half-open circuit behind unproven ones
 - Uses no latency floor or weight floor
 - When no candidate qualifies, emits an availability degradation; the ordering is unchanged
 
 **Configuration**:
 - `BALANCED_FAST_BETA`: Latency exponent (default: 3.0, higher = more aggressive preference for low latency)
 
-### Bounded read exploration
+**Evidence lifetime**: a route's family evidence expires for ranking five minutes after its last comparable observation. Each consecutive client failure after the first doubles that lifetime, up to an hour, and a success resets it; system evidence from probes and head polls keeps five minutes. A route that never answers is therefore re-sampled a few times a day instead of every five minutes.
 
-Exploration is disabled by default. When enabled, an eligible `fastest` or
-`balanced-fast` client read may sample a different configured upstream that
-lacks qualified client evidence for the same method family. The ordinary first
-choice must already be qualified and eligible. System observations cannot
-qualify either route, and explicit capability and parameter restrictions still
-apply. Exploration learns routing latency evidence; it does not infer provider
-method support or change a file profile.
-
-Only known replay-safe unary reads can explore. Priority, load-balanced,
-provider overrides, system requests, writes, subscriptions and unknown methods
-retain ordinary routing. A request selects at most one exploratory attempt,
-which counts against Core's dispatch limit. At least 500 ms must remain
-before reservation. The exploration deadline is the smaller of 100 ms and ten
-percent of the remaining request budget, including admission and I/O. The
-original deadline stays in force, and the ordinary first choice remains the
-fallback. This is a capped attempt budget, not a whole-request latency promise.
-
-An exploration timeout is censored evidence and does not penalize provider
-reliability or its circuit breaker. Actual provider errors retain their normal
-attribution. Opaque server and vendor errors are ambiguous: replay-safe reads
-may fall back without a health penalty, while unsafe requests return the
-original error without replay. Each node admits at most one active exploration
-per configured profile, chain and family, at least one second apart. Route
-cooldowns are ten seconds after success and thirty seconds after other
-outcomes. Reload and route retirement remove stale reservations and cooldowns.
-
-The `[:lasso, :routing, :exploration, :selected]`, `:completed`, and `:skipped`
-telemetry events carry bounded profile, chain and workload-family metadata.
-Completed events distinguish outcome and success; skipped events include a
-bounded reason. Attempt facts retain `attempt_kind: :exploration`. The fact
-codec writes major version 2 and reads ordinary version-1 facts; version 1
-cannot express exploration or ambiguous response semantics. See
-[configuration](CONFIGURATION.md#read-exploration-policy) for opt-in settings.
+Opaque server and vendor errors are ambiguous: replay-safe reads may fall back without a health penalty or success evidence, while unsafe requests return the original error without replay. The execution-fact codec writes major version 2 and also reads ordinary version-1 facts; version 1 cannot express ambiguous response semantics.
 
 ### Priority
 

@@ -25,7 +25,6 @@ defmodule Lasso.RPC.Selection do
     AttemptProjection,
     Channel,
     ExecutionEnvelope,
-    RequestAnalysis,
     RoutingEvidence,
     RoutingPlan,
     Selection.CandidateCursor,
@@ -33,10 +32,7 @@ defmodule Lasso.RPC.Selection do
     TransportRegistry
   }
 
-  alias Lasso.RPC.ProviderKnowledge.Effects
   alias Lasso.RPC.RoutingEvidence.Workload
-  @client_workloads Workload.client_partitions()
-  alias Lasso.RPC.Selection.CandidateCursor.DeferredRanking
   alias Lasso.RPC.Selection.HeadSuitability
   alias Lasso.RPC.Strategies.LoadBalanced
   alias Lasso.RPC.Strategies.Registry, as: StrategyRegistry
@@ -196,18 +192,12 @@ defmodule Lasso.RPC.Selection do
           {:unavailable, _} = failure -> failure
         end
 
-      {:fastest, Lasso.RPC.Strategies.Fastest} ->
-        select_ranked_channel_candidates(
-          profile,
-          chain_id,
-          method,
-          opts,
-          strategy_mod,
-          :fastest_winner
-        )
-
-      {:balanced_fast, Lasso.RPC.Strategies.BalancedFast} ->
-        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod, :full)
+      {strategy, module}
+      when {strategy, module} in [
+             {:fastest, Lasso.RPC.Strategies.Fastest},
+             {:balanced_fast, Lasso.RPC.Strategies.BalancedFast}
+           ] ->
+        select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod)
 
       _custom_or_unknown ->
         select_channels(profile, chain_id, method, opts)
@@ -268,58 +258,21 @@ defmodule Lasso.RPC.Selection do
       else: []
   end
 
-  defp select_ranked_channel_candidates(
-         profile,
-         chain_id,
-         method,
-         opts,
-         strategy_mod,
-         ranking_mode
-       ) do
+  defp select_ranked_channel_candidates(profile, chain_id, method, opts, strategy_mod) do
     case capture_selection_snapshot(profile, chain_id, method, opts) do
       {:ok, snapshot, plan} ->
-        strategy = Keyword.fetch!(opts, :strategy)
+        {_transport, workload_key, filters, head_snapshot} = routing_inputs(plan, method, opts)
+        opts = Keyword.put(opts, :head_suitability, filters.head_suitability)
 
-        fastest_hint =
-          fastest_hint(
-            ranking_mode,
-            plan,
-            Workload.for_request(Keyword.get(opts, :request_origin, :client), method)
-          )
-
-        {_transport, _workload_key, filters, _head_snapshot} =
-          inputs = routing_inputs(plan, method, opts)
-
-        opts =
-          Keyword.put(
-            opts,
-            :head_suitability,
-            filters.head_suitability
-          )
-
-        case build_hinted_fastest_cursor(
-               snapshot,
-               plan,
-               method,
-               opts,
-               strategy_mod,
-               fastest_hint,
-               inputs
-             ) do
-          {:ok, cursor} ->
-            cursor
-
-          :miss ->
-            build_ranked_cursor(
-              snapshot,
-              plan,
-              method,
-              opts,
-              strategy_mod,
-              strategy,
-              inputs
-            )
-        end
+        CandidateCursor.new_ranked(
+          snapshot,
+          plan,
+          method,
+          opts,
+          ranked_candidates(plan, method, opts, strategy_mod, workload_key, filters),
+          filters,
+          head_snapshot
+        )
 
       {:unavailable, _} = failure ->
         failure
@@ -360,11 +313,8 @@ defmodule Lasso.RPC.Selection do
     {transport, workload_key, pool_filters, head_snapshot}
   end
 
-  defp candidates_from_inputs(plan, filters, gate_mode, learned_scope \\ nil) do
+  defp candidates_from_inputs(plan, filters, gate_mode) do
     case gate_mode do
-      :deferred_fastest ->
-        CandidateListing.list_fastest_candidates_from_plan(plan, filters, learned_scope)
-
       :deferred_gates ->
         CandidateListing.list_rankable_candidates_from_plan(plan, filters)
 
@@ -373,267 +323,32 @@ defmodule Lasso.RPC.Selection do
     end
   end
 
-  defp build_ranked_cursor(
-         snapshot,
-         plan,
-         method,
-         opts,
-         strategy_mod,
-         strategy,
-         {_, workload_key, filters, head_snapshot}
-       ) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
-
-    {ranked_candidates, deferred_ranking, _candidates, learning_decision} =
-      ranked_candidate_state(
-        plan,
-        method,
-        timeout,
-        strategy_mod,
-        strategy,
-        workload_key,
-        %{filters: filters, head_snapshot: head_snapshot}
-      )
-
-    CandidateCursor.new_ranked(
-      snapshot,
-      plan,
-      method,
-      Keyword.put(opts, :learning_decision, learning_decision),
-      ranked_candidates,
-      filters,
-      head_snapshot,
-      deferred_ranking
-    )
-  end
-
-  defp ranked_candidate_state(
-         plan,
-         method,
-         timeout,
-         strategy_mod,
-         strategy,
-         workload_key,
-         %{filters: filters} = selection
-       ) do
+  defp ranked_candidates(plan, method, opts, strategy_mod, workload_key, filters) do
     candidates = candidates_from_inputs(plan, filters, :deferred_gates)
 
     entries =
-      for candidate <- candidates,
-          transport <- candidate.transports,
-          {candidate.instance_id, transport} not in Map.get(selection, :excluded_routes, []) do
+      for candidate <- candidates, transport <- candidate.transports do
         {ranking_channel(plan, candidate, transport), candidate, transport}
       end
-
-    capable_channels =
-      entries
-      |> Enum.map(&elem(&1, 0))
-      |> filter_capable_channels(method)
 
     entries_by_key =
       Map.new(entries, fn {channel, candidate, transport} ->
         {{channel.instance_id, transport}, {candidate, transport}}
       end)
 
-    {ranked_candidates, deferred_ranking, learning_decision} =
-      rank_candidate_channels(
-        capable_channels,
-        entries_by_key,
-        %{
-          candidates: candidates,
-          strategy: strategy,
-          method: method,
-          plan: plan,
-          timeout: timeout,
-          workload_key: workload_key,
-          resource: %{
-            historical_resource: filters.historical_resource,
-            historical_height: filters.historical_height
-          },
-          strategy_mod: strategy_mod
-        }
-      )
-
-    {ranked_candidates, deferred_ranking, candidates, learning_decision}
-  end
-
-  defp build_hinted_fastest_cursor(
-         snapshot,
-         plan,
-         method,
-         opts,
-         strategy_mod,
-         {%{route: {routing_instance_id, winner_transport}}, learned_scope},
-         {requested_transport, workload_key, filters, head_snapshot}
-       ) do
-    matching_providers =
-      Enum.filter(plan.providers, fn provider ->
-        provider.routing_instance_id == routing_instance_id and
-          winner_transport in transports_to_check(requested_transport) and
-          winner_transport in provider.transports
-      end)
-
-    {eligible, candidate_entries} =
-      case matching_providers do
-        [provider] ->
-          eligible =
-            candidates_from_inputs(plan, filters, :deferred_fastest, learned_scope)
-
-          {eligible,
-           for candidate <- eligible,
-               candidate.id == provider.id,
-               winner_transport in candidate.transports do
-             {ranking_channel(plan, candidate, winner_transport), candidate, winner_transport}
-           end}
-
-        _ambiguous_or_missing ->
-          {[], []}
-      end
-
-    capable_entries =
-      candidate_entries
-      |> Enum.filter(fn {channel, _candidate, _transport} ->
-        filter_capable_channels([channel], method) == [channel]
-      end)
-
-    case capable_entries do
-      [{_channel, candidate, transport}] ->
-        timeout = Keyword.get(opts, :timeout, 30_000)
-        limit = Keyword.get(opts, :limit, 1000)
-
-        resolver = fn ->
-          {ranked, deferred, _candidates, decision} =
-            ranked_candidate_state(
-              plan,
-              method,
-              timeout,
-              strategy_mod,
-              :fastest,
-              workload_key,
-              %{
-                filters: filters,
-                head_snapshot: head_snapshot,
-                excluded_routes: [{candidate.instance_id, transport}]
-              }
-            )
-
-          {ranked, deferred, decision}
-        end
-
-        deferred = %DeferredRanking{
-          entries: [],
-          scope: learned_scope,
-          chain_id: plan.chain_id,
-          workload_key: workload_key,
-          resolver: resolver,
-          excluded_routes: MapSet.new([{candidate.instance_id, transport}]),
-          candidate_labels:
-            if(limit > 0,
-              do: ["#{candidate.id}:#{transport}"],
-              else: []
-            )
-        }
-
-        if HeadSuitability.leads?(
-             Keyword.get(opts, :head_suitability),
-             {candidate.instance_id, transport},
-             capable_routes(eligible, plan, requested_transport, method)
-           ) and
-             cached_winner_effect_eligible?(
-               candidate,
-               transport,
-               plan,
-               method,
-               opts,
-               workload_key,
-               filters
-             ) do
-          {:ok,
-           CandidateCursor.new_ranked(
-             snapshot,
-             plan,
-             method,
-             opts,
-             [{candidate, transport}],
-             filters,
-             head_snapshot,
-             deferred
-           )}
-        else
-          :miss
-        end
-
-      _missing_or_unsupported ->
-        :miss
-    end
-  end
-
-  defp build_hinted_fastest_cursor(
-         _snapshot,
-         _plan,
-         _method,
-         _opts,
-         _strategy_mod,
-         _winner,
-         _inputs
-       ),
-       do: :miss
-
-  defp cached_winner_effect_eligible?(
-         candidate,
-         transport,
-         plan,
-         method,
-         opts,
-         workload_key,
-         filters
-       ) do
-    facts = filters.request_facts && filters.request_facts.block_facts
-    height = Lasso.RPC.RequestFacts.numeric_interval(facts)
-
-    age =
-      if is_integer(filters.reference_height) and not is_nil(height),
-        do: filters.reference_height - elem(height, 0)
-
-    span =
-      if method == "eth_getLogs" and Effects.mode(:span_limit, plan.profile) == :on,
-        do: RequestAnalysis.analyze(method, Keyword.get(opts, :params, [])).block_range
-
-    Effects.cached_winner_eligible?({candidate, transport}, plan, method, %{
-      partition: workload_key,
-      span: span,
-      historical_resource: (facts && facts.resource) || filters.historical_resource,
-      historical_height: height,
-      historical_age: age
-    })
-  end
-
-  defp fastest_hint(:fastest_winner, plan, workload) do
-    if Effects.response_latency_mode(plan.profile) == :off do
-      scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
-
-      case AttemptProjection.fastest_winner(scope, workload) do
-        nil -> nil
-        winner -> {winner, scope}
-      end
-    else
-      nil
-    end
-  end
-
-  defp fastest_hint(:full, _plan, _workload), do: nil
-
-  # The eligible, method-capable routes a cached winner is compared with. Lazy:
-  # a winner in the first suitability class never enumerates them.
-  defp capable_routes(candidates, plan, transport, method) do
-    Stream.flat_map(candidates, fn candidate ->
-      transport
-      |> transports_to_check()
-      |> Enum.filter(&(&1 in candidate.transports))
-      |> Enum.map(&ranking_channel(plan, candidate, &1))
-      |> filter_capable_channels(method)
-      |> Enum.map(&{&1.instance_id, &1.transport})
-    end)
+    entries
+    |> Enum.map(&elem(&1, 0))
+    |> filter_capable_channels(method)
+    |> rank_capable_channels(
+      candidates,
+      Keyword.fetch!(opts, :strategy),
+      method,
+      plan,
+      Keyword.get(opts, :timeout, 30_000),
+      workload_key,
+      strategy_mod
+    )
+    |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
   end
 
   defp ranking_channel(plan, candidate, transport) do
@@ -797,220 +512,6 @@ defmodule Lasso.RPC.Selection do
         plan.chain_id
       )
     end
-  end
-
-  defp rank_candidate_channels(
-         channels,
-         entries_by_key,
-         %{
-           candidates: candidates,
-           strategy: :fastest,
-           method: method,
-           plan: plan,
-           timeout: timeout,
-           workload_key: workload_key,
-           resource: resource,
-           strategy_mod: Lasso.RPC.Strategies.Fastest = strategy_mod
-         } = ranking
-       )
-       when workload_key in @client_workloads do
-    if Enum.any?(candidates, & &1.learned_feedback_degraded?) do
-      {rank_channels_eager(channels, entries_by_key, ranking), nil, nil}
-    else
-      scope = AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
-      now_us = System.monotonic_time(:microsecond)
-
-      {qualified, remaining} =
-        split_client_qualified(channels, entries_by_key, plan.chain_id, now_us, workload_key)
-
-      case qualified do
-        [] ->
-          {rank_cold_fastest_channels(
-             remaining,
-             entries_by_key,
-             method,
-             plan,
-             timeout,
-             strategy_mod,
-             {scope, now_us, workload_key}
-           ), nil, nil}
-
-        _qualified ->
-          summaries =
-            Map.new(qualified, fn {channel, summary} ->
-              {{channel.instance_id, channel.transport}, summary}
-            end)
-
-          prepared_ctx =
-            strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
-            |> Map.put(:workload_key, workload_key)
-            |> Map.put(:routing_summaries, summaries)
-            |> Map.put(:provider_priorities, plan.provider_priorities)
-
-          learn_response_latency? = Effects.response_latency_mode(plan.profile) != :off
-
-          qualified_channels =
-            Enum.map(qualified, fn {channel, _summary} ->
-              if learn_response_latency? do
-                {candidate, transport} =
-                  Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
-
-                %{
-                  channel
-                  | learning_subject:
-                      TransportRegistry.learning_subject_for(
-                        plan.profile,
-                        plan.chain_id,
-                        transport,
-                        candidate.config
-                      )
-                }
-              else
-                channel
-              end
-            end)
-
-          {ranked_channels, learning_decision} =
-            qualified_channels
-            |> strategy_mod.rank_with_decision(
-              method,
-              prepared_ctx,
-              plan.profile,
-              plan.chain_id,
-              resource
-            )
-
-          ranked =
-            Enum.map(ranked_channels, &Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
-
-          AttemptProjection.cache_ranked_winner(scope, plan.providers, workload_key)
-
-          deferred = %DeferredRanking{
-            entries:
-              Enum.map(remaining, fn {channel, _summary} ->
-                {candidate, transport} =
-                  Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
-
-                {channel, candidate, transport}
-              end),
-            scope: scope,
-            chain_id: plan.chain_id,
-            workload_key: workload_key
-          }
-
-          {ranked, deferred, learning_decision}
-      end
-    end
-  end
-
-  defp rank_candidate_channels(
-         channels,
-         entries_by_key,
-         ranking
-       ) do
-    {rank_channels_eager(channels, entries_by_key, ranking), nil, nil}
-  end
-
-  defp split_client_qualified(channels, entries_by_key, chain_id, now_us, workload_key) do
-    channels
-    |> Enum.map(fn channel ->
-      {candidate, transport} =
-        Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
-
-      summary =
-        candidate.routing_states
-        |> Map.get(transport)
-        |> AttemptProjection.summarize_client_partition(
-          candidate.instance_id,
-          transport,
-          chain_id,
-          now_us,
-          workload_key
-        )
-
-      {channel, summary}
-    end)
-    |> Enum.split_with(fn {_channel, summary} -> RoutingEvidence.qualified?(summary) end)
-  end
-
-  defp rank_cold_fastest_channels(
-         channels_with_summaries,
-         entries_by_key,
-         method,
-         plan,
-         timeout,
-         strategy_mod,
-         {scope, _now_us, workload_key}
-       ) do
-    summaries =
-      Map.new(channels_with_summaries, fn {channel, _primary} ->
-        {candidate, transport} =
-          Map.fetch!(entries_by_key, {channel.instance_id, channel.transport})
-
-        summary =
-          AttemptProjection.summarize_route_bounded(
-            scope,
-            candidate_route_record(scope, candidate, transport),
-            candidate.instance_id,
-            candidate.routing_instance_id,
-            transport,
-            plan.chain_id,
-            workload_key
-          )
-
-        {{channel.instance_id, transport}, summary}
-      end)
-
-    prepared_ctx =
-      strategy_mod.prepare_context(plan.profile, plan.chain_id, method, timeout)
-      |> Map.put(:workload_key, workload_key)
-      |> Map.put(:routing_summaries, summaries)
-      |> Map.put(:provider_priorities, plan.provider_priorities)
-
-    channels_with_summaries
-    |> Enum.map(&elem(&1, 0))
-    |> strategy_mod.rank_channels(method, prepared_ctx, plan.profile, plan.chain_id)
-    |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
-  end
-
-  defp candidate_route_record(scope, candidate, transport) do
-    case Map.get(candidate.routing_states, transport) do
-      nil ->
-        AttemptProjection.route_record_bounded(
-          scope,
-          candidate.routing_instance_id,
-          transport
-        )
-
-      row ->
-        row
-    end
-  end
-
-  defp rank_channels_eager(
-         channels,
-         entries_by_key,
-         %{
-           candidates: candidates,
-           strategy: strategy,
-           method: method,
-           plan: plan,
-           timeout: timeout,
-           workload_key: workload_key,
-           strategy_mod: strategy_mod
-         }
-       ) do
-    channels
-    |> rank_capable_channels(
-      candidates,
-      strategy,
-      method,
-      plan,
-      timeout,
-      workload_key,
-      strategy_mod
-    )
-    |> Enum.map(&Map.fetch!(entries_by_key, {&1.instance_id, &1.transport}))
   end
 
   defp maybe_record_single_channel_degradation(

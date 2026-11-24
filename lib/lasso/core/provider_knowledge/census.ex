@@ -2,7 +2,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Census do
   @moduledoc "Private aggregate census of recent provider outcome and feedback-lane loss."
 
   alias Lasso.Core.ProjectionDispatcher
-  alias Lasso.RPC.ProviderKnowledge.Learners.{LocalResponseLatency, OutcomeStatistics}
+  alias Lasso.RPC.ProviderKnowledge.Learners.OutcomeStatistics
   alias Lasso.RPC.ProviderKnowledge.Persistence
   alias Lasso.RPC.ProviderKnowledge.ReadModel
   alias Lasso.RPC.ProviderKnowledge.ShadowAgreement
@@ -34,7 +34,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Census do
       profile: Keyword.get(opts, :profile)
     )
     |> Map.put(:shadow_since_boot, ShadowAgreement.counts())
-    |> Map.put(:response_latency_read_model, ReadModel.stats(LocalResponseLatency))
   end
 
   @doc "Aggregates already read local learner snapshots without provider identities."

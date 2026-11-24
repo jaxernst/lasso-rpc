@@ -16,9 +16,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     :budget_result,
     :resource,
     :partition,
-    :changed_at,
-    :baseline_at_change,
-    :proposed_at_change,
     :baseline_first,
     :proposed_first,
     :applied_first,
@@ -38,8 +35,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     :omitted_evidence
   ]
 
-  @spec orders(list(), list(), list(), boolean()) :: map()
-  def orders(baseline, proposed, applied, complete? \\ true) do
+  @spec orders(list(), list(), list()) :: map()
+  def orders(baseline, proposed, applied) do
     routes = baseline |> Enum.take(@max_routes) |> Enum.map(&route/1)
     positions = routes |> Enum.with_index(1) |> Map.new()
 
@@ -49,7 +46,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
       proposed: order_positions(proposed, positions),
       applied: order_positions(applied, positions),
       omitted_routes: max(length(baseline) - @max_routes, 0),
-      complete?: complete? and length(baseline) <= @max_routes
+      complete?: length(baseline) <= @max_routes
     }
   end
 
@@ -314,27 +311,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     )
   end
 
-  defp clean_evidence(%{kind: :response_latency, evidence: evidence} = frame),
-    do:
-      Map.put(
-        frame,
-        :evidence,
-        Map.new(evidence, fn {route, hint} ->
-          {route,
-           Map.take(hint, [
-             :source,
-             :age_ms,
-             :accepted_samples,
-             :accepted_successes,
-             :p50_us,
-             :p95_us,
-             :resolution,
-             :epoch,
-             :expires_at_ms
-           ])}
-        end)
-      )
-
   defp clean_evidence(%{kind: :head_suitability, evidence: evidence} = frame),
     do:
       Map.put(
@@ -364,7 +340,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
         :quota_exhaustion,
         :span_limit,
         :historical_depth,
-        :response_latency,
         :head_suitability
       ] and valid_common?(d)
 
@@ -372,21 +347,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     do: map_size(d) == 2
 
   defp valid_frame?(%{kind: :none} = d), do: map_size(d) == 1
-
-  defp valid_frame?(
-         %{
-           kind: :response_latency,
-           evidence: evidence,
-           changed_at: index,
-           baseline_at_change: baseline,
-           proposed_at_change: proposed
-         } = d
-       )
-       when is_map(evidence) and map_size(evidence) <= 2 do
-    valid_common?(d) and is_integer(index) and index in 0..15 and
-      valid_route?(baseline) and valid_route?(proposed) and
-      valid_latency?(Map.get(evidence, baseline)) and valid_latency?(Map.get(evidence, proposed))
-  end
 
   defp valid_frame?(
          %{kind: kind, hints: hints, method: method, partition: partition, omitted_hints: omitted} =
@@ -511,13 +471,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     do: is_binary(id) and byte_size(id) in 1..128 and transport in [:http, :ws]
 
   defp valid_route?(_route), do: false
-
-  defp valid_latency?(%{source: :local, age_ms: age, accepted_samples: samples, p95_us: p95}),
-    do:
-      is_integer(age) and age >= 0 and is_integer(samples) and samples >= 0 and is_integer(p95) and
-        p95 > 0
-
-  defp valid_latency?(_hint), do: false
 
   defp valid_hint?(%{route: route, source: source, value: value} = hint),
     do:

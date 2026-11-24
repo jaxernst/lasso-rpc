@@ -84,7 +84,7 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
 
             if major == 1,
               do: kind in [nil, "ordinary"] and Map.get(attempt, "error_category") != "ambiguous",
-              else: kind in ["ordinary", "exploration"]
+              else: kind == "ordinary"
 
           _other ->
             false
@@ -438,7 +438,6 @@ defmodule Lasso.RPC.ExecutionFact.Codec do
 
   defp attempt_kind(nil), do: :ordinary
   defp attempt_kind("ordinary"), do: :ordinary
-  defp attempt_kind("exploration"), do: :exploration
   defp attempt_kind(_other), do: raise(ArgumentError, "invalid attempt kind")
 
   defp request_common_attrs(map),
