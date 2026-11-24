@@ -8,11 +8,11 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
   uses 3.0 (`:balanced_fast_beta`); `Fastest` ranks through `rank/6` at a sharper exponent.
 
   An upstream is unproven when it has no latency evidence or only stale evidence. One unproven
-  upstream joins each group's permutation at the weight of the quickest, so it earns a sample
-  instead of being starved and a route whose evidence expired is challenged again; the group's
-  other unproven upstreams follow its permutation. Sampling uses exponential-race keys, which
-  produces a correct weighted permutation without a weight floor or hidden success-rate
-  multiplier.
+  upstream joins each group's permutation at 1/8 of the quickest's weight, so it earns a sample
+  instead of being starved and a route whose evidence expired is challenged again, while one that
+  only fails costs a small share of first picks; the group's other unproven upstreams follow its
+  permutation. Sampling uses exponential-race keys, which produces a correct weighted
+  permutation without a weight floor or hidden success-rate multiplier.
   """
 
   @behaviour Lasso.RPC.Strategy
@@ -20,6 +20,7 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
   alias Lasso.RPC.{RoutingEvidence, StrategyContext}
 
   @default_beta 3.0
+  @unproven_weight 1 / 8
 
   @impl true
   def prepare_context(_profile, chain_id, _method, timeout) do
@@ -68,7 +69,7 @@ defmodule Lasso.RPC.Strategies.BalancedFast do
 
     measured
     |> Enum.zip(relative_weights(latencies, beta))
-    |> Enum.concat(Enum.map(sampled, &{&1, 1.0}))
+    |> Enum.concat(Enum.map(sampled, &{&1, @unproven_weight}))
     |> weighted_permutation()
     |> Enum.concat(deferred)
   end

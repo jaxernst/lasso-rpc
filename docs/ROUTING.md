@@ -187,7 +187,7 @@ Client and system attempts use separate fixed method families: basic, state, log
 - The method being called is latency-sensitive (e.g., `eth_getBlockByNumber`)
 
 **Behavior**:
-- One unproven upstream per request, with no latency evidence in the family or only stale evidence, competes at the weight of the quickest. A slow first winner cannot hold a family: an untried upstream gets about half the first picks until it has a sample, and an upstream whose evidence expired is challenged again
+- One unproven upstream per request, with no latency evidence in the family or only stale evidence, competes at 1/8 of the quickest's weight. A slow first winner cannot hold a family: against one measured upstream, an untried upstream gets about one first pick in nine until it has a sample, and an upstream whose evidence expired is challenged again. An upstream that never answers costs the same small share
 - Weighs a measured upstream that has not qualified, including one known only from its system prior, by its mean like a qualified one; client samples replace the prior once they exist
 - Orders upstreams with unreliable evidence after the others, as in balanced-fast
 - Never uses lifetime averages for routing

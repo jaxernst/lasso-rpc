@@ -305,7 +305,7 @@ for the dispatch-budget and recovered-head-preference boundaries.
 
 For upgrades from v0.5.1, rename `LW_BETA` to `BALANCED_FAST_BETA` (application key `:balanced_fast_beta`); the old variable is no longer read, and startup logs a warning when it is set. Existing `latency-weighted` URLs and `strategy` values remain permanent aliases.
 
-**Balanced Fast** — Weighted random ordering of reliable upstreams by their best latency evidence: client samples in the method family, else the same family's system prior. One reliable upstream with no latency evidence yet competes in each ranking at the weight of the quickest, so it earns samples instead of being starved; upstreams with recent failures follow the reliable ones. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. See [balanced fast](ROUTING.md#balanced-fast). `latency-weighted` is an alias.
+**Balanced Fast** — Weighted random ordering of reliable upstreams by their best latency evidence: client samples in the method family, else the same family's system prior. One reliable upstream with no latency evidence yet competes in each ranking at 1/8 of the quickest's weight, so it earns samples instead of being starved; upstreams with recent failures follow the reliable ones. It sits between load-balanced and fastest: load stays spread while the quickest providers receive more of it. See [balanced fast](ROUTING.md#balanced-fast). `latency-weighted` is an alias.
 
 ### Health-Based Tiering
 
