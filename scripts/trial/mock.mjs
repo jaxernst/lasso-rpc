@@ -1,7 +1,9 @@
 // Deterministic EVM JSON-RPC mock upstreams (chain id 137 unless set per instance, one block every 2 s).
 // Usage: node mock.mjs <config.json>
 // config: { log: "path.jsonl", control_port: N, token: "run identity", instances: [{ name, port, chain_id, latency_ms, jitter,
-//           behind, stall, rate_429, refuse_methods, hang, send_timeout, max_range, range_error, seed }] }
+//           behind, stall, rate_429, refuse_methods, hang, hang_every, send_timeout, max_range, range_error, seed }] }
+// hang_every N holds every Nth client read the instance receives (a request carrying a kit tag)
+// and never answers it, so the caller waits out its own timeout.
 // max_range caps the blocks one eth_getLogs call may span (to - from + 1). A wider range gets
 // range_error, a JSON-RPC error whose message may contain {cap}.
 // The log has one "call" line per request item when it arrives and one "outcome" line
@@ -82,7 +84,7 @@ function tagOf(method, params = []) {
 
 class Instance {
   constructor(cfg, logStream) {
-    this.cfg = { chain_id: 137, latency_ms: 20, jitter: 0, behind: 0, rate_429: 0, refuse_methods: [], hang: false, send_timeout: false,
+    this.cfg = { chain_id: 137, latency_ms: 20, jitter: 0, behind: 0, rate_429: 0, refuse_methods: [], hang: false, hang_every: 0, send_timeout: false,
       max_range: 0, range_error: { code: -32000, message: "query exceeds max block range {cap}" }, ...cfg };
     this.rand = mulberry32(cfg.seed ?? (cfg.port * 7919));
     this.log = logStream;
@@ -211,7 +213,10 @@ class Instance {
     const items = Array.isArray(parsed) ? parsed : [parsed];
     const isSend = items.some((r) => r?.method === "eth_sendRawTransaction");
     const throttled = this.cfg.rate_429 > 0 && this.rand() < this.cfg.rate_429;
-    const hang = this.cfg.hang || (this.cfg.send_timeout && isSend);
+    const read = !isSend && items.some((r) => tagOf(r?.method, r?.params));
+    if (read) this.reads = (this.reads ?? 0) + 1;
+    const held = read && this.cfg.hang_every > 0 && this.reads % this.cfg.hang_every === 0;
+    const hang = this.cfg.hang || held || (this.cfg.send_timeout && isSend);
     const calls = items.map((r) => {
       const call = (this.calls = (this.calls ?? 0) + 1);
       this.log.write(JSON.stringify({ kind: "call", t, inst: this.cfg.name, call, m: r?.method, tag: tagOf(r?.method, r?.params), id: r?.id ?? null,

@@ -17,7 +17,7 @@ const PORT_BASE = Number(process.env.PORT_BASE || 43000);
 const BLOCK = 60;
 
 // The endpoint candidate comes first so its mock upstreams sit at PORT_BASE+1, +2 and +3.
-const NAMES = ["endpoint", "direct", "race2", "lasso", "lasso-fastest", "lasso-bf"];
+const NAMES = ["endpoint", "direct", "race2", "lasso", "lasso-fastest", "lasso-bf", "lasso-lb"];
 const DEFS = {
   endpoint: { proxy: "endpoint" },
   direct: {},
@@ -25,6 +25,7 @@ const DEFS = {
   lasso: { proxy: "lasso", route: "/rpc/profile/trial/{chain}" },
   "lasso-fastest": { proxy: "lasso", route: "/rpc/profile/trial/fastest/{chain}" },
   "lasso-bf": { proxy: "lasso", route: "/rpc/profile/trial/balanced-fast/{chain}" },
+  "lasso-lb": { proxy: "lasso", route: "/rpc/profile/trial/load-balanced/{chain}" },
 };
 // Port block per candidate: upstreams base+1..base+39, distribution base+48, mock control base+49,
 // proxy base+50. base+59 stays closed (Lasso's placeholder public provider).
@@ -59,6 +60,9 @@ const SCENARIOS = {
   S4n: { up: [{ latency_ms: 40 }, { latency_ms: 40 }, { latency_ms: 40 }], switch_at_s: 60, switch: { up1: { stall: true } } },
   // S11: the quickest upstream keeps answering but takes 2 s from 60 s on.
   S11: { up: S6_UP, switch_at_s: 60, switch: { up1: { latency_ms: 2000 } } },
+  // Partial degradation: the quickest upstream holds every tenth client read it receives and never
+  // answers it, so that read waits out the attempt timeout before another upstream serves it.
+  S12: { up: [{ latency_ms: 20, hang_every: 10 }, { latency_ms: 60 }, { latency_ms: 120 }] },
   // 13 chains with 3 healthy upstreams each (20, 60, 120 ms), no client traffic.
   S10: { up: S6_UP, chains: IDLE_CHAINS, idle_s: 600 },
   // Wide backfill. Each upstream caps the eth_getLogs block range differently, and up2 also

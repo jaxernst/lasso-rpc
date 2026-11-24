@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a scenario set REPEATS times, then analyze.mjs. See README.md.
-# Usage: scripts/trial/run.sh [default|backfill|midrun|idle|all|S2,S4,...]
+# Usage: scripts/trial/run.sh [default|backfill|midrun|degraded|idle|all|S2,S4,...]
 # Exits nonzero when any run failed; the remaining runs still go ahead.
 set -eu
 
@@ -10,8 +10,9 @@ case "$SET" in
   default) SCENARIOS="S1 S2 S2m S3 S4 S5 S6 S9b S9s S9m" ;;
   backfill) SCENARIOS="B1" ;;
   midrun) SCENARIOS="S4m S4r S4n S11" ;;
+  degraded) SCENARIOS="S12" ;;
   idle) SCENARIOS="S8 S10" ;;
-  all) SCENARIOS="S1 S2 S2m S3 S4 S5 S6 S9b S9s S9m B1 S4m S4r S4n S11 S9a S8 S10" ;;
+  all) SCENARIOS="S1 S2 S2m S3 S4 S5 S6 S9b S9s S9m B1 S4m S4r S4n S11 S12 S9a S8 S10" ;;
   *) SCENARIOS="$(printf '%s' "$SET" | tr ',' ' ')" ;;
 esac
 

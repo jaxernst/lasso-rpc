@@ -11,7 +11,7 @@ const KIT = path.dirname(fileURLToPath(import.meta.url));
 const RES = path.resolve(process.argv[2] || process.env.RESULTS_DIR || path.join(KIT, "results", "runs"));
 const SEND = "eth_sendRawTransaction";
 const UNTAGGED_CLIENT = ["eth_chainId", "eth_blockNumber", "eth_gasPrice"];
-const ORDER = ["direct", "race2", "endpoint", "lasso", "lasso-fastest", "lasso-bf"];
+const ORDER = ["direct", "race2", "endpoint", "lasso", "lasso-fastest", "lasso-bf", "lasso-lb"];
 // Repeats agree when every metric's spread (max minus min) is within these bounds. README.md explains them.
 const TOLERANCE = { success_pp: 1, stale_pp: 1, latency_ms: 5, latency_frac: 0.2, calls_per_request: 0.1 };
 
@@ -130,6 +130,12 @@ function analyzeCandidate(dir) {
   for (const r of tagged) for (const u of byTag.get(r.tag) || []) { const k = `${u.inst}:${u.outcome}`; servedBy[k] = (servedBy[k] || 0) + 1; }
   out.tagged = meta.real ? { requests: tagged.length, upstream_calls: null, calls_per_request: null, fanout_histogram: null, by_upstream_outcome: null }
     : { requests: tagged.length, upstream_calls: fan.reduce((a, b) => a + b, 0), calls_per_request: mean(fan), fanout_histogram: count(fan, (x) => x), by_upstream_outcome: servedBy };
+  // Tagged reads after the first 30 s that were sent to an upstream which held them unanswered.
+  // A candidate that also asks another upstream at once may still answer such a read quickly.
+  const settled = tagged.filter((r) => r.since_ready_ms >= 30_000);
+  const sent = settled.filter((r) => (byTag.get(r.tag) || []).some((u) => u.outcome === "hang"));
+  out.tagged.sent_to_hang_after_30s = meta.real ? null
+    : { requests: settled.length, sent: sent.length, rate: settled.length ? sent.length / settled.length : null };
   if (switchMs !== undefined && !meta.real) {
     const t = (rs) => mean(rs.map((r) => (byTag.get(r.tag) || []).length));
     out.tagged.calls_per_request_before_switch = t(tagged.filter((r) => r.since_ready_ms < switchMs));
@@ -182,14 +188,15 @@ const f = (x, d = "") => (x === null || x === undefined ? "n/a" : `${x}${d}`);
 const f3 = (x) => (x === null || x === undefined ? "n/a" : String(Math.round(x * 1000) / 1000));
 const pc = (x) => (x === null || x === undefined ? "n/a" : `${(x * 100).toFixed(1)}%`);
 const hist = (h) => Object.entries(h).map(([k, v]) => `${k}: ${v}`).join(", ");
-const READ_HEAD = "| candidate | success | success 0-30 s | success after 30 s | first success ms | p50 | p95 | p99 | max | upstream calls per tagged request | stale reads | backwards (>1 block) |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+const READ_HEAD = "| candidate | success | success 0-30 s | success after 30 s | first success ms | p50 | p95 | p99 | max | upstream calls per tagged request | sent to a hung upstream after 30 s | stale reads | backwards (>1 block) |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
 const failed = (a) => Boolean(a.meta.error) || (a.kind === "idle" ? !a.idle : !a.overall);
 const failedRow = (c, a) => `| ${c} | failed: ${(a.meta.error ?? "no client records").split("\n")[0].slice(0, 100)} |\n`;
 const readRow = (c, a) => {
   if (!a.overall || a.meta.error) return failedRow(c, a);
   const l = a.overall.latency_success, fr = a.freshness;
-  return `| ${c} | ${pc(a.overall.success_rate)} | ${pc(a.first_30s.success_rate)} | ${pc(a.after_30s.success_rate)} | ${f(a.first_success_ms)} | ${f(l.p50)} | ${f(l.p95)} | ${f(l.p99)} | ${f(l.max)} | ${f3(a.tagged.calls_per_request)} | ${fr.stale_reads === null ? "n/a" : `${fr.stale_reads} (${pc(fr.stale_rate)})`} | ${fr.backwards_any === null ? "n/a" : `${fr.backwards_any} (${fr.backwards_gt1})`} |\n`;
+  return `| ${c} | ${pc(a.overall.success_rate)} | ${pc(a.first_30s.success_rate)} | ${pc(a.after_30s.success_rate)} | ${f(a.first_success_ms)} | ${f(l.p50)} | ${f(l.p95)} | ${f(l.p99)} | ${f(l.max)} | ${f3(a.tagged.calls_per_request)} | ${sentCell(a.tagged.sent_to_hang_after_30s)} | ${fr.stale_reads === null ? "n/a" : `${fr.stale_reads} (${pc(fr.stale_rate)})`} | ${fr.backwards_any === null ? "n/a" : `${fr.backwards_any} (${fr.backwards_gt1})`} |\n`;
 };
+const sentCell = (w) => (w ? `${w.sent}/${w.requests} (${pc(w.rate)})` : "n/a");
 const BACKFILL_HEAD = "| candidate | windows ok | complete passes | upstream calls per window | window p50 / p95 ms | pass wall time p50 / max s | upstream calls by upstream and outcome | client errors |\n|---|---|---|---|---|---|---|---|\n";
 const secs = (ms) => (ms === null || ms === undefined ? "n/a" : (ms / 1000).toFixed(1));
 const backfillRow = (c, a) => {

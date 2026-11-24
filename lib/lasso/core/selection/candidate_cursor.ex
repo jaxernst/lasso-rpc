@@ -90,8 +90,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       plan,
       method,
       opts,
-      &build_descriptors/4,
-      fn -> AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation) end
+      AttemptProjection.scope_state(plan.profile, plan.chain_id, plan.generation)
     )
     |> Map.put(:snapshot, snapshot)
   end
@@ -162,13 +161,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     }
   end
 
-  defp build(
-         plan,
-         method,
-         opts,
-         descriptors_fun,
-         learned_scope_fun
-       ) do
+  defp build(plan, method, opts, learned_scope) do
     transport = Keyword.get(opts, :transport, :both)
     strategy = Keyword.get(opts, :strategy, :load_balanced)
     head_snapshot = head_snapshot(plan)
@@ -186,7 +179,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       if MethodConstraints.disallowed?(method) do
         []
       else
-        descriptors_fun.(plan, strategy, transport, filters)
+        build_descriptors(plan, strategy, transport, filters, learned_scope)
       end
 
     request_facts = filters.request_facts
@@ -202,7 +195,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       method: method,
       filters: filters,
       head_snapshot: head_snapshot,
-      learned_scope: learned_scope_fun.(),
+      learned_scope: learned_scope,
       request_facts: request_facts,
       effect_context: effect_context,
       learning_decision: decisions,
@@ -728,7 +721,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     Map.put(cursor, field, Map.put(queues, key, queue))
   end
 
-  defp build_descriptors(plan, strategy, transport, filters) do
+  defp build_descriptors(plan, strategy, transport, filters, learned_scope) do
     exclude = MapSet.new(filters.exclude)
     transports = transports_to_check(transport)
 
@@ -758,9 +751,28 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         end)
 
       :load_balanced ->
-        LoadBalanced.shuffle_instances(descriptors, fn {provider, _transport} ->
-          provider.instance_id || {plan.profile, plan.chain_id, provider.id}
-        end)
+        now_us = System.monotonic_time(:microsecond)
+        deferral? = LoadBalanced.deferral?(plan.profile)
+
+        LoadBalanced.order(
+          descriptors,
+          fn {provider, _transport} ->
+            provider.instance_id || {plan.profile, plan.chain_id, provider.id}
+          end,
+          fn
+            {%{instance_id: instance_id}, transport} when deferral? and is_binary(instance_id) ->
+              AttemptProjection.recent_failure_rate(
+                learned_scope,
+                instance_id,
+                transport,
+                filters.workload_key,
+                now_us
+              )
+
+            _unidentified ->
+              nil
+          end
+        )
     end
   end
 

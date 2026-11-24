@@ -422,6 +422,8 @@ defmodule Lasso.RPC.Selection do
         {id, rate_limited}
       end)
 
+    strategy_mod = StrategyRegistry.resolve(strategy)
+
     ordered_channels =
       rank_capable_channels(
         channels,
@@ -431,32 +433,34 @@ defmodule Lasso.RPC.Selection do
         plan,
         timeout,
         workload_key,
-        StrategyRegistry.resolve(strategy)
+        strategy_mod
       )
 
     head = Keyword.get(opts, :head_suitability)
     attempted = MapSet.new(Keyword.get(opts, :attempted_instances, []))
+    # A registry override that resolves to load-balanced gets its fallback diversity too.
+    load_balanced? = strategy_mod == LoadBalanced
 
     # Load-balanced diversity orders within each suitability class, as the
     # cursor does within each tier bucket, so it never lifts a deferred route.
     tier_channels(ordered_channels, circuit_state_map, rate_limit_map, fn tier, seen ->
-      seen = if strategy == :load_balanced, do: MapSet.union(seen, attempted), else: seen
+      seen = if load_balanced?, do: MapSet.union(seen, attempted), else: seen
 
       tier
       |> Enum.group_by(&HeadSuitability.class(head, {&1.instance_id, &1.transport}))
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.flat_map_reduce(seen, fn {_class, group}, seen ->
-        order_class_group(group, strategy, method, seen)
+        order_class_group(group, load_balanced?, method, seen)
       end)
     end)
   end
 
-  defp order_class_group(group, :load_balanced, method, seen) do
+  defp order_class_group(group, true, method, seen) do
     ordered = LoadBalanced.order_fallbacks(group, method, seen)
     {ordered, Enum.reduce(ordered, seen, &MapSet.put(&2, &1.instance_id))}
   end
 
-  defp order_class_group(group, _strategy, _method, seen), do: {group, seen}
+  defp order_class_group(group, false, _method, seen), do: {group, seen}
 
   defp rank_capable_channels(
          [channel],
@@ -472,18 +476,6 @@ defmodule Lasso.RPC.Selection do
     maybe_record_single_channel_degradation(channel, candidates, strategy, plan, workload_key)
     [channel]
   end
-
-  defp rank_capable_channels(
-         channels,
-         _candidates,
-         :load_balanced,
-         _method,
-         _plan,
-         _timeout,
-         _workload_key,
-         LoadBalanced
-       ),
-       do: LoadBalanced.shuffle_channels(channels)
 
   defp rank_capable_channels(
          channels,

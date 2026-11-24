@@ -27,6 +27,7 @@ defmodule Lasso.RPC.AttemptProjection do
   @failing_evidence_max_age_us 3_600_000_000
   @latency_ewma_weight 8
   @reliability_ewma_weight 8
+  @failure_rate_ewma_weight 64
   @qualified_reliability 0.75
   @max_count 9_223_372_036_854_775_807
   @default_workload "client"
@@ -302,6 +303,29 @@ defmodule Lasso.RPC.AttemptProjection do
 
       _other ->
         nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc """
+  A route's recent rate of dispatched failures in a client family, from current evidence only.
+  Stale evidence, a degraded scope and a route with no failure history read as unknown.
+  """
+  @spec recent_failure_rate(scope_state(), binary(), :http | :ws, Workload.t(), integer()) ::
+          float() | nil
+  def recent_failure_rate(%{degraded?: true}, _instance_id, _transport, _workload, _now_us),
+    do: nil
+
+  def recent_failure_rate(scope, instance_id, transport, workload, now_us)
+      when is_binary(instance_id) and transport in [:http, :ws] do
+    with row when not is_nil(row) <- route_record(scope, instance_id, transport),
+         %{recent_failure_rate: rate} = partition when is_number(rate) <-
+           partition_state(row, workload),
+         false <- row_stale?(partition, workload, now_us) do
+      rate
+    else
+      _other -> nil
     end
   rescue
     ArgumentError -> nil
@@ -723,7 +747,8 @@ defmodule Lasso.RPC.AttemptProjection do
           successful_mean_latency_ms: mean,
           successful_p95_latency_ms: nil,
           recent_success_probability:
-            recent_success_probability(row.recent_success_probability, 1.0)
+            recent_success_probability(row.recent_success_probability, 1.0),
+          recent_failure_rate: decay_failure_rate(row.recent_failure_rate)
       }
     else
       %{row | usable_successes: successes}
@@ -737,7 +762,8 @@ defmodule Lasso.RPC.AttemptProjection do
       %{
         row
         | recent_success_probability:
-            recent_success_probability(row.recent_success_probability, 0.0)
+            recent_success_probability(row.recent_success_probability, 0.0),
+          recent_failure_rate: raise_failure_rate(row.recent_failure_rate)
       }
     else
       row
@@ -775,6 +801,13 @@ defmodule Lasso.RPC.AttemptProjection do
 
   defp recent_success_probability(previous, outcome),
     do: previous + (outcome - previous) / @reliability_ewma_weight
+
+  # Only a dispatched failure raises the rate; a rate limit is quota pressure, not a failing route.
+  defp raise_failure_rate(nil), do: 1.0 / @failure_rate_ewma_weight
+  defp raise_failure_rate(rate), do: rate + (1.0 - rate) / @failure_rate_ewma_weight
+
+  defp decay_failure_rate(nil), do: 0.0
+  defp decay_failure_rate(rate), do: rate - rate / @failure_rate_ewma_weight
 
   defp apply_latest_state(row, emitted_at_us, delta) do
     if is_nil(row.state_observed_at_us) or emitted_at_us >= row.state_observed_at_us do
@@ -1210,6 +1243,7 @@ defmodule Lasso.RPC.AttemptProjection do
       total_failures: 0,
       total_rate_limits: 0,
       recent_success_probability: nil,
+      recent_failure_rate: nil,
       successful_mean_latency_ms: nil,
       successful_p95_latency_ms: nil
     }

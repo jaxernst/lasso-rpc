@@ -15,7 +15,8 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     Selection
   }
 
-  alias Lasso.RPC.Strategies.LoadBalanced
+  alias Lasso.RPC.RoutingEvidence.Workload
+  alias Lasso.RPC.Strategies.{BalancedFast, LoadBalanced}
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
   alias Lasso.RPC.Selection.CandidateCursor
 
@@ -95,12 +96,17 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
         Enum.find(1..1_000, fn seed ->
           :rand.seed(:exsss, {seed, seed + 1, seed + 2})
 
+          # Fresh fixtures carry no failure evidence, so load-balanced weighs every route
+          # alike; this draws the same random numbers its weighted permutations do.
           order =
             channels
             |> Enum.group_by(& &1.instance_id)
             |> Map.values()
-            |> Enum.shuffle()
-            |> Enum.flat_map(&Enum.shuffle/1)
+            |> Enum.map(&{&1, 1.0})
+            |> BalancedFast.weighted_permutation()
+            |> Enum.flat_map(fn group ->
+              group |> Enum.map(&{&1, 1.0}) |> BalancedFast.weighted_permutation()
+            end)
 
           List.last(order).provider_id == "capable"
         end)
@@ -273,6 +279,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
       provider_id: "a",
       profile: "public",
       chain_id: 1,
+      route_generation: 0,
       transport: :http
     }
 
@@ -290,11 +297,33 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
           "eth_getFilterChanges",
           "unknown_method"
         ] do
-      ranked = LoadBalanced.rank_channels(input, method, nil, "public", 1)
+      ranked = LoadBalanced.rank_channels(input, method, context(method), "public", 1)
       assert MapSet.new(ranked) == MapSet.new(input)
       assert LoadBalanced.order_fallbacks(ranked, method) == ranked
       assert ExecutionEnvelope.new("safety", method, 2_000).dispatch_limit == 1
     end
+
+    # Ranking keeps each instance's routes together. Distinct-instance fallback order belongs
+    # after health tiering, so ranking a replay-safe read never splits an instance's routes.
+    for _ <- 1..40 do
+      ranked =
+        LoadBalanced.rank_channels(
+          input,
+          "eth_getBalance",
+          context("eth_getBalance"),
+          "public",
+          1
+        )
+
+      assert Enum.chunk_by(ranked, & &1.instance_id) |> length() == 2
+    end
+  end
+
+  defp context(method) do
+    %{
+      LoadBalanced.prepare_context("public", 1, method, 2_000)
+      | workload_key: Workload.for_request(:client, method)
+    }
   end
 
   test "unsafe cursor methods retain the shuffled descriptor order" do
@@ -366,7 +395,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     :ok = :meck.new(LoadBalanced, [:passthrough, :no_link])
     on_exit(fn -> :meck.unload(LoadBalanced) end)
 
-    :meck.expect(LoadBalanced, :shuffle_instances, fn routes, instance_key ->
+    :meck.expect(LoadBalanced, :order, fn routes, instance_key, failure_rate ->
       fixture_route? = fn
         {%{instance_id: instance}, _} -> MapSet.member?(instances, instance)
         _ -> false
@@ -383,7 +412,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
         send(observer, :fallback_order_pinned)
         Enum.map(order, &Map.fetch!(indexed, &1))
       else
-        :meck.passthrough([routes, instance_key])
+        :meck.passthrough([routes, instance_key, failure_rate])
       end
     end)
 
