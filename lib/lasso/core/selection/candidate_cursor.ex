@@ -760,16 +760,16 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
             provider.instance_id || {plan.profile, plan.chain_id, provider.id}
           end,
           fn
-            {%{instance_id: instance_id}, transport} when deferral? and is_binary(instance_id) ->
-              AttemptProjection.recent_failure_rate(
+            {provider, transport} when deferral? ->
+              LoadBalanced.route_failure_rate(
                 learned_scope,
-                instance_id,
+                provider.instance_id,
                 transport,
                 filters.workload_key,
                 now_us
               )
 
-            _unidentified ->
+            _route ->
               nil
           end
         )

@@ -1,6 +1,6 @@
 defmodule Lasso.Harness.LoadBalancedDeferralTest do
   use ExUnit.Case, async: false
-  alias Lasso.Test.Harness.{Fleet, Rpc, Tenant}
+  alias Lasso.Test.Harness.{Fleet, Rpc, Settle, Tenant}
 
   @moduletag :harness
   @moduletag feature: ["core-routing-10"]
@@ -46,6 +46,50 @@ defmodule Lasso.Harness.LoadBalancedDeferralTest do
     end)
   end
 
+  test "a disconnected WebSocket's clean evidence neither sets the limit nor shields its instance" do
+    world(["dual", "steady"], ["dual"], fn tenant, [dual, steady] = fleets ->
+      # The dual upstream's HTTP route fails one read in three, about a quarter of its recent
+      # attempts, while its WebSocket route and the HTTP-only steady upstream answer cleanly.
+      Fleet.script(
+        dual,
+        @method,
+        List.flatten(List.duplicate([{:status, 503, [], "unavailable"}, answer(), answer()], 30)),
+        answer()
+      )
+
+      Fleet.script(steady, @method, [], answer())
+      for n <- 1..90, do: pinned_read(tenant, dual, n, "http")
+      for n <- 1..4, do: assert(pinned_read(tenant, dual, 100 + n, "ws").body["result"])
+      for n <- 1..4, do: assert(pinned_read(tenant, steady, 200 + n, "http").body["result"])
+
+      # Reconnects wait on a held upgrade, so the WebSocket route stays down for the window.
+      disconnected = Settle.listen([:lasso, :websocket, :disconnected])
+      Fleet.script(dual, "fixture_upgrade", [], {:respond, fn _ -> {:hold, make_ref()} end})
+      Fleet.script(dual, @method, [{:disconnect, 1001}], answer())
+      pinned_read(tenant, dual, 300, "ws")
+
+      instance = Lasso.Providers.Catalog.lookup_instance_id(tenant.profile, 31_337, dual.name)
+      Settle.event(disconnected, &(&1.provider_id == instance), 10_000)
+      Settle.unlisten(disconnected)
+
+      # Only the dual upstream's HTTP route can serve now. Weighed on its own evidence it falls
+      # to 1/8 of the steady upstream's share, about 11% of first picks, and stays there while its
+      # rate decays over this window. Were the dead WebSocket's clean rate still counted, it
+      # would set the limit at the floor and average the instance back to 9/16, about 36%.
+      window = reads(tenant, fleets, 1_001..1_300)
+      assert window.served == 300
+      assert window.arrivals[dual.name] <= 75
+      assert window.arrivals[dual.name] >= 10
+    end)
+  end
+
+  defp answer, do: {:answer, "0x20"}
+
+  defp pinned_read(tenant, fleet, n, transport) do
+    url = tenant.rpc_url <> "?provider_override=#{fleet.name}&transport=#{transport}"
+    Rpc.call(%{rpc_url: url}, @method, [address(n), "latest"])
+  end
+
   defp flaky_action(n) when rem(n, 10) == 0, do: {:hold, make_ref()}
   defp flaky_action(_n), do: {:answer, "0x20"}
 
@@ -80,12 +124,14 @@ defmodule Lasso.Harness.LoadBalancedDeferralTest do
 
   defp address(n), do: "0x" <> (n |> Integer.to_string(16) |> String.pad_leading(40, "0"))
 
-  defp world(names, scenario) do
+  defp world(names, dual_names \\ [], scenario) do
     unique = System.unique_integer([:positive])
     fleets = for name <- names, do: Fleet.start!(self(), "#{name}-#{unique}")
+    dual = for {name, fleet} <- Enum.zip(names, fleets), name in dual_names, do: fleet
 
     try do
-      tenant = Tenant.open!(fleets)
+      tenant =
+        Tenant.open!(fleets, providers: Map.new(dual, &{&1.name, %{"ws_url" => &1.ws_url}}))
 
       balanced = %{
         tenant

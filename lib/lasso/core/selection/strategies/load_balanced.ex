@@ -27,8 +27,10 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
   - Tier 4: Half-open circuit, rate-limited
   """
 
+  alias Lasso.Providers.InstanceState
   alias Lasso.RPC.{AttemptProjection, Channel, ExecutionEnvelope}
   alias Lasso.RPC.ProviderKnowledge.Effects
+  alias Lasso.RPC.RoutingEvidence.Workload
   alias Lasso.RPC.Strategies.BalancedFast
 
   @behaviour Lasso.RPC.Strategy
@@ -50,20 +52,34 @@ defmodule Lasso.RPC.Strategies.LoadBalanced do
     deferral? = deferral?(profile)
 
     order(channels, &instance_key/1, fn
-      %{instance_id: instance_id, transport: transport}
-      when deferral? and is_binary(instance_id) ->
-        AttemptProjection.recent_failure_rate(
-          scope,
-          instance_id,
-          transport,
-          ctx.workload_key,
-          now_us
-        )
+      %{instance_id: instance_id, transport: transport} when deferral? ->
+        route_failure_rate(scope, instance_id, transport, ctx.workload_key, now_us)
 
       _unidentified ->
         nil
     end)
   end
+
+  @doc """
+  A route's recent failure rate as load-balanced weighs it, or nil when the route has no current
+  evidence or cannot be tried now. A WebSocket route counts only while its connection is up, so a
+  disconnected route neither sets its peers' limit nor averages into its instance's weight.
+  """
+  @spec route_failure_rate(
+          AttemptProjection.scope_state(),
+          String.t() | nil,
+          :http | :ws,
+          Workload.t(),
+          integer()
+        ) :: float() | nil
+  def route_failure_rate(scope, instance_id, transport, workload, now_us)
+      when is_binary(instance_id) do
+    if transport == :ws and InstanceState.read_ws_status(instance_id).status != :connected,
+      do: nil,
+      else: AttemptProjection.recent_failure_rate(scope, instance_id, transport, workload, now_us)
+  end
+
+  def route_failure_rate(_scope, _instance_id, _transport, _workload, _now_us), do: nil
 
   @doc "Whether failure-rate deferral weighs this profile's routes."
   @spec deferral?(String.t()) :: boolean()
