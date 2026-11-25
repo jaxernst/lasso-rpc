@@ -82,7 +82,8 @@ will serve that range. A successful fallback still returns its result.
 
 A registered send may reach up to three distinct upstreams, one at a time, within
 the request deadline. With a chain [`transactions`](CONFIGURATION.md#transaction-providers)
-block, sends go only to the listed providers
+block, sends go only to the listed providers, then to the read providers once
+those are exhausted when it sets `fallback: read_providers`
 ([routing](ROUTING.md#transaction-providers)). A null send result stays null.
 
 `eth_sendRawTransaction` resends the same signed bytes unless the rejection is on
@@ -100,10 +101,14 @@ the bytes, one at a time within the remaining deadline. An earlier send may have
 broadcast when it got an unclassified error, an invalid response, a timeout or a
 connection lost after sending. A rate-limit or quota refusal, a `-32601`, a send
 refused before dispatch and a recognized failover rejection such as replacement
-underpricing did not, so those upstreams are not asked. If no upstream
-responded, Lasso asks one healthy upstream among the providers of the phase
-that sent it. Pending or mined evidence returns the hash only when the object's
-hash matches it case-insensitively. Wording alone never reports success.
+underpricing did not, so those earlier upstreams are not asked; the upstream
+that answered last is asked whatever its rejection. Each send that may have
+broadcast, such as several that timed out, gets its own pinned lookup, in either
+send phase. Only when the last upstream gave no answer and no other send may
+have broadcast does Lasso ask one healthy upstream among the current send
+phase's providers. Pending or mined evidence returns the hash only when the
+object's hash matches it case-insensitively. Wording alone never reports
+success.
 
 A `null` result means that upstream does not have the transaction. When every
 upstream asked returns `null`, the original error stands. A lookup that fails,

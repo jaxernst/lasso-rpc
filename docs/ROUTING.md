@@ -397,5 +397,6 @@ Sending fails closed: when no transaction provider can take a send, the request
 fails instead of reaching another provider. `fallback: read_providers` adds a
 second phase over the profile's read providers once the transaction providers are
 exhausted, within the same deadline and dispatch budget. The two sides are never
-ranked together, and neither phase leaves the profile. The hash lookup after a
-failed send stays in the phase that sent it.
+ranked together, and neither phase leaves the profile. Hash lookups after a
+failed send go to the upstreams that answered or may have broadcast it, in
+either phase; with none, one lookup stays in the current phase.
