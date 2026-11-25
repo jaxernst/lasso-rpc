@@ -343,7 +343,8 @@ Each node has a unique `LASSO_NODE_ID` (convention: use geographic region names 
 Routes JSON-RPC requests across HTTP and WebSocket transports based on real-time performance.
 
 `Lasso.Core.Request.TransactionConfirmation` confirms rejected raw transactions
-with a single lookup and decorates transaction send errors before terminal projection.
+by hash lookup on the route that answered last and on every earlier send that may
+have broadcast them, and decorates transaction send errors before terminal projection.
 
 ### Request Flow
 

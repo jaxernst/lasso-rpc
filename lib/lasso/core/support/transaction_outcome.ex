@@ -284,6 +284,18 @@ defmodule Lasso.Core.Support.TransactionOutcome do
     )
   end
 
+  @doc "The matched table row retained without storing rejection text."
+  @spec reason(Lasso.JSONRPC.Error.t()) :: atom()
+  def reason(%{
+        resolution: %ErrorResolution{
+          classification_path: :transaction_outcome,
+          baseline_path: reason
+        }
+      }),
+      do: reason
+
+  def reason(error), do: elem(classify(error.code, error.message), 1)
+
   @doc "Preserve scalar upstream error data when adding Lasso's hints."
   @spec data_map(term()) :: map()
   def data_map(nil), do: %{}

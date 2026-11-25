@@ -25,7 +25,7 @@ defmodule Lasso.RPC.RequestPipeline do
   alias Lasso.Core.Request.{ExecutionScope, RequestOwner, TransactionConfirmation}
   alias Lasso.Core.Support.CircuitBreaker
   alias Lasso.Core.Support.CircuitBreaker.AdmissionReceipt
-  alias Lasso.Core.Support.{ClaimAudit, CredentialHealth, LogRangeLimit}
+  alias Lasso.Core.Support.{ClaimAudit, CredentialHealth, LogRangeLimit, TransactionOutcome}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.Providers.{CandidateListing, ChainIdentity, ProbeCoordinator}
 
@@ -190,28 +190,23 @@ defmodule Lasso.RPC.RequestPipeline do
       execution_scope,
       caller_guard,
       &execute_owned/5,
-      &transaction_response_channel/1
+      &request_projection_route/1,
+      &transaction_route_channel/2
     )
     |> finalize_request_terminal()
   end
 
-  defp transaction_response_channel(ctx) do
-    case request_projection_route(ctx) do
-      channel when is_map(channel) ->
-        get_provider_channels(
-          channel.profile,
-          ctx.chain_id,
-          channel.provider_id,
-          channel.transport,
-          ctx.execution_envelope.deadline_us,
-          {ctx.execution_envelope.execution_safety, ctx.send_phase},
-          ctx.routing_capture
-        )
-        |> List.first()
-
-      _ ->
-        nil
-    end
+  defp transaction_route_channel(ctx, route) do
+    get_provider_channels(
+      route.profile,
+      ctx.chain_id,
+      route.provider_id,
+      route.transport,
+      ctx.execution_envelope.deadline_us,
+      :captured,
+      ctx.routing_capture
+    )
+    |> List.first()
   end
 
   defp execute_admitted_request(ctx, opts, caller_guard) do
@@ -1391,6 +1386,12 @@ defmodule Lasso.RPC.RequestPipeline do
       end
 
     ctx = RequestContext.record_terminal_attempt(ctx, channel, outcome.fact)
+
+    ctx =
+      if possible_broadcast?(ctx, outcome),
+        do: RequestContext.record_possible_broadcast(ctx, channel),
+        else: ctx
+
     ctx = record_budget_outcome(ctx, channel, outcome)
 
     %{
@@ -1401,6 +1402,21 @@ defmodule Lasso.RPC.RequestPipeline do
         terminal_reason: nil
     }
   end
+
+  # A signed-transaction send with no recognized answer may have broadcast the
+  # transaction: an unclassified rejection, an invalid response, a timeout or a
+  # dispatched transport failure. A refusal or a recognized rejection did not.
+  defp possible_broadcast?(%{method: "eth_sendRawTransaction"}, %{fact: fact} = outcome) do
+    not authoritative_not_dispatched?(fact) and
+      not match?(%AttemptTerminal.Response{kind: :success}, fact) and
+      not match?(%AttemptTerminal.Response{error_code: -32_601}, fact) and
+      case owner_error(outcome) do
+        {%JError{} = error, _latency_ms} -> TransactionOutcome.reason(error) == :other
+        _ -> true
+      end
+  end
+
+  defp possible_broadcast?(_ctx, _outcome), do: false
 
   defp record_budget_outcome(ctx, _channel, %{result: {:ok, _result, _latency}}), do: ctx
 
@@ -1477,16 +1493,12 @@ defmodule Lasso.RPC.RequestPipeline do
                     (is_struct(fact, AttemptTerminal.TransportFailure) and fact.reason == :timeout)) and
                  fact.dispatch_certainty != :not_dispatched) do
     error =
-      JError.new(-32_000, "Upstream dispatch outcome is indeterminate",
-        provider_id: channel.provider_id,
-        data:
-          case owner_error(outcome) do
-            {%JError{} = upstream, _} -> %{upstream_message: JError.summary(upstream).message}
-            _ -> nil
-          end,
-        category: :indeterminate_dispatch,
-        retriable?: false,
-        breaker_penalty?: false
+      TransactionConfirmation.indeterminate_dispatch_error(
+        channel.provider_id,
+        case owner_error(outcome) do
+          {%JError{} = upstream, _} -> %{upstream_message: JError.summary(upstream).message}
+          _ -> nil
+        end
       )
 
     handle_owner_terminal(outcome, channel, ctx, error)
@@ -1817,14 +1829,8 @@ defmodule Lasso.RPC.RequestPipeline do
   defp owner_terminal_error(
          %{projection: %ExecutionProjector{recommended_action: :finish_unsafe_indeterminate}},
          channel
-       ) do
-    JError.new(-32_000, "Upstream dispatch outcome is indeterminate",
-      provider_id: channel.provider_id,
-      category: :indeterminate_dispatch,
-      retriable?: false,
-      breaker_penalty?: false
-    )
-  end
+       ),
+       do: TransactionConfirmation.indeterminate_dispatch_error(channel.provider_id)
 
   defp owner_terminal_error(%{fact: %AttemptTerminal.Deadline{}}, channel) do
     JError.new(-32_007, "Request timeout",

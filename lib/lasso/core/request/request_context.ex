@@ -77,6 +77,9 @@ defmodule Lasso.RPC.RequestContext do
           # Channel execution tracking (for observability without polluting return types)
           executed_channel: channel_identity() | nil,
           attempted_channels: [channel_attempt()],
+          # Signed-transaction sends that got no recognized answer, so they may
+          # have broadcast the transaction.
+          possible_broadcasts: [channel_identity()],
           refused_vendor_groups: [atom()],
           # Full error retained for a terminal upstream answer.
           last_attempt_error: JError.t() | nil,
@@ -185,6 +188,7 @@ defmodule Lasso.RPC.RequestContext do
             repeated_error_categories: %{},
             executed_channel: nil,
             attempted_channels: [],
+            possible_broadcasts: [],
             budget_refusals: [],
             budget_retry_at_ms: nil,
             non_budget_attempts: 0,
@@ -601,6 +605,11 @@ defmodule Lasso.RPC.RequestContext do
   def record_terminal_attempt(%__MODULE__{} = ctx, %Channel{} = channel, fact) do
     %{ctx | terminal_attempt_fact: fact, terminal_attempt_channel: channel_identity(channel)}
   end
+
+  @doc "Records a send that may have broadcast a signed transaction without saying so."
+  @spec record_possible_broadcast(t(), Channel.t()) :: t()
+  def record_possible_broadcast(%__MODULE__{} = ctx, %Channel{} = channel),
+    do: %{ctx | possible_broadcasts: ctx.possible_broadcasts ++ [channel_identity(channel)]}
 
   @doc """
   Names the latest upstream response and its profile as the public answer, leaving the request's own

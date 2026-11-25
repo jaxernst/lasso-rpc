@@ -1,6 +1,6 @@
 defmodule Lasso.Core.Request.TransactionConfirmation do
   @moduledoc """
-  Confirms rejected raw transactions with a single lookup and decorates transaction send errors.
+  Confirms rejected raw transactions by hash lookup and decorates transaction send errors.
   """
 
   alias Lasso.Core.Request.ExecutionScope
@@ -16,14 +16,30 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
           ExecutionScope.CallerGuard.t() | nil,
           (ExecutionScope.t(), pos_integer(), String.t(), list(), Lasso.RPC.RequestOptions.t() ->
              Lasso.RPC.RequestPipeline.result()),
-          (RequestContext.t() -> Lasso.RPC.Channel.t() | nil)
+          (RequestContext.t() -> map() | nil),
+          (RequestContext.t(), map() -> Lasso.RPC.Channel.t() | nil)
         ) :: Lasso.RPC.RequestPipeline.result()
-  def confirm(result, scope, guard, execute, response_channel) do
+  def confirm(result, scope, guard, execute, answered_route, route_channel) do
+    callbacks = %{execute: execute, answered_route: answered_route, route_channel: route_channel}
+
     result
-    |> confirm_raw_transaction(scope, guard, execute, response_channel)
+    |> confirm_raw_transaction(scope, guard, callbacks)
     |> decorate_send_error()
   end
 
+  @doc "The error for a send whose upstream outcome cannot be known."
+  @spec indeterminate_dispatch_error(String.t() | nil, map() | nil) :: JError.t()
+  def indeterminate_dispatch_error(provider_id, data \\ nil) do
+    JError.new(-32_000, "Upstream dispatch outcome is indeterminate",
+      provider_id: provider_id,
+      data: data,
+      category: :indeterminate_dispatch,
+      retriable?: false,
+      breaker_penalty?: false
+    )
+  end
+
+  # A send that reached no upstream has nothing to confirm.
   defp confirm_raw_transaction(
          {:error, %JError{category: :provider_error} = error,
           %{
@@ -32,8 +48,7 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
           } = ctx},
          _scope,
          _guard,
-         _execute,
-         _response_channel
+         _callbacks
        )
        when not is_nil(policy),
        do: {:error, transaction_error_hint(error, ctx), ctx}
@@ -43,8 +58,7 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
           %{method: "eth_sendRawTransaction", execution_envelope: %{dispatch_count: 0}} = ctx},
          _scope,
          _guard,
-         _execute,
-         _response_channel
+         _callbacks
        ),
        do: {:error, transaction_error_hint(error, ctx), ctx}
 
@@ -57,87 +71,77 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
           } = ctx},
          _scope,
          _guard,
-         _execute,
-         _response_channel
+         _callbacks
        )
        when not is_nil(policy),
        do: {:error, transaction_error_hint(error, ctx), ctx}
 
-  # A single lookup is shared by every terminal sendRaw rejection. Pinning the
-  # selected transport prevents read failover from turning it into peer checks.
+  # Once an earlier send may have broadcast the transaction, the final answer
+  # stands only after every such send says it does not hold it, and a lookup
+  # that cannot answer leaves the send indeterminate rather than rejected.
   defp confirm_raw_transaction(
          {:error, error, %{method: "eth_sendRawTransaction"} = ctx},
          scope,
          guard,
-         execute,
-         response_channel
+         callbacks
        ) do
     hash = TransactionOutcome.hash(ctx.params)
-    channel = transaction_lookup_channel(ctx, hash, response_channel)
-    remaining = ExecutionEnvelope.remaining_ms(ctx.execution_envelope)
 
-    found? =
-      if hash && channel && remaining > 0 && ExecutionScope.caller_alive?(guard) do
-        opts = %{
-          ctx.opts
-          | profile: channel.profile,
-            captured_channel: channel,
-            provider_override: nil,
-            transport: channel.transport,
-            request_origin: :system,
-            timeout_ms: remaining,
-            request_context: nil,
-            plug_start_time: nil
-        }
+    broadcasts =
+      if Enum.any?(ctx.possible_broadcasts, &(&1 != ctx.terminal_attempt_channel)),
+        do: ctx.possible_broadcasts,
+        else: []
 
-        case execute.(scope, ctx.chain_id, "eth_getTransactionByHash", [hash], opts) do
-          {:ok, %Success{} = response, _lookup_ctx} ->
-            found =
-              case Jason.decode(response.raw_bytes) do
-                {:ok, %{"result" => %{"hash" => returned_hash}}} when is_binary(returned_hash) ->
-                  String.downcase(returned_hash) == hash
+    evidence =
+      case transaction_lookup_channels(ctx, broadcasts, hash, callbacks) do
+        [] ->
+          :unknown
 
-                _ ->
-                  false
-              end
-
-            Success.release_capacity(response, :transaction_lookup)
-            found
-
-          {:error, lookup_error, _lookup_ctx} ->
-            Capacity.release(lookup_error, :transaction_lookup)
-            false
-
-          _ ->
-            false
-        end
-      else
-        false
+        channels ->
+          Enum.reduce_while(channels, :absent, fn channel, evidence ->
+            case lookup_transaction(channel, hash, ctx, scope, guard, callbacks.execute) do
+              :found -> {:halt, :found}
+              :absent -> {:cont, evidence}
+              :unknown -> {:cont, :unknown}
+            end
+          end)
       end
 
     :telemetry.execute([:lasso, :rpc, :transaction_lookup], %{count: 1}, %{
       chain_id: ctx.chain_id,
       profile: ctx.routing_profile,
-      result: if(found?, do: :found, else: :not_found)
+      result: if(evidence == :found, do: :found, else: :not_found)
     })
 
-    if found? do
-      Capacity.release(error, :transaction_found)
+    cond do
+      evidence == :found ->
+        Capacity.release(error, :transaction_found)
 
-      response = %Success{
-        id: ctx.opts.jsonrpc_id,
-        jsonrpc: "2.0",
-        raw_bytes: Jason.encode!(%{jsonrpc: "2.0", id: ctx.opts.jsonrpc_id, result: hash})
-      }
+        response = %Success{
+          id: ctx.opts.jsonrpc_id,
+          jsonrpc: "2.0",
+          raw_bytes: Jason.encode!(%{jsonrpc: "2.0", id: ctx.opts.jsonrpc_id, result: hash})
+        }
 
-      ctx = ctx |> RequestContext.record_success(response) |> Map.put(:error, nil)
-      {:ok, response, %{ctx | terminal_reason: :transaction_found, public_response_attempt: nil}}
-    else
-      {:error, transaction_error_hint(error, ctx), ctx}
+        ctx = ctx |> RequestContext.record_success(response) |> Map.put(:error, nil)
+
+        {:ok, response,
+         %{ctx | terminal_reason: :transaction_found, public_response_attempt: nil}}
+
+      evidence == :unknown and broadcasts != [] ->
+        Capacity.release(error, :transaction_indeterminate)
+
+        {:error,
+         indeterminate_dispatch_error(error.provider_id, %{
+           upstream_message: JError.summary(error).message
+         }), ctx}
+
+      true ->
+        {:error, transaction_error_hint(error, ctx), ctx}
     end
   end
 
-  defp confirm_raw_transaction(result, _scope, _guard, _execute, _response_channel), do: result
+  defp confirm_raw_transaction(result, _scope, _guard, _callbacks), do: result
 
   defp decorate_send_error({:error, %JError{} = error, ctx} = result) do
     case RequestContext.send_policy_metadata(ctx) do
@@ -152,27 +156,86 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
 
   defp decorate_send_error(result), do: result
 
-  defp transaction_lookup_channel(
-         %{terminal_attempt_fact: %AttemptTerminal.Response{}} = ctx,
-         _hash,
-         response_channel
-       ) do
-    response_channel.(ctx)
+  # The route that answered last, then each earlier send that may have
+  # broadcast the transaction, as a channel or nil when the route is gone.
+  # Routes resolve from the whole captured plan because an earlier send may
+  # belong to another send phase. Pinning them keeps read failover from turning
+  # a lookup into peer checks; with no route, any route may answer.
+  defp transaction_lookup_channels(_ctx, _broadcasts, nil, _callbacks), do: []
+
+  defp transaction_lookup_channels(ctx, broadcasts, hash, callbacks) do
+    answered =
+      case {ctx.terminal_attempt_fact, callbacks.answered_route.(ctx)} do
+        {%AttemptTerminal.Response{}, route} when is_map(route) -> [route]
+        _ -> []
+      end
+
+    case Enum.uniq_by(answered ++ broadcasts, &{&1.profile, &1.provider_id}) do
+      [] ->
+        Selection.select_channels(ctx.routing_profile, ctx.chain_id, "eth_getTransactionByHash",
+          captured_selection: ctx.routing_capture,
+          execution_safety: ctx.execution_envelope.execution_safety,
+          send_phase: ctx.send_phase,
+          strategy: ctx.opts.strategy,
+          transport: ctx.opts.transport || :both,
+          limit: 1,
+          request_origin: :system,
+          params: [hash],
+          deadline_us: ctx.execution_envelope.deadline_us
+        )
+
+      routes ->
+        Enum.map(routes, &callbacks.route_channel.(ctx, &1))
+    end
   end
 
-  defp transaction_lookup_channel(ctx, hash, _response_channel) do
-    Selection.select_channels(ctx.routing_profile, ctx.chain_id, "eth_getTransactionByHash",
-      captured_selection: ctx.routing_capture,
-      execution_safety: ctx.execution_envelope.execution_safety,
-      send_phase: ctx.send_phase,
-      strategy: ctx.opts.strategy,
-      transport: ctx.opts.transport || :both,
-      limit: 1,
-      request_origin: :system,
-      params: [hash],
-      deadline_us: ctx.execution_envelope.deadline_us
-    )
-    |> List.first()
+  # A matching hash is found and a null result is absent; anything else,
+  # including no time left to ask, leaves the transaction unknown.
+  defp lookup_transaction(nil, _hash, _ctx, _scope, _guard, _execute), do: :unknown
+
+  defp lookup_transaction(channel, hash, ctx, scope, guard, execute) do
+    remaining = ExecutionEnvelope.remaining_ms(ctx.execution_envelope)
+
+    if remaining > 0 and ExecutionScope.caller_alive?(guard) do
+      opts = %{
+        ctx.opts
+        | profile: channel.profile,
+          captured_channel: channel,
+          provider_override: nil,
+          transport: channel.transport,
+          request_origin: :system,
+          timeout_ms: remaining,
+          request_context: nil,
+          plug_start_time: nil
+      }
+
+      case execute.(scope, ctx.chain_id, "eth_getTransactionByHash", [hash], opts) do
+        {:ok, %Success{} = response, _lookup_ctx} ->
+          evidence =
+            case Jason.decode(response.raw_bytes) do
+              {:ok, %{"result" => %{"hash" => returned}}} when is_binary(returned) ->
+                if String.downcase(returned) == hash, do: :found, else: :unknown
+
+              {:ok, %{"result" => nil}} ->
+                :absent
+
+              _ ->
+                :unknown
+            end
+
+          Success.release_capacity(response, :transaction_lookup)
+          evidence
+
+        {:error, lookup_error, _lookup_ctx} ->
+          Capacity.release(lookup_error, :transaction_lookup)
+          :unknown
+
+        _ ->
+          :unknown
+      end
+    else
+      :unknown
+    end
   end
 
   defp transaction_error_hint(error, ctx) do
