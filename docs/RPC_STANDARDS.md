@@ -29,7 +29,7 @@ provider implements them.
   learns the refusal so later requests start elsewhere
   ([learned provider limits](ROUTING.md#learned-provider-limits)). When the
   params carry a signed transaction, the method is a send instead: it runs once,
-  on a transaction provider when the chain declares them, and an ambiguous
+  routed like other [sends](#transaction-sends), and an ambiguous
   outcome returns the [indeterminate error](API_REFERENCE.md#transaction-send-errors-and-metadata).
 
 Responses with `include_meta` report the class and how it was chosen; see
@@ -95,8 +95,8 @@ underpricing, pool capacity and unfamiliar wording. A rate-limit or quota refusa
 and a `-32601` do not use up one of the three sends; such refusals are bounded by
 the allowed providers and the request deadline.
 
-Before returning an `eth_sendRawTransaction` error, with or without a policy,
-Lasso looks up the local hash with `eth_getTransactionByHash`. It asks the
+Before returning an `eth_sendRawTransaction` error, Lasso looks up the local
+hash with `eth_getTransactionByHash`. It asks the
 upstream that answered last, then each earlier upstream that may have broadcast
 the bytes, one at a time within the remaining deadline. An earlier send may have
 broadcast when it got an unclassified error, an invalid response, a timeout or a
@@ -107,9 +107,10 @@ that answered last is asked whatever its rejection. Each send that may have
 broadcast, such as several that timed out, gets its own pinned lookup, in either
 send phase. Only when the last upstream gave no answer and no other send may
 have broadcast does Lasso ask one healthy upstream among the current send
-phase's providers. Pending or mined evidence returns the hash only when the
-object's hash matches it case-insensitively. Wording alone never reports
-success.
+phase's providers. A send rejected as invalid params before dispatch, or one
+that reached no upstream under a policy, gets no lookup. Pending or mined
+evidence returns the hash only when the object's hash matches it
+case-insensitively. Wording alone never reports success.
 
 A `null` result means that upstream does not have the transaction. When every
 upstream asked returns `null`, the original error stands. A lookup that fails,
