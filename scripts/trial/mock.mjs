@@ -1,9 +1,14 @@
 // Deterministic EVM JSON-RPC mock upstreams (chain id 137 unless set per instance, one block every 2 s).
 // Usage: node mock.mjs <config.json>
 // config: { log: "path.jsonl", control_port: N, token: "run identity", instances: [{ name, port, chain_id, latency_ms, jitter,
-//           behind, stall, rate_429, refuse_methods, hang, hang_every, send_timeout, max_range, range_error, seed }] }
+//           behind, stall, rate_429, refuse_methods, hang, hang_every, send_timeout, max_range, range_error,
+//           state_depth, false_error, seed }] }
 // hang_every N holds every Nth client read the instance receives (a request carrying a kit tag)
 // and never answers it, so the caller waits out its own timeout.
+// state_depth N keeps state for the last N blocks only, like a pruned full node: a state read
+// (balance, nonce or call) further back gets geth's "missing trie node" error.
+// false_error { method, match, code, message } answers that method with that error whenever its
+// JSON params contain `match`, although the instance could serve it; peers answer normally.
 // max_range caps the blocks one eth_getLogs call may span (to - from + 1). A wider range gets
 // range_error, a JSON-RPC error whose message may contain {cap}.
 // The log has one "call" line per request item when it arrives and one "outcome" line
@@ -85,6 +90,7 @@ function tagOf(method, params = []) {
 class Instance {
   constructor(cfg, logStream) {
     this.cfg = { chain_id: 137, latency_ms: 20, jitter: 0, behind: 0, rate_429: 0, refuse_methods: [], hang: false, hang_every: 0, send_timeout: false,
+      state_depth: 0, false_error: null,
       max_range: 0, range_error: { code: -32000, message: "query exceeds max block range {cap}" }, ...cfg };
     this.rand = mulberry32(cfg.seed ?? (cfg.port * 7919));
     this.log = logStream;
@@ -120,11 +126,15 @@ class Instance {
     const err = (code, message) => ({ jsonrpc: "2.0", id, error: { code, message } });
     if (!req || typeof method !== "string") return err(-32600, "invalid request");
     if (this.cfg.refuse_methods.includes(method)) return err(-32601, `the method ${method} does not exist/is not available`);
+    const fe = this.cfg.false_error;
+    if (fe && method === fe.method && JSON.stringify(params).includes(fe.match)) return err(fe.code, fe.message);
     const h = this.head();
     const atBlock = (tag) => {
       const n = this.resolveTag(tag);
       if (n === undefined) return { error: err(-32000, "header not found") };
       if (n > h) return { error: err(-32000, "header not found") };
+      if (this.cfg.state_depth > 0 && n < h - this.cfg.state_depth)
+        return { error: err(-32000, `missing trie node ${blockHash(n).slice(2)} (path )`) };
       return { n };
     };
     switch (method) {

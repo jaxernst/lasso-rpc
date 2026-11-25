@@ -28,6 +28,7 @@ This runs the default set (S1, S2, S2m, S3, S4, S5, S6, S9b, S9s, S9m) three tim
 | `backfill` | B1 |
 | `midrun` | S4m, S4r, S4n, S11 |
 | `degraded` | S12 |
+| `learning` | L1, L2, S5, S12, B1, with `lasso-learned` and `lasso-unlearned` unless `CANDIDATES` is set |
 | `idle` | S8, S10 (Lasso candidates only) |
 | `all` | every scenario |
 
@@ -48,6 +49,17 @@ To run one scenario by hand: `node scripts/trial/runner.mjs <scenario> [candidat
 | `lasso-fastest` | Lasso, `/rpc/profile/trial/fastest/<chain>` |
 | `lasso-bf` | Lasso, `/rpc/profile/trial/balanced-fast/<chain>` |
 | `lasso-lb` | Lasso, `/rpc/profile/trial/load-balanced/<chain>` |
+| `lasso-learned` | Lasso, `/rpc/profile/trial/load-balanced/<chain>`, with every learned routing effect on (the default) |
+| `lasso-unlearned` | the same route, with every learned routing effect off |
+
+`lasso-unlearned` starts Lasso with each of these set to `off`; they are listed once, as `LEARNED_EFFECT_MODES` in `runner.mjs`, so a newly added effect is one more line there:
+
+- `LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE`
+- `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE`
+- `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE`
+- `LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE`
+
+Declared limits, probes and head-lag ordering stay on in both arms. Head lag is judged from live observations rather than learned, so it is not a learning result. Both arms use the load-balanced route because every learned effect applies there.
 
 Lasso gets one profile, `trial`, with the chain, its three upstreams and its block time, and nothing else. It also gets a minimal `public` profile that points at a closed local port, because Lasso requires one. Each run's generated profiles are in `results/.../<candidate>/lasso-data/config/profiles/`. Lasso starts fresh for every run.
 
@@ -95,6 +107,10 @@ Upstreams are up1, up2 and up3. Latencies have 20% uniform jitter. Read scenario
 | S10 | 13 chains, 3 upstreams each at 20, 60, 120 ms | none for 10 minutes |
 | S11 | 20, 60, 120 ms; at 60 s up1 starts taking 2 s per answer | reads |
 | S12 | up1 20 ms but holds every tenth read it receives and never answers it; up2 60 ms; up3 120 ms | reads |
+| L1 | up1 20 ms and up2 60 ms keep state for the last 128 blocks and answer older state reads with `missing trie node`; up3 120 ms keeps all state | reads, with 30% of balance and call reads at the block 1,000 below the head |
+| L2 | up1 20 ms answers every `eth_getBalance` at `latest` with `-32000 upstream could not serve this request`; up2 60 ms; up3 120 ms | reads |
+
+L1 and L2 are defined in `scenarios.json`, each with a description. A read at a fixed block must be answered at that block, or it counts as an `invalid result` (`wrong_block`); it is left out of the stale-read counts.
 | B1 | see below | wide `eth_getLogs` backfill |
 | R | real endpoints from `UPSTREAMS` | reads |
 
@@ -155,14 +171,14 @@ The scenarios are built so the differences they show are larger than these bound
 
 ## Changing faults by hand
 
-Each candidate's mock process has a control port at `PORT_BASE + 60 * i + 49`, where `i` is the candidate's place in this list, from 0: `endpoint`, `direct`, `race2`, `lasso`, `lasso-fastest`, `lasso-bf`. `GET /` returns the run's identity token and every instance's settings; `POST /config/<instance>` merges JSON into one instance. With the default `PORT_BASE`, the `lasso` candidate's control port is 43229:
+Each candidate's mock process has a control port at `PORT_BASE + 60 * i + 49`, where `i` is the candidate's place in this list, from 0: `endpoint`, `direct`, `race2`, `lasso`, `lasso-fastest`, `lasso-bf`, `lasso-lb`, `lasso-learned`, `lasso-unlearned`. `GET /` returns the run's identity token and every instance's settings; `POST /config/<instance>` merges JSON into one instance. With the default `PORT_BASE`, the `lasso` candidate's control port is 43229:
 
 ```sh
 curl -X POST localhost:43229/config/up1 -d '{"hang": true}'
 curl -X POST localhost:43229/config/up1 -d '{"hang": false, "behind": 5, "rate_429": 0.3}'
 ```
 
-Settings: `latency_ms`, `jitter`, `behind` (blocks), `stall` (freeze the head), `rate_429` (fraction), `refuse_methods` (list), `hang`, `send_timeout` (hang on sends only), `max_range` (`eth_getLogs` block cap), `range_error` (`{code, message}`, `{cap}` in the message is replaced), `chain_id`. Timed switches in S2m, S4m, S9m and S11 use the same endpoint.
+Settings: `latency_ms`, `jitter`, `behind` (blocks), `stall` (freeze the head), `rate_429` (fraction), `refuse_methods` (list), `hang`, `send_timeout` (hang on sends only), `max_range` (`eth_getLogs` block cap), `range_error` (`{code, message}`, `{cap}` in the message is replaced), `hang_every` (hold every Nth read), `state_depth` (blocks of state kept), `false_error` (`{method, match, code, message}`: answer that method with that error when its JSON params contain `match`), `chain_id`. Timed switches in S2m, S4m, S9m and S11 use the same endpoint.
 
 ## Real endpoints
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs a scenario set REPEATS times, then analyze.mjs. See README.md.
-# Usage: scripts/trial/run.sh [default|backfill|midrun|degraded|idle|all|S2,S4,...]
+# Usage: scripts/trial/run.sh [default|backfill|midrun|degraded|learning|idle|all|S2,S4,...]
 # Exits nonzero when any run failed; the remaining runs still go ahead.
 set -eu
 
@@ -11,14 +11,17 @@ case "$SET" in
   backfill) SCENARIOS="B1" ;;
   midrun) SCENARIOS="S4m S4r S4n S11" ;;
   degraded) SCENARIOS="S12" ;;
+  learning) SCENARIOS="L1 L2 S5 S12 B1" ;;
   idle) SCENARIOS="S8 S10" ;;
-  all) SCENARIOS="S1 S2 S2m S3 S4 S5 S6 S9b S9s S9m B1 S4m S4r S4n S11 S12 S9a S8 S10" ;;
+  all) SCENARIOS="S1 S2 S2m S3 S4 S5 S6 S9b S9s S9m B1 S4m S4r S4n S11 S12 L1 L2 S9a S8 S10" ;;
   *) SCENARIOS="$(printf '%s' "$SET" | tr ',' ' ')" ;;
 esac
 
 REPEATS="${REPEATS:-3}"
 DURATION="${DURATION:-180}"
-if [ -z "${CANDIDATES:-}" ]; then
+if [ -z "${CANDIDATES:-}" ] && [ "$SET" = learning ]; then
+  CANDIDATES="lasso-learned,lasso-unlearned"
+elif [ -z "${CANDIDATES:-}" ]; then
   CANDIDATES="direct,race2,lasso,lasso-fastest,lasso-bf"
   if [ -n "${ENDPOINT_URL:-}" ]; then CANDIDATES="$CANDIDATES,endpoint"; fi
 fi
