@@ -12,6 +12,10 @@ defmodule Lasso.RPC.ExecutionEnvelope do
   @max_candidate_admissions 16
   @max_replay_safe_dispatches 3
 
+  @doc "Most candidates, and so most dispatches, one request may admit."
+  @spec max_candidate_admissions() :: pos_integer()
+  def max_candidate_admissions, do: @max_candidate_admissions
+
   @type execution_safety ::
           :replay_safe
           | :raw_transaction_broadcast
@@ -25,10 +29,10 @@ defmodule Lasso.RPC.ExecutionEnvelope do
           original_timeout_ms: non_neg_integer(),
           execution_safety: execution_safety(),
           execution_nonce: binary(),
-          dispatch_limit: 1..16,
-          dispatch_count: 0..16,
-          candidate_admission_limit: 16,
-          candidate_admission_count: 0..16,
+          dispatch_limit: pos_integer(),
+          dispatch_count: non_neg_integer(),
+          candidate_admission_limit: pos_integer(),
+          candidate_admission_count: non_neg_integer(),
           dispatched_channels: term(),
           extra_send: :available | :spent
         }

@@ -6,8 +6,9 @@ defmodule Lasso.RPC.ExecutionFact do
   from the external codec.
   """
 
-  alias Lasso.RPC.BoundedIdentifier
+  alias Lasso.RPC.{BoundedIdentifier, ExecutionEnvelope}
 
+  @max_admissions ExecutionEnvelope.max_candidate_admissions()
   @dispatch_certainties [:not_dispatched, :indeterminate, :dispatched]
   @max_portable_integer 9_223_372_036_854_775_807
   @transports [:http, :ws]
@@ -43,15 +44,17 @@ defmodule Lasso.RPC.ExecutionFact do
 
   def positive!(_value, field), do: raise(ArgumentError, "#{field} must be positive")
 
-  @spec candidate_count!(term()) :: 0..16
-  def candidate_count!(value) when is_integer(value) and value in 0..16, do: value
+  @spec candidate_count!(term()) :: non_neg_integer()
+  def candidate_count!(value) when is_integer(value) and value in 0..@max_admissions, do: value
 
   def candidate_count!(_value),
-    do: raise(ArgumentError, "candidate_admission_count must be 0..16")
+    do: raise(ArgumentError, "candidate_admission_count must be 0..#{@max_admissions}")
 
-  @spec dispatch_count!(term()) :: 0..3
-  def dispatch_count!(value) when is_integer(value) and value in 0..3, do: value
-  def dispatch_count!(_value), do: raise(ArgumentError, "dispatch_count must be 0..3")
+  @spec dispatch_count!(term()) :: non_neg_integer()
+  def dispatch_count!(value) when is_integer(value) and value in 0..@max_admissions, do: value
+
+  def dispatch_count!(_value),
+    do: raise(ArgumentError, "dispatch_count must be 0..#{@max_admissions}")
 
   @spec member!(term(), atom(), [term()]) :: term()
   def member!(value, field, allowed) do

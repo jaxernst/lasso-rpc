@@ -64,6 +64,27 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
     end)
   end
 
+  test "a refused send leaves three sends for the remaining upstreams" do
+    for transport <- [:http, :ws],
+        refusal <- [
+          {:status, 429, [], "Too Many Requests"},
+          {:error, -32_601, "the method eth_sendRawTransaction does not exist"}
+        ] do
+      journey(4, fn tenant, [refused, second, third, fourth] = fleets ->
+        Fleet.script(refused, @send, [], refusal)
+        Fleet.script(second, @send, [], {:error, -32_000, "replacement transaction underpriced"})
+        Fleet.script(third, @send, [], {:error, -32_000, "replacement transaction underpriced"})
+        Fleet.script(fourth, @send, [], {:answer, hash()})
+
+        {body, sends, lookups} = submit(tenant, fleets, transport)
+        assert body["result"] == hash(), inspect(body)
+        refute body["error"]
+        assert_sends(sends, [refused.name, second.name, third.name, fourth.name])
+        assert lookups == []
+      end)
+    end
+  end
+
   test "a plaintext stop-list rejection in an HTTP 500 body stops at the first upstream" do
     for body <- [
           "insufficient funds for gas * price + value",

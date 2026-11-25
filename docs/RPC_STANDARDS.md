@@ -80,8 +80,8 @@ will serve that range. A successful fallback still returns its result.
 
 ## Transaction sends
 
-A registered send may reach up to three distinct upstreams, one at a time, within
-the request deadline. With a chain [`transactions`](CONFIGURATION.md#transaction-providers)
+A registered send makes up to three sends to distinct upstreams, one at a time,
+within the request deadline. With a chain [`transactions`](CONFIGURATION.md#transaction-providers)
 block, sends go only to the listed providers, then to the read providers once
 those are exhausted when it sets `fallback: read_providers`
 ([routing](ROUTING.md#transaction-providers)). A null send result stays null.
@@ -92,7 +92,8 @@ known transactions and sender faults such as nonce bounds, insufficient funds,
 invalid signatures, malformed transactions and invalid gas or fee limits. All
 other outcomes fail over, including rate limits, timeouts, 5xx, replacement
 underpricing, pool capacity and unfamiliar wording. A rate-limit or quota refusal
-and a `-32601` do not use up one of the three sends.
+and a `-32601` do not use up one of the three sends; such refusals are bounded by
+the allowed providers and the request deadline.
 
 Before returning an `eth_sendRawTransaction` error, with or without a policy,
 Lasso looks up the local hash with `eth_getTransactionByHash`. It asks the
