@@ -2650,13 +2650,17 @@ defmodule Lasso.Config.ConfigStore do
         Catalog.list_instances_for_chain(chain_id) != []
       end)
 
-    {instance_starts, instance_stops} =
+    {instance_starts, instance_stops, retired} =
       reconcile_instance_supervisors(new_instances, removed_instances)
 
     {probe_starts, probe_stops} =
       reconcile_probe_coordinators(old_chain_ids, probe_chain_ids)
 
     block_sync = reconcile_block_sync_workers(old_instances, old_instance_chain_ids)
+
+    # Cleared only once the retired instances' workers and poll owners have stopped,
+    # so none of them can write a row back afterwards.
+    Enum.each(retired, &Lasso.Providers.InstanceState.clear/1)
 
     runtime_reconcile_status(
       instance_starts ++ instance_stops ++ probe_starts ++ probe_stops ++ block_sync
@@ -2697,33 +2701,29 @@ defmodule Lasso.Config.ConfigStore do
             end
           end)
 
-        stops =
-          if Enum.any?(starts, &match?({:error, _}, &1)) do
-            []
-          else
+        if Enum.any?(starts, &match?({:error, _}, &1)) do
+          {starts, [], []}
+        else
+          stops =
             bounded_reconcile(stale_instances, fn instance_id ->
-              result =
-                case GenServer.whereis(InstanceSupervisor.via_name(instance_id)) do
-                  nil ->
-                    :ok
+              case GenServer.whereis(InstanceSupervisor.via_name(instance_id)) do
+                nil ->
+                  :ok
 
-                  pid ->
-                    DynamicSupervisorCall.terminate_child(
-                      Lasso.Providers.InstanceDynamicSupervisor,
-                      pid
-                    )
-                    |> track_runtime_reconcile_result(:instance_stop)
-                end
-
-              Lasso.Providers.InstanceState.clear(instance_id)
-              result
+                pid ->
+                  DynamicSupervisorCall.terminate_child(
+                    Lasso.Providers.InstanceDynamicSupervisor,
+                    pid
+                  )
+                  |> track_runtime_reconcile_result(:instance_stop)
+              end
             end)
-          end
 
-        {starts, stops}
+          {starts, stops, stale_instances}
+        end
 
       {:error, _} = error ->
-        {[track_runtime_reconcile_result(error, :instance_supervisor)], []}
+        {[track_runtime_reconcile_result(error, :instance_supervisor)], [], []}
     end
   end
 

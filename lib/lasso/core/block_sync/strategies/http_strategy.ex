@@ -138,8 +138,16 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @impl true
   def stop(%__MODULE__{poll_owner_pid: owner_pid, poll_owner_ref: owner_ref}) do
+    if is_pid(owner_pid) do
+      monitor = Process.monitor(owner_pid)
+      Process.exit(owner_pid, :kill)
+
+      receive do
+        {:DOWN, ^monitor, :process, ^owner_pid, _} -> :ok
+      end
+    end
+
     if owner_ref, do: Process.demonitor(owner_ref, [:flush])
-    if is_pid(owner_pid) and Process.alive?(owner_pid), do: Process.exit(owner_pid, :kill)
     :ok
   end
 

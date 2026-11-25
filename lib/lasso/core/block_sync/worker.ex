@@ -127,6 +127,9 @@ defmodule Lasso.BlockSync.Worker do
 
   @impl true
   def init({chain_id, instance_id}) do
+    # Supervised shutdown runs terminate/2, which stops the poll owner before this exits.
+    Process.flag(:trap_exit, true)
+
     state = %__MODULE__{
       chain_id: chain_id,
       instance_id: instance_id,
