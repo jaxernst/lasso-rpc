@@ -15,6 +15,14 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
   # of the method budget HTTP ingress uses.
   @socket_deadline_ms 10_000
 
+  # A send budget a loaded host cannot spend before reaching a held lookup.
+  setup do
+    previous = Application.get_env(:lasso, :method_timeouts, %{})
+    Application.put_env(:lasso, :method_timeouts, Map.put(previous, @send, 2_000))
+    on_exit(fn -> Application.put_env(:lasso, :method_timeouts, previous) end)
+    :ok
+  end
+
   test "a send the first upstream broadcast returns its hash when the second says already known" do
     journey(2, fn tenant, [first, second] = fleets ->
       Fleet.script(first, @send, [], {:error, -32_000, "internal server error"})
