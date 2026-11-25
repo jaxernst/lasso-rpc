@@ -201,12 +201,13 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @doc """
   Whether a round that ticks every `round_interval_ms` should poll this instance
-  now: its own interval falls due within half a round and no rate-limit cooldown
-  is running.
+  now: its own interval falls due within half a round, no rate-limit cooldown
+  is running and a rate-limited poll's full interval has passed.
   """
   @spec due?(t(), integer(), non_neg_integer()) :: boolean()
   def due?(%__MODULE__{} = state, now_ms, round_interval_ms) do
     (InstanceState.read_rate_limit(state.instance_id, :http).remaining_ms || 0) == 0 and
+      now_ms >= (InstanceState.read_block_sync_health(state.instance_id)[:next_poll_at_ms] || 0) and
       (is_nil(state.last_poll_started_ms) or
          now_ms - state.last_poll_started_ms >=
            state.poll_interval_ms - div(round_interval_ms, 2))
@@ -428,7 +429,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         )
       end
 
-      write_health_success(state.instance_id)
+      write_health_success(state.instance_id, next_poll_at_ms(reason, state.poll_interval_ms))
       maybe_signal_recovery(state)
       %{state | consecutive_failures: 0}
     end
@@ -474,14 +475,25 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       else: ttl_ms
   end
 
+  # The route may serve again once its cooldown ends, but the next poll still
+  # waits a full interval. Kept in ETS so a restarted worker keeps the hold.
+  defp next_poll_at_ms(%JError{category: :rate_limit} = error, poll_interval_ms),
+    do: System.system_time(:millisecond) + max(rate_limit_ttl_ms(error), poll_interval_ms)
+
+  defp next_poll_at_ms(_error, _poll_interval_ms), do: nil
+
   defp valid_retry_after_ms(value) when is_integer(value) and value > 0, do: value
   defp valid_retry_after_ms(_value), do: 30_000
 
-  defp write_health_success(instance_id) do
+  defp write_health_success(instance_id, next_poll_at_ms \\ nil) do
     :ets.insert(
       :lasso_instance_state,
       {{:health_block_sync, instance_id},
-       %{http_status: :healthy, last_health_check: System.system_time(:millisecond)}}
+       %{
+         http_status: :healthy,
+         last_health_check: System.system_time(:millisecond),
+         next_poll_at_ms: next_poll_at_ms
+       }}
     )
   end
 
