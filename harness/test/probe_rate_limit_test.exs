@@ -2,7 +2,7 @@ defmodule Lasso.Harness.ProbeRateLimitTest do
   use ExUnit.Case, async: false
   alias Lasso.Test.Harness.{Fleet, Rpc, Settle, Tenant}
   @moduletag :harness
-  @moduletag feature: ["core-failover-6"]
+  @moduletag feature: ["core-failover-7"]
   @moduletag timeout: 120_000
 
   @limited %{jsonrpc: "2.0", id: 1, error: %{code: -32_005, message: "Too many requests"}}

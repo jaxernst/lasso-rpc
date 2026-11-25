@@ -2,7 +2,7 @@ defmodule Lasso.Harness.HeadPollQuotaBackoffTest do
   use ExUnit.Case, async: false
   alias Lasso.Test.Harness.{Fleet, Rpc, Settle, Tenant}
   @moduletag :harness
-  @moduletag feature: ["core-failover-7"]
+  @moduletag feature: ["core-failover-8"]
   @moduletag timeout: 120_000
 
   # Longer than the one-second Retry-After, so the route's release and its next
