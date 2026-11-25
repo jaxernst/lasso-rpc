@@ -87,7 +87,7 @@ defmodule Lasso.RPC.ClientHeadObservationTest do
     assert [{{:health_block_sync, ^instance_id}, %{http_status: :healthy}}] =
              :ets.lookup(:lasso_instance_state, {:health_block_sync, instance_id})
 
-    assert InstanceState.read_rate_limit(instance_id, :http).remaining_ms > 19_000
+    assert InstanceState.read_rate_limit(instance_id, :http).remaining_ms in 4_001..5_000
     refute HttpStrategy.due?(state, System.system_time(:millisecond) + 10_000, 0)
     HttpStrategy.stop(state)
   end
