@@ -26,6 +26,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
   - `{:health_probe, id}` — ProbeCoordinator (this module)
   - `{:health_block_sync, id}` — HttpStrategy (block sync polling)
+  - `{:head_poll_hold, id}` — HttpStrategy's poll owner (rate-limited head polls)
   - `{:health_routing, id}` — Observability (real request outcomes)
   - `{:ws_status, id}` — WebSocket Connection
   - `{:rate_limit, id, transport}` — Observability + ProbeCoordinator (write-if-earlier)

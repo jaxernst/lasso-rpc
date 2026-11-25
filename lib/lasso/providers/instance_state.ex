@@ -331,6 +331,24 @@ defmodule Lasso.Providers.InstanceState do
     put_longer_rate_limit(key, cooldown)
   end
 
+  @doc "Holds an instance's next HTTP head poll for `delay_ms` on the monotonic clock."
+  @spec hold_head_poll(String.t(), pos_integer()) :: :ok
+  def hold_head_poll(instance_id, delay_ms)
+      when is_binary(instance_id) and is_integer(delay_ms) and delay_ms > 0 do
+    until_ms = System.monotonic_time(:millisecond) + delay_ms
+    :ets.insert(:lasso_instance_state, {{:head_poll_hold, instance_id}, until_ms})
+    :ok
+  end
+
+  @doc "Whether a rate-limited head poll still holds the instance's next poll."
+  @spec head_poll_held?(String.t()) :: boolean()
+  def head_poll_held?(instance_id) when is_binary(instance_id) do
+    case safe_lookup({:head_poll_hold, instance_id}) do
+      [{_key, until_ms}] -> System.monotonic_time(:millisecond) < until_ms
+      [] -> false
+    end
+  end
+
   @doc "Records quota feedback only for the originating physical breaker lifetime."
   @spec record_rate_limit(String.t(), :http | :ws, pos_integer(), non_neg_integer()) :: :ok
   def record_rate_limit(instance_id, transport, ttl_ms, epoch)
@@ -491,6 +509,7 @@ defmodule Lasso.Providers.InstanceState do
       {:health_probe, instance_id},
       {:chain_identity, instance_id, :http},
       {:health_block_sync, instance_id},
+      {:head_poll_hold, instance_id},
       {:health_routing, instance_id},
       {:circuit, instance_id, :http},
       {:circuit, instance_id, :ws},
