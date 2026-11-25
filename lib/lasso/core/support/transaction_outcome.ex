@@ -196,11 +196,110 @@ defmodule Lasso.Core.Support.TransactionOutcome do
   defp category(:failover, :capacity), do: :quota
   defp category(:failover, _reason), do: :ambiguous
 
+  @doc "Normalize a sendRaw transport failure without applying JSON-RPC code fallbacks."
+  @spec transport_error(term(), keyword()) :: Lasso.JSONRPC.Error.t()
+  def transport_error(%Lasso.JSONRPC.Error{} = error, opts) do
+    resolution = resolve(error.code, error.message, opts)
+
+    %{
+      error
+      | category: resolution.category,
+        retriable?: resolution.retriable?,
+        breaker_penalty?: false,
+        resolution: resolution
+    }
+  end
+
+  def transport_error({:rate_limit, _payload} = reason, opts) do
+    error = Lasso.Core.Support.ErrorNormalizer.normalize(reason, opts)
+
+    resolution = %{
+      resolve(-32_005, "Rate limited by provider", opts)
+      | category: :rate_limit,
+        control_category: :rate_limit,
+        baseline_category: :rate_limit
+    }
+
+    %{
+      error
+      | category: :rate_limit,
+        retriable?: true,
+        breaker_penalty?: false,
+        resolution: resolution
+    }
+  end
+
+  def transport_error(reason, opts) do
+    {code, message, payload} =
+      case reason do
+        {:server_error, payload} -> {-32_000, "Upstream server error", payload}
+        {:client_error, payload} -> {-32_000, "Upstream rejected request", payload}
+        :timeout -> {-32_004, "Upstream timeout", %{}}
+        _ -> {-32_004, "Upstream transport failed", %{}}
+      end
+
+    payload = if is_map(payload), do: payload, else: %{}
+    error = Lasso.Core.Transport.UpstreamResponse.gateway_error(payload[:body])
+
+    {code, message, data, classification_message, rejection_body} =
+      case error do
+        {:ok, c, m, data} ->
+          {c, m, data, m, nil}
+
+        _ ->
+          {code, message, Map.take(payload, [:status]), payload[:body] || message, payload[:body]}
+      end
+
+    resolution =
+      resolve(code, classification_message, Keyword.put(opts, :http_status, payload[:status]))
+
+    data =
+      case payload[:retry_after_ms] do
+        delay when is_integer(delay) ->
+          data |> data_map() |> Map.delete("retry_after_ms") |> Map.put(:retry_after_ms, delay)
+
+        _ ->
+          data
+      end
+
+    Lasso.JSONRPC.Error.new(
+      code,
+      message,
+      [
+        data: data,
+        provider_id: opts[:provider_id],
+        transport: opts[:transport],
+        http_status: payload[:status],
+        source: :transport,
+        resolution: resolution,
+        # Retain unknown plaintext only for masked observation. sendRaw's final
+        # hint clears raw_response before either ingress can serialize it.
+        raw_response: if(resolution.baseline_path == :other, do: rejection_body)
+      ] ++
+        [
+          category: resolution.category,
+          retriable?: resolution.retriable?,
+          breaker_penalty?: false
+        ]
+    )
+  end
+
   @doc "Preserve scalar upstream error data when adding Lasso's hints."
   @spec data_map(term()) :: map()
   def data_map(nil), do: %{}
   def data_map(data) when is_map(data), do: data
   def data_map(data), do: %{upstream_data: data}
+
+  @doc "The retained, bounded Retry-After hint, if present."
+  @spec retry_after(Lasso.JSONRPC.Error.t()) :: non_neg_integer() | nil
+  def retry_after(%{data: data}) when is_map(data) do
+    case data[:retry_after_ms] || data["retry_after_ms"] do
+      delay when is_integer(delay) and delay >= 0 -> delay
+      _ -> nil
+    end
+  end
+
+  def retry_after(_), do: nil
 
   @doc "Hash for evidence lookup only; opaque chain-specific types pass through."
   @spec hash(term()) :: binary() | nil

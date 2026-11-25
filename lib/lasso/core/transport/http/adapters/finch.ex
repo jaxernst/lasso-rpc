@@ -10,7 +10,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission, UpstreamResponse}
   alias Lasso.Core.Transport.HTTP.DispatchTracker
   alias Lasso.Providers.ProviderHeaders
-  alias Lasso.RPC.PreparedRequest
+  alias Lasso.RPC.{ExecutionEnvelope, PreparedRequest}
 
   @minimum_timeout_us 1_000
 
@@ -63,6 +63,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     body = %{"jsonrpc" => "2.0", "method" => method, "params" => params, "id" => request_id}
 
     with {:ok, json} <- encode_body(body, context) do
+      opts = Keyword.put(opts, :method_class, ExecutionEnvelope.classify(method))
       request_encoded(provider, url, json, context, deadline_us, finch_name, opts)
     end
   end
@@ -70,7 +71,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
   @impl true
   def request_prepared(
         %{url: url} = provider,
-        %PreparedRequest{encoded: encoded},
+        %PreparedRequest{encoded: encoded, method: method},
         opts
       ) do
     timeout_ms = Keyword.get(opts, :timeout, 30_000)
@@ -78,6 +79,7 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
     finch_name = Keyword.get(opts, :finch_name, Lasso.Finch)
     context = Keyword.get(opts, :attempt_dispatch)
 
+    opts = Keyword.put(opts, :method_class, ExecutionEnvelope.classify(method))
     request_encoded(provider, url, encoded, context, deadline_us, finch_name, opts)
   end
 
@@ -238,7 +240,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
             {outcome, dispatch_state, tracker_healthy?},
             context,
             lease,
-            io_duration_us
+            io_duration_us,
+            Keyword.get(opts, :method_class)
           )
         else
           {:error, reason} ->
@@ -516,11 +519,15 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
           _state, _healthy?},
          context,
          lease,
-         io_duration_us
+         io_duration_us,
+         method_class
        ) do
     case handle_response(status, body, headers) do
       {:error, reason} = error ->
-        emit_http_error(context, reason, io_duration_us)
+        # Send-class response facts are committed by HTTP after normalization.
+        # A received non-2xx response is not an indeterminate transport failure.
+        unless method_class == :raw_transaction_broadcast,
+          do: emit_http_error(context, reason, io_duration_us)
 
         error
 
@@ -537,7 +544,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
          {{:returned, {:error, {:response_limit, reason}}}, _state, _healthy?},
          context,
          _lease,
-         io_duration_us
+         io_duration_us,
+         _method_class
        ) do
     AttemptProtocol.terminal(context, :response, %{
       response_kind: :error,
@@ -554,7 +562,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
           true},
          %AttemptProtocol.Context{} = context,
          _lease,
-         _io_duration_us
+         _io_duration_us,
+         _method_class
        ) do
     failure =
       if reason in [:timeout, :econnrefused, :econnreset, :closed, :nxdomain],
@@ -569,7 +578,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
          {{:returned, {:error, reason}}, dispatch_state, tracker_healthy?},
          context,
          _lease,
-         _io_duration_us
+         _io_duration_us,
+         _method_class
        ) do
     certainty = dispatch_certainty(dispatch_state, tracker_healthy?)
     emit_failure(context, reason, certainty)
@@ -580,7 +590,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
          {{:raised, error}, dispatch_state, tracker_healthy?},
          context,
          _lease,
-         _io_duration_us
+         _io_duration_us,
+         _method_class
        ) do
     certainty = dispatch_certainty(dispatch_state, tracker_healthy?)
     emit_failure(context, error, certainty)
@@ -596,7 +607,8 @@ defmodule Lasso.RPC.Transport.HTTP.Client.Finch do
          {{:caught, _kind, reason}, dispatch_state, tracker_healthy?},
          context,
          _lease,
-         _io_duration_us
+         _io_duration_us,
+         _method_class
        ) do
     certainty = dispatch_certainty(dispatch_state, tracker_healthy?)
     emit_failure(context, reason, certainty)

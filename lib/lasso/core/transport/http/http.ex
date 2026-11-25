@@ -12,7 +12,7 @@ defmodule Lasso.RPC.Transports.HTTP do
   alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer, TransactionOutcome}
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.PreparedRequest
+  alias Lasso.RPC.{ExecutionEnvelope, PreparedRequest}
   alias Lasso.RPC.Response.Capacity
   alias Lasso.RPC.Transport.HTTP.Client, as: HttpClient
 
@@ -158,15 +158,18 @@ defmodule Lasso.RPC.Transports.HTTP do
           )
 
         {:error, reason} ->
-          {:error,
-           ErrorNormalizer.normalize(reason,
-             provider_id: provider_id,
-             profile: Map.get(channel, :profile),
-             chain_id: Map.get(channel, :chain_id),
-             provider_capabilities: Map.get(channel, :provider_capabilities),
-             context: :transport,
-             transport: :http
-           )}
+          error =
+            normalize_transport(reason, channel,
+              provider_id: provider_id,
+              profile: Map.get(channel, :profile),
+              chain_id: Map.get(channel, :chain_id),
+              provider_capabilities: Map.get(channel, :provider_capabilities),
+              context: :transport,
+              transport: :http
+            )
+
+          commit_rejection_response(reason, error, channel, dispatch_context, io_start_us)
+          {:error, error}
       end
 
     # Calculate I/O latency
@@ -213,6 +216,38 @@ defmodule Lasso.RPC.Transports.HTTP do
       validated_at_us: validated_at_us
     })
   end
+
+  defp commit_rejection_response({kind, _payload}, error, %{method: method}, context, started)
+       when kind in [:rate_limit, :server_error, :client_error] do
+    if ExecutionEnvelope.classify(method) == :raw_transaction_broadcast,
+      do: commit_application_response(error, context, started)
+  end
+
+  defp commit_rejection_response(_, _, _, _, _), do: :ok
+
+  defp commit_application_response(error, context, started) do
+    fields = %{
+      response_kind: :error,
+      error_code: error.code,
+      error_category: error.category,
+      io_duration_us: max(System.monotonic_time(:microsecond) - started, 0)
+    }
+
+    AttemptProtocol.terminal(context, :response, with_retry_after(fields, error))
+  end
+
+  defp with_retry_after(fields, %JError{} = error),
+    do: with_retry_after(fields, TransactionOutcome.retry_after(error))
+
+  defp with_retry_after(fields, delay) when is_integer(delay) and delay >= 0,
+    do: Map.put(fields, :retry_after_ms, min(delay, 600_000))
+
+  defp with_retry_after(fields, _delay), do: fields
+
+  defp normalize_transport(reason, %{method: "eth_sendRawTransaction"}, opts),
+    do: TransactionOutcome.transport_error(reason, opts)
+
+  defp normalize_transport(reason, _channel, opts), do: ErrorNormalizer.normalize(reason, opts)
 
   @impl true
   def subscribe(_channel, _rpc_request, _handler_pid) do

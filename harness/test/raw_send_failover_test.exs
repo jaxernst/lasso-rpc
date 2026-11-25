@@ -50,6 +50,25 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
     end)
   end
 
+  test "a plaintext stop-list rejection in an HTTP 500 body stops at the first upstream" do
+    for body <- [
+          "insufficient funds for gas * price + value",
+          "intrinsic gas too low",
+          "nonce too high"
+        ] do
+      journey(fn tenant, [first, second] = fleets ->
+        Fleet.script(first, @send, [], {:status, 500, [], body})
+        Fleet.script(second, @send, [], {:answer, hash()})
+
+        {response, sends, lookups} = submit(tenant, fleets)
+        assert %{"code" => -32_000, "data" => %{"retryable" => false}} = response["error"]
+        refute response["result"]
+        assert sends == [first.name]
+        assert lookups == [first.name]
+      end)
+    end
+  end
+
   defp journey(scenario) do
     fleets = Enum.map(["first", "second"], &Fleet.start!(self(), &1))
     tenant = Tenant.open!(fleets)
