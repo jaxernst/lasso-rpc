@@ -20,7 +20,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   def mode(:quota_exhaustion, profile),
     do: resolve(:quota_exhaustion, profile, [:off, :shadow], &global_mode/1)
 
-  def mode(kind, profile) when kind in @kinds,
+  def mode(kind, profile) when kind in [:failure_rate_deferral | @kinds],
     do: resolve(kind, profile, [:off, :on], &global_mode/1)
 
   defp resolve(kind, profile, allowed, global_fun) do
@@ -30,7 +30,11 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   defp global_mode(kind) do
-    default = if kind in [:method_refusal, :span_limit, :historical_depth], do: :on, else: :off
+    default =
+      if kind in [:method_refusal, :span_limit, :historical_depth, :failure_rate_deferral],
+        do: :on,
+        else: :off
+
     Application.get_env(:lasso, :provider_knowledge_effect_modes, %{}) |> Map.get(kind, default)
   end
 

@@ -297,7 +297,8 @@ Strategies control how providers are selected for each request. Set via URL path
 
 **Fastest** — Optimal latency among upstreams with qualified recent evidence. It never ranks from lifetime averages. If none qualifies, all live candidates remain available and the engine emits an explicit degradation.
 
-**Load Balanced** — Randomized ordering with health-aware tiering. For replay-safe
+**Load Balanced** — Randomized ordering with health-aware tiering, deferring routes
+whose recent failure rate is clearly worse than their peers' until they recover. For replay-safe
 fallback, distinct physical instances receive a bounded first pass before sibling
 transports within a tier. It does not guarantee exact shares, capacity-aware
 balancing, or independent operators. See [Routing](ROUTING.md#load-balanced)
@@ -514,23 +515,26 @@ config :lasso, :provider_selection_strategy, :load_balanced
 
 ## Learned routing
 
-Three provider-knowledge effects are enabled by default:
+Four routing effects learned from traffic are enabled by default:
 
 | Environment variable | Default | Accepted values |
 | --- | --- | --- |
 | `LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 | `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 | `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
+| `LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 
 Set a variable to `off` and restart to keep that effect from reordering routes.
 Other values fail startup. Disabling an effect does not erase its observations;
 inspection remains available. Application configuration uses
 `:provider_knowledge_effect_modes`, a map with `:method_refusal`,
-`:historical_depth` and `:span_limit` keys. Runtime environment values populate
+`:historical_depth`, `:span_limit` and `:failure_rate_deferral` keys.
+Failure-rate deferral is the `load-balanced` weighting described in
+[routing](ROUTING.md#load-balanced); off, that strategy shares load equally. Runtime environment values populate
 that map at boot. No profile schema or database migration is required.
 
 The quota-exhaustion effect remains off. Claim auditing also
-remains off. The three settled effects accept no `shadow` mode. Knowledge uses
+remains off. The four settled effects accept no `shadow` mode. Knowledge uses
 node-local memory, no durable knowledge store, and no background model service.
 See [routing](ROUTING.md#learned-provider-limits) for evidence and safety rules.
 

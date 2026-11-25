@@ -27,6 +27,7 @@ This runs the default set (S1, S2, S2m, S3, S4, S5, S6, S9b, S9s, S9m) three tim
 | `default` | S1, S2, S2m, S3, S4, S5, S6, S9b, S9s, S9m |
 | `backfill` | B1 |
 | `midrun` | S4m, S4r, S4n, S11 |
+| `degraded` | S12 |
 | `idle` | S8, S10 (Lasso candidates only) |
 | `all` | every scenario |
 
@@ -46,6 +47,7 @@ To run one scenario by hand: `node scripts/trial/runner.mjs <scenario> [candidat
 | `lasso` | Lasso, `/rpc/profile/trial/<chain>`, the default strategy |
 | `lasso-fastest` | Lasso, `/rpc/profile/trial/fastest/<chain>` |
 | `lasso-bf` | Lasso, `/rpc/profile/trial/balanced-fast/<chain>` |
+| `lasso-lb` | Lasso, `/rpc/profile/trial/load-balanced/<chain>` |
 
 Lasso gets one profile, `trial`, with the chain, its three upstreams and its block time, and nothing else. It also gets a minimal `public` profile that points at a closed local port, because Lasso requires one. Each run's generated profiles are in `results/.../<candidate>/lasso-data/config/profiles/`. Lasso starts fresh for every run.
 
@@ -92,6 +94,7 @@ Upstreams are up1, up2 and up3. Latencies have 20% uniform jitter. Read scenario
 | S9m | 20, 60, 120 ms; at 60 s up1 starts hanging on sends | reads plus one send every 2 s |
 | S10 | 13 chains, 3 upstreams each at 20, 60, 120 ms | none for 10 minutes |
 | S11 | 20, 60, 120 ms; at 60 s up1 starts taking 2 s per answer | reads |
+| S12 | up1 20 ms but holds every tenth read it receives and never answers it; up2 60 ms; up3 120 ms | reads |
 | B1 | see below | wide `eth_getLogs` backfill |
 | R | real endpoints from `UPSTREAMS` | reads |
 

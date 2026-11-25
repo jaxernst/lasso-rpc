@@ -153,9 +153,31 @@ underscore, such as `load_balanced` or `balanced_fast`. URLs use the hyphenated 
 **URL**: `/rpc/load-balanced/:chain`
 **Module**: `Lasso.RPC.Strategies.LoadBalanced`
 
-Randomizes physical provider instances first, then the transports within each
-instance. An upstream offering both HTTP and WebSocket receives one first-pick
-share. For replay-safe unary reads, fallback
+Orders physical provider instances by a weighted random permutation, then the
+transports within each instance. An upstream offering both HTTP and WebSocket
+receives one first-pick share.
+
+Routes share load equally unless one fails clearly more often than its peers.
+Each route's evidence for the request's method family keeps a recent failure
+rate: an EWMA with weight 1/64 over dispatched attempts, where a timeout,
+provider error or transport failure counts as a failure and a rate limit does
+not. A route whose rate is above both twice the lower median of the physical
+instances with current evidence, each counted once at its best route, and 1/32
+(about two failures in 64 attempts) is deferred: its weight is the square of
+reference over rate, but never under 1/8 of a peer's. It keeps earning samples
+at that reduced share, so its rate decays as it recovers and it returns to an
+equal share. Stale evidence counts as unknown and leaves the route at full
+weight. Counting instances rather than routes keeps a failing instance's second
+transport from outvoting a healthy peer. At least half of the measured instances
+always keep a route at full weight, and when every route fails alike none is
+deferred. An instance weighs the mean of its measured routes' weights, and its
+transports are ordered the same way. Answers that arrive in time are not ranked
+by latency; `balanced-fast` and `fastest` do that. Set
+`LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE=off` to share load equally
+regardless of failure rate (see
+[configuration](CONFIGURATION.md#learned-routing)).
+
+For replay-safe unary reads, fallback
 tries distinct physical provider instances before sibling transports within each
 availability tier. Alternate transports remain available; a healthy alternate
 still precedes a different provider in a lower availability tier. The lazy cursor
@@ -318,7 +340,7 @@ Exception: a connection-class HTTP circuit in half-open with a free probation le
 
 | Strategy | Within-Tier Behavior | Cross-Tier Impact |
 |----------|---------------------|-------------------|
-| Load Balanced | Randomized; replay-safe fallback gives distinct physical instances a bounded first pass | Health tiers and recovered-head preference dominate |
+| Load Balanced | Randomized, with routes that fail clearly more often than their peers deferred; replay-safe fallback gives distinct physical instances a bounded first pass | Health tiers and recovered-head preference dominate |
 | Fastest | Latency-ordered | Fastest provider may not receive traffic if unhealthy |
 | Latency Weighted | Weighted random | Weights apply only within each tier |
 | Priority | Priority-ordered | Priority applies only within each tier |
