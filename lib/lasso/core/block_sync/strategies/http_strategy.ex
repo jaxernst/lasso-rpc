@@ -138,16 +138,8 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @impl true
   def stop(%__MODULE__{poll_owner_pid: owner_pid, poll_owner_ref: owner_ref}) do
-    if is_pid(owner_pid) do
-      monitor = Process.monitor(owner_pid)
-      Process.exit(owner_pid, :kill)
-
-      receive do
-        {:DOWN, ^monitor, :process, ^owner_pid, _} -> :ok
-      end
-    end
-
     if owner_ref, do: Process.demonitor(owner_ref, [:flush])
+    if is_pid(owner_pid) and Process.alive?(owner_pid), do: Process.exit(owner_pid, :kill)
     :ok
   end
 
@@ -209,13 +201,12 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   @doc """
   Whether a round that ticks every `round_interval_ms` should poll this instance
-  now: its own interval falls due within half a round, no rate-limit cooldown
-  is running and a rate-limited poll's full interval has passed.
+  now: its own interval falls due within half a round and no rate-limit cooldown
+  is running.
   """
   @spec due?(t(), integer(), non_neg_integer()) :: boolean()
   def due?(%__MODULE__{} = state, now_ms, round_interval_ms) do
     (InstanceState.read_rate_limit(state.instance_id, :http).remaining_ms || 0) == 0 and
-      not InstanceState.head_poll_held?(state.instance_id) and
       (is_nil(state.last_poll_started_ms) or
          now_ms - state.last_poll_started_ms >=
            state.poll_interval_ms - div(round_interval_ms, 2))
@@ -249,12 +240,10 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         instance_id = state.instance_id
         owner_id = make_ref()
         runner = state.poll_runner
-        poll_interval_ms = state.poll_interval_ms
 
         {owner_pid, owner_ref} =
           spawn_monitor(fn ->
             result = safely_run_poll(runner, plan)
-            hold_rate_limited(instance_id, poll_interval_ms, result)
 
             outcome = %PollOutcome{
               result: result,
@@ -431,6 +420,14 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
     if ErrorClassification.provider_health_failure?(category) do
       apply_health_failure(state, reason)
     else
+      if category == :rate_limit do
+        InstanceState.record_rate_limit(
+          state.instance_id,
+          :http,
+          rate_limit_ttl_ms(reason)
+        )
+      end
+
       write_health_success(state.instance_id)
       maybe_signal_recovery(state)
       %{state | consecutive_failures: 0}
@@ -476,28 +473,6 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
       do: max(ttl_ms, @quota_exhaustion_poll_delay_ms),
       else: ttl_ms
   end
-
-  # The poll's owner records the routing cooldown and holds the next poll for at
-  # least a full interval before the worker sees the result, so both survive a
-  # worker that dies first. The route may serve again once its cooldown ends.
-  defp hold_rate_limited(
-         _instance_id,
-         _interval_ms,
-         {:error, %JError{data: %{reason: :upstream_request_budget_exhausted}}}
-       ),
-       do: :ok
-
-  defp hold_rate_limited(
-         instance_id,
-         interval_ms,
-         {:error, %JError{category: :rate_limit} = error}
-       ) do
-    ttl_ms = rate_limit_ttl_ms(error)
-    InstanceState.record_rate_limit(instance_id, :http, ttl_ms)
-    InstanceState.hold_head_poll(instance_id, max(ttl_ms, interval_ms))
-  end
-
-  defp hold_rate_limited(_instance_id, _interval_ms, _result), do: :ok
 
   defp valid_retry_after_ms(value) when is_integer(value) and value > 0, do: value
   defp valid_retry_after_ms(_value), do: 30_000
