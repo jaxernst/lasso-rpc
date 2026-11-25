@@ -62,9 +62,11 @@ and you scale by adding providers instead of replatforming.
 
 - **Outages and rate limits.** Circuit breakers pull a failing provider from
   rotation and reads fail over to the next healthy one. Recovered providers are
-  eased back in. By default a transaction send is
-  [never retried after dispatch](docs/RPC_STANDARDS.md#transaction-sends), so it
-  reaches one provider.
+  eased back in. An `eth_sendRawTransaction` is
+  [tried on up to three providers](docs/RPC_STANDARDS.md#transaction-sends), one
+  at a time, not counting a provider that refuses it outright with a rate-limit
+  or quota answer or because it does not support the method, and before
+  returning a rejection Lasso looks up the transaction by its hash.
 - **Uneven performance.** A provider can be fast for `eth_call` and slow for
   `eth_getLogs`. Lasso tracks latency per provider, transport, and kind of request
   (basic reads, state, logs, trace, transactions, subscriptions), and `fastest`
