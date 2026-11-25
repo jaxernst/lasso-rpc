@@ -1,5 +1,6 @@
 defmodule Lasso.Test.Harness.RawSendFailoverTest do
   use ExUnit.Case, async: false
+  alias Lasso.Config.MethodPolicy
   alias Lasso.Test.Harness.{Fleet, Rpc, Settle, Tenant}
 
   @moduletag :harness
@@ -10,6 +11,9 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
   @raw "0x02f86c0180843b9aca0082520894111111111111111111111111111111111111111180c0"
   @retry "It is safe to resend the same signed transaction."
   @stop "Check this transaction's hash for a receipt before signing a new one, then address the cause in the error message before retrying."
+  # WebSocket ingress gives every forwarded request this fixed deadline instead
+  # of the method budget HTTP ingress uses.
+  @socket_deadline_ms 10_000
 
   test "a send the first upstream broadcast returns its hash when the second says already known" do
     journey(2, fn tenant, [first, second] = fleets ->
@@ -91,11 +95,90 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
         Fleet.script(primary, @lookup, [], lookup)
         Fleet.script(backup, @send, [], {:error, -32_000, "nonce too low"})
         {body, sends, lookups} = submit(tenant, fleets, transport)
-        refute body["result"]
-        assert body["error"]["code"] == -32_000
-        assert body["error"]["message"] == "Upstream dispatch outcome is indeterminate"
+        assert_indeterminate(body)
         assert_sends(sends, [primary.name, backup.name])
         assert_lookups(lookups, [primary.name, backup.name])
+      end)
+    end
+  end
+
+  # The fixture fleets answer every send at once, so the request starts its
+  # lookups with nearly all of its deadline left. A lookup held past that
+  # deadline can only end at the request's own deadline. Twice the deadline is
+  # far above it yet still below the test timeout, so the bound fails only when
+  # a lookup outlives the request instead of on a slow host.
+  test "a possible broadcast whose lookup outlives the deadline ends indeterminate in time" do
+    for transport <- [:http, :ws] do
+      journey(2, fn tenant, [primary, backup] = fleets ->
+        deadline_ms = ingress_deadline_ms(transport)
+        token = make_ref()
+        Fleet.script(primary, @send, [], {:error, -32_000, "internal server error"})
+        Fleet.script(primary, @lookup, [{:hold, token}])
+        Fleet.script(backup, @send, [], {:error, -32_000, "nonce too low"})
+        started = System.monotonic_time(:millisecond)
+        {body, sends, lookups} = submit(tenant, fleets, transport, 2 * deadline_ms)
+        elapsed_ms = System.monotonic_time(:millisecond) - started
+        assert :ok = Fleet.release(primary, token, {:answer, nil})
+        assert_indeterminate(body)
+        assert elapsed_ms < 2 * deadline_ms
+        assert_sends(sends, [primary.name, backup.name])
+        assert_lookups(lookups, [primary.name, backup.name])
+      end)
+    end
+  end
+
+  # Each send may spend at most 60% of the time left, which reserves time for
+  # lookups after any number of answered sends. The last upstream's lookup is
+  # asked first; held, it spends every millisecond the request has left, so the
+  # earlier possible broadcast is never asked and its outcome stays unknown. The
+  # response still ends at the request deadline, under the same twice-the-deadline
+  # bound as the held lookup above.
+  test "a possible broadcast left no time to look up ends indeterminate unasked" do
+    for transport <- [:http, :ws] do
+      journey(2, fn tenant, [primary, backup] = fleets ->
+        deadline_ms = ingress_deadline_ms(transport)
+        token = make_ref()
+        Fleet.script(primary, @send, [], {:error, -32_000, "internal server error"})
+        Fleet.script(backup, @send, [], {:error, -32_000, "nonce too low"})
+        Fleet.script(backup, @lookup, [{:hold, token}])
+        started = System.monotonic_time(:millisecond)
+        {body, sends, lookups} = submit(tenant, fleets, transport, 2 * deadline_ms)
+        elapsed_ms = System.monotonic_time(:millisecond) - started
+        assert :ok = Fleet.release(backup, token, {:answer, nil})
+        assert_indeterminate(body)
+        assert elapsed_ms < 2 * deadline_ms
+        assert_sends(sends, [primary.name, backup.name])
+        assert_lookups(lookups, [backup.name])
+      end)
+    end
+  end
+
+  test "a lookup returning another transaction's hash is unknown, never a confirmation" do
+    other = %{hash: "0x" <> String.duplicate("cd", 32), blockHash: nil}
+
+    for transport <- [:http, :ws], mismatched <- [0, 1] do
+      journey(2, fn tenant, [primary, backup] = fleets ->
+        Fleet.script(primary, @send, [], {:error, -32_000, "internal server error"})
+        Fleet.script(backup, @send, [], {:error, -32_000, "nonce too low"})
+        Fleet.script(Enum.at(fleets, mismatched), @lookup, [], {:answer, other})
+        {body, sends, lookups} = submit(tenant, fleets, transport)
+        assert_indeterminate(body)
+        refute Jason.encode!(body) =~ other.hash
+        assert_sends(sends, [primary.name, backup.name])
+        assert_lookups(lookups, [primary.name, backup.name])
+      end)
+    end
+
+    for transport <- [:http, :ws] do
+      journey(1, fn tenant, [primary] = fleets ->
+        Fleet.script(primary, @send, [], {:error, -32_000, "nonce too low"})
+        Fleet.script(primary, @lookup, [], {:answer, other})
+        {body, sends, lookups} = submit(tenant, fleets, transport)
+        assert %{"code" => -32_000, "message" => "nonce too low", "data" => data} = body["error"]
+        assert data["next_action"] == @stop
+        refute body["result"]
+        assert_sends(sends, [primary.name])
+        assert_lookup(lookups, primary.name)
       end)
     end
   end
@@ -193,7 +276,10 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
     end
   end
 
-  defp submit(tenant, fleets, transport \\ :http) do
+  defp ingress_deadline_ms(:http), do: MethodPolicy.timeout_for(@send)
+  defp ingress_deadline_ms(:ws), do: @socket_deadline_ms
+
+  defp submit(tenant, fleets, transport \\ :http, receive_ms \\ 5_000) do
     cursors = Enum.map(fleets, &length(Fleet.drain(&1)))
     id = "signed-transaction-#{System.unique_integer([:positive])}"
 
@@ -216,7 +302,7 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
 
                 try do
                   Rpc.send!(wire, @send, [@raw], id)
-                  assert_receive {:rpc_frame, reference, {:text, bytes}}
+                  assert_receive {:rpc_frame, reference, {:text, bytes}}, receive_ms
                   assert reference == wire.reference
                   Jason.decode!(bytes)
                 after
@@ -253,6 +339,13 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
   defp assert_lookups(lookups, names) do
     assert Enum.map(lookups, & &1.fleet) == names
     assert Enum.all?(lookups, &(&1.request["params"] == [hash()]))
+  end
+
+  defp assert_indeterminate(body) do
+    refute body["result"]
+    assert %{"code" => -32_000, "data" => data} = body["error"]
+    assert body["error"]["message"] == "Upstream dispatch outcome is indeterminate"
+    assert data["upstream_message"] == "nonce too low"
   end
 
   defp assert_retry(body) do

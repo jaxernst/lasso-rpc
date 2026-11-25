@@ -80,18 +80,48 @@ will serve that range. A successful fallback still returns its result.
 
 ## Transaction sends
 
-Without a chain [`transactions`](CONFIGURATION.md#transaction-providers) block, a
-send runs once and is not retried after dispatch. With one, sends go only to the
-listed providers, one at a time, and the same bytes may be resent to another of
-them within the request deadline ([routing](ROUTING.md#transaction-providers)).
-A null send result stays null.
+A registered send may reach up to three distinct upstreams, one at a time, within
+the request deadline. With a chain [`transactions`](CONFIGURATION.md#transaction-providers)
+block, sends go only to the listed providers
+([routing](ROUTING.md#transaction-providers)). A null send result stays null.
 
-Under a policy, after a failed `eth_sendRawTransaction` Lasso looks up its hash
-among the providers of the phase that sent it before returning the error. Without a
-policy, and for other send methods, the upstream result is returned without a
-lookup. A lost response may still mean the transaction was accepted. Clients
-own signing, nonces, replacement, receipts and finality. Errors and metadata are
-in the [API reference](API_REFERENCE.md#transaction-send-errors-and-metadata).
+`eth_sendRawTransaction` resends the same signed bytes unless the rejection is on
+the stop list in the [transaction-outcome module](../lib/lasso/core/support/transaction_outcome.ex):
+known transactions and sender faults such as nonce bounds, insufficient funds,
+invalid signatures, malformed transactions and invalid gas or fee limits. All
+other outcomes fail over, including rate limits, timeouts, 5xx, replacement
+underpricing, pool capacity and unfamiliar wording. A rate-limit or quota refusal
+and a `-32601` do not use up one of the three sends.
+
+Before returning an `eth_sendRawTransaction` error, with or without a policy,
+Lasso looks up the local hash with `eth_getTransactionByHash`. It asks the
+upstream that answered last, then each earlier upstream that may have broadcast
+the bytes, one at a time within the remaining deadline. An earlier send may have
+broadcast when it got an unclassified error, an invalid response, a timeout or a
+connection lost after sending. A rate-limit or quota refusal, a `-32601`, a send
+refused before dispatch and a recognized failover rejection such as replacement
+underpricing did not, so those upstreams are not asked. If no upstream
+responded, Lasso asks one healthy upstream among the providers of the phase
+that sent it. Pending or mined evidence returns the hash only when the object's
+hash matches it case-insensitively. Wording alone never reports success.
+
+A `null` result means that upstream does not have the transaction. When every
+upstream asked returns `null`, the original error stands. A lookup that fails,
+times out, finds no time left, or returns a mismatched or unreadable object
+leaves the outcome unknown. If an earlier send may have broadcast and no lookup
+found the hash, an unknown outcome returns `-32000` "Upstream dispatch outcome is
+indeterminate" instead of the last rejection; check the hash before sending
+again. Its `data.upstream_message` is a shortened copy of the last upstream's
+message. With no earlier possible broadcast, an unknown lookup keeps the
+original error. Only the EIP-4844 network wrapper is decoded for hashing; other
+transaction types route opaquely, and acceptance hashes are not policed. Other
+send methods return the upstream result without a lookup.
+
+A response proves submission only, not propagation, inclusion or finality, and
+when every attempt fails and the hash is not found the outcome can still be
+unknown; reconcile by hash. Clients own signing, nonces, replacement, receipts
+and finality. Errors and metadata are in the
+[API reference](API_REFERENCE.md#transaction-send-errors-and-metadata).
 
 While a transaction is private, ordinary providers return null for it and their
 pending nonce excludes it until inclusion, so manage nonces client-side. Lasso
