@@ -9,7 +9,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   @behaviour Lasso.RPC.Transport
 
-  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer}
+  alias Lasso.Core.Support.{ErrorClassifier, ErrorNormalizer, TransactionOutcome}
   alias Lasso.Core.Transport.{AttemptProtocol, UpstreamAdmission, UpstreamResponse}
   alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.RPC.PreparedRequest
@@ -78,15 +78,21 @@ defmodule Lasso.RPC.Transports.HTTP do
     params = Map.get(rpc_request, "params", [])
     request_id = Map.get(rpc_request, "id")
 
-    perform_request(channel, request_id, request_id, timeout, fn provider_config, options ->
-      HttpClient.request(provider_config, method, params, options)
-    end)
+    perform_request(
+      Map.put(channel, :method, method),
+      request_id,
+      request_id,
+      timeout,
+      fn provider_config, options ->
+        HttpClient.request(provider_config, method, params, options)
+      end
+    )
   end
 
   @impl true
   def request_prepared(channel, %PreparedRequest{} = prepared, timeout) do
     perform_request(
-      channel,
+      Map.put(channel, :method, prepared.method),
       prepared.transport_id,
       prepared.client_id,
       timeout,
@@ -196,6 +202,7 @@ defmodule Lasso.RPC.Transports.HTTP do
       http_status: http_status,
       raw_bytes: raw_bytes,
       response_lease: lease,
+      method: Map.get(channel, :method),
       provider_id: channel.provider_id,
       profile: Map.get(channel, :profile),
       chain_id: Map.get(channel, :chain_id),
@@ -318,7 +325,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
   defp settle_raw_response(%{validation: {:error, %JError{} = jerr}} = input) do
     resolution =
-      ErrorClassifier.resolve(jerr.code, jerr.message,
+      resolve_error(input, jerr.code, jerr.message,
         data: jerr.data,
         http_status: input.http_status,
         provider_id: input.provider_id,
@@ -342,7 +349,7 @@ defmodule Lasso.RPC.Transports.HTTP do
 
     case retain_response_lease(jerr, input) do
       {:ok, jerr} ->
-        :ok = ErrorClassifier.observe(resolution, jerr.message, jerr.data)
+        :ok = observe_error(resolution, jerr.message, jerr.data)
 
         AttemptProtocol.terminal_at(
           input.dispatch_context,
@@ -403,6 +410,17 @@ defmodule Lasso.RPC.Transports.HTTP do
        breaker_penalty?: true
      )}
   end
+
+  defp resolve_error(%{method: "eth_sendRawTransaction"}, code, message, opts),
+    do: TransactionOutcome.resolve(code, message, opts)
+
+  defp resolve_error(_input, code, message, opts),
+    do: ErrorClassifier.resolve(code, message, opts)
+
+  defp observe_error(%{classification_path: :transaction_outcome}, _message, _data), do: :ok
+
+  defp observe_error(resolution, message, data),
+    do: ErrorClassifier.observe(resolution, message, data)
 
   defp retain_response_lease(response, %{response_lease: nil}), do: {:ok, response}
 

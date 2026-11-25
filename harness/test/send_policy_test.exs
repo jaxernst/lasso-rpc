@@ -418,8 +418,8 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       before = cursors(fleets)
       pinned_send = %{rpc_url: tenant.rpc_url <> "?provider=" <> public.name <> "&transport=ws"}
       response = Rpc.call(pinned_send, @send, [@raw])
-      assert response.body["error"]["code"] == -32000
-      assert ledger(fleets, before, @lookup) == []
+      assert response.body["result"] == hash()
+      assert names(ledger(fleets, before, @lookup)) == [relay.name]
       assert ledger(fleets, before, @send) == []
     end)
   end

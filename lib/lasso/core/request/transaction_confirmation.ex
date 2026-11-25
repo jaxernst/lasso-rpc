@@ -4,8 +4,9 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
   """
 
   alias Lasso.Core.Request.ExecutionScope
+  alias Lasso.Core.Support.TransactionOutcome
   alias Lasso.JSONRPC.Error, as: JError
-  alias Lasso.RPC.{AttemptTerminal, ExecutionEnvelope, RequestContext, Selection, TransactionHash}
+  alias Lasso.RPC.{AttemptTerminal, ExecutionEnvelope, RequestContext, Selection}
   alias Lasso.RPC.Response.{Capacity, Success}
 
   @doc "Confirms the send outcome and attaches transaction policy metadata to errors."
@@ -65,31 +66,13 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
   # A single lookup is shared by every terminal sendRaw rejection. Pinning the
   # selected transport prevents read failover from turning it into peer checks.
   defp confirm_raw_transaction(
-         {:error, _, %{routing_capture: {:unavailable, _}}} = result,
-         _scope,
-         _guard,
-         _execute,
-         _response_channel
-       ),
-       do: result
-
-  defp confirm_raw_transaction(
-         {:error, _error, %{routing_capture: {:ok, _, %{transactions: nil}}}} = result,
-         _scope,
-         _guard,
-         _execute,
-         _response_channel
-       ),
-       do: result
-
-  defp confirm_raw_transaction(
          {:error, error, %{method: "eth_sendRawTransaction"} = ctx},
          scope,
          guard,
          execute,
          response_channel
        ) do
-    hash = TransactionHash.from_params(ctx.params)
+    hash = TransactionOutcome.hash(ctx.params)
     channel = transaction_lookup_channel(ctx, hash, response_channel)
     remaining = ExecutionEnvelope.remaining_ms(ctx.execution_envelope)
 
@@ -162,7 +145,7 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
         result
 
       policy ->
-        data = Map.put(TransactionHash.error_data(error.data), :send_policy, policy)
+        data = Map.put(TransactionOutcome.data_map(error.data), :send_policy, policy)
         {:error, %{error | data: data, raw_response: nil}, ctx}
     end
   end
@@ -204,7 +187,7 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
           error
           | retriable?: true,
             data:
-              Map.merge(TransactionHash.error_data(error.data), %{
+              Map.merge(TransactionOutcome.data_map(error.data), %{
                 reason: :transaction_providers_unavailable
               })
         }
@@ -222,7 +205,7 @@ defmodule Lasso.Core.Request.TransactionConfirmation do
       end
 
     data =
-      TransactionHash.error_data(error.data)
+      TransactionOutcome.data_map(error.data)
       |> Map.drop(["retryable", "next_action", "code", "error_type", "request_id"])
 
     data =

@@ -285,18 +285,8 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp capture_routing(%{routing_capture: nil} = ctx) do
-    capture = Selection.capture(ctx.routing_profile, ctx.chain_id)
-    envelope = ctx.execution_envelope
-
-    envelope =
-      if Selection.policy(capture) && envelope.execution_safety == :raw_transaction_broadcast &&
-           envelope.classified_by == :registry,
-         do: %{envelope | dispatch_limit: 3},
-         else: envelope
-
-    %{ctx | routing_capture: capture, execution_envelope: envelope}
-  end
+  defp capture_routing(%{routing_capture: nil} = ctx),
+    do: %{ctx | routing_capture: Selection.capture(ctx.routing_profile, ctx.chain_id)}
 
   defp capture_routing(ctx), do: ctx
 
@@ -1140,7 +1130,6 @@ defmodule Lasso.RPC.RequestPipeline do
         do: retire_last_error(ctx, :retry_dispatched),
         else: ctx
 
-    outcome = policy_send_outcome(outcome, ctx)
     {decision, ctx} = qualify_response(outcome, ctx, channel)
 
     qualification =
@@ -1374,14 +1363,31 @@ defmodule Lasso.RPC.RequestPipeline do
     certainty = strongest_certainty(ctx.request_dispatch_certainty, fact_certainty(outcome.fact))
 
     envelope =
-      if authoritative_not_dispatched?(outcome.fact) do
-        ExecutionEnvelope.release_dispatch(
-          ctx.execution_envelope,
-          instance_id,
-          channel.transport
-        )
-      else
-        ctx.execution_envelope
+      cond do
+        authoritative_not_dispatched?(outcome.fact) ->
+          ExecutionEnvelope.release_dispatch(
+            ctx.execution_envelope,
+            instance_id,
+            channel.transport
+          )
+
+        ctx.method == "eth_sendRawTransaction" and
+            match?(
+              %AttemptTerminal.Response{kind: :application_error, error_code: -32_601},
+              outcome.fact
+            ) ->
+          ExecutionEnvelope.exclude_refused_dispatch(ctx.execution_envelope)
+
+        ctx.execution_envelope.execution_safety == :raw_transaction_broadcast and
+          ctx.execution_envelope.classified_by == :registry and
+            match?(
+              %AttemptTerminal.Response{kind: :application_error, error_category: :quota},
+              outcome.fact
+            ) ->
+          ExecutionEnvelope.exclude_refused_dispatch(ctx.execution_envelope)
+
+        true ->
+          ctx.execution_envelope
       end
 
     ctx = RequestContext.record_terminal_attempt(ctx, channel, outcome.fact)
@@ -1420,28 +1426,6 @@ defmodule Lasso.RPC.RequestPipeline do
         %{ctx | non_budget_attempts: ctx.non_budget_attempts + 1}
     end
   end
-
-  # Identical signed bytes can be resent within the declared send boundary.
-  defp policy_send_outcome(
-         %{projection: %{recommended_action: :finish_unsafe_indeterminate}} = outcome,
-         ctx
-       ) do
-    if not is_nil(RequestContext.transaction_policy(ctx)) and
-         ctx.execution_envelope.classified_by == :registry do
-      %{
-        outcome
-        | projection: %{
-            outcome.projection
-            | fallback_eligible: true,
-              recommended_action: :try_next_candidate
-          }
-      }
-    else
-      outcome
-    end
-  end
-
-  defp policy_send_outcome(outcome, _ctx), do: outcome
 
   defp qualify_response(
          %{fact: %AttemptTerminal.Response{kind: :success}, result: {:ok, result, _io_ms}},

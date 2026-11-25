@@ -127,7 +127,8 @@ defmodule Lasso.RPC.ExecutionProjector do
     do: retryable_projection(safety, :dispatched, breaker, evidence, diagnostic)
 
   defp retryable_projection(safety, certainty, breaker, evidence, diagnostic) do
-    fallback? = certainty == :not_dispatched or safety == :replay_safe
+    fallback? =
+      certainty == :not_dispatched or safety in [:replay_safe, :raw_transaction_broadcast]
 
     projection(
       fallback?,
@@ -156,8 +157,9 @@ defmodule Lasso.RPC.ExecutionProjector do
   defp application_error_projection(:deterministic, _safety),
     do: projection(false, :return_response, :none, :application_response, :deterministic_error)
 
-  defp application_error_projection(:ambiguous, :replay_safe),
-    do: projection(true, :try_next_candidate, :none, :neutral, :ambiguous_application_error)
+  defp application_error_projection(:ambiguous, safety)
+       when safety in [:replay_safe, :raw_transaction_broadcast],
+       do: projection(true, :try_next_candidate, :none, :neutral, :ambiguous_application_error)
 
   defp application_error_projection(:ambiguous, _safety),
     do: projection(false, :return_response, :none, :neutral, :ambiguous_application_error)

@@ -6,7 +6,7 @@ Use the configured profile’s RPC URL with a real HTTP or WebSocket client.
 
 ## Gotchas
 
-- Core does not replay signed transactions after dispatch. Clients reconcile hashes.
+- Registered sends such as `eth_sendRawTransaction` reach up to three distinct upstreams; a final hash lookup decides a rejected send's outcome. Other signed bytes execute once.
 - A missing response can mean a transaction was accepted.
 - No-send evidence ends at a correlated closing marker and fleet drain.
 

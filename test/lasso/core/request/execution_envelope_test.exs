@@ -56,12 +56,18 @@ defmodule Lasso.RPC.ExecutionEnvelopeTest do
     end
   end
 
-  test "raw transactions remain single-dispatch until broadcast arbitration owns completion" do
+  test "registered raw transactions reach three distinct providers once each" do
     envelope = ExecutionEnvelope.new("tx", "eth_sendRawTransaction", 1_000, started_at_us: 0)
     assert {:ok, envelope, _} = ExecutionEnvelope.reserve_dispatch(envelope, "one", :http, 0)
 
+    assert {:error, :duplicate_dispatch} =
+             ExecutionEnvelope.reserve_dispatch(envelope, "one", :ws, 0)
+
+    assert {:ok, envelope, _} = ExecutionEnvelope.reserve_dispatch(envelope, "two", :http, 0)
+    assert {:ok, envelope, _} = ExecutionEnvelope.reserve_dispatch(envelope, "three", :ws, 0)
+
     assert {:error, :dispatch_budget_exhausted} =
-             ExecutionEnvelope.reserve_dispatch(envelope, "two", :http, 0)
+             ExecutionEnvelope.reserve_dispatch(envelope, "four", :http, 0)
   end
 
   test "candidate admission is capped at sixteen" do

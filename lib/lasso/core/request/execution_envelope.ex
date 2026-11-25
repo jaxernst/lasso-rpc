@@ -25,8 +25,8 @@ defmodule Lasso.RPC.ExecutionEnvelope do
           original_timeout_ms: non_neg_integer(),
           execution_safety: execution_safety(),
           execution_nonce: binary(),
-          dispatch_limit: 1..3,
-          dispatch_count: 0..3,
+          dispatch_limit: 1..16,
+          dispatch_count: 0..16,
           candidate_admission_limit: 16,
           candidate_admission_count: 0..16,
           dispatched_channels: term(),
@@ -62,7 +62,7 @@ defmodule Lasso.RPC.ExecutionEnvelope do
         _ -> System.monotonic_time(:microsecond)
       end
 
-    {safety, source} = MethodRegistry.classify(method, Keyword.get(opts, :params, []))
+    {safety, classified_by} = MethodRegistry.classify(method, Keyword.get(opts, :params, []))
 
     timeout_deadline_us = started_at_us + timeout_ms * 1_000
 
@@ -79,9 +79,9 @@ defmodule Lasso.RPC.ExecutionEnvelope do
       deadline_us: deadline_us,
       original_timeout_ms: timeout_ms,
       execution_safety: safety,
-      classified_by: source,
+      classified_by: classified_by,
       execution_nonce: Base.url_encode64(:erlang.term_to_binary(make_ref()), padding: false),
-      dispatch_limit: dispatch_limit(safety)
+      dispatch_limit: dispatch_limit(safety, classified_by)
     }
   end
 
@@ -161,7 +161,7 @@ defmodule Lasso.RPC.ExecutionEnvelope do
       envelope.dispatch_count >= envelope.dispatch_limit ->
         {:error, :dispatch_budget_exhausted}
 
-      MapSet.member?(envelope.dispatched_channels, channel_key) ->
+      dispatched?(envelope, channel_key) ->
         {:error, :duplicate_dispatch}
 
       true ->
@@ -190,25 +190,35 @@ defmodule Lasso.RPC.ExecutionEnvelope do
     end
   end
 
-  defp dispatch_limit(:replay_safe), do: @max_replay_safe_dispatches
-  defp dispatch_limit(:raw_transaction_broadcast), do: 1
-  defp dispatch_limit(_safety), do: 1
+  @doc "Exclude a definitive refusal from the send budget, retaining dispatch evidence."
+  @spec exclude_refused_dispatch(t()) :: t()
+  def exclude_refused_dispatch(%__MODULE__{} = envelope) do
+    %{envelope | dispatch_limit: min(envelope.dispatch_limit + 1, @max_candidate_admissions)}
+  end
+
+  defp dispatched?(%{execution_safety: safety} = envelope, {instance, _})
+       when safety in [:raw_transaction_broadcast, :unknown, :subscription] do
+    Enum.any?(envelope.dispatched_channels, fn {sent, _} -> sent == instance end)
+  end
+
+  defp dispatched?(envelope, key), do: MapSet.member?(envelope.dispatched_channels, key)
+
+  # Only a registered send's contract makes rebroadcast safe; an unregistered
+  # method carrying signed bytes may have other effects, so it executes once.
+  defp dispatch_limit(:replay_safe, _classified_by), do: @max_replay_safe_dispatches
+  defp dispatch_limit(:raw_transaction_broadcast, :registry), do: 3
+  defp dispatch_limit(_safety, _classified_by), do: 1
+
+  # Leave time for sequential alternatives and the final evidence lookup.
+  defp attempt_timeout_ms(%{execution_safety: :raw_transaction_broadcast}, remaining_ms, _),
+    do: max(@minimum_attempt_ms, div(remaining_ms * 60, 100))
 
   defp attempt_timeout_ms(
-         %__MODULE__{execution_safety: :raw_transaction_broadcast, dispatch_limit: limit},
-         remaining_ms,
-         _fallback_available?
-       )
-       when limit > 1,
-       do: max(@minimum_attempt_ms, div(remaining_ms * 60, 100))
-
-  defp attempt_timeout_ms(
-         %__MODULE__{execution_safety: :replay_safe, dispatch_count: 1},
+         %{execution_safety: :replay_safe, dispatch_count: 1},
          remaining_ms,
          true
-       ) do
-    min(remaining_ms, max(@minimum_attempt_ms, div(remaining_ms * 60, 100)))
-  end
+       ),
+       do: min(remaining_ms, max(@minimum_attempt_ms, div(remaining_ms * 60, 100)))
 
   defp attempt_timeout_ms(_envelope, remaining_ms, _fallback_available?), do: remaining_ms
 end
