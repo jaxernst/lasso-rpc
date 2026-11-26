@@ -1,6 +1,7 @@
 defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
   use ExUnit.Case, async: false
 
+  alias Lasso.Config.MethodPolicy
   alias Lasso.Core.Streaming.ClientSubscriptionRegistry
   alias Lasso.Core.Streaming.ContinuityBudget
   alias Lasso.Core.Streaming.SubscriptionRouter
@@ -414,9 +415,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
         provider_id: nil,
         jsonrpc_id: 1,
         jsonrpc_id_present?: true,
-        started_at_us: now_us,
-        deadline_us: now_us + 5_000_000,
-        timeout_ms: 5_000
+        started_at_us: now_us
       }
 
       assert {:ok, owner} = ItemOwner.start(socket, item_ref, work)
@@ -464,9 +463,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
         provider_id: nil,
         jsonrpc_id: 1,
         jsonrpc_id_present?: true,
-        started_at_us: now_us,
-        deadline_us: now_us + 100_000,
-        timeout_ms: 100
+        started_at_us: now_us - (MethodPolicy.timeout_for("eth_subscribe") - 100) * 1_000
       }
 
       assert {:ok, owner} = ItemOwner.start(socket, item_ref, work)
@@ -521,9 +518,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
         jsonrpc_id: 1,
         jsonrpc_id_present?: true,
         subscription_known?: true,
-        started_at_us: now_us,
-        deadline_us: now_us + 100_000,
-        timeout_ms: 100
+        started_at_us: now_us - (MethodPolicy.timeout_for("eth_subscribe") - 100) * 1_000
       }
 
       assert {:ok, owner} = ItemOwner.start(socket, item_ref, work)
@@ -556,9 +551,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
         provider_id: nil,
         jsonrpc_id: 1,
         jsonrpc_id_present?: true,
-        started_at_us: now_us,
-        deadline_us: now_us + 5_000_000,
-        timeout_ms: 5_000
+        started_at_us: now_us
       }
 
       assert {:ok, subscribe_owner} = ItemOwner.start(self(), subscribe_ref, subscribe_work)
@@ -573,8 +566,7 @@ defmodule Lasso.Core.Streaming.UpstreamSubscriptionPoolIntegrationTest do
         | method: "eth_unsubscribe",
           params: [subscription_id],
           subscription_known?: true,
-          started_at_us: System.monotonic_time(:microsecond),
-          deadline_us: System.monotonic_time(:microsecond) + 5_000_000
+          started_at_us: System.monotonic_time(:microsecond)
       }
 
       assert {:ok, unsubscribe_owner} =

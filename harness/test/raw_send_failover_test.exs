@@ -11,9 +11,6 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
   @raw "0x02f86c0180843b9aca0082520894111111111111111111111111111111111111111180c0"
   @retry "It is safe to resend the same signed transaction."
   @stop "Check this transaction's hash for a receipt before signing a new one, then address the cause in the error message before retrying."
-  # WebSocket ingress gives every forwarded request this fixed deadline instead
-  # of the method budget HTTP ingress uses.
-  @socket_deadline_ms 10_000
 
   # A send budget a loaded host cannot spend before reaching a held lookup.
   setup do
@@ -139,7 +136,7 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
   test "a possible broadcast whose lookup outlives the deadline ends indeterminate in time" do
     for transport <- [:http, :ws] do
       journey(2, fn tenant, [primary, backup] = fleets ->
-        deadline_ms = ingress_deadline_ms(transport)
+        deadline_ms = MethodPolicy.timeout_for(@send)
         token = make_ref()
         Fleet.script(primary, @send, [], {:error, -32_000, "internal server error"})
         Fleet.script(primary, @lookup, [{:hold, token}])
@@ -165,7 +162,7 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
   test "a possible broadcast left no time to look up ends indeterminate unasked" do
     for transport <- [:http, :ws] do
       journey(2, fn tenant, [primary, backup] = fleets ->
-        deadline_ms = ingress_deadline_ms(transport)
+        deadline_ms = MethodPolicy.timeout_for(@send)
         token = make_ref()
         Fleet.script(primary, @send, [], {:error, -32_000, "internal server error"})
         Fleet.script(backup, @send, [], {:error, -32_000, "nonce too low"})
@@ -304,9 +301,6 @@ defmodule Lasso.Test.Harness.RawSendFailoverTest do
       Enum.each(fleets, &Fleet.stop/1)
     end
   end
-
-  defp ingress_deadline_ms(:http), do: MethodPolicy.timeout_for(@send)
-  defp ingress_deadline_ms(:ws), do: @socket_deadline_ms
 
   defp submit(tenant, fleets, transport \\ :http, receive_ms \\ 5_000) do
     cursors = Enum.map(fleets, &length(Fleet.drain(&1)))
