@@ -17,7 +17,15 @@ const PORT_BASE = Number(process.env.PORT_BASE || 43000);
 const BLOCK = 60;
 
 // The endpoint candidate comes first so its mock upstreams sit at PORT_BASE+1, +2 and +3.
-const NAMES = ["endpoint", "direct", "race2", "lasso", "lasso-fastest", "lasso-bf", "lasso-lb"];
+const NAMES = ["endpoint", "direct", "race2", "lasso", "lasso-fastest", "lasso-bf", "lasso-lb", "lasso-learned", "lasso-unlearned"];
+// Every routing effect Lasso learns from traffic, by the setting that turns it off. The unlearned
+// arm sets each to off; a newly ported effect adds its setting here.
+const LEARNED_EFFECT_MODES = [
+  "LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE",
+  "LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE",
+  "LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE",
+  "LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE",
+];
 const DEFS = {
   endpoint: { proxy: "endpoint" },
   direct: {},
@@ -26,6 +34,10 @@ const DEFS = {
   "lasso-fastest": { proxy: "lasso", route: "/rpc/profile/trial/fastest/{chain}" },
   "lasso-bf": { proxy: "lasso", route: "/rpc/profile/trial/balanced-fast/{chain}" },
   "lasso-lb": { proxy: "lasso", route: "/rpc/profile/trial/load-balanced/{chain}" },
+  // Learning arms: the same load-balanced route, with learned effects on (the default) or off.
+  "lasso-learned": { proxy: "lasso", route: "/rpc/profile/trial/load-balanced/{chain}" },
+  "lasso-unlearned": { proxy: "lasso", route: "/rpc/profile/trial/load-balanced/{chain}",
+    env: Object.fromEntries(LEARNED_EFFECT_MODES.map((name) => [name, "off"])) },
 };
 // Port block per candidate: upstreams base+1..base+39, distribution base+48, mock control base+49,
 // proxy base+50. base+59 stays closed (Lasso's placeholder public provider).
@@ -79,6 +91,11 @@ const SCENARIOS = {
   // Real endpoints from UPSTREAMS, read mix only, no injected faults.
   R: { up: [], real: true },
 };
+// Scenarios defined as data, with a description each (the learning scenarios).
+for (const [name, def] of Object.entries(JSON.parse(fs.readFileSync(path.join(KIT, "scenarios.json"), "utf8")))) {
+  if (SCENARIOS[name]) throw new Error(`scenarios.json redefines ${name}`);
+  SCENARIOS[name] = def;
+}
 const JITTER = 0.2;
 const RATE = 5;
 const CLIENT_TIMEOUT_MS = 10_000;
@@ -147,14 +164,20 @@ function methodSequence(n) {
   });
 }
 
+// A scenario's `history` sends `share` of balance and call reads to the block `depth` below the
+// head, the same reads for every candidate.
+const historical = (seq) => Boolean(scenario.history) && ((seq * 2654435761) >>> 0) % 1000 < scenario.history.share * 1000;
+
 function buildRequest(seq, method, nonce) {
   const H = headNow();
   const s = pad(seq, 10);
   const id = seq + 1;
+  const at = historical(seq) && (method === "eth_getBalance" || method === "eth_call") ? H - scenario.history.depth : null;
+  const tag = at === null ? "latest" : hex(at);
   switch (method) {
-    case "eth_getBalance": return { id, method, params: ["0xb1" + s.padStart(38, "0"), "latest"] };
+    case "eth_getBalance": return { id, method, params: ["0xb1" + s.padStart(38, "0"), tag], atBlock: at };
     case "eth_getTransactionCount": return { id, method, params: ["0xa1" + s.padStart(38, "0"), "latest"] };
-    case "eth_call": return { id, method, params: [{ to: "0x00000000000000000000000000000000c0ffee01", data: "0x70a08231" + s.padStart(64, "0") }, "latest"] };
+    case "eth_call": return { id, method, params: [{ to: "0x00000000000000000000000000000000c0ffee01", data: "0x70a08231" + s.padStart(64, "0") }, tag], atBlock: at };
     case "eth_getLogs": return getLogs(seq, H - 100, H - 1);
     case "eth_getTransactionReceipt": return { id, method, params: [REAL ? realTxs[seq % realTxs.length] : "0x" + pad(H - 3, 16) + s.padStart(48, "0")] };
     case "eth_sendRawTransaction": return { id, method, params: [signedTransfer({ chainId: CHAINS[0], nonce }).raw] };
@@ -318,7 +341,7 @@ function startProxy(name, c, dir) {
     fs.writeFileSync(path.join(data, "config/profiles/public.yml"),
       fs.readFileSync(path.join(KIT, "templates/public.yml"), "utf8").replace("{{CLOSED}}", c.closed));
     fs.writeFileSync(path.join(data, "config/profiles/trial.yml"), lassoProfile(c));
-    const env = { ...process.env, LASSO_DATA_DIR: data, SECRET_KEY_BASE: crypto.randomBytes(64).toString("base64"), PHX_HOST: "localhost",
+    const env = { ...process.env, ...(c.env ?? {}), LASSO_DATA_DIR: data, SECRET_KEY_BASE: crypto.randomBytes(64).toString("base64"), PHX_HOST: "localhost",
       LASSO_NODE_ID: `trial-${name}`, PORT: String(c.port),
       // The release always starts distributed; give each instance its own node name and pin its
       // distribution port inside this candidate's port block.
@@ -461,10 +484,13 @@ async function runWorkload(name, c, dir, meta, startAt) {
       if (!REAL && rpcOk && method === "eth_getLogs" && req.expectLogs) dataProblem = checkLogs(result, req);
       if (rpcOk && method === "eth_chainId" && result !== hex(CHAINS[0])) dataProblem = "wrong_chain";
       if (rpcOk && method === "eth_sendRawTransaction" && result !== txHash(req.params[0])) dataProblem = "wrong_tx_hash";
+      // A read at a fixed block must be answered at that block; it is not a freshness sample.
+      const atBlock = req.atBlock ?? null;
+      if (!REAL && rpcOk && atBlock !== null && servedBlock(method, result) !== atBlock) dataProblem = "wrong_block";
       const ok = rpcOk && !dataProblem;
-      const served = ok ? servedBlock(method, result) : null;
-      rec.write(JSON.stringify({ seq, method, tag, ...extra, t_send: tSend, t_recv: tRecv, latency_ms: tRecv - tSend, since_ready_ms: tSend - runStart,
-        status: r.status, rpc_ok: rpcOk, ok, error: error ? { code: error.code, message: String(error.message).slice(0, 160) } : (ok ? undefined : (r.text ?? "non-jsonrpc")),
+      const served = ok && atBlock === null ? servedBlock(method, result) : null;
+      rec.write(JSON.stringify({ seq, method, tag, ...extra, ...(atBlock !== null ? { at_block: atBlock } : {}), t_send: tSend, t_recv: tRecv,
+        latency_ms: tRecv - tSend, since_ready_ms: tSend - runStart, status: r.status, rpc_ok: rpcOk, ok, error: error ? { code: error.code, message: String(error.message).slice(0, 160) } : (ok ? undefined : (r.text ?? "non-jsonrpc")),
         served_block: served, head_at_send: headAtSend, head_at_recv: headAtRecv, lag_blocks: served !== null ? headAtRecv - served : null,
         data_problem: dataProblem, winner: r.winner, result: method === "eth_sendRawTransaction" ? result : undefined }) + "\n");
       return ok;

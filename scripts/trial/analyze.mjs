@@ -11,7 +11,7 @@ const KIT = path.dirname(fileURLToPath(import.meta.url));
 const RES = path.resolve(process.argv[2] || process.env.RESULTS_DIR || path.join(KIT, "results", "runs"));
 const SEND = "eth_sendRawTransaction";
 const UNTAGGED_CLIENT = ["eth_chainId", "eth_blockNumber", "eth_gasPrice"];
-const ORDER = ["direct", "race2", "endpoint", "lasso", "lasso-fastest", "lasso-bf", "lasso-lb"];
+const ORDER = ["direct", "race2", "endpoint", "lasso", "lasso-fastest", "lasso-bf", "lasso-lb", "lasso-learned", "lasso-unlearned"];
 // Repeats agree when every metric's spread (max minus min) is within these bounds. README.md explains them.
 const TOLERANCE = { success_pp: 1, stale_pp: 1, latency_ms: 5, latency_frac: 0.2, calls_per_request: 0.1 };
 
