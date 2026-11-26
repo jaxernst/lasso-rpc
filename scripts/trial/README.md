@@ -109,10 +109,10 @@ Upstreams are up1, up2 and up3. Latencies have 20% uniform jitter. Read scenario
 | S12 | up1 20 ms but holds every tenth read it receives and never answers it; up2 60 ms; up3 120 ms | reads |
 | L1 | up1 20 ms and up2 60 ms keep state for the last 128 blocks and answer older state reads with `missing trie node`; up3 120 ms keeps all state | reads, with 30% of balance and call reads at the block 1,000 below the head |
 | L2 | up1 20 ms answers every `eth_getBalance` at `latest` with `-32000 upstream could not serve this request`; up2 60 ms; up3 120 ms | reads |
-
-L1 and L2 are defined in `scenarios.json`, each with a description. A read at a fixed block must be answered at that block, or it counts as an `invalid result` (`wrong_block`); it is left out of the stale-read counts.
 | B1 | see below | wide `eth_getLogs` backfill |
 | R | real endpoints from `UPSTREAMS` | reads |
+
+L1 and L2 are defined in `scenarios.json`, each with a description. A read at a fixed block must be answered at that block, or it counts as an `invalid result` (`wrong_block`); it is left out of the stale-read counts.
 
 ### B1: wide backfill
 
