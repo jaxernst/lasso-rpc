@@ -47,7 +47,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
   @max_backoff_ms 30_000
   @rate_limit_backoff_ms 30_000
   @auth_backoff_ms 120_000
-  @probe_rate_limit_ttl_ms 60_000
   @jitter_percent 0.2
   @probe_timeouts_to_open 2
 
@@ -470,17 +469,24 @@ defmodule Lasso.Providers.ProbeCoordinator do
 
     case {result, response} do
       {{^instance_id, {:rate_limited, _}}, {:ok, payload}} ->
-        retry_after =
-          ErrorClassifier.parse_retry_after(Map.get(payload, :headers), Map.get(payload, :body))
-
-        if is_integer(retry_after) and retry_after > 0,
-          do: InstanceState.record_rate_limit(instance_id, :http, min(retry_after, 2_147_483_647))
+        InstanceState.record_rate_limit(instance_id, :http, probe_cooldown_ms(payload))
 
       _ ->
         :ok
     end
 
     result
+  end
+
+  # The upstream's own retry hint bounds the cooldown; without one it matches a client 429's.
+  defp probe_cooldown_ms(payload) do
+    case ErrorClassifier.parse_retry_after(Map.get(payload, :headers), Map.get(payload, :body)) do
+      retry_after when is_integer(retry_after) and retry_after > 0 ->
+        min(retry_after, 2_147_483_647)
+
+      _none ->
+        @rate_limit_backoff_ms
+    end
   end
 
   defp handle_http_probe_response(response, instance_id, chain_id, observation) do
@@ -493,7 +499,7 @@ defmodule Lasso.Providers.ProbeCoordinator do
             {instance_id, :success}
 
           {:rate_limited, reason} ->
-            write_probe_rate_limit(instance_id)
+            write_probe_success(instance_id)
             {instance_id, {:rate_limited, reason}}
 
           {:identity_error, reason} ->
@@ -511,12 +517,12 @@ defmodule Lasso.Providers.ProbeCoordinator do
         {instance_id, {:auth_failed, status}}
 
       {:ok, %{status: status}} when status in [403, 429] ->
-        write_probe_rate_limit(instance_id)
+        write_probe_success(instance_id)
         {instance_id, {:rate_limited, status}}
 
       {:ok, %{status: status, body: resp_body}} when status in 500..599 ->
         if rate_limit_in_body?(resp_body) do
-          write_probe_rate_limit(instance_id)
+          write_probe_success(instance_id)
           {instance_id, {:rate_limited, status}}
         else
           write_probe_failure(instance_id, {:http_status, status})
@@ -633,22 +639,6 @@ defmodule Lasso.Providers.ProbeCoordinator do
       instance_id: instance_id,
       http_status: status
     )
-  end
-
-  defp write_probe_rate_limit(instance_id) do
-    existing = read_existing_probe(instance_id)
-
-    :ets.insert(
-      :lasso_instance_state,
-      {{:health_probe, instance_id},
-       Map.merge(existing, %{
-         status: :degraded,
-         http_status: :degraded,
-         last_health_check: System.system_time(:millisecond)
-       })}
-    )
-
-    InstanceState.record_rate_limit(instance_id, :http, @probe_rate_limit_ttl_ms)
   end
 
   defp read_existing_probe(instance_id) do

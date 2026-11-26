@@ -424,7 +424,7 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
         InstanceState.record_rate_limit(
           state.instance_id,
           :http,
-          rate_limit_ttl_ms(reason, state.poll_interval_ms)
+          rate_limit_ttl_ms(reason)
         )
       end
 
@@ -461,18 +461,17 @@ defmodule Lasso.BlockSync.Strategies.HttpStrategy do
 
   defp maybe_signal_recovery(_state), do: :ok
 
-  defp rate_limit_ttl_ms(%JError{data: data} = error, poll_interval_ms) do
+  defp rate_limit_ttl_ms(%JError{data: data} = error) do
     retry_after_ms =
       if is_map(data),
         do: Map.get(data, :retry_after_ms) || Map.get(data, "retry_after_ms"),
         else: nil
 
-    floor_ms =
-      if ErrorClassification.quota_exhausted?(error.message),
-        do: @quota_exhaustion_poll_delay_ms,
-        else: poll_interval_ms * 2
+    ttl_ms = valid_retry_after_ms(retry_after_ms)
 
-    max(valid_retry_after_ms(retry_after_ms), floor_ms)
+    if ErrorClassification.quota_exhausted?(error.message),
+      do: max(ttl_ms, @quota_exhaustion_poll_delay_ms),
+      else: ttl_ms
   end
 
   defp valid_retry_after_ms(value) when is_integer(value) and value > 0, do: value
