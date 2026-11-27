@@ -57,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known issues
 
-- Between head observations, a provider steadily behind can still be chosen for a read at a fixed block it hasn't reached yet. A fix is in review in [#449](https://github.com/jaxernst/lasso-rpc/pull/449).
+- Between head observations, a provider a few blocks behind can still answer a read at a fixed block it hasn't reached with `null` or an empty log list ([#460](https://github.com/jaxernst/lasso-rpc/issues/460)).
+- A `header not found` answer fails over to the next provider but doesn't get the extra send to a provider known to have the block. When that provider is half-open, the read can fail without trying it ([#458](https://github.com/jaxernst/lasso-rpc/issues/458)).
 - With an even number of upstreams in a head round, a lagging one can become the mark ([#451](https://github.com/jaxernst/lasso-rpc/issues/451)).
 - A pooled HTTP connection can be reused just after the upstream's keep-alive closed it, failing that attempt over ([#450](https://github.com/jaxernst/lasso-rpc/issues/450)).
 
