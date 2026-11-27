@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A read of past state behind full nodes that keep only recent state now reaches an archive. A pruned-state refusal (such as geth's `missing trie node`) to a replay-safe state, proof or trace read below the accepted head no longer spends one of the read's dispatches; the walk stays bounded by the admission cap and the request deadline. Block, receipt and log reads, and reads at the head, still spend it.
+- Learned historical depth applies per resource class instead of per method, so a cutoff learned from `eth_getBalance` refusals also covers `eth_call`, `eth_getCode` and `eth_getStorageAt` of the same state. `eth_getBalance` joins the `state` class. In the trial kit's pruned-history scenario (L1), refusals fell from 20 to 25 per run to 10 to 16.
+
+### Compatibility
+
+- Learned outcome statistics move to version 3. Version-2 rows load unchanged, except rows for the retired `balance` class, which are dropped and relearned.
+- Learned historical depth moves to version 4. Version-2 and version-3 rows are dropped and relearned.
+
 ## [0.10.0] - 2026-11-27
 
 ### Added
