@@ -89,7 +89,7 @@ defmodule Lasso.Core.Streaming.Backfill do
       {:none} ->
         :ok
 
-      {:regressed, _last_seen, observed_head} when ctx.allow_head_regression ->
+      {:regressed, _last_seen, observed_head} ->
         backfill_canonical_blocks(
           ctx,
           snapshot,
@@ -98,16 +98,6 @@ defmodule Lasso.Core.Streaming.Backfill do
           owner_id,
           allow_observation_boundary: true
         )
-
-      {:regressed, last_seen, observed_head} ->
-        Logger.error("Backfill source head regressed below the delivered stream",
-          chain_id: ctx.chain_id,
-          key: inspect(key),
-          last_seen: last_seen,
-          observed_head: observed_head
-        )
-
-        {:error, :head_regressed}
 
       {:range, from_n, to_n} ->
         backfill_canonical_blocks(ctx, snapshot, from_n, to_n, owner_id,

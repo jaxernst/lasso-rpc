@@ -953,6 +953,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         requester: state.backfill_requester
       )
 
+    continuity_marker = continuity_marker(state.state, state.key)
+
+    # A replacement behind the delivered stream is awaited until it reaches the delivered
+    # head, whose canonical hash then proves the splice; the recovery deadline bounds it.
     backfill_ctx = %Backfill.Context{
       profile: state.profile,
       chain_id: state.chain_id,
@@ -960,14 +964,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       backfill_timeout: state.backfill_timeout,
       continuity_policy: state.continuity_policy,
       allow_head_regression: false,
-      minimum_head: state.minimum_head,
+      minimum_head: max(state.minimum_head || 0, continuity_marker || 0),
       excluded_providers:
         [old_provider_id | Enum.map(state.failover_history, & &1.provider_id)]
         |> Enum.reject(&(&1 == new_provider_id)),
       plan: plan
     }
 
-    continuity_marker = continuity_marker(state.state, state.key)
     continuity_snapshot = StreamState.continuity_snapshot(state.state)
 
     failover_context = %{
