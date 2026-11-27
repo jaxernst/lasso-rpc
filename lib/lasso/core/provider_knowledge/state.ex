@@ -1,7 +1,7 @@
 defmodule Lasso.RPC.ProviderKnowledge.State do
   @moduledoc "Serializes causal learning state. Serving reads only its local ETS projection."
   use GenServer
-  alias Lasso.RPC.ProviderKnowledge.{Evidence, Learner, ReadModel}
+  alias Lasso.RPC.ProviderKnowledge.{Disproval, Evidence, Learner, ReadModel}
 
   @table :lasso_provider_knowledge_controls_v2
   @lease_ms :timer.hours(4)
@@ -30,8 +30,9 @@ defmodule Lasso.RPC.ProviderKnowledge.State do
   def receive_control(key, row), do: GenServer.call(__MODULE__, {:control, key, row}, 10_000)
   @spec inventory([target()]) :: :ok
   def inventory(targets), do: call({:inventory, targets})
-  @spec observe(Evidence.t()) :: :ok
+  @spec observe(Evidence.t() | Disproval.t()) :: :ok
   def observe(%Evidence{} = evidence), do: call({:observe, evidence})
+  def observe(%Disproval{} = disproval), do: call({:observe, disproval})
   @spec restore_own(target(), map() | nil) :: :ok
   def restore_own(target, image), do: call({:restore_own, target, image})
   @spec import_image(target(), map(), :peer | :checkpoint) :: :ok
@@ -201,27 +202,7 @@ defmodule Lasso.RPC.ProviderKnowledge.State do
   end
 
   def handle_call({:observe, evidence}, _from, state) do
-    target = {evidence.profile, evidence.chain_id, evidence.subject}
-    key = key(target)
-
-    cond do
-      not is_integer(evidence.dispatched_at_ms) ->
-        loss(:missing_dispatch_stamp)
-
-      not lookup({:admitted, evidence.profile, evidence.chain_id, evidence.subject}, false) ->
-        loss(:not_admitted)
-
-      evidence.epoch != epoch(target) ->
-        loss(:epoch_stale)
-
-      match?({:fenced, _}, lifecycle(key)) ->
-        loss(:checkpoint_fenced)
-
-      true ->
-        ReadModel.apply(evidence)
-        update_entry(key, &%{&1 | version: fresh_version()})
-    end
-
+    apply_observation(evidence)
     {:reply, :ok, state}
   end
 
@@ -346,6 +327,32 @@ defmodule Lasso.RPC.ProviderKnowledge.State do
 
     ReadModel.refresh_expired_historical_predictions()
     {:reply, :ok, state}
+  end
+
+  defp apply_observation(%Evidence{dispatched_at_ms: stamp}) when not is_integer(stamp),
+    do: loss(:missing_dispatch_stamp)
+
+  defp apply_observation(observation) do
+    target = {observation.profile, observation.chain_id, observation.subject}
+    key = key(target)
+
+    cond do
+      not lookup(
+        {:admitted, observation.profile, observation.chain_id, observation.subject},
+        false
+      ) ->
+        loss(:not_admitted)
+
+      observation.epoch != epoch(target) ->
+        loss(:epoch_stale)
+
+      match?({:fenced, _}, lifecycle(key)) ->
+        loss(:checkpoint_fenced)
+
+      true ->
+        ReadModel.apply(observation)
+        update_entry(key, &%{&1 | version: fresh_version()})
+    end
   end
 
   defp newer?(nil, _image, _source), do: true

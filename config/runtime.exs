@@ -49,7 +49,8 @@ provider_knowledge_effect_modes =
       method_refusal: "LASSO_PROVIDER_KNOWLEDGE_METHOD_REFUSAL_MODE",
       span_limit: "LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE",
       historical_depth: "LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE",
-      failure_rate_deferral: "LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE"
+      failure_rate_deferral: "LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE",
+      disproved_error: "LASSO_PROVIDER_KNOWLEDGE_DISPROVED_ERROR_MODE"
     ],
     fn {kind, name} ->
       mode =

@@ -12,11 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A read of past state behind full nodes that keep only recent state now reaches an archive. A pruned-state refusal (such as geth's `missing trie node`) to a replay-safe state, proof or trace read below the accepted head no longer spends one of the read's dispatches; the walk stays bounded by the admission cap and the request deadline. Block, receipt and log reads, and reads at the head, still spend it.
 - Learned historical depth applies per resource class instead of per method, so a cutoff learned from `eth_getBalance` refusals also covers `eth_call`, `eth_getCode` and `eth_getStorageAt` of the same state. `eth_getBalance` joins the `state` class. In the trial kit's pruned-history scenario (L1), refusals fell from 20 to 25 per run to 10 to 16.
 - A route held back by a learned method refusal is now a last resort for the rest of the request instead of being dropped after the first dispatch. It is tried only after every ordinary candidate has been tried and while dispatch budget remains, so a read whose other routes fail no longer errors with budget unspent. Custom strategies' candidate lists keep such a route as their last entry too. A learned deferral is withdrawn once enough accepted successes from its route outweigh its refusals, and otherwise expires within an hour. Routes deferred by a learned span limit or historical depth already wait behind the ordinary routes of their availability tier.
+- An upstream whose error on a replay-safe read another upstream then served moves behind its peers for the same method and request shape for 30 minutes. The deferral only reorders: the route stays available for fallback, a sole route is still tried first, about 5% of matching reads still try it first, and its next accepted success of that shape retracts the deferral. Errors that credential health, capacity tiers, the quota latch, method refusal, head suitability or the span and history learners already own are left to them. In the trial kit's false-error scenario (L2), upstream calls per read fell from 1.11 to 1.13 to 1.00 to 1.01, and p99 from 161 ms to 149 ms. Set `LASSO_PROVIDER_KNOWLEDGE_DISPROVED_ERROR_MODE=off` to keep learning without reordering. See [Disproved errors](docs/ROUTING.md#disproved-errors).
 
 ### Compatibility
 
 - Learned outcome statistics move to version 3. Version-2 rows load unchanged, except rows for the retired `balance` class, which are dropped and relearned.
 - Learned historical depth moves to version 4. Version-2 and version-3 rows are dropped and relearned.
+- Disproved errors are a new learner at version 1, with no stored rows to migrate.
+- A custom `Lasso.RPC.ProviderKnowledge.Persistence` adapter's `observe/1` now also receives `Lasso.RPC.ProviderKnowledge.Disproval` records.
 
 ## [0.10.0] - 2026-11-27
 

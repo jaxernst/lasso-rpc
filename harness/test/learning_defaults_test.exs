@@ -174,7 +174,7 @@ defmodule Lasso.Harness.LearningDefaultsTest do
             |> String.split("\n")
             |> Enum.filter(&String.starts_with?(&1, "lasso_provider_knowledge_"))
 
-          assert length(series) == 6
+          assert length(series) == 7
 
           assert Enum.all?(
                    series,

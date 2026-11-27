@@ -4,12 +4,13 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   alias Lasso.Config.ProfileId
   alias Lasso.RPC.BoundedIdentifier
   alias Lasso.RPC.ProviderKnowledge
-  alias Lasso.RPC.ProviderKnowledge.Decision
-  alias Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth
+  alias Lasso.RPC.ProviderKnowledge.{Decision, Evidence}
+  alias Lasso.RPC.ProviderKnowledge.Learners.{DisprovedError, HistoricalDepth}
   alias Lasso.RPC.Selection.HeadSuitability
   alias Lasso.RPC.TransportRegistry
 
-  @kinds [:method_refusal, :span_limit, :historical_depth]
+  @kinds [:method_refusal, :span_limit, :historical_depth, :disproved_error]
+  @ordering_kinds [:method_refusal, :span_limit, :disproved_error]
   @max_head_evidence 2
   @custom_class "u_*"
 
@@ -31,9 +32,15 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   defp global_mode(kind) do
     default =
-      if kind in [:method_refusal, :span_limit, :historical_depth, :failure_rate_deferral],
-        do: :on,
-        else: :off
+      if kind in [
+           :method_refusal,
+           :span_limit,
+           :historical_depth,
+           :disproved_error,
+           :failure_rate_deferral
+         ],
+         do: :on,
+         else: :off
 
     Application.get_env(:lasso, :provider_knowledge_effect_modes, %{}) |> Map.get(kind, default)
   end
@@ -96,13 +103,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         else: Enum.zip_with(descriptors, scopes, &historical_prediction(&1, &2, context))
 
     learned =
-      learned_deferrals(
-        Enum.zip([descriptors, scopes, predictions]),
-        historical_mode,
-        plan,
-        method,
-        context
-      )
+      Enum.zip([descriptors, scopes, predictions])
+      |> learned_deferrals(historical_mode, plan, method, context)
 
     {classes, verdicts} =
       if head do
@@ -157,10 +159,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         if historical_mode == :on and is_map(hint) do
           deferral(descriptor, :historical_depth, context.historical_resource)
         else
-          learned_deferral(descriptor, scope, plan, method, context, [
-            :method_refusal,
-            :span_limit
-          ])
+          learned_deferral(descriptor, scope, plan, method, context, @ordering_kinds)
         end
       end)
     else
@@ -172,7 +171,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
     do: %{route: Decision.route(descriptor), kind: kind, dimension: dimension}
 
   defp capability_decisions(deferrals, plan, method, context, order) do
-    for kind <- [:method_refusal, :span_limit],
+    for kind <- @ordering_kinds,
         hints = Enum.filter(deferrals, &(is_map(&1) and &1.kind == kind)),
         hints != [] do
       deferred_routes = MapSet.new(hints, & &1.route)
@@ -438,6 +437,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
           span_limited?(scope, method, context) ->
         deferral(descriptor, :span_limit, :logs)
 
+      :disproved_error in kinds and mode(:disproved_error, plan.profile) == :on and
+          disproved?(scope, method, context) ->
+        deferral(descriptor, :disproved_error, BoundedIdentifier.encode(method))
+
       :historical_depth in kinds and mode(:historical_depth, plan.profile) == :on and
           historical_depth_limited?(scope, context) ->
         deferral(descriptor, :historical_depth, context.historical_resource)
@@ -446,6 +449,28 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         nil
     end
   end
+
+  # A sampled share of matching requests keeps the deferred credential first, so
+  # a provider that serves again retracts its own deferral. A context without the
+  # request's shape (the cached-winner check) treats any disproval as matching.
+  defp disproved?(scope, method, context) do
+    with {:ok, %{source: source, shapes: shapes}} when source in [:local, :imported] <-
+           ProviderKnowledge.disproved_error(scope, method),
+         true <- shape_disproved?(shapes, method, context) do
+      not Map.has_key?(context, :request_shape) or :rand.uniform() >= DisprovedError.probe_share()
+    else
+      _ -> false
+    end
+  end
+
+  defp shape_disproved?(shapes, method, %{request_shape: {params, head_height}}) do
+    case Map.fetch(shapes, Evidence.request_shape(method, params, head_height)) do
+      {:ok, expires_at_ms} -> expires_at_ms > System.system_time(:millisecond)
+      :error -> false
+    end
+  end
+
+  defp shape_disproved?(_shapes, _method, _context), do: true
 
   defp effect_scope(descriptor, plan, method, context) do
     {provider, transport} = route(descriptor)

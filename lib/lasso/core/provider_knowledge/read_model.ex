@@ -1,9 +1,10 @@
 defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
   @moduledoc "Per-learner local ETS state with bounded keys and read-only request access."
 
-  alias Lasso.RPC.ProviderKnowledge.{Evidence, Learner}
+  alias Lasso.RPC.ProviderKnowledge.{Disproval, Evidence, Learner}
 
   alias Lasso.RPC.ProviderKnowledge.Learners.{
+    DisprovedError,
     HistoricalDepth,
     MethodRefusal,
     OutcomeStatistics,
@@ -41,10 +42,10 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
     :ok
   end
 
-  @spec apply(Evidence.t()) :: :ok
+  @spec apply(Evidence.t() | Disproval.t()) :: :ok
   def apply(%Evidence{} = evidence) do
     for {learner, table, bounds} <- tables() do
-      apply_one(learner, table, bounds, evidence, learner.key(evidence))
+      apply_one(learner, table, bounds, evidence, evidence_key(learner, table, evidence))
 
       if learner == MethodRefusal,
         do: apply_one(learner, table, bounds, evidence, MethodRefusal.quota_key(evidence))
@@ -52,6 +53,29 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
 
     :ok
   end
+
+  def apply(%Disproval{} = record) do
+    with {:ok, table, bounds} <- table(DisprovedError),
+         do: apply_one(DisprovedError, table, bounds, record, DisprovedError.key(record))
+
+    :ok
+  end
+
+  # A success can only retract a disproval this node already holds, so ordinary
+  # traffic never allocates disproval rows.
+  defp evidence_key(DisprovedError, table, evidence) do
+    case DisprovedError.key(evidence) do
+      :skip ->
+        :skip
+
+      key ->
+        if :ets.member(table, {:local, key}) or :ets.member(table, {:imported, key}),
+          do: key,
+          else: :skip
+    end
+  end
+
+  defp evidence_key(learner, _table, evidence), do: learner.key(evidence)
 
   @spec lookup(module(), term(), :local | :imported) :: {:ok, term()} | :unknown
   def lookup(learner, key, source \\ :local) when source in [:local, :imported] do
@@ -128,7 +152,8 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
     for {learner, kind} <- [
           {MethodRefusal, :method_refusal},
           {HistoricalDepth, :historical_depth},
-          {SpanBracket, :span_limit}
+          {SpanBracket, :span_limit},
+          {DisprovedError, :disproved_error}
         ],
         do: %{kind: kind, reason: :contradicted, count: counter(learner, :retractions)}
   end
@@ -376,10 +401,10 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
            epoch: epoch
          } = evidence
        )
-       when learner in [MethodRefusal, HistoricalDepth, SpanBracket] do
+       when learner in [MethodRefusal, HistoricalDepth, SpanBracket, DisprovedError] do
     case prediction(learner, key) do
       {:ok, %{kind: kind, epoch: ^epoch} = hint}
-      when kind in [:method_refusal, :historical_depth, :span_limit] ->
+      when kind in [:method_refusal, :historical_depth, :span_limit, :disproved_error] ->
         if contradicts_hint?(hint, evidence), do: hint
 
       _ ->
@@ -410,16 +435,25 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
   defp contradicts_hint?(%{kind: :method_refusal, dimension: method}, %Evidence{method: method}),
     do: true
 
+  defp contradicts_hint?(%{kind: :disproved_error, shapes: shapes}, %Evidence{shape: shape}),
+    do: Map.has_key?(shapes, shape)
+
   defp contradicts_hint?(_, _), do: false
 
   defp count_retraction(_learner, _key, nil), do: :ok
 
   defp count_retraction(learner, key, previous) do
     if previous.expires_at_ms > System.system_time(:millisecond) and
-         prediction(learner, key) == :unknown do
+         retracted?(previous, prediction(learner, key)) do
       increment(learner, :retractions)
     end
   end
+
+  # A disproval retracts per request shape while other shapes of the same method may defer.
+  defp retracted?(%{kind: :disproved_error, shapes: shapes}, {:ok, %{shapes: current}}),
+    do: map_size(Map.drop(shapes, Map.keys(current))) > 0
+
+  defp retracted?(_previous, current), do: current == :unknown
 
   defp encoded_state_fits?(learner, state, max_bytes) do
     upper_bound =
@@ -583,7 +617,7 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
   end
 
   defp refresh_prediction(learner, table, {_, _, dimension} = key)
-       when learner in [MethodRefusal, SpanBracket] do
+       when learner in [MethodRefusal, SpanBracket, DisprovedError] do
     local = prediction_state(table, :local, key)
     imported = prediction_state(table, :imported, key)
 
@@ -600,6 +634,7 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
         {MethodRefusal, :quota} -> :quota_exhaustion
         {MethodRefusal, _} -> :method_refusal
         {SpanBracket, _} -> :span_limit
+        {DisprovedError, _} -> :disproved_error
       end
 
     projection =
@@ -673,7 +708,8 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
     |> Enum.min(fn -> now end)
   end
 
-  defp projection_expiry(SpanBracket, _state, hint), do: hint.expires_at_ms
+  defp projection_expiry(learner, _state, hint) when learner in [SpanBracket, DisprovedError],
+    do: hint.expires_at_ms
 
   defp prediction_state(table, source, key) do
     case :ets.lookup(table, {source, key}) do

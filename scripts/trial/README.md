@@ -58,6 +58,7 @@ To run one scenario by hand: `node scripts/trial/runner.mjs <scenario> [candidat
 - `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE`
 - `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE`
 - `LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE`
+- `LASSO_PROVIDER_KNOWLEDGE_DISPROVED_ERROR_MODE`
 
 Declared limits, probes and head-lag ordering stay on in both arms. Head lag is judged from live observations rather than learned, so it is not a learning result. Both arms use the load-balanced route because every learned effect applies there.
 

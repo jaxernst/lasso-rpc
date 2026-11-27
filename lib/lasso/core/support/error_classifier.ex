@@ -86,7 +86,7 @@ defmodule Lasso.Core.Support.ErrorClassifier do
   @doc "Emits the legacy classification observation after a prepared error is retained."
   @spec observe(ErrorResolution.t(), String.t() | nil, term()) :: :ok
   def observe(%ErrorResolution{} = resolution, message, data) do
-    message_fingerprint = message |> bounded_message() |> message_fingerprint()
+    message_fingerprint = message_fingerprint(message)
     provider_id = resolution.scope.provider_id
 
     emit_classification_telemetry(
@@ -231,11 +231,14 @@ defmodule Lasso.Core.Support.ErrorClassifier do
 
   defp shared_instance?(_profile, _chain, _provider_id), do: false
 
-  defp message_fingerprint(nil), do: nil
+  @doc "Groups bounded diagnostic wording independently of case, hex values and numeric IDs."
+  @spec message_fingerprint(term()) :: String.t() | nil
+  def message_fingerprint(message) when not is_binary(message), do: nil
 
-  defp message_fingerprint(message) do
+  def message_fingerprint(message) do
     normalized =
       message
+      |> bounded_message()
       |> String.downcase()
       |> String.replace(~r/0x[0-9a-f]+/i, "<hex>")
       |> String.replace(~r/\d+/, "<number>")

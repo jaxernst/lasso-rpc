@@ -68,9 +68,13 @@ defmodule Lasso.GatewayMethodRefusalTest do
   } do
     add_upstreams(chain, [{"refusing", 1}, {"healthy", 2}])
 
-    for _request <- 1..6 do
+    assert %{"id" => 1, "result" => "0x123"} = rpc(chain)
+    assert_receive {:called, "refusing"}
+    assert_receive {:called, "healthy"}
+
+    # The healthy peer disproved the refusal, so later reads mostly skip the refusing route.
+    for _request <- 1..5 do
       assert %{"id" => 1, "result" => "0x123"} = rpc(chain)
-      assert_receive {:called, "refusing"}
       assert_receive {:called, "healthy"}
     end
 

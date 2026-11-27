@@ -55,7 +55,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   alias Lasso.RPC.ProviderKnowledge.Decision, as: LearningDecision
 
-  alias Lasso.RPC.ProviderKnowledge.ShadowAgreement
+  alias Lasso.RPC.ProviderKnowledge.{DisprovalWitness, ShadowAgreement}
 
   alias Lasso.RPC.Providers.AdapterFilter
   alias Lasso.RPC.RequestOptions
@@ -1173,6 +1173,8 @@ defmodule Lasso.RPC.RequestPipeline do
         knowledge_options
       )
 
+    ctx = DisprovalWitness.observe(ctx, channel, outcome, knowledge_options)
+
     ctx =
       ShadowAgreement.observe(
         ctx,
@@ -2002,6 +2004,7 @@ defmodule Lasso.RPC.RequestPipeline do
     else
       Capacity.release(state.original, :null_recovery_replaced)
       :ok = NullRecovery.decision(ctx, :replaced)
+      ctx = DisprovalWitness.served(ctx, channel)
       handle_success(result, fact_latency_ms(fact), channel, %{ctx | null_recovery: nil})
     end
   end
@@ -2009,7 +2012,12 @@ defmodule Lasso.RPC.RequestPipeline do
   defp serve_success(result, fact, channel, rest_channels, ctx, caller_guard, head) do
     case NullRecovery.assess(ctx, channel, result, head) do
       :ordinary ->
-        handle_success(result, fact_latency_ms(fact), channel, ctx)
+        handle_success(
+          result,
+          fact_latency_ms(fact),
+          channel,
+          DisprovalWitness.served(ctx, channel)
+        )
 
       {:declined, reason} ->
         decline_missing(result, fact, channel, ctx, caller_guard, reason)

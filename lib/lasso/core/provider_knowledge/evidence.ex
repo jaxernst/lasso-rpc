@@ -336,6 +336,13 @@ defmodule Lasso.RPC.ProviderKnowledge.Evidence do
   defp certainty(%{dispatch_certainty: value}), do: value
   defp certainty(_), do: :dispatched
 
+  @doc "The bounded request shape that evidence and disproval deferral share."
+  @spec request_shape(binary(), term(), integer() | nil) :: term()
+  def request_shape(method, params, head_height) do
+    analysis = RequestAnalysis.analyze(method, params, consensus_height: head_height)
+    shape(method, params, analysis, head_height)
+  end
+
   defp shape("eth_getLogs", [filter], %{block_range: span}, _head) when is_map(filter) do
     anchor =
       if is_binary(filter["blockHash"]),

@@ -515,7 +515,7 @@ config :lasso, :provider_selection_strategy, :load_balanced
 
 ## Learned routing
 
-Four routing effects learned from traffic are enabled by default:
+Five routing effects learned from traffic are enabled by default:
 
 | Environment variable | Default | Accepted values |
 | --- | --- | --- |
@@ -523,14 +523,16 @@ Four routing effects learned from traffic are enabled by default:
 | `LASSO_PROVIDER_KNOWLEDGE_HISTORICAL_DEPTH_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 | `LASSO_PROVIDER_KNOWLEDGE_SPAN_LIMIT_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 | `LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
+| `LASSO_PROVIDER_KNOWLEDGE_DISPROVED_ERROR_MODE` | `on` | `on`/`off`, `true`/`false`, `1`/`0`, any case |
 
 Set a variable to `off` and restart to keep that effect from reordering routes.
 Other values fail startup. Disabling an effect does not erase its observations;
 inspection remains available. Application configuration uses
 `:provider_knowledge_effect_modes`, a map with `:method_refusal`,
-`:historical_depth`, `:span_limit` and `:failure_rate_deferral` keys.
-Failure-rate deferral is the `load-balanced` weighting described in
-[routing](ROUTING.md#load-balanced); off, that strategy shares load equally. Runtime environment values populate
+`:historical_depth`, `:span_limit`, `:failure_rate_deferral` and `:disproved_error`
+keys. Failure-rate deferral is the `load-balanced` weighting described in
+[routing](ROUTING.md#load-balanced); off, that strategy shares load equally.
+Disproved-error deferral is described in [routing](ROUTING.md#disproved-errors). Runtime environment values populate
 that map at boot. No profile schema or database migration is required.
 
 The quota-exhaustion effect remains off. Claim auditing also

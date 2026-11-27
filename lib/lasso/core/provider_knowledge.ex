@@ -5,9 +5,10 @@ defmodule Lasso.RPC.ProviderKnowledge do
   alias Lasso.RPC.AttemptTerminal
   alias Lasso.RPC.BoundedIdentifier
   alias Lasso.RPC.MethodRegistry
-  alias Lasso.RPC.ProviderKnowledge.{Evidence, Persistence, ReadModel}
+  alias Lasso.RPC.ProviderKnowledge.{Disproval, Evidence, Persistence, ReadModel}
 
   alias Lasso.RPC.ProviderKnowledge.Learners.{
+    DisprovedError,
     HistoricalDepth,
     MethodRefusal,
     OutcomeStatistics,
@@ -26,7 +27,8 @@ defmodule Lasso.RPC.ProviderKnowledge do
         OutcomeStatistics,
         MethodRefusal,
         SpanBracket,
-        HistoricalDepth
+        HistoricalDepth,
+        DisprovedError
       ])
 
   @spec lane_options() :: keyword()
@@ -78,14 +80,53 @@ defmodule Lasso.RPC.ProviderKnowledge do
     end
   end
 
+  @doc """
+  Queues an errored attempt that a peer then served, attributed to the peer.
+
+  The record is built lazily on the feedback lane from the errored attempt's own
+  fact and options, so the request path pays only the enqueue.
+  """
+  @spec record_disproval(map(), map(), AttemptTerminal.t(), keyword(), map()) :: term()
+  def record_disproval(channel, ctx, fact, opts, witness) do
+    identity = fact.identity
+
+    ProjectionDispatcher.enqueue_lazy(
+      @dispatcher,
+      :learned_feedback,
+      {identity.profile, "#{identity.chain_id}:#{channel.learning_subject.id}"},
+      fn ->
+        case Evidence.from_attempt(channel, ctx, fact, :accepted, opts) do
+          %Evidence{} = evidence ->
+            evidence
+            |> Disproval.from_evidence(BoundedIdentifier.encode(witness.provider_id))
+            |> Disproval.encode()
+
+          nil ->
+            {:error, :not_dispatched}
+        end
+      end
+    )
+  end
+
   @doc "Applies one encoded record on the feedback lane, away from request execution."
   @spec deliver(term(), binary()) :: :ok
   def deliver(_scope, payload) do
-    case Evidence.decode(payload) do
-      {:ok, evidence} -> Persistence.adapter().observe(evidence)
+    case decode_feedback(payload) do
+      {:ok, record} -> Persistence.adapter().observe(record)
       _ -> :ok
     end
   end
+
+  defp decode_feedback(payload) when byte_size(payload) <= @max_payload_bytes do
+    case :erlang.binary_to_term(payload, [:safe]) do
+      {:disproval, %Disproval{}} = record -> Disproval.decode_record(record)
+      _ -> Evidence.decode(payload)
+    end
+  rescue
+    ArgumentError -> {:error, :invalid}
+  end
+
+  defp decode_feedback(payload), do: Evidence.decode(payload)
 
   @spec span_limit(map(), term()) :: {:ok, map()} | :unknown
   def span_limit(scope, dimension), do: read_hint(scope, :span_limit, dimension)
@@ -182,6 +223,10 @@ defmodule Lasso.RPC.ProviderKnowledge do
 
   @spec method_refusal(map(), binary()) :: {:ok, map()} | :unknown
   def method_refusal(scope, method), do: read_hint(scope, :method_refusal, method)
+
+  @doc "Request shapes of this method a peer disproved, each with its own expiry."
+  @spec disproved_error(map(), binary()) :: {:ok, map()} | :unknown
+  def disproved_error(scope, method), do: read_hint(scope, :disproved_error, method)
 
   @spec method_refused?(map(), binary()) :: boolean()
   def method_refused?(scope, method) do
@@ -286,7 +331,7 @@ defmodule Lasso.RPC.ProviderKnowledge do
   defp inspection_hints(MethodRefusal, _state, {_, _, :quota}, _source), do: []
 
   defp inspection_hints(learner, _state, key, source)
-       when learner in [MethodRefusal, SpanBracket] do
+       when learner in [MethodRefusal, SpanBracket, DisprovedError] do
     case ReadModel.prediction(learner, key) do
       {:ok, %{source: ^source} = hint} -> [hint]
       _ -> []
@@ -322,7 +367,7 @@ defmodule Lasso.RPC.ProviderKnowledge do
     learner = Map.get(scope, :learner) || Map.get(hint_learners(), kind)
 
     learning_dimension =
-      if kind == :method_refusal and is_binary(dimension),
+      if kind in [:method_refusal, :disproved_error] and is_binary(dimension),
         do: BoundedIdentifier.encode(dimension),
         else: dimension
 
@@ -406,7 +451,8 @@ defmodule Lasso.RPC.ProviderKnowledge do
         outcome_stats: OutcomeStatistics,
         method_refusal: MethodRefusal,
         span_limit: SpanBracket,
-        historical_depth: HistoricalDepth
+        historical_depth: HistoricalDepth,
+        disproved_error: DisprovedError
       })
 
   defp learned_hint(learner, key, _kind, _dimension, scope) do

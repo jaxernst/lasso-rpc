@@ -381,6 +381,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         if(historical?, do: (facts && facts.resource) || filters.historical_resource),
       historical_height: height,
       historical_age: age,
+      request_shape: {Keyword.get(opts, :params, []), filters.reference_height},
       head_suitability: Keyword.get(opts, :head_suitability, filters.head_suitability)
     }
   end

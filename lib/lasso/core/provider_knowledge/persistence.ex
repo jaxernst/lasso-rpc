@@ -5,7 +5,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Persistence do
 
   @callback epoch(target()) :: non_neg_integer()
   @callback allowed?(target(), map()) :: boolean()
-  @callback observe(Lasso.RPC.ProviderKnowledge.Evidence.t()) :: :ok
+  @callback observe(
+              Lasso.RPC.ProviderKnowledge.Evidence.t()
+              | Lasso.RPC.ProviderKnowledge.Disproval.t()
+            ) :: :ok
   @callback apply_loss() :: map()
 
   @spec adapter() :: module()

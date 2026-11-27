@@ -94,6 +94,8 @@ defmodule Lasso.RPC.RequestContext do
           null_recovery: Lasso.RPC.NullRecovery.State.t() | nil,
           missing_block: %{original?: boolean(), missing: map() | nil},
           attempt_observation: map() | nil,
+          # Errored attempts a later peer success would disprove.
+          disproval_candidates: [{Channel.t(), struct(), keyword()}],
 
           # Timing
           # Plug-level start time for true E2E measurement (from RequestTimingPlug)
@@ -203,6 +205,7 @@ defmodule Lasso.RPC.RequestContext do
             null_recovery: nil,
             missing_block: %{original?: false, missing: nil},
             attempt_observation: nil,
+            disproval_candidates: [],
             plug_start_time: nil,
             start_time: nil,
             request_start_ms: nil,

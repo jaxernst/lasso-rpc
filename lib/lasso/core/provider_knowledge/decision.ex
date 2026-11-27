@@ -337,6 +337,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     do:
       kind in [
         :method_refusal,
+        :disproved_error,
         :quota_exhaustion,
         :span_limit,
         :historical_depth,
@@ -352,7 +353,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
          %{kind: kind, hints: hints, method: method, partition: partition, omitted_hints: omitted} =
            d
        )
-       when kind in [:method_refusal, :span_limit, :quota_exhaustion] and is_list(hints) and
+       when kind in [:method_refusal, :disproved_error, :span_limit, :quota_exhaustion] and
+              is_list(hints) and
               length(hints) in 1..2 do
     valid_common?(d) and Lasso.RPC.BoundedIdentifier.valid?(method) and
       partition in Lasso.RPC.RoutingEvidence.Workload.partitions() and
@@ -360,7 +362,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
       Enum.all?(hints, fn
         %{route: route, kind: ^kind, dimension: dimension} ->
           valid_route?(route) and
-            ((kind == :method_refusal and dimension == method) or
+            ((kind in [:method_refusal, :disproved_error] and dimension == method) or
                (kind == :span_limit and dimension == :logs) or
                (kind == :quota_exhaustion and dimension == :quota and d.mode == :shadow))
 

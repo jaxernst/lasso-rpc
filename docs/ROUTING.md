@@ -410,6 +410,33 @@ The provider ID must match a provider configured in the profile. Health checks a
 
 This is useful for debugging, testing specific provider behavior, or implementing custom provider selection logic outside of Lasso.
 
+### Disproved errors
+
+When an upstream returns an error on a replay-safe read and a different upstream
+instance then serves the same request with an accepted success, the error is
+disproved. Ordinary failover supplies this witness. Errors another mechanism
+owns feed that mechanism instead: authentication (credential health), rate
+limits and quota (capacity tiers and the quota latch), unknown methods (method
+refusal), missing blocks (head suitability), and typed span and history
+constraints (their learners). One disproval defers that credential (its
+learning subject, not its vendor) for the same method and request shape: every
+profile that routes to the same upstream URL shares it. The shape is the `eth_getLogs` span band and
+anchor, the historical resource and age band, or the method alone. The fact
+records the error code, the masked message fingerprint and the provider that
+served.
+
+The deferral only reorders: the route waits behind undeferred peers in its
+availability tier, stays available for fallback, never ends a request and never
+touches a breaker, so a route with no peer to move behind is still tried first.
+Each shape expires 30 minutes after its latest disproval. About 5% of matching
+requests keep the deferred route in its ordinary place; an accepted success of
+the same shape from that credential retracts the deferral and counts in
+`lasso_provider_knowledge_retractions_total{kind="disproved_error",reason="contradicted"}`.
+The share and the expiry are the dial between deferring too much and sending too
+much. `LASSO_PROVIDER_KNOWLEDGE_DISPROVED_ERROR_MODE=off` keeps learning and stops
+the reordering. `Lasso.Diagnostics.provider_knowledge/3` shows each disproval
+with its witness, error code, source and expiry.
+
 ## Transaction providers
 
 When a chain declares [`transactions`](CONFIGURATION.md#transaction-providers),
