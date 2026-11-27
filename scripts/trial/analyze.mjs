@@ -261,20 +261,25 @@ for (const [run, cands] of Object.entries(results.scenarios)) {
   }
 }
 
-// Repeats: runs named <scenario>-r<N>. run.sh writes plan.json with the repeat count and the
-// runner writes run.json with the candidates it was asked for, so a missing or failed run
-// marks its group incomplete instead of dropping out of the comparison.
+// Repeats: runs group by scenario, from a <scenario>-r<N> name or the run's run.json. run.sh
+// writes plan.json with the scenarios, candidates and repeat count, and the runner writes
+// run.json with the candidates it was asked for, so a missing or failed run marks its group
+// incomplete instead of dropping out of the comparison.
 const readJson = (f) => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null);
 const plan = readJson(path.join(RES, "plan.json"));
 const groups = {};
-for (const run of runNames) { const m = run.match(/^(.+)-r(\d+)$/); if (m) (groups[m[1]] ||= new Set()).add(run); }
+for (const run of runNames) {
+  const s = run.match(/^(.+)-r(\d+)$/)?.[1] ?? readJson(path.join(RES, run, "run.json"))?.scenario;
+  if (s) (groups[s] ||= new Set()).add(run);
+}
 for (const s of plan?.scenarios ?? []) for (let i = 1; i <= plan.repeats; i++) (groups[s] ||= new Set()).add(`${s}-r${i}`);
 results.repeats = {};
 const range = (xs) => { const v = xs.filter((x) => x !== null && x !== undefined); return v.length ? { min: Math.min(...v), max: Math.max(...v) } : null; };
 const show = (r, fmt) => (r ? (r.min === r.max ? fmt(r.min) : `${fmt(r.min)} to ${fmt(r.max)}`) : "n/a");
-const candidatesFor = (runs) => {
-  const asked = new Set(runs.flatMap((r) => [...(readJson(path.join(RES, r, "run.json"))?.candidates ?? []), ...Object.keys(results.scenarios[r] ?? {})]));
-  return [...(asked.size ? asked : plan?.candidates ?? [])].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+const candidatesFor = (s, runs) => {
+  const planned = plan?.scenarios?.includes(s) ? plan.candidates : [];
+  const asked = new Set([...planned, ...runs.flatMap((r) => [...(readJson(path.join(RES, r, "run.json"))?.candidates ?? []), ...Object.keys(results.scenarios[r] ?? {})])]);
+  return [...asked].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
 };
 const repeatGroups = Object.entries(groups).map(([s, runs]) => [s, [...runs].sort((a, b) => a.localeCompare(b, "en", { numeric: true }))])
   .filter(([, runs]) => !runs.some((r) => Object.values(results.scenarios[r] ?? {}).some((a) => a.kind === "idle")));
@@ -283,7 +288,7 @@ if (repeatGroups.length) {
     `${TOLERANCE.success_pp} percentage point, p50 and p95 within the larger of ${TOLERANCE.latency_ms} ms and ${TOLERANCE.latency_frac * 100}% of the lowest value, ` +
     `and upstream calls per request within ${TOLERANCE.calls_per_request}. A row is incomplete when any repeat is missing or failed.\n`;
   for (const [s, runs] of repeatGroups) {
-    const cands = candidatesFor(runs);
+    const cands = candidatesFor(s, runs);
     md += `\n### ${s} (${runs.length} ${runs.length === 1 ? "run" : "runs"})\n\n| candidate | success | p50 ms | p95 ms | stale reads | upstream calls per request | agree |\n|---|---|---|---|---|---|---|\n`;
     results.repeats[s] = {};
     for (const c of cands) {
@@ -325,7 +330,7 @@ results.expected = [];
 for (const [s, runSet] of Object.entries(groups)) {
   if (!EXPECTED[s]) continue;
   const runs = [...runSet].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
-  const cands = candidatesFor(runs);
+  const cands = candidatesFor(s, runs);
   for (const [c, bars] of Object.entries(EXPECTED[s])) {
     if (!cands.includes(c)) continue;
     for (const [metric, bound] of Object.entries(bars)) {
