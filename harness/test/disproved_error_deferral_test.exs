@@ -29,6 +29,19 @@ defmodule Lasso.Harness.DisprovedErrorDeferralTest do
           first.fleet
         end
 
+      deferred =
+        Settle.await("a read deferred behind the peer", fn ->
+          case call(tenant, fleets, "eth_getBalance") do
+            {response, [%{fleet: first}]} when first == backup.name -> {:ok, response}
+            _ -> :sampled
+          end
+        end)
+
+      assert %{"kind" => "disproved_error", "method" => "eth_getBalance", "hints" => [_]} =
+               deferred.body["lasso_meta"]["learning_decision"]
+
+      assert applied_deferrals(tenant) > 0
+
       # Only the sampled share (about 5%) still tries the deferred provider first.
       assert Enum.count(firsts, &(&1 == primary.name)) <= 6
 
@@ -104,11 +117,27 @@ defmodule Lasso.Harness.DisprovedErrorDeferralTest do
     for %{kind: :disproved_error} = hint <- Map.get(hints, :http, []), do: hint
   end
 
+  defp applied_deferrals(tenant) do
+    uri = URI.parse(tenant.rpc_url)
+
+    {:ok, %{status: 200, body: metrics}} =
+      Finch.build(:get, "#{uri.scheme}://#{uri.host}:#{uri.port}/metrics")
+      |> Finch.request(Lasso.Finch)
+
+    [_, count] =
+      Regex.run(
+        ~r/^lasso_provider_knowledge_applied_deferrals_total\{kind="disproved_error"\} (\d+)/m,
+        metrics
+      )
+
+    String.to_integer(count)
+  end
+
   defp call(tenant, fleets, method) do
     params = [unique_address(), "latest"]
 
     Settle.closed(
-      fn -> Rpc.call(Tenant.credentials(tenant), method, params) end,
+      fn -> Rpc.call(%{rpc_url: tenant.rpc_url <> "?include_meta=body"}, method, params) end,
       fleets,
       %{method: method, params: params}
     )

@@ -689,7 +689,7 @@ defmodule Lasso.RPC.RequestProjection do
   defp public_learning_decision(nil, _selected), do: nil
 
   defp public_learning_decision(%{kind: kind} = decision, selected)
-       when kind in [:method_refusal, :span_limit] do
+       when kind in [:method_refusal, :span_limit, :disproved_error] do
     decision
     |> Map.take([
       :kind,

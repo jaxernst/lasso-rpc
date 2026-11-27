@@ -98,7 +98,7 @@ defmodule Lasso.RPC.ProviderKnowledge.AppliedEffects do
   def totals do
     rows = :ets.tab2list(@table)
 
-    for kind <- [:method_refusal, :historical_depth, :span_limit] do
+    for kind <- [:method_refusal, :historical_depth, :span_limit, :disproved_error] do
       count =
         Enum.reduce(rows, 0, fn
           {{_, _, ^kind, _}, count}, total -> total + count

@@ -238,15 +238,19 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.DisprovedError do
 
   defp latest_ms(entry), do: max_optional(entry.disproved_at_ms, entry.served_at_ms)
 
-  # Deferring shapes outlast served-only ones, so successes never evict a deferral.
-  defp retain(shapes) when map_size(shapes) <= @max_shapes, do: shapes
-
+  # Deferring shapes outlast served-only ones, but one slot always holds the
+  # newest success, so it can retract a shape only a peer's image defers.
   defp retain(shapes) do
-    shapes
-    |> Enum.sort_by(fn {_shape, entry} -> {deferring?(entry), latest_ms(entry)} end, :desc)
-    |> Enum.take(@max_shapes)
-    |> Map.new()
+    {deferring, served} = Enum.split_with(shapes, fn {_shape, entry} -> deferring?(entry) end)
+    kept = newest(deferring, @max_shapes - min(length(served), 1))
+    Map.new(kept ++ newest(served, @max_shapes - length(kept)))
   end
+
+  defp newest(entries, count),
+    do:
+      entries
+      |> Enum.sort_by(fn {_shape, entry} -> latest_ms(entry) end, :desc)
+      |> Enum.take(count)
 
   defp max_optional(nil, value), do: value
   defp max_optional(value, nil), do: value

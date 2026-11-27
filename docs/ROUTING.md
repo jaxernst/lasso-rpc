@@ -419,8 +419,10 @@ owns feed that mechanism instead: authentication (credential health), rate
 limits and quota (capacity tiers and the quota latch), unknown methods (method
 refusal), missing blocks (head suitability), and typed span and history
 constraints (their learners). One disproval defers that credential (its
-learning subject, not its vendor) for the same method and request shape: every
-profile that routes to the same upstream URL shares it. The shape is the `eth_getLogs` span band and
+learning subject, not its vendor) for the same method and request shape.
+Profiles share a learning subject only when they reach the same endpoint with
+the same authorization headers and neither sets `sharing_mode: isolated`. The
+shape is the `eth_getLogs` span band and
 anchor, the historical resource and age band, or the method alone. The fact
 records the error code, the masked message fingerprint and the provider that
 served.
