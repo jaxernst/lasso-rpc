@@ -70,11 +70,26 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
     end)
   end
 
+  test "a steered send that fails still reaches an upstream the search passed over" do
+    world("skipped", [@block + 1, nil, @block + 1], fn tenant, fleets ->
+      [missing, unknown, failing] = fleets
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      Fleet.script(failing, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
+      half_open!(tenant, failing)
+
+      # Under priority the unknown upstream answers before the failing one is tried,
+      # so a send to all three means the steered send went ahead of it.
+      {response, sent} = read(tenant, fleets, "priority")
+      assert response.body["result"] == "0x10", inspect({response.body, sent})
+      assert sent == [missing.name, unknown.name, failing.name]
+    end)
+  end
+
   defp world(prefix, heads, fun) do
     fleets =
       for {head, i} <- Enum.with_index(heads, 1) do
         fleet = Fleet.start!(self(), "#{prefix}-#{i}")
-        Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(head)})
+        Fleet.script(fleet, "eth_blockNumber", [], head_answer(head))
         fleet
       end
 
@@ -123,11 +138,15 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
         %{method: "eth_getBalance", params: @params}
       )
 
+    # Sends come back grouped by fleet, in the order the fleets are passed.
     {response, Enum.map(sends, & &1.fleet)}
   end
 
   defp head_polled?(fleet),
     do: Enum.any?(Fleet.drain(fleet), &(&1.request["method"] == "eth_blockNumber"))
+
+  defp head_answer(nil), do: {:error, -32_603, "internal error"}
+  defp head_answer(head), do: {:answer, hex(head)}
 
   defp hex(n), do: "0x" <> Integer.to_string(n, 16)
 end

@@ -2034,7 +2034,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   # A missing-block error is no answer worth holding, so its extra send only
   # steers failover: the route whose fresh head reached the block goes next and
-  # the rest of the cursor stays behind it.
+  # the whole cursor stays behind it, attempted routes aside.
   defp recover_missing(
          %JError{} = error,
          outcome,
@@ -2046,10 +2046,10 @@ defmodule Lasso.RPC.RequestPipeline do
        ) do
     with nil <- NullRecovery.denial(ctx.execution_envelope),
          {:ok, envelope} = ExecutionEnvelope.spend_extra_send(ctx.execution_envelope),
-         {%Channel{} = alternate, rest, steered} <-
+         {%Channel{} = alternate, _rest, steered} <-
            alternate(cursor, %{ctx | execution_envelope: envelope}, routes, 8) do
       :ok = NullRecovery.decision(steered, :proposed)
-      ordinary_owner_error(outcome, channel, {alternate, rest}, steered, caller_guard)
+      ordinary_owner_error(outcome, channel, {alternate, cursor}, steered, caller_guard)
     else
       {nil, _rest, _ctx} ->
         decline_missing(
