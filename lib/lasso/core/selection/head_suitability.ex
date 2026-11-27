@@ -5,8 +5,8 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   A selection phase captures its evidence once from the scope's head snapshot,
   which carries every scope transport's latest observation and is refreshed when
-  observations are written: the observations, the round lags for a moving head,
-  the band and the chain's cadence. `assess/2` is pure over that capture:
+  observations are written: the observations, the round lags for a moving head
+  and the band. `assess/2` is pure over that capture:
 
   - `:against` needs a fresh observation at the qualified reference height
     with a different block hash, or:
@@ -19,19 +19,18 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     Routes no round measured, such as routes whose profile turns background
     observations off, are `:unknown`. Passive observations never change a
     moving-head verdict;
-  - for a fixed height, `:supports` needs fresh evidence at or above it, and
-    `:against` needs fresh evidence that stays short of it even when credited
-    with the blocks the chain could have produced since it was observed, at the
-    fastest cadence the chain has shown, or at twice the configured rate until
-    cadence is measured; without either, an exact request height uses the
-    observed height while a recovery height remains unknown;
+  - for a fixed height, fresh evidence at or above it `:supports` the route and
+    fresh evidence below it is `:against`. An observation's age earns no credit:
+    a route counts only the blocks it was seen to have;
   - everything else is `:unknown`.
 
   A verdict orders routes inside their availability tier and never excludes one.
+  Deferred routes go highest fresh observed height first, so when every route is
+  behind, the one nearest the requirement is tried first.
   """
 
   alias Lasso.BlockSync.{Observation, Registry}
-  alias Lasso.Observations.{HeadCadence, HeadComparison, HeadSnapshot}
+  alias Lasso.Observations.{HeadComparison, HeadSnapshot}
   alias Lasso.RPC.{ExecutionEnvelope, RequestAnalysis, RoutingPlan}
 
   # Methods whose omitted block parameter clients resolve to the moving head.
@@ -43,7 +42,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     debug_traceCall trace_call trace_callMany
   )
 
-  @enforce_keys [:requirement, :band, :cadence, :captured_at_ms, :evidence]
+  @enforce_keys [:requirement, :band, :captured_at_ms, :evidence]
   defstruct @enforce_keys
 
   @typedoc """
@@ -62,9 +61,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
           | :below_height
           | :branch_conflict
           | :behind_mark
-          | :within_credit
           | :unmeasured
-          | :cadence_unknown
           | :observation_stale
           | :no_observation
 
@@ -85,7 +82,6 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   @type t :: %__MODULE__{
           requirement: requirement(),
           band: non_neg_integer(),
-          cadence: HeadCadence.t(),
           captured_at_ms: integer(),
           evidence: %{route() => evidence()}
         }
@@ -122,8 +118,7 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   @doc """
   Captures one selection phase's evidence from the scope's head snapshot, or
-  returns `nil` when the request has no requirement. Cadence is a precomputed
-  scalar carried by the same snapshot; selection reads no cadence sample table.
+  returns `nil` when the request has no requirement.
   """
   @spec capture(
           RoutingPlan.t(),
@@ -161,7 +156,6 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     %__MODULE__{
       requirement: requirement,
       band: band,
-      cadence: HeadCadence.with_seed(nil, plan.head_scope.policy.block_time_ms, now_ms),
       captured_at_ms: now_ms,
       evidence: evidence
     }
@@ -245,27 +239,11 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     end
   end
 
-  defp judge(capture, observation) do
-    target = target_height(capture)
-    age_ms = max(capture.captured_at_ms - observation.observed_at_ms, 0)
+  defp judge(%__MODULE__{requirement: {_source, target}}, %{height: height})
+       when height >= target,
+       do: {:supports, :at_or_above_height}
 
-    cond do
-      observation.height >= target ->
-        {:supports, :at_or_above_height}
-
-      is_nil(capture.cadence.credit_block_time_ms) ->
-        without_cadence(capture.requirement)
-
-      observation.height + HeadCadence.credit_blocks(capture.cadence, age_ms) < target ->
-        {:against, :below_height}
-
-      true ->
-        {:unknown, :within_credit}
-    end
-  end
-
-  defp without_cadence({:request_height, _height}), do: {:against, :below_height}
-  defp without_cadence({:recovery_height, _height}), do: {:unknown, :cadence_unknown}
+  defp judge(_capture, _observation), do: {:against, :below_height}
 
   @doc "The height a fixed requirement needs. A moving head has none: rounds judge it by lag."
   @spec target_height(t()) :: non_neg_integer() | nil
@@ -289,6 +267,19 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
 
   @spec class(t() | nil, route()) :: class()
   def class(capture, route), do: capture |> classify(route) |> elem(0)
+
+  @doc """
+  The route's place inside its availability tier: its class, then, for a
+  deferred route, its fresh observed height, highest first. Other classes keep
+  strategy order.
+  """
+  @spec rank(t() | nil, route()) :: {class(), integer()}
+  def rank(capture, route), do: rank(capture, route, class(capture, route))
+
+  @doc "The route's rank from the class `classify/2` gave it."
+  @spec rank(t() | nil, route(), class()) :: {class(), integer()}
+  def rank(%__MODULE__{evidence: evidence}, route, 2), do: {2, -evidence[route].height}
+  def rank(_capture, _route, class), do: {class, 0}
 
   defp verdict_class(_requirement, :supports), do: 0
   defp verdict_class({:recovery_height, _height}, _verdict), do: 1

@@ -70,9 +70,12 @@ measured without waiting for the next tick.
 A profile with background observations off gets no round lag, so its
 moving-head reads keep strategy order even when another profile observes the
 same upstreams, and so do unobserved and stale routes. A read at a fixed block,
-in any profile, defers a route whose fresh observation stays short of that
-block even after crediting the blocks the chain could have produced since. A
-fresh route that reports the qualified reference height on a different block
+in any profile, defers a route whose fresh observation is below that block. An
+observation's age earns it no blocks, so a route a few blocks behind stays
+deferred through a missed poll. Deferred routes go highest observed height
+first: when every route was last seen short of the block, the nearest one is
+tried first. A route with no fresh observation keeps strategy order ahead of
+deferred routes. A fresh route that reports the qualified reference height on a different block
 hash is deferred the same way. Deferral never excludes a route, so when every
 current route fails or lacks the method, a lagging route still serves.
 

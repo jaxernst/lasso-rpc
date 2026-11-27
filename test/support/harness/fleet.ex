@@ -38,9 +38,12 @@ defmodule Lasso.Test.Harness.Fleet do
   def init({owner, name}) do
     ref = {__MODULE__, make_ref()}
 
+    # Cowboy closes an idle keep-alive connection after 5 s by default, which races
+    # head polls on the same interval and fails polls no test scripted.
     {:ok, _} =
       :cowboy.start_clear(ref, %{socket_opts: [ip: {127, 0, 0, 1}, port: 0]}, %{
-        env: %{dispatch: :cowboy_router.compile([{:_, [{:_, __MODULE__.Wire, self()}]}])}
+        env: %{dispatch: :cowboy_router.compile([{:_, [{:_, __MODULE__.Wire, self()}]}])},
+        request_timeout: 300_000
       })
 
     endpoint = %{

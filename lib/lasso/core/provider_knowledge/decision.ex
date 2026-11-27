@@ -31,7 +31,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
     :requirement,
     :target_height,
     :band,
-    :cadence,
     :omitted_evidence
   ]
 
@@ -404,18 +403,11 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
               band >= 0 and is_list(evidence) and length(evidence) <= 2 and
               is_integer(omitted) and omitted >= 0 do
     valid_common?(d) and is_map(Map.get(d, :orders)) and
-      optional_count?(Map.get(d, :target_height)) and valid_cadence?(Map.get(d, :cadence)) and
+      optional_count?(Map.get(d, :target_height)) and
       Enum.all?(evidence, &valid_head_evidence?/1)
   end
 
   defp valid_frame?(_decision), do: false
-
-  defp valid_cadence?(nil), do: true
-
-  defp valid_cadence?(%{source: source, block_time_ms: block_time_ms}),
-    do: source in [:measured, :seed, :unknown] and optional_count?(block_time_ms)
-
-  defp valid_cadence?(_cadence), do: false
 
   defp valid_head_evidence?(
          %{baseline_position: position, verdict: verdict, reason: reason, reached: reached} =
@@ -426,9 +418,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
            reason in [
              :below_height,
              :behind_mark,
-             :within_credit,
              :unmeasured,
-             :cadence_unknown,
              :observation_stale,
              :no_observation
            ] and

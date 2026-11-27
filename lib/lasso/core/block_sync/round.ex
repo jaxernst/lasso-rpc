@@ -21,12 +21,12 @@ defmodule Lasso.BlockSync.Round do
   show which one is wrong, so the higher one is the mark. Each upstream's lag is
   the mark less its own height, less the whole blocks the scope's configured
   block time fits between its answer and the mark's earliest answer, and never
-  below zero. Measured cadence is not consulted, so the credit is as good as the
-  configured block time; the band absorbs the rest. The lags go to
-  `Lasso.BlockSync.Registry` for `Lasso.RPC.Selection.HeadSuitability`. A scope
-  with fewer answers keeps the lags it has, so neither another profile's rounds
-  nor an upstream that errors or skips replaces a verdict, and an answer from an
-  upstream the catalog no longer routes judges nothing.
+  below zero. The credit is as good as the configured block time; the band
+  absorbs the rest. The lags go to `Lasso.BlockSync.Registry` for
+  `Lasso.RPC.Selection.HeadSuitability`. A scope with fewer answers keeps the
+  lags it has, so neither another profile's rounds nor an upstream that errors
+  or skips replaces a verdict, and an answer from an upstream the catalog no
+  longer routes judges nothing.
 
   `start_now/1` starts a round at once, so an upstream that switches between
   `newHeads` and HTTP polling, or whose `newHeads` head moves backward, is

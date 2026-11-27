@@ -743,7 +743,6 @@ defmodule Lasso.RPC.RequestProjection do
       requirement: decision.requirement,
       target_height: decision.target_height,
       band: decision.band,
-      cadence: Map.get(decision, :cadence),
       evidence: decision.evidence,
       omitted_evidence: decision.omitted_evidence,
       intervention_count: count,

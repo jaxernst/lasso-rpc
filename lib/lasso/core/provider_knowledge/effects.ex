@@ -74,7 +74,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
   Routes deferred by neither come first, head class 0 before class 1. Routes
   with head evidence against suitability or an `on`-mode learned deferral
-  follow; the returned set names them so they can wait behind the rest of their
+  follow, those with head evidence against them highest observed height first;
+  the returned set names them so they can wait behind the rest of their
   availability tier. Shadow-mode effects never change the order.
   """
   @spec order_with_decision(list(), term(), binary(), map()) ::
@@ -104,29 +105,31 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         context
       )
 
-    {classes, verdicts} =
+    {ranks, verdicts} =
       if head do
         descriptors
         |> Enum.map(fn descriptor ->
-          {class, verdict, reason} = HeadSuitability.classify(head, Decision.route(descriptor))
-          {class, {verdict, reason}}
+          route = Decision.route(descriptor)
+          {class, verdict, reason} = HeadSuitability.classify(head, route)
+          {HeadSuitability.rank(head, route, class), {verdict, reason}}
         end)
         |> Enum.unzip()
       else
-        {Enum.map(descriptors, fn _descriptor -> 0 end), Enum.map(descriptors, fn _ -> nil end)}
+        {Enum.map(descriptors, fn _descriptor -> {0, 0} end),
+         Enum.map(descriptors, fn _ -> nil end)}
       end
 
-    entries = Enum.zip([descriptors, classes, learned])
+    entries = Enum.zip([descriptors, ranks, learned])
 
     applied =
       entries
-      |> Enum.sort_by(fn {_descriptor, class, learned?} ->
-        {class == 2 or is_map(learned?), class, is_map(learned?)}
+      |> Enum.sort_by(fn {_descriptor, {class, height}, learned?} ->
+        {class == 2 or is_map(learned?), class, is_map(learned?), height}
       end)
       |> Enum.map(&elem(&1, 0))
 
     deferred =
-      for {descriptor, class, learned?} <- entries,
+      for {descriptor, {class, _height}, learned?} <- entries,
           class == 2 or is_map(learned?),
           into: MapSet.new(),
           do: Decision.route(descriptor)
@@ -143,7 +146,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
          [
            historical_decision(predictions, historical_mode, plan, method, context, order),
            quota_decision(plan, method, context, order),
-           head_decision(head, Enum.zip([descriptors, classes, learned, verdicts]), plan, order)
+           head_decision(head, Enum.zip([descriptors, ranks, learned, verdicts]), plan, order)
          ])
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&Decision.capture/1)
@@ -294,11 +297,11 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
       proposed =
         entries
-        |> Enum.sort_by(fn {_descriptor, class, _learned?, _verdict} -> class end)
+        |> Enum.sort_by(fn {_descriptor, rank, _learned?, _verdict} -> rank end)
         |> Enum.map(&elem(&1, 0))
 
       evidence =
-        for {descriptor, _class, _learned?, {verdict, reason}} <- entries,
+        for {descriptor, _rank, _learned?, {verdict, reason}} <- entries,
             verdict != :supports do
           route = Decision.route(descriptor)
           observation = Map.get(head.evidence, route)
@@ -325,7 +328,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         requirement: requirement_source(head.requirement),
         target_height: HeadSuitability.target_height(head),
         band: head.band,
-        cadence: %{source: head.cadence.source, block_time_ms: head.cadence.block_time_ms},
         evidence: Enum.take(evidence, @max_head_evidence),
         omitted_evidence: max(length(evidence) - @max_head_evidence, 0),
         order_scope: :materialized_candidates,

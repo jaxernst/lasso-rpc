@@ -523,8 +523,8 @@ it against what the request needs: a numeric block, the moving head, or
 nothing. For the moving head, a route is deferred when the latest head round
 that judged its profile found its upstream more than the agreement band behind
 that round's mark; passive observations never change that verdict. For a
-numeric block, a route is deferred when its fresh observation stays short of
-the block even after crediting the blocks the chain could have produced since.
+numeric block, a route is deferred when its fresh observation is below the
+block, and deferred routes go highest observed height first.
 A route fresh at the qualified reference height on a different hash is
 deferred too. Deferral stays within the route's health tier and never excludes
 it; see [Head freshness](ROUTING.md#head-freshness). Operator

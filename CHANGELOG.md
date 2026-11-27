@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A read of past state behind full nodes that keep only recent state now reaches an archive. A pruned-state refusal (such as geth's `missing trie node`) to a replay-safe state, proof or trace read below the accepted head no longer spends one of the read's dispatches; the walk stays bounded by the admission cap and the request deadline. Block, receipt and log reads, and reads at the head, still spend it.
 - Learned historical depth applies per resource class instead of per method, so a cutoff learned from `eth_getBalance` refusals also covers `eth_call`, `eth_getCode` and `eth_getStorageAt` of the same state. `eth_getBalance` joins the `state` class. In the trial kit's pruned-history scenario (L1), refusals fell from 20 to 25 per run to 10 to 16.
+- Reads at a fixed block defer a route whose fresh head observation is below the block, with no credit for the blocks the chain could have produced since. The credit ran at twice the configured `block_time_ms`, or as if blocks took 6 s without one, so a route a few blocks behind looked caught up after a missed head poll and served blocks it lacked. When every route was last seen below the block, the highest goes first instead of the strategy's order.
+
+### Removed
+
+- The `cadence` field of the `head_suitability` learning decision in `lasso_meta`, and its `within_credit` and `cadence_unknown` evidence reasons.
 
 ### Compatibility
 
