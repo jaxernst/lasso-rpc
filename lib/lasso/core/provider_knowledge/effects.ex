@@ -76,15 +76,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   with head evidence against suitability or an `on`-mode learned deferral
   follow; the returned set names them so they can wait behind the rest of their
   availability tier. Shadow-mode effects never change the order.
-
-  When a learned deferral applies, the fourth element names the routes only a
-  learned effect deferred and the order head suitability alone would give, so
-  a request can stop honoring learned deferrals after a failed attempt.
   """
   @spec order_with_decision(list(), term(), binary(), map()) ::
-          {list(), MapSet.t(HeadSuitability.route()), [map()],
-           %{routes: MapSet.t(HeadSuitability.route()), order: list()} | nil}
-  def order_with_decision([], _plan, _method, _context), do: {[], MapSet.new(), [], nil}
+          {list(), MapSet.t(HeadSuitability.route()), [map()]}
+  def order_with_decision([], _plan, _method, _context), do: {[], MapSet.new(), []}
 
   def order_with_decision(descriptors, plan, method, context) do
     historical_mode = mode(:historical_depth, plan.profile)
@@ -138,25 +133,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
     order = %{baseline: descriptors, applied: applied}
 
-    yield =
-      if Enum.any?(learned, &is_map/1) do
-        head_only = entries |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 0))
-
-        Lasso.RPC.ProviderKnowledge.AppliedEffects.record(
-          plan.profile,
-          head_only,
-          applied,
-          learned
-        )
-
-        routes =
-          for {descriptor, class, learned?} <- entries,
-              class != 2 and is_map(learned?),
-              into: MapSet.new(),
-              do: Decision.route(descriptor)
-
-        %{routes: routes, order: head_only}
-      end
+    if Enum.any?(learned, &is_map/1) do
+      head_only = entries |> Enum.sort_by(&elem(&1, 1)) |> Enum.map(&elem(&1, 0))
+      Lasso.RPC.ProviderKnowledge.AppliedEffects.record(plan.profile, head_only, applied, learned)
+    end
 
     decisions =
       (capability_decisions(learned, plan, method, context, order) ++
@@ -168,7 +148,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&Decision.capture/1)
 
-    {applied, deferred, decisions, yield}
+    {applied, deferred, decisions}
   end
 
   defp learned_deferrals(entries, historical_mode, plan, method, context) do

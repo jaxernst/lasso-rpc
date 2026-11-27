@@ -49,11 +49,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 request_facts: nil,
                 shadow_proposals: [],
                 deferred_routes: MapSet.new(),
-                learned_yield: nil,
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 excluded_fallback: nil,
-                dispatched?: false,
                 diversity_seen: nil,
                 diversity_ordered_tiers: MapSet.new(),
                 supported?: false,
@@ -133,7 +131,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
     effect_context = effect_context(opts, method, plan, filters)
 
-    {ordered, deferred_routes, decisions, learned_yield} =
+    {ordered, deferred_routes, decisions} =
       Effects.order_with_decision(descriptors, plan, method, effect_context)
 
     %__MODULE__{
@@ -155,7 +153,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         ),
       descriptors: ordered,
       deferred_routes: deferred_routes,
-      learned_yield: learned_yield,
       limit: limit,
       deadline_us: Keyword.get(opts, :deadline_us),
       candidate_labels: candidate_labels,
@@ -189,7 +186,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     limit = Keyword.get(opts, :limit, 1000)
     effect_context = effect_context(opts, method, plan, filters)
 
-    {ordered, deferred_routes, decisions, learned_yield} =
+    {ordered, deferred_routes, decisions} =
       Effects.order_with_decision(descriptors, plan, method, effect_context)
 
     %__MODULE__{
@@ -204,7 +201,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       shadow_proposals: Effects.shadow_proposals(descriptors, plan, method, effect_context),
       descriptors: ordered,
       deferred_routes: deferred_routes,
-      learned_yield: learned_yield,
       limit: limit,
       deadline_us: Keyword.get(opts, :deadline_us),
       candidate_labels: [],
@@ -279,48 +275,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     do: next_with_evidence(%{cursor | channel_lookup: :cached})
 
   defp current?(cursor), do: Catalog.snapshot() == cursor.snapshot
-
-  @doc """
-  Stops honoring learned effects for the rest of the request: routes only a
-  learned effect deferred return to the order head suitability alone gives,
-  and a learned method refusal no longer holds its route back.
-  """
-  @spec yield_learned_deferrals(t()) :: t()
-  def yield_learned_deferrals(%__MODULE__{learned_yield: yield} = cursor)
-      when yield in [nil, :yielded],
-      do: cursor
-
-  def yield_learned_deferrals(
-        %__MODULE__{learned_yield: %{routes: routes, order: order}} = cursor
-      ) do
-    positions = order |> Enum.map(&Decision.route/1) |> Enum.with_index() |> Map.new()
-    position = &Map.get(positions, Decision.route(&1))
-
-    %{
-      cursor
-      | learned_yield: :yielded,
-        deferred_routes: MapSet.difference(cursor.deferred_routes, routes),
-        descriptors: Enum.sort_by(cursor.descriptors, position),
-        supported_deferred: requeue(cursor.supported_deferred, routes, position),
-        unsupported_deferred: requeue(cursor.unsupported_deferred, routes, position),
-        diversity_ordered_tiers: MapSet.new()
-    }
-  end
-
-  defp requeue(queues, routes, position) do
-    Enum.reduce(1..4, queues, fn tier, queues ->
-      {moved, kept} =
-        queues[{tier, :deferred}]
-        |> :queue.to_list()
-        |> Enum.split_with(&MapSet.member?(routes, Decision.route(&1)))
-
-      ordinary = Enum.sort_by(:queue.to_list(queues[{tier, :ordinary}]) ++ moved, position)
-
-      queues
-      |> Map.put({tier, :deferred}, :queue.from_list(kept))
-      |> Map.put({tier, :ordinary}, :queue.from_list(ordinary))
-    end)
-  end
 
   @spec exclude_provider(t(), String.t()) :: t()
   def exclude_provider(%__MODULE__{} = cursor, provider_id) when is_binary(provider_id) do
@@ -463,8 +417,10 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
+  # A route a learned refusal held back is the last resort: tried only once no
+  # other candidate remains, while the request still has dispatch budget.
   defp pop_deferred(%{excluded_fallback: channel} = cursor, _field, [])
-       when not is_nil(channel) and (not cursor.dispatched? or cursor.learned_yield == :yielded),
+       when not is_nil(channel),
        do: {:ok, channel, %{cursor | returned: cursor.returned + 1, excluded_fallback: nil}}
 
   defp pop_deferred(cursor, _field, []), do: {:done, cursor}
@@ -498,7 +454,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     provider = Enum.find(cursor.plan.providers, &(&1.instance_id == channel.instance_id))
 
     refused? =
-      (cursor.learned_yield != :yielded and provider) &&
+      provider &&
         Effects.method_refused?(
           {provider, channel.transport},
           cursor.plan,
@@ -578,11 +534,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         HeadSuitability.classify(cursor.effect_context.head_suitability, Decision.route(route)),
         0
       )
-
-  @doc "Records a dispatch so learned recovery cannot add another send."
-  @spec attempted_provider(t(), Channel.t()) :: t()
-  def attempted_provider(cursor, _channel),
-    do: %{cursor | dispatched?: true, excluded_fallback: nil}
 
   defp return_allowed(channel, cursor) do
     if current?(cursor) do

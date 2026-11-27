@@ -1,6 +1,6 @@
 # core-routing-12
 
-- `core-routing-12` A route that a learned method refusal or span limit moved behind its peers still serves a read when every peer ahead of it fails, within the read's dispatch budget.
+- `core-routing-12` A route held back by a learned method refusal is a last resort: it serves a read once every other route has failed and dispatch budget remains, and it never goes ahead of an ordinary route.
 
 [Area and shared preconditions](README.md).
 
@@ -8,8 +8,8 @@ Guard: `harness/test/deferral_budget_test.exs` uses real HTTP RPC and owned fixt
 
 ## Driving it through surfaces
 
-Configure an owned file profile with four fixture upstreams, A to D, in priority order.
+Configure an owned file profile with fixture upstreams in priority order. Train each refusing route with reads pinned to it until its operator knowledge report carries the learned hint.
 
-- **core-routing-12.** Pin reads to A while it refuses them, until A's operator knowledge report carries the learned hint: `-32601 method not found` on `eth_getCode` for the method refusal, and `-32600` with a 10-block range limit on a 500-block `eth_getLogs` for the span limit. Then script A to answer and B, C and D to answer `-32000 upstream could not serve this request`. Each of ten reads through the priority URL must return A's answer.
+- **core-routing-12.** With two routes, A learned to refuse `eth_getCode` with `-32601 method not found` and then answers it, while B answers `-32000 upstream could not serve this request`. A read through the priority URL must send to both and return A's answer. With six routes, A and B learned to refuse (`eth_getCode` with `-32601`, or a 500-block `eth_getLogs` with a 10-block range limit) and keep refusing, C and D answer HTTP 503, and E and F serve. Each of three reads must be served by E after sends to C, D and E only.
 
-Before this behaviour every read sent to B, C and D, spent its dispatch budget of three, and returned the `-32000` error without reaching A.
+Before this behaviour the two-route read returned B's error after one send, with dispatch budget unspent.
