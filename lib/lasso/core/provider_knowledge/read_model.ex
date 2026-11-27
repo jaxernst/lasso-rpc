@@ -61,21 +61,24 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
     :ok
   end
 
-  # A success can only retract a disproval this node already holds, so ordinary
-  # traffic never allocates disproval rows.
+  # A success can only retract a shape this node already holds, local or
+  # imported, so ordinary traffic never allocates disproval rows or shapes.
   defp evidence_key(DisprovedError, table, evidence) do
-    case DisprovedError.key(evidence) do
-      :skip ->
-        :skip
-
-      key ->
-        if :ets.member(table, {:local, key}) or :ets.member(table, {:imported, key}),
-          do: key,
-          else: :skip
+    with key when key != :skip <- DisprovedError.key(evidence),
+         true <- holds_shape?(table, key, evidence.shape) do
+      key
+    else
+      _ -> :skip
     end
   end
 
   defp evidence_key(learner, _table, evidence), do: learner.key(evidence)
+
+  defp holds_shape?(table, key, shape) do
+    Enum.any?([:local, :imported], fn source ->
+      match?(%{shapes: %{^shape => _}}, prediction_state(table, source, key))
+    end)
+  end
 
   @spec lookup(module(), term(), :local | :imported) :: {:ok, term()} | :unknown
   def lookup(learner, key, source \\ :local) when source in [:local, :imported] do

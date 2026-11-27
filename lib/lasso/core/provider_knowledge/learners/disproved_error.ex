@@ -5,8 +5,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.DisprovedError do
   One disproval is enough to defer that credential behind its peers for matching
   requests, because deferral only reorders. Each shape expires on its own, and
   an accepted success of the same shape from the deferred credential retracts it.
-  The read model admits a success only for a key this node already holds, local
-  or imported, so ordinary traffic never creates rows here. A success on a shape
+  The read model admits a success only for a shape this node already holds,
+  local or imported, so ordinary traffic never creates rows or shapes here. A success on a shape
   only a peer's image holds is kept as a served-only entry, so the merged
   deferral retracts here and the recovery publishes back to that peer.
   """
@@ -238,19 +238,16 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.DisprovedError do
 
   defp latest_ms(entry), do: max_optional(entry.disproved_at_ms, entry.served_at_ms)
 
-  # Deferring shapes outlast served-only ones, but one slot always holds the
-  # newest success, so it can retract a shape only a peer's image defers.
-  defp retain(shapes) do
-    {deferring, served} = Enum.split_with(shapes, fn {_shape, entry} -> deferring?(entry) end)
-    kept = newest(deferring, @max_shapes - min(length(served), 1))
-    Map.new(kept ++ newest(served, @max_shapes - length(kept)))
-  end
+  # Successes are admitted only for shapes some image holds, so the newest
+  # entries are the ones still worth keeping, deferring or recovered.
+  defp retain(shapes) when map_size(shapes) <= @max_shapes, do: shapes
 
-  defp newest(entries, count),
-    do:
-      entries
-      |> Enum.sort_by(fn {_shape, entry} -> latest_ms(entry) end, :desc)
-      |> Enum.take(count)
+  defp retain(shapes) do
+    shapes
+    |> Enum.sort_by(fn {_shape, entry} -> latest_ms(entry) end, :desc)
+    |> Enum.take(@max_shapes)
+    |> Map.new()
+  end
 
   defp max_optional(nil, value), do: value
   defp max_optional(value, nil), do: value
