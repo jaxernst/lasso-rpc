@@ -1,0 +1,30 @@
+{
+  "S2": {
+    "lasso": { "success_after_30s": { "min": 0.99 } },
+    "lasso-fastest": { "success_after_30s": { "min": 0.99 } }
+  },
+  "S4": {
+    "lasso-fastest": { "stale_rate": { "max": 0.02 } },
+    "lasso-bf": { "stale_rate": { "max": 0.02 } }
+  },
+  "S9b": {
+    "lasso": { "sends_delivered": { "min": 1 } },
+    "lasso-fastest": { "sends_delivered": { "min": 1 } },
+    "lasso-bf": { "sends_delivered": { "min": 1 } },
+    "lasso-lb": { "sends_delivered": { "min": 1 } },
+    "lasso-learned": { "sends_delivered": { "min": 1 } },
+    "lasso-unlearned": { "sends_delivered": { "min": 1 } }
+  },
+  "S9m": {
+    "lasso": { "sends_delivered": { "min": 1 } },
+    "lasso-fastest": { "sends_delivered": { "min": 1 } },
+    "lasso-bf": { "sends_delivered": { "min": 1 } },
+    "lasso-lb": { "sends_delivered": { "min": 1 } },
+    "lasso-learned": { "sends_delivered": { "min": 1 } },
+    "lasso-unlearned": { "sends_delivered": { "min": 1 } }
+  },
+  "S12": {
+    "lasso-fastest": { "sent_to_hang_after_30s": { "max": 0.02 } },
+    "lasso-lb": { "sent_to_hang_after_30s": { "max": 0.02 } }
+  }
+}
