@@ -100,6 +100,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Constraint do
 
   def kind(_), do: nil
 
+  @doc "Whether an outcome refuses pruned state: a recognized archival constraint."
+  @spec pruned_state?(map()) :: boolean()
+  def pruned_state?(outcome), do: kind(outcome) == :archival
+
   defp request_constraint(%JError{resolution: %{constraint_claim: :block_span}}),
     do: :block_range
 

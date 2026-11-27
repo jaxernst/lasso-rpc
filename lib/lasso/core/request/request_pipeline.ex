@@ -1381,6 +1381,9 @@ defmodule Lasso.RPC.RequestPipeline do
             ) ->
           ExecutionEnvelope.exclude_refused_dispatch(ctx.execution_envelope)
 
+        pruned_state_refusal?(ctx, outcome) ->
+          ExecutionEnvelope.exclude_refused_dispatch(ctx.execution_envelope)
+
         true ->
           ctx.execution_envelope
       end
@@ -1442,6 +1445,25 @@ defmodule Lasso.RPC.RequestPipeline do
         %{ctx | non_budget_attempts: ctx.non_budget_attempts + 1}
     end
   end
+
+  # A recognized pruned-state answer to a read of a past block executed nothing
+  # and names why, so the read walks past full nodes to an archive within the
+  # admission cap. History reads keep spending the budget.
+  defp pruned_state_refusal?(ctx, outcome) do
+    ctx.execution_envelope.execution_safety == :replay_safe and
+      historical_state_read?(ctx) and
+      Lasso.RPC.ProviderKnowledge.Constraint.pruned_state?(outcome)
+  end
+
+  # A block hash names a block that already exists. Any other selector counts
+  # when its lowest fixed block is below the phase's accepted head.
+  defp historical_state_read?(%{block_facts: %{resource: resource} = facts} = ctx)
+       when resource in [:state, :proofs, :traces] do
+    match?(%{block: {:hash, _}}, facts) or
+      Lasso.RPC.RequestFacts.before_reference?(ctx.request_facts)
+  end
+
+  defp historical_state_read?(_ctx), do: false
 
   defp qualify_response(
          %{fact: %AttemptTerminal.Response{kind: :success}, result: {:ok, result, _io_ms}},

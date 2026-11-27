@@ -2,17 +2,20 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
   @moduledoc """
   Retained history observations classified off path as an age cutoff, a height
   floor, or non-monotone evidence withheld from routing. Age wins monotone ties.
+  One state per provider, partition and resource class: an `eth_call` refusal
+  and an `eth_getBalance` refusal at the same depth describe the same pruned
+  state. `method` is the latest observed method, kept as a revalidation fixture.
   Request readers consume the cached hint, never traverse observations.
   """
   @behaviour Lasso.RPC.ProviderKnowledge.Learner
   alias Lasso.RPC.ProviderKnowledge.Evidence
   alias Lasso.RPC.ProviderKnowledge.Stats.Bracket
-  @version 3
+  @version 4
   @retention_ms :timer.hours(24 * 30)
   @freshness_ms :timer.minutes(30)
   @max_state_bytes 16_384
   @enforce_keys [:key, :epoch, :bracket]
-  defstruct @enforce_keys ++ [:observed_at_ms, :hint, :memory, classification: :unknown]
+  defstruct @enforce_keys ++ [:method, :observed_at_ms, :hint, :memory, classification: :unknown]
   @type t :: %__MODULE__{}
 
   @impl true
@@ -21,12 +24,12 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
   @impl true
   def key(%Evidence{historical_resource: resource, method: method} = evidence)
       when is_binary(method) do
-    if resource in [:blocks, :balance, :state, :logs, :receipts, :proofs, :traces] and
+    if resource in Lasso.RPC.RequestAnalysis.resources() and
          ((is_integer(evidence.historical_age) and evidence.historical_age >= 0) or
             (not is_nil(Map.get(evidence, :historical_height)) and
                Bracket.valid_height?(evidence.historical_height))) and
          observation_kind(evidence) != :skip,
-       do: {evidence.subject, evidence_partition(evidence), {resource, method}},
+       do: {evidence.subject, evidence_partition(evidence), resource},
        else: :skip
   end
 
@@ -82,6 +85,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
                     observation_id(evidence.request_nonce),
                     Map.get(evidence, :historical_height)
                   ),
+                method: evidence.method,
                 observed_at_ms: max_optional(state.observed_at_ms, evidence.observed_at_ms)
             }
             |> classify(System.system_time(:millisecond))
@@ -103,13 +107,18 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
     %{
       left
       | bracket: Bracket.merge(left.bracket, right.bracket),
+        method:
+          if((right.observed_at_ms || 0) > (left.observed_at_ms || 0),
+            do: right.method || left.method,
+            else: left.method || right.method
+          ),
         observed_at_ms: max_optional(left.observed_at_ms, right.observed_at_ms)
     }
     |> classify(System.system_time(:millisecond))
   end
 
   @impl true
-  def hints(%__MODULE__{key: {_, _, {resource, _}}, hint: hint}, {:historical_depth, resource})
+  def hints(%__MODULE__{key: {_, _, resource}, hint: hint}, {:historical_depth, resource})
       when is_map(hint) do
     if hint.expires_at_ms > System.system_time(:millisecond), do: [hint], else: []
   end
@@ -117,7 +126,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
   def hints(_, _), do: []
 
   @impl true
-  def publication(%__MODULE__{key: {_, _, {resource, _}}} = state) do
+  def publication(%__MODULE__{key: {_, _, resource}} = state) do
     hints = hints(state, {:historical_depth, resource})
 
     recovery =
@@ -194,7 +203,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
   @impl true
   def decode(payload) when is_binary(payload) and byte_size(payload) <= @max_state_bytes do
     case :erlang.binary_to_term(payload, [:safe]) do
-      {version, %__MODULE__{} = state} when version in [2, @version] ->
+      {@version, %__MODULE__{} = state} ->
         state = struct(__MODULE__, Map.from_struct(state))
         state = %{state | bracket: Bracket.normalize(state.bracket)}
 
@@ -202,8 +211,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
           do: {:ok, classify(state, System.system_time(:millisecond))},
           else: {:error, :invalid}
 
-      {1, %__MODULE__{}} ->
-        {:error, {:unsupported_version, 1}}
+      {version, %__MODULE__{}} when is_integer(version) ->
+        {:error, {:unsupported_version, version}}
 
       _ ->
         {:error, :invalid}
@@ -261,7 +270,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
         true -> {:unknown, nil}
       end
 
-    {_, _, {resource, method}} = state.key
+    {_, _, resource} = state.key
+    method = state.method
 
     hint =
       if is_map(bound),
@@ -283,12 +293,12 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
           expires_at_ms: bound.earliest_at_ms + @freshness_ms
         }
 
-    memory = retained_memory(state.key, coordinate, hint, failures, successes)
+    memory = retained_memory(state.key, method, coordinate, hint, failures, successes)
 
     %{state | bracket: bracket, classification: coordinate, hint: hint, memory: memory}
   end
 
-  defp retained_memory({_, partition, {resource, method}}, coordinate, hint, failures, successes) do
+  defp retained_memory({_, partition, resource}, method, coordinate, hint, failures, successes) do
     # Recovery retracts a failed interval only when the newer successful request
     # contains it. A point or overlapping range cannot clear another range.
     unresolved =
@@ -377,14 +387,15 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.HistoricalDepth do
 
   defp valid_state?(
          %__MODULE__{
-           key: {subject, partition, {resource, method}},
+           key: {subject, partition, resource},
+           method: method,
            bracket: %Bracket{ttl_ms: @retention_ms}
          } = state
        ) do
     is_binary(subject) and byte_size(subject) in 1..128 and
       partition in Lasso.RPC.RoutingEvidence.Workload.partitions() and
-      resource in [:blocks, :balance, :state, :logs, :receipts, :proofs, :traces] and
-      method in Lasso.RPC.MethodRegistry.all_methods() and
+      resource in Lasso.RPC.RequestAnalysis.resources() and
+      (is_nil(method) or method in Lasso.RPC.MethodRegistry.all_methods()) and
       is_integer(state.epoch) and state.epoch >= 0 and
       (is_nil(state.observed_at_ms) or
          (is_integer(state.observed_at_ms) and state.observed_at_ms >= 0)) and

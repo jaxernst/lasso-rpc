@@ -120,9 +120,16 @@ dispatch. Because the final candidate is still tried, a provider that starts
 serving a method again is found by ordinary traffic.
 
 Evidence belongs to the configured endpoint, credentials, transport and sharing
-scope. Method refusal is method-specific. Historical hints are method- and
-resource-specific and need a qualified request age plus fresh failure witnesses;
-head lag, empty results and zero values do not establish missing history. Span
+scope. Method refusal is method-specific. A historical hint belongs to one
+resource class (state, proofs, traces, blocks, receipts or logs), so an
+`eth_call` refusal and an `eth_getBalance` refusal at the same depth describe the
+same pruned state. Hints need a qualified request age plus fresh failure
+witnesses; head lag, empty results and zero values do not establish missing
+history. A recognized pruned-state refusal (such as geth's `missing trie node`)
+to a replay-safe state, proof or trace read of a block below the accepted head
+does not spend the read's dispatch budget, so the read can reach an archive
+behind several full nodes; the deadline and the admission cap still bound it.
+Block, receipt and log reads keep spending the budget. Span
 learning uses numeric block ranges and explicit block-span failures; result-volume
 limits and mixed or ambiguous wording do not establish a span boundary.
 

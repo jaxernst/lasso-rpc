@@ -19,7 +19,7 @@ defmodule Lasso.RPC.SelectionFilters do
           include_half_open: boolean(),
           exclude_rate_limited: boolean(),
           requires_archival: boolean(),
-          historical_resource: Lasso.RPC.HistoricalCoverage.resource(),
+          historical_resource: Lasso.RPC.RequestAnalysis.resource(),
           historical_height: non_neg_integer() | nil,
           reference_height: non_neg_integer() | nil,
           request_facts: Lasso.RPC.RequestFacts.t() | nil,
