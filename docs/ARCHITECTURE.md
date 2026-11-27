@@ -526,8 +526,11 @@ that round's mark; passive observations never change that verdict. For a
 numeric block, a route is deferred when its fresh observation stays short of
 the block even after crediting the blocks the chain could have produced since.
 A route fresh at the qualified reference height on a different hash is
-deferred too. Deferral stays within the route's health tier and never excludes
-it; see [Head freshness](ROUTING.md#head-freshness). Operator
+deferred too. Initial selection defers a route only within its health tier.
+Once a request gets a missing-block error for its block, every later pick in
+that request moves the routes whose fresh head stays short of the block behind
+every other remaining route, across tiers. Neither step excludes a route; see
+[Head freshness](ROUTING.md#head-freshness). Operator
 assessment is separate: the dashboard compares HTTP observations with the
 reference captured before their poll and WebSocket observations with the
 current qualified reference, using `monitoring.lag_alert_threshold_blocks`. A

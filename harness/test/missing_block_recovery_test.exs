@@ -145,6 +145,24 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
     end
   end
 
+  test "a laggard stays behind the supporter after an ordinary failure follows the missing-block error" do
+    behind = @block - 1_001
+
+    world("after-503", [@block + 1, nil, behind, @block + 1], fn tenant, fleets ->
+      [missing, unknown, lagging, supporter] = fleets
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      Fleet.script(unknown, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
+      Fleet.script(lagging, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      half_open!(tenant, supporter)
+
+      # The unknown route's 503 carries no head evidence, so a read that forgot the
+      # missing-block error would spend its third dispatch on the laggard.
+      {response, sent} = read(tenant, fleets, "priority")
+      assert response.body["result"] == "0x10", inspect({response.body, sent})
+      assert sent == [missing.name, unknown.name, supporter.name]
+    end)
+  end
+
   defp world(prefix, heads, fun) do
     fleets =
       for {head, i} <- Enum.with_index(heads, 1) do

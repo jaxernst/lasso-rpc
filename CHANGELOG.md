@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- After a missing-block error, such as `-32000 header not found` for a block the upstream has not reached, failover now tries upstreams whose fresh head stays short of the block after every other remaining upstream, which keep their cursor order. A read no longer spends its dispatch budget on lagging upstreams before reaching one that has the block. A lagging upstream that has caught up since its last head poll still serves, and a read never sends more than before (#458).
+- After a missing-block error, such as `-32000 header not found` for a block the upstream has not reached, every later failover pick in that request tries upstreams whose fresh head stays short of the block after every other remaining upstream, which keep their cursor order. A read no longer spends its dispatch budget on lagging upstreams before reaching one that has the block. A lagging upstream that has caught up since its last head poll still serves, and a read never sends more than before (#458).
 
 ### Compatibility
 

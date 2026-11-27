@@ -732,11 +732,41 @@ defmodule Lasso.RPC.RequestPipeline do
     {selected, remaining, labels, ctx}
   end
 
-  defp pop_candidate([%Channel{} = channel | rest], ctx), do: {channel, rest, ctx}
-  defp pop_candidate([], ctx), do: {nil, [], ctx}
-  defp pop_candidate({%Channel{} = channel, rest}, ctx), do: {channel, rest, ctx}
+  defp pop_candidate(source, %{missing_block_head: nil} = ctx), do: next_candidate(source, ctx)
+  defp pop_candidate(source, ctx), do: pop_reaching(source, ctx, [])
 
-  defp pop_candidate(%CandidateCursor{} = cursor, ctx) do
+  # After a missing-block error, every later pick tries the routes whose fresh head
+  # stays short of the block after every other remaining route. A head observation
+  # can trail an upstream that has since caught up, so those routes stay reachable.
+  # A branch conflict at the head says nothing about an older block, so it keeps
+  # its place.
+  defp pop_reaching(source, ctx, behind) do
+    case next_candidate(source, ctx) do
+      {%Channel{} = channel, remaining, ctx} ->
+        route = {channel.instance_id, channel.transport}
+
+        if match?(
+             {_class, :against, :below_height},
+             HeadSuitability.classify(ctx.missing_block_head, route)
+           ),
+           do: pop_reaching(remaining, ctx, [channel | behind]),
+           else: {channel, demote(remaining, Enum.reverse(behind)), ctx}
+
+      {nil, remaining, ctx} ->
+        case Enum.reverse(behind) do
+          [] -> {nil, remaining, ctx}
+          [channel | rest] -> {channel, demote(remaining, rest), ctx}
+        end
+    end
+  end
+
+  defp demote(%CandidateCursor{} = cursor, behind), do: CandidateCursor.demote(cursor, behind)
+  defp demote(channels, behind), do: channels ++ behind
+
+  defp next_candidate([%Channel{} = channel | rest], ctx), do: {channel, rest, ctx}
+  defp next_candidate([], ctx), do: {nil, [], ctx}
+
+  defp next_candidate(%CandidateCursor{} = cursor, ctx) do
     {cursor, ctx} = capture_cursor_decisions(cursor, ctx)
 
     case CandidateCursor.next_with_evidence(cursor) do
@@ -744,7 +774,7 @@ defmodule Lasso.RPC.RequestPipeline do
         {remaining, ctx} = capture_cursor_decisions(remaining, ctx)
 
         if RequestContext.attempted_instance?(ctx, channel.instance_id, channel.transport) do
-          pop_candidate(remaining, ctx)
+          next_candidate(remaining, ctx)
         else
           {channel, remaining, ctx}
         end
@@ -1641,35 +1671,14 @@ defmodule Lasso.RPC.RequestPipeline do
          {:continue, nil},
          head
        ) do
-    {rest_channels, ctx} = demote_known_behind(rest_channels, ctx, head)
+    ctx = remember_missing_block(ctx, head)
     ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
   end
 
-  # After a missing-block error, failover tries the routes whose fresh head stays
-  # short of the block after every other remaining route. A head observation can
-  # trail an upstream that has since caught up, so those routes stay reachable. A
-  # branch conflict at the head says nothing about an older block, so it keeps its place.
-  defp demote_known_behind(rest_channels, ctx, %HeadSuitability{} = head),
-    do: demote_known_behind(order_siblings(rest_channels, ctx), ctx, head, [])
+  defp remember_missing_block(%{missing_block_head: nil} = ctx, %HeadSuitability{} = head),
+    do: %{ctx | missing_block_head: head}
 
-  defp demote_known_behind(rest_channels, ctx, _head), do: {rest_channels, ctx}
-
-  defp demote_known_behind(rest_channels, ctx, head, behind) do
-    case pop_candidate(rest_channels, ctx) do
-      {%Channel{} = next, remaining, ctx} ->
-        route = {next.instance_id, next.transport}
-
-        if match?({_class, :against, :below_height}, HeadSuitability.classify(head, route)),
-          do: demote_known_behind(remaining, ctx, head, [next | behind]),
-          else: {{next, demote(remaining, Enum.reverse(behind))}, ctx}
-
-      {nil, remaining, ctx} ->
-        {demote(remaining, Enum.reverse(behind)), ctx}
-    end
-  end
-
-  defp demote(%CandidateCursor{} = cursor, behind), do: CandidateCursor.demote(cursor, behind)
-  defp demote(channels, behind), do: channels ++ behind
+  defp remember_missing_block(ctx, _head), do: ctx
 
   defp ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard) do
     rest_channels = order_siblings(rest_channels, ctx)

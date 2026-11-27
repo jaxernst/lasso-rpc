@@ -93,6 +93,9 @@ defmodule Lasso.RPC.RequestContext do
           request_facts: Lasso.RPC.RequestFacts.t() | nil,
           null_recovery: Lasso.RPC.NullRecovery.State.t() | nil,
           missing_block: %{original?: boolean(), missing: map() | nil},
+          # Head evidence from the first missing-block error; later picks try the
+          # routes it finds short of the block last.
+          missing_block_head: Lasso.RPC.Selection.HeadSuitability.t() | nil,
           attempt_observation: map() | nil,
 
           # Timing
@@ -202,6 +205,7 @@ defmodule Lasso.RPC.RequestContext do
             block_facts: nil,
             null_recovery: nil,
             missing_block: %{original?: false, missing: nil},
+            missing_block_head: nil,
             attempt_observation: nil,
             plug_start_time: nil,
             start_time: nil,
