@@ -54,7 +54,7 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
     end
   end
 
-  test "a supporter past skipped laggards that fails still fails over to the next one" do
+  test "a supporter ahead of a demoted laggard that fails still fails over to the next one" do
     behind = @block - 1_001
 
     world("past-laggard", [@block + 1, behind, @block + 1, @block + 1], fn tenant, fleets ->
@@ -122,6 +122,27 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
       assert response.body["result"] == block, inspect({response.body, sent})
       assert sent == Enum.map(fleets, & &1.name)
     end)
+  end
+
+  test "an upstream that caught up since its last head poll still serves the block" do
+    for strategy <- ~w(priority fastest balanced-fast load-balanced) do
+      world("catchup-#{strategy}", [@block + 1, @block - 1_001], fn tenant, fleets ->
+        [missing, caught_up] = fleets
+        Fleet.script(caught_up, "eth_blockNumber", [], {:answer, hex(@block + 1)})
+
+        assert Rpc.call(%{rpc_url: caught_up.url}, "eth_blockNumber").body["result"] ==
+                 hex(@block + 1)
+
+        Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+        Fleet.script(caught_up, "eth_getBalance", [], {:answer, "0x42"})
+
+        # Lasso still holds the poll that saw 9,000, which stays short of the block.
+        {response, sent} = read(tenant, fleets, strategy)
+        assert response.body["result"] == "0x42", "#{strategy}: #{inspect({response.body, sent})}"
+        assert caught_up.name in sent
+        assert length(sent) <= 2
+      end)
+    end
   end
 
   defp world(prefix, heads, fun) do

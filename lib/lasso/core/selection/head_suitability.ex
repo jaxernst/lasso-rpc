@@ -27,7 +27,8 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
     observed height while a recovery height remains unknown;
   - everything else is `:unknown`.
 
-  A verdict orders routes inside their availability tier and never excludes one.
+  A verdict orders routes inside their availability tier, and after a missing-block
+  error failover tries the routes found short of the block last. It never excludes one.
   """
 
   alias Lasso.BlockSync.{Observation, Registry}

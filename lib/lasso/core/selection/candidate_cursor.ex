@@ -52,6 +52,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 excluded_fallback: nil,
+                demoted: [],
                 dispatched?: false,
                 diversity_seen: nil,
                 diversity_ordered_tiers: MapSet.new(),
@@ -213,7 +214,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   def pending?(%__MODULE__{returned: returned, limit: limit}) when returned >= limit, do: false
 
   def pending?(%__MODULE__{} = cursor) do
-    cursor.descriptors != [] or
+    cursor.descriptors != [] or cursor.demoted != [] or
       deferred_pending?(cursor.supported_deferred) or
       deferred_pending?(cursor.unsupported_deferred)
   end
@@ -289,9 +290,19 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
           Enum.reject(cursor.descriptors, &(descriptor_provider_id(&1) == provider_id)),
         supported_deferred: reject_queued_provider(cursor.supported_deferred, provider_id),
         unsupported_deferred: reject_queued_provider(cursor.unsupported_deferred, provider_id),
+        demoted: Enum.reject(cursor.demoted, &(&1.provider_id == provider_id)),
         excluded_provider_ids: MapSet.put(cursor.excluded_provider_ids, provider_id)
     }
   end
+
+  @doc "Hands back returned channels to follow every other remaining route, in order."
+  @spec demote(t(), [Channel.t()]) :: t()
+  def demote(%__MODULE__{} = cursor, channels),
+    do: %{
+      cursor
+      | demoted: cursor.demoted ++ channels,
+        returned: cursor.returned - length(channels)
+    }
 
   defp scan(%__MODULE__{descriptors: [descriptor | rest]} = cursor) do
     cursor = %{cursor | descriptors: rest}
@@ -417,6 +428,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       |> Map.put(:diversity_ordered_tiers, MapSet.put(cursor.diversity_ordered_tiers, ordered))
     end
   end
+
+  defp pop_deferred(%{demoted: [channel | rest]} = cursor, _field, []),
+    do: return_allowed(channel, %{cursor | demoted: rest})
 
   defp pop_deferred(%{dispatched?: false, excluded_fallback: channel} = cursor, _field, [])
        when not is_nil(channel),

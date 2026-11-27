@@ -1641,30 +1641,35 @@ defmodule Lasso.RPC.RequestPipeline do
          {:continue, nil},
          head
        ) do
-    {rest_channels, ctx} = skip_known_behind(rest_channels, ctx, head)
+    {rest_channels, ctx} = demote_known_behind(rest_channels, ctx, head)
     ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
   end
 
-  # After a missing-block error, failover passes over the routes whose fresh head
-  # is known to stay short of the block and keeps every other route in order. A
-  # branch conflict at the head says nothing about an older block, so it stays.
-  defp skip_known_behind(rest_channels, ctx, %HeadSuitability{} = head) do
-    rest_channels = order_siblings(rest_channels, ctx)
+  # After a missing-block error, failover tries the routes whose fresh head stays
+  # short of the block after every other remaining route. A head observation can
+  # trail an upstream that has since caught up, so those routes stay reachable. A
+  # branch conflict at the head says nothing about an older block, so it keeps its place.
+  defp demote_known_behind(rest_channels, ctx, %HeadSuitability{} = head),
+    do: demote_known_behind(order_siblings(rest_channels, ctx), ctx, head, [])
 
+  defp demote_known_behind(rest_channels, ctx, _head), do: {rest_channels, ctx}
+
+  defp demote_known_behind(rest_channels, ctx, head, behind) do
     case pop_candidate(rest_channels, ctx) do
       {%Channel{} = next, remaining, ctx} ->
         route = {next.instance_id, next.transport}
 
         if match?({_class, :against, :below_height}, HeadSuitability.classify(head, route)),
-          do: skip_known_behind(remaining, ctx, head),
-          else: {{next, remaining}, ctx}
+          do: demote_known_behind(remaining, ctx, head, [next | behind]),
+          else: {{next, demote(remaining, Enum.reverse(behind))}, ctx}
 
       {nil, remaining, ctx} ->
-        {remaining, ctx}
+        {demote(remaining, Enum.reverse(behind)), ctx}
     end
   end
 
-  defp skip_known_behind(rest_channels, ctx, _head), do: {rest_channels, ctx}
+  defp demote(%CandidateCursor{} = cursor, behind), do: CandidateCursor.demote(cursor, behind)
+  defp demote(channels, behind), do: channels ++ behind
 
   defp ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard) do
     rest_channels = order_siblings(rest_channels, ctx)

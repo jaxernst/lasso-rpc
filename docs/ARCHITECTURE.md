@@ -527,9 +527,7 @@ numeric block, a route is deferred when its fresh observation stays short of
 the block even after crediting the blocks the chain could have produced since.
 A route fresh at the qualified reference height on a different hash is
 deferred too. Deferral stays within the route's health tier and never excludes
-it, except that after a missing-block error failover skips the remaining routes
-whose fresh head is known to stay short of the block; see
-[Head freshness](ROUTING.md#head-freshness). Operator
+it; see [Head freshness](ROUTING.md#head-freshness). Operator
 assessment is separate: the dashboard compares HTTP observations with the
 reference captured before their poll and WebSocket observations with the
 current qualified reference, using `monitoring.lag_alert_threshold_blocks`. A
