@@ -163,6 +163,31 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
     end)
   end
 
+  test "a demoted laggard the catalog has since removed is never sent" do
+    behind = @block - 1_001
+
+    world("republish", [@block + 1, behind, @block + 1], fn tenant, fleets ->
+      [missing, lagging, held] = fleets
+      token = make_ref()
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      half_open!(tenant, held)
+      Fleet.script(held, "eth_getBalance", [], {:hold, token})
+
+      # The missing-block error demotes the laggard behind the half-open upstream.
+      # While that send is held, a republish removes the laggard, so the read
+      # must end on the stale catalog instead of reviving the laggard's route.
+      read = Task.async(fn -> read(tenant, fleets, "priority") end)
+      held_pid = held.pid
+      assert_receive {:fleet, ^held_pid, %{action: {:hold, ^token}}}, 5_000
+      Tenant.replace!(tenant, [missing, held])
+      assert :ok = Fleet.release(held, token, {:status, 503, [], "<html>unavailable</html>"})
+
+      {response, sent} = Task.await(read)
+      assert response.body["error"], inspect({response.body, sent})
+      assert sent == [missing.name, held.name]
+    end)
+  end
+
   defp world(prefix, heads, fun) do
     fleets =
       for {head, i} <- Enum.with_index(heads, 1) do

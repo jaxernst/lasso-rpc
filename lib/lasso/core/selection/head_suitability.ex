@@ -91,6 +91,11 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
           evidence: %{route() => evidence()}
         }
 
+  @doc "Whether fresh, credited evidence keeps a route short of the fixed height."
+  @spec below_height?(t(), route()) :: boolean()
+  def below_height?(%__MODULE__{} = suitability, route),
+    do: match?({_class, :against, :below_height}, classify(suitability, route))
+
   @doc """
   The selection phase's requirement. A recovery height, when present, is the
   phase's only requirement. A range uses its upper bound, and an omitted upper

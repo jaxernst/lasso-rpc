@@ -25,8 +25,10 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   alias Lasso.RPC.Strategies.LoadBalanced
 
   # Each availability tier scans its ordinary routes before the routes deferred
-  # by head suitability or a learned effect.
-  @queue_keys for tier <- 1..4, bucket <- [:ordinary, :deferred], do: {tier, bucket}
+  # by head suitability or a learned effect. After a missing-block error, routes
+  # whose fresh head stays short of the block follow every tier.
+  @queue_keys for(tier <- 1..4, bucket <- [:ordinary, :deferred], do: {tier, bucket}) ++
+                [:below_block]
   @empty_queues Map.new(@queue_keys, &{&1, :queue.new()})
 
   @enforce_keys [
@@ -52,7 +54,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 excluded_fallback: nil,
-                demoted: [],
+                below_block: nil,
                 dispatched?: false,
                 diversity_seen: nil,
                 diversity_ordered_tiers: MapSet.new(),
@@ -214,7 +216,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   def pending?(%__MODULE__{returned: returned, limit: limit}) when returned >= limit, do: false
 
   def pending?(%__MODULE__{} = cursor) do
-    cursor.descriptors != [] or cursor.demoted != [] or
+    cursor.descriptors != [] or
       deferred_pending?(cursor.supported_deferred) or
       deferred_pending?(cursor.unsupported_deferred)
   end
@@ -290,19 +292,43 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
           Enum.reject(cursor.descriptors, &(descriptor_provider_id(&1) == provider_id)),
         supported_deferred: reject_queued_provider(cursor.supported_deferred, provider_id),
         unsupported_deferred: reject_queued_provider(cursor.unsupported_deferred, provider_id),
-        demoted: Enum.reject(cursor.demoted, &(&1.provider_id == provider_id)),
         excluded_provider_ids: MapSet.put(cursor.excluded_provider_ids, provider_id)
     }
   end
 
-  @doc "Hands back returned channels to follow every other remaining route, in order."
-  @spec demote(t(), [Channel.t()]) :: t()
-  def demote(%__MODULE__{} = cursor, channels),
-    do: %{
-      cursor
-      | demoted: cursor.demoted ++ channels,
-        returned: cursor.returned - length(channels)
-    }
+  @doc "Moves routes whose fresh head stays short of a missing block behind every other route."
+  @spec below_block_last(t(), HeadSuitability.t()) :: t()
+  def below_block_last(%__MODULE__{below_block: nil} = cursor, %HeadSuitability{} = head) do
+    cursor = %{cursor | below_block: head}
+
+    Enum.reduce([:supported_deferred, :unsupported_deferred], cursor, fn field, cursor ->
+      queues = Map.fetch!(cursor, field)
+
+      {below, queues} =
+        Enum.map_reduce(@queue_keys, queues, fn key, queues ->
+          {below, reaching} =
+            queues[key] |> :queue.to_list() |> Enum.split_with(&below_block?(cursor, &1))
+
+          {below, Map.put(queues, key, :queue.from_list(reaching))}
+        end)
+
+      Map.put(cursor, field, Map.put(queues, :below_block, :queue.from_list(List.flatten(below))))
+    end)
+  end
+
+  def below_block_last(%__MODULE__{} = cursor, _head), do: cursor
+
+  defp below_block?(%{below_block: nil}, _channel), do: false
+
+  defp below_block?(cursor, channel),
+    do:
+      HeadSuitability.below_height?(cursor.below_block, {channel.instance_id, channel.transport})
+
+  defp queue_key(cursor, descriptor, channel, tier) do
+    if below_block?(cursor, channel),
+      do: :below_block,
+      else: {tier, bucket(cursor, descriptor)}
+  end
 
   defp scan(%__MODULE__{descriptors: [descriptor | rest]} = cursor) do
     cursor = %{cursor | descriptors: rest}
@@ -311,7 +337,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       {:ok, channel, tier, true} ->
         cursor = %{cursor | supported?: true, unsupported_deferred: @empty_queues}
 
-        case {tier, bucket(cursor, descriptor)} do
+        case queue_key(cursor, descriptor, channel, tier) do
           {1, :ordinary} = key ->
             if defer_alternate?(cursor, channel),
               do: cursor |> defer(:supported_deferred, key, channel) |> scan(),
@@ -326,7 +352,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
       {:ok, channel, tier, false} ->
         cursor
-        |> defer(:unsupported_deferred, {tier, bucket(cursor, descriptor)}, channel)
+        |> defer(:unsupported_deferred, queue_key(cursor, descriptor, channel, tier), channel)
         |> scan()
 
       {:skip, reason} ->
@@ -428,9 +454,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       |> Map.put(:diversity_ordered_tiers, MapSet.put(cursor.diversity_ordered_tiers, ordered))
     end
   end
-
-  defp pop_deferred(%{demoted: [channel | rest]} = cursor, _field, []),
-    do: return_allowed(channel, %{cursor | demoted: rest})
 
   defp pop_deferred(%{dispatched?: false, excluded_fallback: channel} = cursor, _field, [])
        when not is_nil(channel),

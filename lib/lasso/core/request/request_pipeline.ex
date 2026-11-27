@@ -733,35 +733,24 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp pop_candidate(source, %{missing_block_head: nil} = ctx), do: next_candidate(source, ctx)
-  defp pop_candidate(source, ctx), do: pop_reaching(source, ctx, [])
 
   # After a missing-block error, every later pick tries the routes whose fresh head
   # stays short of the block after every other remaining route. A head observation
   # can trail an upstream that has since caught up, so those routes stay reachable.
   # A branch conflict at the head says nothing about an older block, so it keeps
   # its place.
-  defp pop_reaching(source, ctx, behind) do
-    case next_candidate(source, ctx) do
-      {%Channel{} = channel, remaining, ctx} ->
-        route = {channel.instance_id, channel.transport}
+  defp pop_candidate(%CandidateCursor{} = cursor, ctx),
+    do: next_candidate(CandidateCursor.below_block_last(cursor, ctx.missing_block_head), ctx)
 
-        if match?(
-             {_class, :against, :below_height},
-             HeadSuitability.classify(ctx.missing_block_head, route)
-           ),
-           do: pop_reaching(remaining, ctx, [channel | behind]),
-           else: {channel, demote(remaining, Enum.reverse(behind)), ctx}
+  defp pop_candidate(channels, ctx) do
+    {below, reaching} =
+      Enum.split_with(
+        channels,
+        &HeadSuitability.below_height?(ctx.missing_block_head, {&1.instance_id, &1.transport})
+      )
 
-      {nil, remaining, ctx} ->
-        case Enum.reverse(behind) do
-          [] -> {nil, remaining, ctx}
-          [channel | rest] -> {channel, demote(remaining, rest), ctx}
-        end
-    end
+    next_candidate(reaching ++ below, ctx)
   end
-
-  defp demote(%CandidateCursor{} = cursor, behind), do: CandidateCursor.demote(cursor, behind)
-  defp demote(channels, behind), do: channels ++ behind
 
   defp next_candidate([%Channel{} = channel | rest], ctx), do: {channel, rest, ctx}
   defp next_candidate([], ctx), do: {nil, [], ctx}
