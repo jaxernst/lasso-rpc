@@ -1,5 +1,5 @@
 <h1 align="left">
-<img width="1600" height="600" alt="image" src="https://github.com/user-attachments/assets/b6ad3157-1118-4d8b-878d-1b023303eefd" />
+<img width="800" alt="Lasso" src="https://github.com/user-attachments/assets/b6ad3157-1118-4d8b-878d-1b023303eefd" />
 </h1>
 
 ### Smart RPC routing for all your nodes and providers.
@@ -10,8 +10,9 @@
 [![Docs](https://img.shields.io/badge/docs-reference-38BDF8?style=flat-square&labelColor=19202E)](#documentation)
 [![X](https://img.shields.io/badge/follow-%40lassoRPC-19202E?style=flat-square&labelColor=19202E&logo=x&logoColor=white)](https://x.com/lassoRPC)
 
-Lasso wrangles your nodes and RPC providers into one fast, resilient, and observable
-JSON-RPC endpoint. It adapts to transient failures, absorbs provider inconsistencies,
+Lasso is a self-hosted proxy that wrangles your EVM nodes and RPC providers into one
+fast, resilient, and observable JSON-RPC endpoint. Point any JSON-RPC client at it in
+place of a provider URL. It adapts to transient failures, absorbs provider inconsistencies,
 and learns the optimal path for your app's RPC workload. Use it to aggregate all your RPC
 infra and tune your RPC throughput and performance without redeploys.
 
@@ -41,6 +42,10 @@ across Ethereum, Base, Arbitrum, BSC, Tempo, Robinhood Chain, and more.
 Add any additional EVM chain and your own providers in YAML, and Lasso will learn each
 provider's method, history and log-range limits from live traffic.
 
+The [trial kit](scripts/trial/README.md) in this repo runs a wallet-like workload
+through Lasso against mock upstreams whose faults you control, so you can check
+these claims on your own machine.
+
 [Quick Start](#quick-start) · [Use it from your app](#use-it-from-your-app) ·
 [Configuration](#configuration) · [Endpoints](#endpoints) ·
 [How it works](#how-it-works) · [Migration guide](docs/MIGRATION.md) ·
@@ -64,9 +69,9 @@ and you scale by adding providers instead of replatforming.
   rotation and reads fail over to the next healthy one. Recovered providers are
   eased back in. An `eth_sendRawTransaction` is
   [tried on up to three providers](docs/RPC_STANDARDS.md#transaction-sends), one
-  at a time, not counting a provider that refuses it outright with a rate-limit
-  or quota answer or because it does not support the method, and before
-  returning a rejection Lasso looks up the transaction by its hash.
+  at a time. A provider that refuses it with a rate-limit or quota answer, or
+  doesn't support the method, doesn't count toward the three. Before returning
+  a rejection, Lasso looks up the transaction by its hash.
 - **Uneven performance.** A provider can be fast for `eth_call` and slow for
   `eth_getLogs`. Lasso tracks latency per provider, transport, and kind of request
   (basic reads, state, logs, trace, transactions, subscriptions), and `fastest`

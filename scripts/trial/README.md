@@ -12,7 +12,7 @@ Runs a wallet-like JSON-RPC workload against mock upstreams whose faults you con
 ## Run
 
 ```sh
-gh release download v0.9.0 --repo jaxernst/lasso-rpc --pattern 'lasso-*-macos-aarch64.tar.gz'
+gh release download --repo jaxernst/lasso-rpc --pattern 'lasso-*-macos-aarch64.tar.gz'
 tar -xzf lasso-*-macos-aarch64.tar.gz
 export LASSO_REL="$PWD/lasso"
 scripts/trial/run.sh
