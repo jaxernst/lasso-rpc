@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An identity probe whose answer is empty, unparsable, null or not a valid hex chain ID no longer marks the upstream as serving the wrong chain. Only a readable wrong chain ID does. Previously one malformed answer blocked HTTP requests to that upstream until the next identity check; it now counts as an ordinary probe failure and requests keep flowing.
 
 - A background HTTP 429 holds an upstream out of routing only for its `Retry-After`, or 30 s without one. The identity prober recorded a fixed 60 s cooldown on every 429, and the head poller held the route for at least two poll intervals, so a provider that asked for one second could stay out for a minute. A head-poll answer that names exhausted quota still holds the upstream for at least an hour, and a rate-limited probe no longer counts as unhealthy.
+- Learned feedback reaches the learner from every bucket of its delivery lane. Only the lowest-numbered bucket with queued work was drained, so feedback in the others, such as a method refusal or a rejected log range, waited until it expired and the matching limit was learned late or not at all. With a lower bucket kept busy, a higher bucket's item now arrives in milliseconds where before it was never delivered.
 
 ### Security
 
