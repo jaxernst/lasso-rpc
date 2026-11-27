@@ -194,9 +194,12 @@ regardless of failure rate (see
 For replay-safe unary reads, fallback
 tries distinct physical provider instances before sibling transports within each
 availability tier. Alternate transports remain available; a healthy alternate
-still precedes a different provider in a lower availability tier. The lazy cursor
-bounds healthy-sibling deferral by its remaining candidate limit, and explicit
-recovered-head preference takes precedence over diversity.
+still precedes a different provider in a lower availability tier. Whether a
+route's instance was already tried is part of its precedence key, after head
+evidence and learned limits, so diversity never lifts a route those placed later.
+Each route the cursor returns marks its instance tried and reorders the routes
+that remain, so the cursor never opens channels ahead to find a distinct
+instance. Explicit recovered-head preference takes precedence over diversity.
 
 Unsafe or unknown methods retain the instance-shuffled order and existing replay limits.
 This ordering does not increase the dispatch budget or deadline, infer

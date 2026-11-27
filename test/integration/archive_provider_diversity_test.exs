@@ -422,7 +422,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     assert ctx.execution_envelope.dispatch_count <= 3
   end
 
-  test "cursor deferral stays bounded and existing channel return limits hold" do
+  test "existing channel return limits hold" do
     {_chain, snapshot, plan} = fixture([{"bad-a", true, [:http, :ws]}])
     provider = hd(plan.providers)
 
@@ -432,8 +432,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     cursor = %{cursor | descriptors: List.duplicate({provider, :http}, 100)}
     assert {:ok, _, cursor} = CandidateCursor.next(cursor)
     assert {:ok, _, cursor} = CandidateCursor.next(cursor)
-    assert length(cursor.descriptors) == 96
-    assert :queue.len(cursor.supported_deferred[1]) == 2
+    assert length(cursor.descriptors) == 98
     assert {:ok, _, cursor} = CandidateCursor.next(cursor)
     assert :done = CandidateCursor.next(cursor)
   end
@@ -454,16 +453,15 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     assert :done = CandidateCursor.next(rebuilt)
   end
 
-  test "deferred channels cannot outlive the catalog snapshot" do
+  test "remaining channels cannot outlive the catalog snapshot" do
     {_chain, snapshot, plan} =
       fixture([{"bad-a", true, [:http, :ws]}, {"capable", true, [:http]}])
 
-    [a, b] = Enum.sort_by(plan.providers, & &1.id)
     cursor = CandidateCursor.new(snapshot, plan, "eth_getBalance", strategy: :load_balanced)
-    cursor = %{cursor | descriptors: [{a, :http}, {a, :ws}, {b, :http}]}
-    assert {:ok, %{provider_id: "bad-a"}, cursor} = CandidateCursor.next(cursor)
-    assert {:ok, %{provider_id: "capable"}, cursor} = CandidateCursor.next(cursor)
-    assert :queue.len(cursor.supported_deferred[1]) == 1
+    assert {:ok, first, cursor} = CandidateCursor.next(cursor)
+    assert {:ok, second, cursor} = CandidateCursor.next(cursor)
+    assert Enum.sort([first.provider_id, second.provider_id]) == ["bad-a", "capable"]
+    assert [{%{id: "bad-a"}, _transport}] = cursor.descriptors
     excluded = CandidateCursor.exclude_provider(cursor, "bad-a")
     assert :done = CandidateCursor.next(excluded)
     Catalog.build_from_config()
@@ -567,7 +565,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     assert actual == expected
   end
 
-  test "a deferred sibling still passes final circuit admission after health changes" do
+  test "a sibling whose circuit opens during an earlier send is not dispatched" do
     {chain, snapshot, plan} =
       fixture([
         {"bad-a", true, [:http, :ws]},
@@ -605,7 +603,7 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
     :rand.seed(:exsss, {seed, seed + 1, seed + 2})
     assert {:ok, _, ctx} = execute(chain, params, :both)
     assert ctx.execution_envelope.dispatch_count == 3
-    assert ctx.execution_envelope.candidate_admission_count == 4
+    assert ctx.execution_envelope.candidate_admission_count == 3
     assert dispatched(3) == [{"bad-a", :http}, {"bad-b", :http}, {"capable", :http}]
   end
 
@@ -690,7 +688,17 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
           transport: transport
         )
 
-      order = Enum.map(cursor.descriptors, fn {provider, protocol} -> {provider.id, protocol} end)
+      applied =
+        Enum.map(cursor.descriptors, fn {provider, protocol} -> {provider.id, protocol} end)
+
+      # Load-balanced keeps a provider's routes together; the cursor lists every
+      # provider's first route before alternates, so regroup to the strategy's order.
+      order =
+        applied
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.uniq()
+        |> Enum.flat_map(fn id -> Enum.filter(applied, &(elem(&1, 0) == id)) end)
+
       if predicate.(order), do: {seed, order}
     end) || flunk("no deterministic failing permutation")
   end

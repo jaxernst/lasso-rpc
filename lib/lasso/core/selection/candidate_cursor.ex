@@ -54,7 +54,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 excluded_fallback: nil,
                 dispatched?: false,
                 diversity_seen: nil,
-                diversity_ordered_tiers: MapSet.new(),
                 supported?: false,
                 supported_deferred: @empty_queues,
                 unsupported_deferred: @empty_queues
@@ -135,7 +134,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     {ordered, precedence, decisions} =
       Effects.order_with_decision(descriptors, plan, method, effect_context)
 
-    %__MODULE__{
+    order_by_precedence(%__MODULE__{
       snapshot: snapshot,
       plan: plan,
       method: method,
@@ -158,7 +157,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       deadline_us: Keyword.get(opts, :deadline_us),
       candidate_labels: candidate_labels,
       diversity_seen: diversity_seen(Keyword.get(opts, :strategy), method, opts)
-    }
+    })
   end
 
   defp build(plan, method, opts, learned_scope) do
@@ -190,7 +189,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     {ordered, precedence, decisions} =
       Effects.order_with_decision(descriptors, plan, method, effect_context)
 
-    %__MODULE__{
+    order_by_precedence(%__MODULE__{
       plan: plan,
       method: method,
       filters: filters,
@@ -206,7 +205,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       deadline_us: Keyword.get(opts, :deadline_us),
       candidate_labels: [],
       diversity_seen: diversity_seen(strategy, method, opts)
-    }
+    })
   end
 
   @spec pending?(t()) :: boolean()
@@ -300,7 +299,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       {:ok, channel, tier, true} ->
         cursor = %{cursor | supported?: true, unsupported_deferred: @empty_queues}
 
-        if tier == 1 and not defer_alternate?(cursor, channel),
+        if tier == 1,
           do: return(channel, cursor),
           else: cursor |> defer(:supported_deferred, tier, channel) |> scan()
 
@@ -380,32 +379,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     }
   end
 
-  defp defer_alternate?(%{diversity_seen: nil}, _channel), do: false
-
-  defp defer_alternate?(cursor, channel) do
-    MapSet.member?(cursor.diversity_seen, channel.instance_id) and
-      :queue.len(cursor.supported_deferred[1]) < cursor.limit - cursor.returned
-  end
-
-  defp order_deferred(%{diversity_seen: nil} = cursor, _field, _tier), do: cursor
-
-  defp order_deferred(cursor, field, key) do
-    ordered = {field, key}
-
-    if MapSet.member?(cursor.diversity_ordered_tiers, ordered) do
-      cursor
-    else
-      queues = Map.fetch!(cursor, field)
-
-      channels =
-        LoadBalanced.distinct_instances_first(:queue.to_list(queues[key]), cursor.diversity_seen)
-
-      cursor
-      |> Map.put(field, Map.put(queues, key, :queue.from_list(channels)))
-      |> Map.put(:diversity_ordered_tiers, MapSet.put(cursor.diversity_ordered_tiers, ordered))
-    end
-  end
-
   defp pop_deferred(%{dispatched?: false, excluded_fallback: channel} = cursor, _field, [])
        when not is_nil(channel),
        do: {:ok, channel, %{cursor | returned: cursor.returned + 1, excluded_fallback: nil}}
@@ -413,8 +386,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defp pop_deferred(cursor, _field, []), do: {:done, cursor}
 
   defp pop_deferred(cursor, field, [key | rest]) do
-    cursor = order_deferred(cursor, field, key)
-    cursor = order_refusal_queue(cursor, field, key)
+    cursor = cursor |> order_queue_by_precedence(field, key) |> order_refusal_queue(field, key)
     queues = Map.fetch!(cursor, field)
 
     case :queue.out(Map.fetch!(queues, key)) do
@@ -515,7 +487,35 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   defp order_siblings(channels, groups, cursor),
     do: SiblingLast.order(channels, groups, & &1, &precedence(cursor, &1))
 
-  defp precedence(cursor, route), do: Map.get(cursor.precedence, Decision.route(route))
+  # A route's key is its stored precedence, then, for load-balanced fallback,
+  # whether its physical instance was already tried. Tried instances grow as
+  # the cursor returns channels, so returning one reorders what remains.
+  defp precedence(cursor, route) do
+    route = Decision.route(route)
+    {Map.get(cursor.precedence, route), attempted?(cursor.diversity_seen, route)}
+  end
+
+  defp attempted?(nil, _route), do: false
+  defp attempted?(seen, {instance_id, _transport}), do: MapSet.member?(seen, instance_id)
+
+  defp order_by_precedence(%{diversity_seen: nil} = cursor), do: cursor
+
+  defp order_by_precedence(cursor),
+    do: %{cursor | descriptors: Enum.sort_by(cursor.descriptors, &precedence(cursor, &1))}
+
+  defp order_queue_by_precedence(%{diversity_seen: nil} = cursor, _field, _tier), do: cursor
+
+  defp order_queue_by_precedence(cursor, field, tier) do
+    queues = Map.fetch!(cursor, field)
+
+    queue =
+      queues[tier]
+      |> :queue.to_list()
+      |> Enum.sort_by(&precedence(cursor, &1))
+      |> :queue.from_list()
+
+    Map.put(cursor, field, Map.put(queues, tier, queue))
+  end
 
   @doc "Records a dispatch so learned recovery cannot add another send."
   @spec attempted_provider(t(), Channel.t()) :: t()
@@ -526,7 +526,8 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     if current?(cursor) do
       cursor = %{cursor | effect_context: Map.delete(cursor.effect_context, :sibling_last)}
       seen = cursor.diversity_seen && MapSet.put(cursor.diversity_seen, channel.instance_id)
-      {:ok, channel, %{cursor | returned: cursor.returned + 1, diversity_seen: seen}}
+      cursor = %{cursor | returned: cursor.returned + 1, diversity_seen: seen}
+      {:ok, channel, order_by_precedence(cursor)}
     else
       {:stale, cursor}
     end
