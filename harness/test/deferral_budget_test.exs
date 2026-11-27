@@ -22,15 +22,28 @@ defmodule Lasso.Harness.DeferralBudgetTest do
 
   # The last resort uses only time ordinary failover leaves unspent: a slow last
   # ordinary route keeps the whole deadline while a learned refuser waits.
-  for strategy <- ~w(priority fastest balanced-fast load-balanced) do
-    @strategy strategy
-    test "a slow last ordinary route keeps the whole deadline under #{strategy}" do
-      with_short_deadline(fn ->
-        with_fleets(2, fn tenant, fleets ->
-          slow_last_ordinary(tenant, fleets, @strategy)
-        end)
-      end)
-    end
+  test "a slow last ordinary route keeps the whole deadline under priority" do
+    with_short_deadline(fn ->
+      with_fleets(2, fn tenant, fleets -> slow_last_ordinary(tenant, fleets, "priority") end)
+    end)
+  end
+
+  test "a slow last ordinary route keeps the whole deadline under fastest" do
+    with_short_deadline(fn ->
+      with_fleets(2, fn tenant, fleets -> slow_last_ordinary(tenant, fleets, "fastest") end)
+    end)
+  end
+
+  test "a slow last ordinary route keeps the whole deadline under balanced-fast" do
+    with_short_deadline(fn ->
+      with_fleets(2, fn tenant, fleets -> slow_last_ordinary(tenant, fleets, "balanced-fast") end)
+    end)
+  end
+
+  test "a slow last ordinary route keeps the whole deadline under load-balanced" do
+    with_short_deadline(fn ->
+      with_fleets(2, fn tenant, fleets -> slow_last_ordinary(tenant, fleets, "load-balanced") end)
+    end)
   end
 
   test "a slow last ordinary route keeps the whole deadline on a custom candidate list" do
