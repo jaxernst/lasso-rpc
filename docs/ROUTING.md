@@ -138,9 +138,7 @@ knowledge keeps ordinary routing available. A route a learned effect deferred wa
 behind the ordinary routes of its availability tier, and a route a learned method
 refusal held back is the last resort, tried only after every other candidate and
 only while the request has dispatch budget left. Neither adds a send ahead of an
-ordinary route. A learned deferral recovers on an accepted success from its
-route or expires within an hour; the learners' code is the reference for when a
-success is enough. Feedback is delivered on a bounded
+ordinary route. A learned deferral is withdrawn once enough accepted successes from its route outweigh its refusals, and otherwise expires within an hour. Feedback is delivered on a bounded
 background lane; overload can discard observations without delaying RPC. Learned
 state lives in local memory and is rebuilt from traffic after restart. Core does
 not restore database checkpoints or start cross-node knowledge-image exchange.
