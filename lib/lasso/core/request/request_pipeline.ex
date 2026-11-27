@@ -644,7 +644,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
     if is_list(rest) and rest != [] and is_nil(ctx.opts.provider_override) and
-         learned_method_refused?(ctx, channel) do
+         not learned_effects_yielded?(ctx) and learned_method_refused?(ctx, channel) do
       Lasso.RPC.ProviderKnowledge.AppliedEffects.record_exclusion(channel.profile, %{
         route: {channel.instance_id, channel.transport},
         kind: :method_refusal,
@@ -656,6 +656,10 @@ defmodule Lasso.RPC.RequestPipeline do
       admit_channel(channel, rest, ctx, param_rejected, caller_guard)
     end
   end
+
+  # After a failed attempt, a learned effect could keep the only capable route
+  # outside the request's dispatch budget, so the rest of the request ignores it.
+  defp learned_effects_yielded?(ctx), do: ctx.attempted_instance_transports != %{}
 
   defp learned_method_refused?(ctx, channel) do
     Lasso.RPC.ProviderKnowledge.Effects.method_refusal(
@@ -736,6 +740,11 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp pop_candidate(%CandidateCursor{} = cursor, ctx) do
     {cursor, ctx} = capture_cursor_decisions(cursor, ctx)
+
+    cursor =
+      if learned_effects_yielded?(ctx),
+        do: CandidateCursor.yield_learned_deferrals(cursor),
+        else: cursor
 
     case CandidateCursor.next_with_evidence(cursor) do
       {:ok, channel, remaining} ->

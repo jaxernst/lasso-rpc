@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A read of past state behind full nodes that keep only recent state now reaches an archive. A pruned-state refusal (such as geth's `missing trie node`) to a replay-safe state, proof or trace read below the accepted head no longer spends one of the read's dispatches; the walk stays bounded by the admission cap and the request deadline. Block, receipt and log reads, and reads at the head, still spend it.
 - Learned historical depth applies per resource class instead of per method, so a cutoff learned from `eth_getBalance` refusals also covers `eth_call`, `eth_getCode` and `eth_getStorageAt` of the same state. `eth_getBalance` joins the `state` class. In the trial kit's pruned-history scenario (L1), refusals fell from 20 to 25 per run to 10 to 16.
+- Learned routing effects shape only a request's first attempt. Once an attempt fails, the rest of the request stops honoring learned deferrals (method refusal, span limit, historical depth) and the learned method-refusal exclusion, so a route deferred for an earlier refusal is still tried when the routes ahead of it fail, instead of the dispatch budget running out first. A provider that still refuses gets at most one dispatch, inside the existing budget. Head-suitability deferral and `load-balanced` failure-rate weighting are unchanged.
 
 ### Compatibility
 

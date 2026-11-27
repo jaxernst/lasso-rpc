@@ -134,7 +134,12 @@ learning uses numeric block ranges and explicit block-span failures; result-volu
 limits and mixed or ambiguous wording do not establish a span boundary.
 
 Hints expire and newer successful evidence can withdraw them. Unknown or missing
-knowledge keeps ordinary routing available. Feedback is delivered on a bounded
+knowledge keeps ordinary routing available. Learned effects shape only a request's
+first attempt: once an attempt fails, the rest of the request stops honoring them.
+Learned-deferred routes return to the order head suitability alone gives, and a
+route held back by a learned method refusal can be tried, so a learned deferral
+never keeps the only route that can serve outside the request's dispatch budget.
+Head-suitability deferral still applies. Feedback is delivered on a bounded
 background lane; overload can discard observations without delaying RPC. Learned
 state lives in local memory and is rebuilt from traffic after restart. Core does
 not restore database checkpoints or start cross-node knowledge-image exchange.
