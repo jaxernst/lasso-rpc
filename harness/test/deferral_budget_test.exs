@@ -20,6 +20,30 @@ defmodule Lasso.Harness.DeferralBudgetTest do
     end)
   end
 
+  test "a route held back by a learned refusal keeps time to serve after its peer hangs" do
+    previous = Application.get_env(:lasso, :method_timeouts, %{})
+    Application.put_env(:lasso, :method_timeouts, Map.put(previous, "eth_getCode", 1_000))
+
+    try do
+      with_fleets(2, fn tenant, [refuser, peer] = fleets ->
+        learn(tenant, fleets, refuser, "eth_getCode", @refusal, "method_refusal")
+        Fleet.script(refuser, "eth_getCode", [], {:answer, "0x11"})
+
+        # A rate limit queues the peer behind the closed routes, so the cursor
+        # has already set the refusing route aside when the peer is sent.
+        Fleet.script(peer, "eth_getCode", [], {:status, 429, [{"retry-after", "30"}], ""})
+        call(tenant, fleets, "eth_getCode", params("eth_getCode"), peer.name)
+        Fleet.script(peer, "eth_getCode", [], {:respond, fn _ -> {:hold, make_ref()} end})
+
+        {response, sends} = call(tenant, fleets, "eth_getCode", params("eth_getCode"))
+        assert %{"result" => "0x11"} = response.body
+        assert Enum.sort(Enum.map(sends, & &1.fleet)) == Enum.sort([refuser.name, peer.name])
+      end)
+    after
+      Application.put_env(:lasso, :method_timeouts, previous)
+    end
+  end
+
   test "routes learned to refuse stay behind every ordinary route" do
     for {method, refusal, kind, answer} <- [
           {"eth_getCode", @refusal, "method_refusal", "0x11"},

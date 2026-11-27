@@ -643,15 +643,18 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
-    if is_list(rest) and rest != [] and is_nil(ctx.opts.provider_override) and
-         learned_method_refused?(ctx, channel) do
+    # A learned-refused channel moves behind the rest as their last resort, and is
+    # tried in its turn once only learned-refused channels remain.
+    if is_list(rest) and is_nil(ctx.opts.provider_override) and
+         learned_method_refused?(ctx, channel) and
+         not Enum.all?(rest, &learned_method_refused?(ctx, &1)) do
       Lasso.RPC.ProviderKnowledge.AppliedEffects.record_exclusion(channel.profile, %{
         route: {channel.instance_id, channel.transport},
         kind: :method_refusal,
         dimension: Lasso.RPC.BoundedIdentifier.encode(ctx.method)
       })
 
-      attempt_channels(rest, ctx, param_rejected, caller_guard)
+      attempt_channels(rest ++ [channel], ctx, param_rejected, caller_guard)
     else
       admit_channel(channel, rest, ctx, param_rejected, caller_guard)
     end

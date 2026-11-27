@@ -138,9 +138,11 @@ knowledge keeps ordinary routing available. A route a learned effect deferred wa
 behind the ordinary routes of its availability tier, and a route a learned method
 refusal held back is the last resort, tried only after every other candidate and
 only while the request has dispatch budget left. Neither adds a send ahead of an
-ordinary route. When ordinary routes fail and
-use up the budget first, a stale deferral can still cost that read; sampled
-retries and retraction on the next accepted success recover from it. Feedback is delivered on a bounded
+ordinary route. A stale deferral recovers on any read that still has budget once
+the ordinary routes are tried, because the route's accepted success retracts the
+hint, or when the hint expires. Until then, while every ordinary route fails and
+uses up the budget, it can cost reads: up to 1 h for a method refusal and 30 min
+for a span limit. Feedback is delivered on a bounded
 background lane; overload can discard observations without delaying RPC. Learned
 state lives in local memory and is rebuilt from traffic after restart. Core does
 not restore database checkpoints or start cross-node knowledge-image exchange.
