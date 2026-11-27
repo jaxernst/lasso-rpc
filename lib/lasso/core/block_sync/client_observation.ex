@@ -3,8 +3,10 @@ defmodule Lasso.BlockSync.ClientObservation do
   Bounded head evidence from actual client upstream attempts.
 
   Only head-reporting requests qualify. Extraction is opportunistic and never
-  changes the response or the accepted regression floor. Publication runs in an
-  isolated, coalescing projection lane; oversized responses remain passthrough.
+  changes the response or the accepted regression floor. On the request path one
+  registry read decides whether an answer is new evidence; scope references are
+  read and the observation published in an isolated, coalescing projection lane.
+  Oversized responses remain passthrough.
   """
 
   alias Lasso.BlockSync.{Registry, Worker}
@@ -17,7 +19,6 @@ defmodule Lasso.BlockSync.ClientObservation do
 
   @dispatcher Lasso.ExecutionProjectionDispatcher
   @max_response_bytes 65_536
-  @max_payload_bytes 4_096
   @max_references 8
   @sample_interval_ms 250
 
@@ -26,10 +27,9 @@ defmodule Lasso.BlockSync.ClientObservation do
   def wrap(task, %PreparedRequest{} = request, identity, :client) do
     if head_request?(request) do
       fn ->
-        capture = capture(identity, request.method)
+        sent_at_ms = System.system_time(:millisecond)
         result = task.()
-        observed_at_ms = System.system_time(:millisecond)
-        record(capture, result, observed_at_ms)
+        record(identity, request.method, sent_at_ms, result)
         result
       end
     else
@@ -56,85 +56,29 @@ defmodule Lasso.BlockSync.ClientObservation do
 
   defp head_request?(_request), do: false
 
-  defp capture(identity, method) do
-    now_ms = System.system_time(:millisecond)
-
-    with false <-
-           recently_observed?(
-             identity.chain_id,
-             identity.upstream_instance_id,
-             identity.transport,
-             now_ms
-           ),
-         %{} = catalog <- Catalog.snapshot(),
-         {:ok, plan} <- Catalog.get_routing_plan(catalog, identity.profile, identity.chain_id),
-         true <- identity.upstream_instance_id in plan.head_scope.instance_ids do
-      scopes =
-        [
-          plan.head_scope
-          | Catalog.head_scopes_for_instance(catalog, identity.upstream_instance_id)
-        ]
-        |> Stream.uniq_by(& &1.scope_id)
-        |> Enum.take(@max_references)
-
-      references =
-        Enum.flat_map(scopes, fn scope ->
-          with {:ok, snapshot} <- Registry.get_cached_head_snapshot(scope),
-               {:ok, reference} <- HeadSnapshot.reference(snapshot),
-               true <- is_nil(reference.observed_at_ms) or reference.observed_at_ms <= now_ms do
-            [%{reference | captured_at_ms: now_ms}]
-          else
-            _ -> []
-          end
-        end)
-
-      %{
-        method: method,
-        profile: identity.profile,
-        chain_id: identity.chain_id,
-        instance_id: identity.upstream_instance_id,
-        transport: identity.transport,
-        references: references,
-        freshness_ms: plan.head_scope.policy.reference_freshness_ms
-      }
-    else
-      _ -> nil
-    end
-  rescue
-    ArgumentError -> nil
-  catch
-    :exit, _ -> nil
-  end
-
-  defp record(nil, _result, _observed_at_ms), do: :ok
-
-  defp record(capture, {:ok, %Success{raw_bytes: bytes}, _latency}, observed_at_ms)
+  # A `latest` block is sampled before its body is decoded. An eth_blockNumber answer is
+  # skipped only when it repeats a recent head, so a height a client was just told is
+  # evidence for the client's next read.
+  defp record(identity, method, sent_at_ms, {:ok, %Success{raw_bytes: bytes}, _latency})
        when byte_size(bytes) <= @max_response_bytes do
-    ProjectionDispatcher.enqueue_lazy(
-      @dispatcher,
-      :head_observations,
-      {capture.instance_id <> ":" <> Atom.to_string(capture.transport), capture.chain_id},
-      fn ->
-        with {:ok, %{"result" => result}} <- Jason.decode(bytes),
-             {:ok, fields} <- head_fields(capture.method, result),
-             {:ok, observation} <-
-               HeadObservation.new(
-                 Map.merge(fields, %{
-                   chain_id: capture.chain_id,
-                   instance_id: capture.instance_id,
-                   transport: capture.transport,
-                   observed_at_ms: observed_at_ms,
-                   origin_member_id: Topology.self_node_id(),
-                   poll_references: capture.references,
-                   attributes: %{collection: :client, evidence_freshness_ms: capture.freshness_ms}
-                 })
-               ) do
-          encode(capture.profile, observation)
-        else
-          _ -> {:error, :invalid_head_response}
-        end
-      end
-    )
+    observed_at_ms = System.system_time(:millisecond)
+    %{chain_id: chain_id, upstream_instance_id: instance_id, transport: transport} = identity
+    recent = recent_observation(chain_id, instance_id, transport, observed_at_ms)
+
+    with false <- method == "eth_getBlockByNumber" and recent != nil,
+         {:ok, %{"result" => result}} <- Jason.decode(bytes),
+         {:ok, fields} <- head_fields(method, result),
+         false <- recent != nil and fields.height <= recent.height do
+      ProjectionDispatcher.enqueue(
+        @dispatcher,
+        :head_observations,
+        {instance_id <> ":" <> Atom.to_string(transport), chain_id},
+        :erlang.term_to_binary(
+          {{identity.profile, chain_id, instance_id, transport}, sent_at_ms, observed_at_ms,
+           fields}
+        )
+      )
+    end
 
     :ok
   rescue
@@ -143,7 +87,7 @@ defmodule Lasso.BlockSync.ClientObservation do
     :exit, _ -> :ok
   end
 
-  defp record(_capture, _result, _observed_at_ms), do: :ok
+  defp record(_identity, _method, _sent_at_ms, _result), do: :ok
 
   defp head_fields("eth_blockNumber", value) when is_binary(value) do
     with {:ok, height} <- Quantity.decode(value), do: {:ok, %{height: height}}
@@ -165,29 +109,6 @@ defmodule Lasso.BlockSync.ClientObservation do
 
   defp head_fields(_, _), do: {:error, :invalid_head_response}
 
-  defp encode(profile, observation) do
-    base = {1, profile, %{observation | poll_references: []}}
-    available = @max_payload_bytes - :erlang.external_size(base) - 8
-
-    {references, _remaining} =
-      Enum.reduce(observation.poll_references, {[], available}, fn reference, {refs, remaining} ->
-        size = :erlang.external_size(reference)
-
-        if size <= remaining,
-          do: {[reference | refs], remaining - size},
-          else: {refs, remaining}
-      end)
-
-    payload =
-      :erlang.term_to_binary(
-        {1, profile, %{observation | poll_references: Enum.reverse(references)}}
-      )
-
-    if byte_size(payload) <= @max_payload_bytes,
-      do: {:ok, payload},
-      else: {:error, :oversized_head_observation}
-  end
-
   @doc "Configures the bounded, isolated lane for optional head publication."
   @spec lane_options() :: keyword()
   def lane_options do
@@ -204,28 +125,65 @@ defmodule Lasso.BlockSync.ClientObservation do
     ]
   end
 
-  @doc "Publishes an encoded client fact if its initiating profile still references the instance."
+  @doc "Publishes a client-served head if its initiating profile still references the instance."
   @spec deliver(term(), binary()) :: :ok
   def deliver(_scope, payload) do
-    {1, profile, %HeadObservation{} = observation} = :erlang.binary_to_term(payload, [:safe])
+    {{profile, _chain_id, instance_id, _transport} = route, sent_at_ms, observed_at_ms, fields} =
+      :erlang.binary_to_term(payload, [:safe])
 
-    if profile in Catalog.get_instance_refs(observation.instance_id) and
-         not recently_observed?(
-           observation.chain_id,
-           observation.instance_id,
-           observation.transport,
-           observation.observed_at_ms
-         ) do
+    with true <- profile in Catalog.get_instance_refs(instance_id),
+         {:ok, observation} <- observation(route, sent_at_ms, observed_at_ms, fields) do
       Worker.publish_client_observation(observation)
     end
 
     :ok
   end
 
-  defp recently_observed?(chain_id, instance_id, transport, now_ms) do
+  defp recent_observation(chain_id, instance_id, transport, now_ms) do
     case Registry.get_observation(chain_id, instance_id, transport) do
-      {:ok, observation} -> now_ms - observation.observed_at_ms < @sample_interval_ms
-      _ -> false
+      {:ok, last} when now_ms - last.observed_at_ms < @sample_interval_ms -> last
+      _ -> nil
+    end
+  end
+
+  # The scope references are those a poll had reported before the request was sent.
+  defp observation(
+         {profile, chain_id, instance_id, transport},
+         sent_at_ms,
+         observed_at_ms,
+         fields
+       ) do
+    with %{} = catalog <- Catalog.snapshot(),
+         {:ok, plan} <- Catalog.get_routing_plan(catalog, profile, chain_id),
+         true <- instance_id in plan.head_scope.instance_ids do
+      references =
+        [plan.head_scope | Catalog.head_scopes_for_instance(catalog, instance_id)]
+        |> Stream.uniq_by(& &1.scope_id)
+        |> Enum.take(@max_references)
+        |> Enum.flat_map(fn scope ->
+          with {:ok, snapshot} <- Registry.get_cached_head_snapshot(scope),
+               {:ok, reference} <- HeadSnapshot.reference(snapshot),
+               true <- is_nil(reference.observed_at_ms) or reference.observed_at_ms <= sent_at_ms do
+            [%{reference | captured_at_ms: sent_at_ms}]
+          else
+            _ -> []
+          end
+        end)
+
+      HeadObservation.new(
+        Map.merge(fields, %{
+          chain_id: chain_id,
+          instance_id: instance_id,
+          transport: transport,
+          observed_at_ms: observed_at_ms,
+          origin_member_id: Topology.self_node_id(),
+          poll_references: references,
+          attributes: %{
+            collection: :client,
+            evidence_freshness_ms: plan.head_scope.policy.reference_freshness_ms
+          }
+        })
+      )
     end
   end
 end

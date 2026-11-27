@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Learned historical depth applies per resource class instead of per method, so a cutoff learned from `eth_getBalance` refusals also covers `eth_call`, `eth_getCode` and `eth_getStorageAt` of the same state. `eth_getBalance` joins the `state` class. In the trial kit's pruned-history scenario (L1), refusals fell from 20 to 25 per run to 10 to 16.
 - A route held back by a learned method refusal is now a last resort for the rest of the request instead of being dropped after the first dispatch. It is tried only after every ordinary candidate has been tried and while dispatch budget remains, so a read whose other routes fail no longer errors with budget unspent. Custom strategies' candidate lists keep such a route as their last entry too. A learned deferral is withdrawn once enough accepted successes from its route outweigh its refusals, and otherwise expires within an hour. Routes deferred by a learned span limit or historical depth already wait behind the ordinary routes of their availability tier.
 
+### Fixed
+
+- A client that reads `eth_blockNumber` through Lasso and then reads that block no longer gets `null` from a lagging upstream that went first. Every head advance Lasso serves to a client in an `eth_blockNumber` answer now counts as that upstream's report, where it used to be sampled at most once per upstream every 250 ms, so the null fails over to the upstream that served the head. Part of #460.
+
 ### Compatibility
 
 - Learned outcome statistics move to version 3. Version-2 rows load unchanged, except rows for the retired `balance` class, which are dropped and relearned.
