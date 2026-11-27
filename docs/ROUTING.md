@@ -74,7 +74,11 @@ in any profile, defers a route whose fresh observation stays short of that
 block even after crediting the blocks the chain could have produced since. A
 fresh route that reports the qualified reference height on a different block
 hash is deferred the same way. Deferral never excludes a route, so when every
-current route fails or lacks the method, a lagging route still serves.
+current route fails or lacks the method, a lagging route still serves. The one
+exception follows a missing-block error, such as `header not found`, for a read
+at a fixed block: failover then skips the remaining routes whose fresh head is
+known to stay short of that block, even after credit, and keeps every other
+route in order. A route deferred only for a branch conflict is not skipped.
 
 What a request needs comes from its own parameters:
 

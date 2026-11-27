@@ -1646,7 +1646,8 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   # After a missing-block error, failover passes over the routes whose fresh head
-  # is known to stay short of the block and keeps every other route in order.
+  # is known to stay short of the block and keeps every other route in order. A
+  # branch conflict at the head says nothing about an older block, so it stays.
   defp skip_known_behind(rest_channels, ctx, %HeadSuitability{} = head) do
     rest_channels = order_siblings(rest_channels, ctx)
 
@@ -1654,7 +1655,7 @@ defmodule Lasso.RPC.RequestPipeline do
       {%Channel{} = next, remaining, ctx} ->
         route = {next.instance_id, next.transport}
 
-        if match?({_class, :against, _reason}, HeadSuitability.classify(head, route)),
+        if match?({_class, :against, :below_height}, HeadSuitability.classify(head, route)),
           do: skip_known_behind(remaining, ctx, head),
           else: {{next, remaining}, ctx}
 
