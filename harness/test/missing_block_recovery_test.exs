@@ -188,6 +188,25 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
     end)
   end
 
+  test "demoted routes keep their health order, so a caught-up closed route precedes half-open laggards" do
+    behind = @block - 1_001
+
+    world("tiers", [@block + 1, behind, behind, behind], fn tenant, fleets ->
+      [missing, first_half_open, second_half_open, caught_up] = fleets
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+
+      for fleet <- [first_half_open, second_half_open] do
+        Fleet.script(fleet, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
+        half_open!(tenant, fleet)
+      end
+
+      # All three remaining routes are demoted; among them the closed one comes first.
+      {response, sent} = read(tenant, fleets, "priority")
+      assert response.body["result"] == "0x10", inspect({response.body, sent})
+      assert sent == [missing.name, caught_up.name]
+    end)
+  end
+
   defp world(prefix, heads, fun) do
     fleets =
       for {head, i} <- Enum.with_index(heads, 1) do

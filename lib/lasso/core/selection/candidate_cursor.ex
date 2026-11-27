@@ -26,9 +26,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   # Each availability tier scans its ordinary routes before the routes deferred
   # by head suitability or a learned effect. After a missing-block error, routes
-  # whose fresh head stays short of the block follow every tier.
+  # whose fresh head stays short of the block follow every tier, in tier order.
   @queue_keys for(tier <- 1..4, bucket <- [:ordinary, :deferred], do: {tier, bucket}) ++
-                [:below_block]
+                for(tier <- 1..4, do: {tier, :below_block})
   @empty_queues Map.new(@queue_keys, &{&1, :queue.new()})
 
   @enforce_keys [
@@ -301,19 +301,24 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   def below_block_last(%__MODULE__{below_block: nil} = cursor, %HeadSuitability{} = head) do
     cursor = %{cursor | below_block: head}
 
-    Enum.reduce([:supported_deferred, :unsupported_deferred], cursor, fn field, cursor ->
-      queues = Map.fetch!(cursor, field)
+    for field <- [:supported_deferred, :unsupported_deferred],
+        {tier, bucket} = key when bucket != :below_block <- @queue_keys,
+        reduce: cursor do
+      cursor ->
+        queues = Map.fetch!(cursor, field)
 
-      {below, queues} =
-        Enum.map_reduce(@queue_keys, queues, fn key, queues ->
-          {below, reaching} =
-            queues[key] |> :queue.to_list() |> Enum.split_with(&below_block?(cursor, &1))
+        {below, reaching} =
+          queues[key] |> :queue.to_list() |> Enum.split_with(&below_block?(cursor, &1))
 
-          {below, Map.put(queues, key, :queue.from_list(reaching))}
-        end)
+        below = :queue.join(queues[{tier, :below_block}], :queue.from_list(below))
 
-      Map.put(cursor, field, Map.put(queues, :below_block, :queue.from_list(List.flatten(below))))
-    end)
+        queues =
+          queues
+          |> Map.put(key, :queue.from_list(reaching))
+          |> Map.put({tier, :below_block}, below)
+
+        Map.put(cursor, field, queues)
+    end
   end
 
   def below_block_last(%__MODULE__{} = cursor, _head), do: cursor
@@ -326,7 +331,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp queue_key(cursor, descriptor, channel, tier) do
     if below_block?(cursor, channel),
-      do: :below_block,
+      do: {tier, :below_block},
       else: {tier, bucket(cursor, descriptor)}
   end
 
