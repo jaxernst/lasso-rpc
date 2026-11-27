@@ -436,7 +436,7 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
     do: true
 
   defp contradicts_hint?(%{kind: :disproved_error, shapes: shapes}, %Evidence{shape: shape}),
-    do: Map.has_key?(shapes, shape)
+    do: Map.get(shapes, shape, 0) > System.system_time(:millisecond)
 
   defp contradicts_hint?(_, _), do: false
 
