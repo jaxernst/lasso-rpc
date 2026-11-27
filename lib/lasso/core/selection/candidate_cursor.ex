@@ -520,19 +520,15 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
         %{template_provider_config: provider.config, transport: transport}
       end,
-      &head_class(cursor, &1)
+      &head_rank(cursor, &1)
     )
   end
 
   defp order_siblings(channels, groups, cursor),
-    do: SiblingLast.order(channels, groups, & &1, &head_class(cursor, &1))
+    do: SiblingLast.order(channels, groups, & &1, &head_rank(cursor, &1))
 
-  defp head_class(cursor, route),
-    do:
-      elem(
-        HeadSuitability.classify(cursor.effect_context.head_suitability, Decision.route(route)),
-        0
-      )
+  defp head_rank(cursor, route),
+    do: HeadSuitability.rank(cursor.effect_context.head_suitability, Decision.route(route))
 
   @doc "Records a dispatch so learned recovery cannot add another send."
   @spec attempted_provider(t(), Channel.t()) :: t()

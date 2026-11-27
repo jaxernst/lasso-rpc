@@ -72,11 +72,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   Orders one batch of descriptors by head suitability and learned deferral in
   one precedence step, and captures the decisions that changed it.
 
-  Routes deferred by neither come first, head class 0 before class 1. Routes
-  head suitability defers or an `on`-mode learned deferral defers follow, in
-  `HeadSuitability.rank/3` order; the returned set names them so they can wait
-  behind the rest of their availability tier. Shadow-mode effects never change
-  the order.
+  Routes deferred by neither come first, in `HeadSuitability.rank/3` order.
+  Routes with head class 2 or an `on`-mode learned deferral follow; the returned
+  set names them so they can wait behind the rest of their availability tier.
+  Shadow-mode effects never change the order.
   """
   @spec order_with_decision(list(), term(), binary(), map()) ::
           {list(), MapSet.t(HeadSuitability.route()), [map()]}
