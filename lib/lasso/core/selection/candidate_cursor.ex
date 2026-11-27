@@ -52,7 +52,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 excluded_fallback: nil,
-                dispatched?: false,
                 diversity_seen: nil,
                 diversity_ordered_tiers: MapSet.new(),
                 supported?: false,
@@ -418,7 +417,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
-  defp pop_deferred(%{dispatched?: false, excluded_fallback: channel} = cursor, _field, [])
+  # A route a learned refusal held back is the last resort: tried only once no
+  # other candidate remains, while the request still has dispatch budget.
+  defp pop_deferred(%{excluded_fallback: channel} = cursor, _field, [])
        when not is_nil(channel),
        do: {:ok, channel, %{cursor | returned: cursor.returned + 1, excluded_fallback: nil}}
 
@@ -533,11 +534,6 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         HeadSuitability.classify(cursor.effect_context.head_suitability, Decision.route(route)),
         0
       )
-
-  @doc "Records a dispatch so learned recovery cannot add another send."
-  @spec attempted_provider(t(), Channel.t()) :: t()
-  def attempted_provider(cursor, _channel),
-    do: %{cursor | dispatched?: true, excluded_fallback: nil}
 
   defp return_allowed(channel, cursor) do
     if current?(cursor) do

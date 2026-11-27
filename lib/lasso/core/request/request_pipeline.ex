@@ -643,15 +643,18 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_attempt_channels([%Channel{} = channel], ctx, param_rejected, caller_guard, rest) do
-    if is_list(rest) and rest != [] and is_nil(ctx.opts.provider_override) and
-         learned_method_refused?(ctx, channel) do
+    # A learned-refused channel moves behind the rest as their last resort, and is
+    # tried in its turn once only learned-refused channels remain.
+    if is_list(rest) and is_nil(ctx.opts.provider_override) and
+         learned_method_refused?(ctx, channel) and
+         not Enum.all?(rest, &learned_method_refused?(ctx, &1)) do
       Lasso.RPC.ProviderKnowledge.AppliedEffects.record_exclusion(channel.profile, %{
         route: {channel.instance_id, channel.transport},
         kind: :method_refusal,
         dimension: Lasso.RPC.BoundedIdentifier.encode(ctx.method)
       })
 
-      attempt_channels(rest, ctx, param_rejected, caller_guard)
+      attempt_channels(rest ++ [channel], ctx, param_rejected, caller_guard)
     else
       admit_channel(channel, rest, ctx, param_rejected, caller_guard)
     end
@@ -1006,7 +1009,7 @@ defmodule Lasso.RPC.RequestPipeline do
            instance_id,
            channel.transport,
            reserved_at_us,
-           fallback_channel_available?(rest_channels) or fallback_profile_available?(ctx)
+           fallback_channel_available?(rest_channels, ctx) or fallback_profile_available?(ctx)
          ) do
       {:ok, envelope, attempt_timeout_ms} ->
         # A full remaining-time allocation keeps the exact absolute cutoff.
@@ -1032,11 +1035,17 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp fallback_channel_available?(%CandidateCursor{} = cursor),
+  defp fallback_channel_available?(%CandidateCursor{} = cursor, _ctx),
     do: CandidateCursor.pending?(cursor)
 
-  defp fallback_channel_available?([]), do: false
-  defp fallback_channel_available?(_candidates), do: true
+  defp fallback_channel_available?([], _ctx), do: false
+
+  # Without an override a learned-refused channel is only a last resort, so it
+  # reserves no time.
+  defp fallback_channel_available?(candidates, %{opts: %{provider_override: nil}} = ctx),
+    do: Enum.any?(candidates, &(not learned_method_refused?(ctx, &1)))
+
+  defp fallback_channel_available?(_candidates, _ctx), do: true
 
   defp execute_owned_channel(
          channel,
@@ -1477,12 +1486,6 @@ defmodule Lasso.RPC.RequestPipeline do
   defp qualify_response(_outcome, ctx, _channel), do: {{:continue, nil}, ctx}
 
   defp handle_owner_outcome(outcome, channel, rest_channels, ctx, caller_guard, decision) do
-    rest_channels =
-      if match?(%CandidateCursor{}, rest_channels) and
-           fact_certainty(outcome.fact) != :not_dispatched,
-         do: CandidateCursor.attempted_provider(rest_channels, channel),
-         else: rest_channels
-
     head =
       if MissingBlock.candidate?(ctx, outcome),
         do: MissingBlock.capture(ctx, channel, rest_channels)
