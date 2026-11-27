@@ -1,6 +1,6 @@
 # core-websocket-6
 
-- `core-websocket-6` A subscription that fails over to an upstream behind the head it already delivered stays open: Lasso holds the replacement's older heads and logs, resumes once the replacement reaches the delivered head with the same block hash, and closes with `1011` at the recovery deadline when it never gets there. A replacement on another branch at that height is replayed as a reorg, not spliced.
+- `core-websocket-6` A subscription that fails over to an upstream behind the head it already delivered stays open: Lasso holds the replacement's older heads, resumes once the replacement reaches the delivered head with the same block hash, and closes with `1011` at the recovery deadline when it never gets there. Log delivery is not exactly-once: duplicate suppression is bounded, a re-added log is delivered again, and a log from below the last delivered block can arrive after it (see [WebSocket configuration](../../../CONFIGURATION.md#websocket)). A replacement on another branch at that height is replayed as a reorg, not spliced.
 
 [Area and shared preconditions](README.md).
 
