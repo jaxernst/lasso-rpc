@@ -859,7 +859,7 @@ defmodule Lasso.Core.ProjectionLane do
   end
 
   defp first_ready_key(table, bucket) do
-    case :ets.next(table, {:ready, bucket}) do
+    case :ets.next(table, ready_key_floor(bucket)) do
       {:ready, ^bucket, _scope, _sequence} = key -> key
       _other -> nil
     end
@@ -867,6 +867,10 @@ defmodule Lasso.Core.ProjectionLane do
 
   defp ready_key(bucket, scope, sequence), do: {:ready, bucket, scope, sequence}
   defp ready_key_after_scope(bucket, scope), do: {:ready, bucket, scope, :end_of_scope}
+
+  # Tuples order by size first, so the seek key must be a 4-tuple; an integer
+  # sorts before every scope tuple and keeps the seek inside this bucket.
+  defp ready_key_floor(bucket), do: {:ready, bucket, 0, 0}
 
   defp row(state, token, scope, enqueued_at, payload),
     do: {token.slot, state, token, scope, enqueued_at, byte_size(payload), payload}
