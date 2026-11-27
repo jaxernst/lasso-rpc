@@ -2032,9 +2032,10 @@ defmodule Lasso.RPC.RequestPipeline do
   defp serve_ordinary(_error, outcome, channel, rest_channels, ctx, caller_guard),
     do: ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
 
-  # A missing-block error is no answer worth holding, so its extra send only
-  # steers failover: the route whose fresh head reached the block goes next and
-  # the whole cursor stays behind it, attempted routes aside.
+  # A missing-block error is no answer worth holding, so recovery only reorders
+  # its failover: the route whose fresh head reached the block goes next and the
+  # whole cursor stays behind it. The dispatch budget bounds it like any failover,
+  # and the extra send stays for a null.
   defp recover_missing(
          %JError{} = error,
          outcome,
@@ -2044,13 +2045,11 @@ defmodule Lasso.RPC.RequestPipeline do
          caller_guard,
          {:recover, _height, routes}
        ) do
-    with nil <- NullRecovery.denial(ctx.execution_envelope),
-         {:ok, envelope} = ExecutionEnvelope.spend_extra_send(ctx.execution_envelope),
-         {%Channel{} = alternate, _rest, steered} <-
-           alternate(cursor, %{ctx | execution_envelope: envelope}, routes, 8) do
-      :ok = NullRecovery.decision(steered, :proposed)
-      ordinary_owner_error(outcome, channel, {alternate, cursor}, steered, caller_guard)
-    else
+    case alternate(cursor, ctx, routes, 8) do
+      {%Channel{} = alternate, _rest, steered} ->
+        :ok = NullRecovery.decision(steered, :proposed)
+        ordinary_owner_error(outcome, channel, {alternate, cursor}, steered, caller_guard)
+
       {nil, _rest, _ctx} ->
         decline_missing(
           error,
@@ -2061,9 +2060,6 @@ defmodule Lasso.RPC.RequestPipeline do
           caller_guard,
           :alternate_unavailable
         )
-
-      reason ->
-        decline_missing(error, outcome, channel, cursor, ctx, caller_guard, reason)
     end
   end
 

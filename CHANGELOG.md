@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A missing-block error, such as `-32000 header not found` for a block the upstream has not reached, now gets the same one-send recovery as a null: the request's one extra send goes to an upstream whose fresh head reached the block, instead of the next lagging upstream in cursor order (#458).
+- A missing-block error, such as `-32000 header not found` for a block the upstream has not reached, now fails over first to an upstream whose fresh head reached the block, instead of the next lagging upstream in cursor order, within the read's dispatch budget. The one extra send stays available for a null that follows (#458).
 
 ### Compatibility
 
