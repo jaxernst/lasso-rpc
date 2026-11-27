@@ -2,10 +2,9 @@ defmodule Lasso.RPC.NullRecovery do
   @moduledoc """
   One extra send for a client's missing numeric block, authorized only by
   fresh evidence of N on another physical instance in the current phase scope.
-  A held null and its provenance survive an unavailable or failed alternate.
+  The original null and its provenance survive an unavailable or failed alternate.
   """
 
-  alias Lasso.JSONRPC.Error
   alias Lasso.RPC.{Channel, ExecutionEnvelope, MissingBlock}
   alias Lasso.RPC.Response.Success
   alias Lasso.RPC.Selection.HeadSuitability
@@ -52,7 +51,6 @@ defmodule Lasso.RPC.NullRecovery do
   def missing?(ctx, %Success{} = result, head, channel),
     do: MissingBlock.missing?(ctx, {:ok, result}, head, channel)
 
-  def missing?(_ctx, %Error{category: :block_not_available}, _head, _channel), do: true
   def missing?(_ctx, _result, _head, _channel), do: false
 
   # Routes on other physical instances whose fresh observation reached the block.

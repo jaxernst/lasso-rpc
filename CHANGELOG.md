@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A missing-block error, such as `-32000 header not found` for a block the upstream has not reached, now fails over first to an upstream whose fresh head reached the block, instead of the next lagging upstream in cursor order, within the read's dispatch budget. The one extra send stays available for a null that follows (#458).
+- After a missing-block error, such as `-32000 header not found` for a block the upstream has not reached, failover now passes over upstreams whose fresh head is known to stay short of the block, and keeps every other upstream in cursor order. A read no longer spends its dispatch budget on known laggards before reaching an upstream that has the block, and never sends more than before (#458).
 
 ### Compatibility
 

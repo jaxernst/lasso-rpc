@@ -49,6 +49,7 @@ defmodule Lasso.RPC.RequestPipeline do
     Selection,
     Selection.CandidateCursor,
     Selection.Exhaustion,
+    Selection.HeadSuitability,
     Selection.SiblingLast,
     TransportRegistry
   }
@@ -1542,8 +1543,7 @@ defmodule Lasso.RPC.RequestPipeline do
   end
 
   defp do_handle_owner_outcome(
-         %{fact: %AttemptTerminal.Response{kind: :success} = fact, result: {:ok, result, _io_ms}} =
-           outcome,
+         %{fact: %AttemptTerminal.Response{kind: :success} = fact, result: {:ok, result, _io_ms}},
          channel,
          rest_channels,
          ctx,
@@ -1563,7 +1563,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
         case if(require_open?, do: request_open(ctx, caller_guard), else: :ok) do
           :ok ->
-            serve_success(result, outcome, channel, rest_channels, ctx, caller_guard, head)
+            serve_success(result, fact, channel, rest_channels, ctx, caller_guard, head)
 
           {:error, :caller_abandoned} ->
             Success.release_capacity(result, :caller_abandoned)
@@ -1641,9 +1641,29 @@ defmodule Lasso.RPC.RequestPipeline do
          {:continue, nil},
          head
        ) do
-    {reason, _latency_ms} = owner_error(outcome)
-    assess_missing(reason, outcome, channel, rest_channels, ctx, caller_guard, head)
+    {rest_channels, ctx} = skip_known_behind(rest_channels, ctx, head)
+    ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
   end
+
+  # After a missing-block error, failover passes over the routes whose fresh head
+  # is known to stay short of the block and keeps every other route in order.
+  defp skip_known_behind(rest_channels, ctx, %HeadSuitability{} = head) do
+    rest_channels = order_siblings(rest_channels, ctx)
+
+    case pop_candidate(rest_channels, ctx) do
+      {%Channel{} = next, remaining, ctx} ->
+        route = {next.instance_id, next.transport}
+
+        if match?({_class, :against, _reason}, HeadSuitability.classify(head, route)),
+          do: skip_known_behind(remaining, ctx, head),
+          else: {{next, remaining}, ctx}
+
+      {nil, remaining, ctx} ->
+        {remaining, ctx}
+    end
+  end
+
+  defp skip_known_behind(rest_channels, ctx, _head), do: {rest_channels, ctx}
 
   defp ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard) do
     rest_channels = order_siblings(rest_channels, ctx)
@@ -1986,7 +2006,7 @@ defmodule Lasso.RPC.RequestPipeline do
   @spec handle_success(any(), number(), Channel.t(), RequestContext.t()) :: result()
   defp serve_success(
          result,
-         %{fact: fact},
+         fact,
          channel,
          _rest_channels,
          %{null_recovery: %NullRecovery.State{} = state} = ctx,
@@ -2007,65 +2027,22 @@ defmodule Lasso.RPC.RequestPipeline do
     end
   end
 
-  defp serve_success(result, outcome, channel, rest_channels, ctx, caller_guard, head),
-    do: assess_missing(result, outcome, channel, rest_channels, ctx, caller_guard, head)
-
-  # A null or a missing-block error from one upstream may spend the request's
-  # one extra send on another whose fresh head reached the block. Otherwise the
-  # answer is served or fails over as any other.
-  defp assess_missing(answer, outcome, channel, rest_channels, ctx, caller_guard, head) do
-    case NullRecovery.assess(ctx, channel, answer, head) do
+  defp serve_success(result, fact, channel, rest_channels, ctx, caller_guard, head) do
+    case NullRecovery.assess(ctx, channel, result, head) do
       :ordinary ->
-        serve_ordinary(answer, outcome, channel, rest_channels, ctx, caller_guard)
+        handle_success(result, fact_latency_ms(fact), channel, ctx)
 
       {:declined, reason} ->
-        decline_missing(answer, outcome, channel, rest_channels, ctx, caller_guard, reason)
+        decline_missing(result, fact, channel, ctx, caller_guard, reason)
 
       {:recover, _, _} = assessment ->
-        recover_missing(answer, outcome, channel, rest_channels, ctx, caller_guard, assessment)
-    end
-  end
-
-  defp serve_ordinary(%Success{} = result, outcome, channel, _rest_channels, ctx, _caller_guard),
-    do: handle_success(result, fact_latency_ms(outcome.fact), channel, ctx)
-
-  defp serve_ordinary(_error, outcome, channel, rest_channels, ctx, caller_guard),
-    do: ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
-
-  # A missing-block error is no answer worth holding, so recovery only reorders
-  # its failover: the route whose fresh head reached the block goes next and the
-  # whole cursor stays behind it. The dispatch budget bounds it like any failover,
-  # and the extra send stays for a null.
-  defp recover_missing(
-         %JError{} = error,
-         outcome,
-         channel,
-         cursor,
-         ctx,
-         caller_guard,
-         {:recover, _height, routes}
-       ) do
-    case alternate(cursor, ctx, routes, 8) do
-      {%Channel{} = alternate, _rest, steered} ->
-        :ok = NullRecovery.decision(steered, :proposed)
-        ordinary_owner_error(outcome, channel, {alternate, cursor}, steered, caller_guard)
-
-      {nil, _rest, _ctx} ->
-        decline_missing(
-          error,
-          outcome,
-          channel,
-          cursor,
-          ctx,
-          caller_guard,
-          :alternate_unavailable
-        )
+        recover_missing(result, fact, channel, rest_channels, ctx, caller_guard, assessment)
     end
   end
 
   defp recover_missing(
-         %Success{} = result,
-         %{fact: fact} = outcome,
+         result,
+         fact,
          channel,
          cursor,
          ctx,
@@ -2109,7 +2086,7 @@ defmodule Lasso.RPC.RequestPipeline do
         end
 
       reason ->
-        decline_missing(result, outcome, channel, cursor, ctx, caller_guard, reason)
+        decline_missing(result, fact, channel, ctx, caller_guard, reason)
     end
   end
 
@@ -2120,12 +2097,15 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp cap_recovery_cursor(cursor, _envelope), do: cursor
 
-  defp decline_missing(%Success{} = result, outcome, channel, _rest, ctx, caller_guard, reason) do
+  defp decline_missing(result, fact, channel, ctx, caller_guard, reason) do
     :ok = NullRecovery.decision(ctx, reason)
+    finish_missing_response(result, fact, channel, ctx, caller_guard)
+  end
 
+  defp finish_missing_response(result, fact, channel, ctx, caller_guard) do
     case request_open(ctx, caller_guard) do
       :ok ->
-        handle_success(result, fact_latency_ms(outcome.fact), channel, ctx)
+        handle_success(result, fact_latency_ms(fact), channel, ctx)
 
       {:error, reason} ->
         Capacity.release(result, reason)
@@ -2134,11 +2114,6 @@ defmodule Lasso.RPC.RequestPipeline do
           do: finalize_caller_abandoned(ctx),
           else: finalize_bounded_error(ctx, reason)
     end
-  end
-
-  defp decline_missing(_error, outcome, channel, rest_channels, ctx, caller_guard, reason) do
-    :ok = NullRecovery.decision(ctx, reason)
-    ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
   end
 
   defp alternate(_cursor, ctx, _routes, 0), do: {nil, [], ctx}

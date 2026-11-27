@@ -54,30 +54,58 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
     end
   end
 
-  test "a steered send that fails still fails over to the next upstream with the block" do
-    world("steered", [@block + 1, @block + 1, @block + 1], fn tenant, fleets ->
-      [missing, failing, _serving] = fleets
-      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
-      Fleet.script(failing, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
+  test "a supporter past skipped laggards that fails still fails over to the next one" do
+    behind = @block - 1_001
 
+    world("past-laggard", [@block + 1, behind, @block + 1, @block + 1], fn tenant, fleets ->
+      [missing, lagging, failing, serving] = fleets
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      Fleet.script(lagging, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      Fleet.script(failing, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
+      half_open!(tenant, failing)
+      half_open!(tenant, serving)
+
+      # The closed laggard precedes both half-open supporters, so a read that sent to
+      # it would spend its third dispatch on the failing supporter and never reach
+      # the serving one.
       {response, sent} = read(tenant, fleets, "priority")
       assert response.body["result"] == "0x10", inspect({response.body, sent})
-      assert sent == Enum.map(fleets, & &1.name)
+      assert sent == [missing.name, failing.name, serving.name]
     end)
   end
 
-  test "a steered send that fails still reaches an upstream the search passed over" do
-    world("skipped", [@block + 1, nil, @block + 1], fn tenant, fleets ->
+  test "an upstream with an unknown head keeps its place after a missing-block error" do
+    world("unknown", [@block + 1, nil, @block + 1], fn tenant, fleets ->
       [missing, unknown, failing] = fleets
       Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
       Fleet.script(failing, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
       half_open!(tenant, failing)
 
-      # Under priority the unknown upstream answers before the failing one is tried,
-      # so a send to all three means the steered send went ahead of it.
       {response, sent} = read(tenant, fleets, "priority")
       assert response.body["result"] == "0x10", inspect({response.body, sent})
-      assert sent == [missing.name, unknown.name, failing.name]
+      assert sent == [missing.name, unknown.name]
+    end)
+  end
+
+  test "a slow half-open supporter leaves the deadline to a ready upstream with an unknown head" do
+    timeouts = Application.get_env(:lasso, :method_timeouts, %{})
+    Application.put_env(:lasso, :method_timeouts, Map.put(timeouts, "eth_getBalance", 350))
+    on_exit(fn -> Application.put_env(:lasso, :method_timeouts, timeouts) end)
+
+    world("slow", [@block + 1, nil, @block + 1], fn tenant, fleets ->
+      [missing, serving, slow] = fleets
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      half_open!(tenant, slow)
+      token = make_ref()
+      Fleet.script(slow, "eth_getBalance", [], {:hold, token})
+
+      try do
+        {response, sent} = read(tenant, fleets, "priority")
+        assert response.body["result"] == "0x10", inspect({response.body, sent})
+        assert sent == [missing.name, serving.name]
+      after
+        Fleet.release(slow, token, {:answer, "0x10"})
+      end
     end)
   end
 
