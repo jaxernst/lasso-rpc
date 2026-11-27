@@ -1,6 +1,6 @@
 # core-websocket-6
 
-- `core-websocket-6` A subscription that fails over to an upstream behind the head it already delivered stays open: Lasso holds the replacement's older heads and logs, resumes once the replacement reaches the delivered head with the same block hash, and closes with `1011` at the recovery deadline when it never gets there. A replacement on another branch at that height is replayed as a reorg, not spliced.
+- `core-websocket-6` A subscription that fails over to an upstream behind the head it already delivered stays open: Lasso holds the replacement's older heads and logs, resumes once the replacement reaches the delivered head with the same block hash, and closes with `1011` at the recovery deadline when it never gets there. No log from below the last log delivered reaches the client, except a reorg's removals and its new-chain logs. A replacement on another branch at that height is replayed as a reorg, not spliced.
 
 [Area and shared preconditions](README.md).
 
@@ -16,5 +16,7 @@ Subscribe through `$WS` and push heads 101 to 105 from the first upstream. Then 
 - `logs` at `lag` 2: the socket stays open and the client receives exactly one log per block, with no gap or duplicate.
 - The second upstream frozen 2 blocks behind: the client receives nothing more, and the socket closes with `1011` between 29 and 33 seconds after the first upstream dies.
 - The second upstream on another branch from height 105, at `lag` 0 and 2: the client receives that branch's block 105 before any child of it, then the branch's later heads, each linked to the previous head received. Both lags deliver the same frames.
+- `logs` at `lag` 2, with the first upstream announcing only block 105's log: the client receives logs from 105 onward and none from a block below 105, although the second upstream announces 104 while it catches up.
+- `logs` at `lag` 2, with the second upstream on another branch from height 104 and the main chain carrying no log at 104: after logs 101, 102, 103 and 105, the client receives the removal of 105, then the branch's logs from 104 onward in block order.
 
 The oracle is the client's recorded frames and close code.

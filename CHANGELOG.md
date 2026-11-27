@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `logs` subscription that fails over to an upstream catching up from behind no longer receives logs from blocks below the last log it was delivered. A client whose first log was in block 105 used to receive block 104's log after it. A reorg below that log still delivers its removals and every new-chain log, including logs at heights where the old chain had none.
 - A `newHeads` or `logs` subscription that fails over to an upstream a few blocks behind the head it already delivered no longer closes with `1011` within milliseconds. Lasso now waits for the replacement to reach the delivered head, checks that block's hash against the one the client received, and resumes from there, so heads arrive contiguous with no duplicate or gap. A replacement that never catches up still closes the subscription at the recovery deadline, and one on another branch at that height is replayed as a reorg. Fixes #467.
 - A client that reads `eth_blockNumber` through Lasso and then reads that block no longer gets `null` from a lagging upstream that went first. Every head advance Lasso serves to a client in an `eth_blockNumber` answer now counts as that upstream's report, where it used to be sampled at most once per upstream every 250 ms, so the null fails over to the upstream that served the head. Part of #460.
 

@@ -55,6 +55,29 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     assert Enum.all?(w.events, &(&1["blockHash"] == hash(:main, hex(&1["blockNumber"]))))
   end
 
+  test "a replacement catching up does not deliver logs from below the first delivered log" do
+    w = run(:logs, lag: 2, first: @delivered)
+
+    assert w.closed == nil
+
+    assert Enum.map(w.events, &hex(&1["blockNumber"])) ==
+             Enum.to_list(@delivered..(@delivered - 2 + @ticks))
+  end
+
+  test "a reorg below the delivered log during recovery delivers its removals and new-chain logs" do
+    fork = @delivered - 1
+    last = @delivered - 2 + @ticks
+    # The main chain has no log at the fork height, so only replay from the fork reaches it.
+    w = run(:logs, lag: 2, fork_at: fork, no_log: fork)
+
+    assert w.closed == nil
+
+    assert Enum.map(w.events, &{hex(&1["blockNumber"]), &1["removed"], &1["blockHash"]}) ==
+             Enum.map([101, 102, 103, @delivered], &{&1, false, hash(:main, &1)}) ++
+               [{@delivered, true, hash(:main, @delivered)}] ++
+               Enum.map(fork..last, &{&1, false, hash(:fork, &1)})
+  end
+
   defp assert_contiguous(w, lag) do
     assert {lag, w.closed} == {lag, nil}
     assert {lag, numbers(w)} == {lag, Enum.to_list(101..(@delivered - lag + @ticks))}
@@ -64,10 +87,17 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
 
   defp run(kind, opts) do
     lag = Keyword.fetch!(opts, :lag)
+    first = Keyword.get(opts, :first, @start + 1)
 
     {:ok, chain} =
       Agent.start_link(fn ->
-        %{a: @start, b: @start - lag, a_dead: false, fork_at: opts[:fork_at]}
+        %{
+          a: @start,
+          b: @start - lag,
+          a_dead: false,
+          fork_at: opts[:fork_at],
+          no_log: opts[:no_log]
+        }
       end)
 
     suffix = System.unique_integer([:positive])
@@ -111,9 +141,14 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       w =
         Enum.reduce((@start + 1)..@delivered, w, fn n, w ->
           Agent.update(chain, &%{&1 | a: n, b: n - lag})
-          notify(w, :a, n)
+          if n >= first, do: notify(w, :a, n)
           notify(w, :b, n - lag)
-          await(w, &(length(&1.events) == n - @start), "head #{n} from the first upstream")
+
+          await(
+            w,
+            &(length(&1.events) == Enum.count(first..n//1, fn m -> m != opts[:no_log] end)),
+            "head #{n} from the first upstream"
+          )
         end)
 
       fail_first(w) |> follow(lag, opts)
@@ -172,7 +207,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     for report <- w.subs[id] do
       case report.request["params"] do
         ["newHeads" | _] -> Fleet.notify(report, block(id, n, state))
-        ["logs" | _] -> Fleet.notify(report, log(id, n, state))
+        ["logs" | _] -> if log = log(id, n, state), do: Fleet.notify(report, log)
       end
     end
   end
@@ -251,7 +286,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       [],
       respond.(fn %{"params" => [filter | _]}, s ->
         range = hex(filter["fromBlock"])..min(hex(filter["toBlock"]), s[id])//1
-        {:answer, Enum.map(range, &log(id, &1, s))}
+        {:answer, range |> Enum.map(&log(id, &1, s)) |> Enum.reject(&is_nil/1)}
       end)
     )
 
@@ -279,6 +314,8 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       "gasUsed" => "0x0"
     }
   end
+
+  defp log(id, n, %{no_log: n} = state) when id == :a or n < state.fork_at, do: nil
 
   defp log(id, n, state) do
     %{

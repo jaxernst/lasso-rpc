@@ -1226,7 +1226,11 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           drain_head_buffers(state, replay_buffer, live_buffer, context)
 
         {:logs, _filter} ->
-          drain_log_buffers(state, replay_buffer, live_buffer)
+          drain_log_buffers(
+            state,
+            replay_buffer,
+            drop_logs_below_checkpoint(live_buffer, state, context)
+          )
       end
 
     case result do
@@ -1295,6 +1299,23 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       {next_stream_state, :skip} ->
         next_stream_state
+    end
+  end
+
+  # A replacement catching up re-announces blocks below the delivered log. Canonical replay
+  # covers every block a reorg changed, so only its removals still need the live path.
+  defp drop_logs_below_checkpoint(logs, _state, %{recovery_kind: :live_reorg}), do: logs
+
+  defp drop_logs_below_checkpoint(logs, state, _context) do
+    case StreamState.last_log_block(state.state) do
+      nil ->
+        logs
+
+      checkpoint ->
+        Enum.reject(logs, fn log ->
+          Map.get(log, "removed") != true and
+            decode_hex(Map.get(log, "blockNumber", "0x0")) < checkpoint
+        end)
     end
   end
 
