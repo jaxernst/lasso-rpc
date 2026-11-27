@@ -57,9 +57,32 @@ defmodule Lasso.RPC.ProviderKnowledge.Constraint do
         ]
 
       true ->
-        [constraint_kind: constraint, result_verification: verification]
+        [constraint_kind: constraint, result_verification: verification] ++
+          disproval_options(constraint, outcome)
     end
   end
+
+  # Only an error no other mechanism owns (credential health, capacity and quota,
+  # method refusal, missing-block recovery, typed constraints) carries the message
+  # fingerprint that lets a served peer disprove it.
+  defp disproval_options(nil, %{
+         fact: %AttemptTerminal.Response{kind: :application_error},
+         result: {:error, %JError{category: category, message: message}, _elapsed}
+       })
+       when category not in [
+              :auth_error,
+              :rate_limit,
+              :quota,
+              :quota_exhausted,
+              :method_not_found,
+              :block_not_available
+            ] and is_binary(message),
+       do: [template_fingerprint: Lasso.Core.Support.ErrorClassifier.message_fingerprint(message)]
+
+  defp disproval_options(constraint, %{fact: fact, result: {:error, error}}),
+    do: disproval_options(constraint, %{fact: fact, result: {:error, error, 0}})
+
+  defp disproval_options(_constraint, _outcome), do: []
 
   # HeadPolicy already validated the dispatched header before rewriting it to
   # the client's scalar block number. Reuse that accepted evidence, not its body.

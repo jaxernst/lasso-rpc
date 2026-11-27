@@ -4,7 +4,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   alias Lasso.Config.ProfileId
   alias Lasso.RPC.BoundedIdentifier
   alias Lasso.RPC.ProviderKnowledge
-  alias Lasso.RPC.ProviderKnowledge.{Decision, Evidence}
+  alias Lasso.RPC.ProviderKnowledge.Decision
   alias Lasso.RPC.ProviderKnowledge.Learners.{DisprovedError, HistoricalDepth}
   alias Lasso.RPC.Selection.HeadSuitability
   alias Lasso.RPC.TransportRegistry
@@ -456,21 +456,17 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   defp disproved?(scope, method, context) do
     with {:ok, %{source: source, shapes: shapes}} when source in [:local, :imported] <-
            ProviderKnowledge.disproved_error(scope, method),
-         true <- shape_disproved?(shapes, method, context) do
+         true <- shape_disproved?(shapes, context) do
       not Map.has_key?(context, :request_shape) or :rand.uniform() >= DisprovedError.probe_share()
     else
       _ -> false
     end
   end
 
-  defp shape_disproved?(shapes, method, %{request_shape: {params, head_height}}) do
-    case Map.fetch(shapes, Evidence.request_shape(method, params, head_height)) do
-      {:ok, expires_at_ms} -> expires_at_ms > System.system_time(:millisecond)
-      :error -> false
-    end
-  end
+  defp shape_disproved?(shapes, %{request_shape: shape}),
+    do: Map.get(shapes, shape, 0) > System.system_time(:millisecond)
 
-  defp shape_disproved?(_shapes, _method, _context), do: true
+  defp shape_disproved?(_shapes, _context), do: true
 
   defp effect_scope(descriptor, plan, method, context) do
     {provider, transport} = route(descriptor)
