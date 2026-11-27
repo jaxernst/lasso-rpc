@@ -72,7 +72,15 @@ defmodule Lasso.GatewayMethodRefusalTest do
     assert_receive {:called, "refusing"}
     assert_receive {:called, "healthy"}
 
-    # The healthy peer disproved the refusal, so later reads mostly skip the refusing route.
+    # The healthy peer's success disproves the refusal; later reads are still served.
+    Lasso.Test.Harness.Settle.await("refusal disproved", fn ->
+      {:ok, hints} = Lasso.Diagnostics.provider_knowledge("public", chain, "refusing")
+
+      if Enum.any?(Map.get(hints, :http, []), &(&1.kind == :disproved_error)),
+        do: {:ok, :disproved},
+        else: hints
+    end)
+
     for _request <- 1..5 do
       assert %{"id" => 1, "result" => "0x123"} = rpc(chain)
       assert_receive {:called, "healthy"}
