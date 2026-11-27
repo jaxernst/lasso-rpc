@@ -55,28 +55,58 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     assert Enum.all?(w.events, &(&1["blockHash"] == hash(:main, hex(&1["blockNumber"]))))
   end
 
-  test "a replacement catching up does not deliver logs from below the first delivered log" do
+  test "a log the client has, replayed live and over HTTP by a catching-up replacement, arrives once" do
+    w = run(:logs, lag: 2)
+
+    assert w.closed == nil
+    assert @delivered in w.announced
+    assert Enum.any?(w.log_reads, fn {from, to} -> @delivered in from..to//1 end)
+
+    assert Enum.map(w.events, &identity/1) ==
+             Enum.map(101..(@delivered - 2 + @ticks), &identity(:main, &1))
+  end
+
+  # Order below the delivered log is not promised, so these cases compare what arrived as a set.
+  test "a catching-up replacement delivers an unseen older log once and drops the ones the client has" do
     w = run(:logs, lag: 2, first: @delivered)
 
     assert w.closed == nil
 
-    assert Enum.map(w.events, &hex(&1["blockNumber"])) ==
-             Enum.to_list(@delivered..(@delivered - 2 + @ticks))
+    assert Enum.sort(Enum.map(w.events, &identity/1)) ==
+             Enum.map((@delivered - 1)..(@delivered - 2 + @ticks), &identity(:main, &1))
   end
 
   test "a reorg below the delivered log during recovery delivers its removals and new-chain logs" do
     fork = @delivered - 1
-    last = @delivered - 2 + @ticks
-    # The main chain has no log at the fork height, so only replay from the fork reaches it.
+    # The main chain has no log at the fork height, so the new chain's log there is owed too.
     w = run(:logs, lag: 2, fork_at: fork, no_log: fork)
 
     assert w.closed == nil
-
-    assert Enum.map(w.events, &{hex(&1["blockNumber"]), &1["removed"], &1["blockHash"]}) ==
-             Enum.map([101, 102, 103, @delivered], &{&1, false, hash(:main, &1)}) ++
-               [{@delivered, true, hash(:main, @delivered)}] ++
-               Enum.map(fork..last, &{&1, false, hash(:fork, &1)})
+    assert_owed(w, [101, 102, 103, @delivered], fork)
   end
+
+  test "a reorg with no unchanged retained log still delivers the new chain's logs below the delivered log" do
+    fork = @delivered - 1
+    w = run(:logs, lag: 2, first: @delivered, fork_at: fork)
+
+    assert w.closed == nil
+    assert_owed(w, [@delivered], fork)
+  end
+
+  defp assert_owed(w, old, fork) do
+    owed =
+      Enum.map(old, &identity(:main, &1)) ++
+        [identity(:removed, @delivered)] ++
+        Enum.map(fork..(@delivered - 2 + @ticks), &identity(:fork, &1))
+
+    assert Enum.sort(Enum.map(w.events, &identity/1)) == Enum.sort(owed)
+  end
+
+  defp identity(%{"blockNumber" => n, "blockHash" => hash, "removed" => removed}),
+    do: {hex(n), hash, removed}
+
+  defp identity(:removed, n), do: {n, hash(:main, n), true}
+  defp identity(branch, n), do: {n, hash(branch, n), false}
 
   defp assert_contiguous(w, lag) do
     assert {lag, w.closed} == {lag, nil}
@@ -128,7 +158,9 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       subs: %{a: [], b: []},
       events: [],
       closed: nil,
-      killed_at: nil
+      killed_at: nil,
+      announced: [],
+      log_reads: []
     }
 
     try do
@@ -198,7 +230,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
   defp advance_b(w, n) do
     Agent.update(w.chain, &%{&1 | b: n})
     notify(w, :b, n)
-    w
+    %{w | announced: [n | w.announced]}
   end
 
   defp notify(w, id, n) do
@@ -222,6 +254,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
 
   defp pump(w, until) do
     ref = w.ref
+    b = w.fleets.b.pid
 
     receive do
       {:rpc_frame, ^ref, {:text, bytes}} ->
@@ -229,6 +262,11 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
 
       {:rpc_disconnect, ^ref, %{reason: reason}} ->
         %{w | closed: %{reason: reason, at_ms: now() - w.killed_at}}
+
+      {:fleet, ^b,
+       %{transport: :http, request: %{"method" => "eth_getLogs", "params" => [f | _]}}}
+      when w.killed_at != nil ->
+        %{w | log_reads: [{hex(f["fromBlock"]), hex(f["toBlock"])} | w.log_reads]} |> pump(until)
 
       {:fleet, _pid, report} ->
         w |> track(report) |> pump(until)

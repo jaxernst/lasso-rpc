@@ -1226,11 +1226,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           drain_head_buffers(state, replay_buffer, live_buffer, context)
 
         {:logs, _filter} ->
-          drain_log_buffers(
-            state,
-            replay_buffer,
-            drop_logs_below_checkpoint(live_buffer, state, context)
-          )
+          drain_log_buffers(state, replay_buffer, live_buffer)
       end
 
     case result do
@@ -1299,23 +1295,6 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       {next_stream_state, :skip} ->
         next_stream_state
-    end
-  end
-
-  # A replacement catching up re-announces blocks below the delivered log. Canonical replay
-  # covers every block a reorg changed, so only its removals still need the live path.
-  defp drop_logs_below_checkpoint(logs, _state, %{recovery_kind: :live_reorg}), do: logs
-
-  defp drop_logs_below_checkpoint(logs, state, _context) do
-    case StreamState.last_log_block(state.state) do
-      nil ->
-        logs
-
-      checkpoint ->
-        Enum.reject(logs, fn log ->
-          Map.get(log, "removed") != true and
-            decode_hex(Map.get(log, "blockNumber", "0x0")) < checkpoint
-        end)
     end
   end
 
@@ -1540,9 +1519,13 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  # Live events prepend; the tail is the seed from before this replacement attempt.
+  # Live events prepend; the tail is the seed from before this replacement attempt. A failed
+  # attempt's removals stay, since replay cannot rebuild a removal from below retained history.
   defp recovery_seed(context) do
-    Enum.take(context.event_buffer, -context.initial_live_event_count)
+    attempt_count = length(context.event_buffer) - context.initial_live_event_count
+    {attempt, seed} = Enum.split(context.event_buffer, attempt_count)
+
+    Enum.filter(attempt, &(Map.get(&1, "removed") == true)) ++ seed
   end
 
   defp discard_attempt_events(state) do

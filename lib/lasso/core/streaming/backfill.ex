@@ -390,8 +390,8 @@ defmodule Lasso.Core.Streaming.Backfill do
     provider_id = ctx.plan.provider_id
     retained_logs = Map.get(snapshot, :logs, [])
 
-    with {:ok, orphaned_logs, canonical_blocks} <- find_orphaned_logs(ctx.plan, retained_logs),
-         replay_from <- replay_from_for_logs(orphaned_logs, canonical_blocks, from_n),
+    with {:ok, orphaned_logs} <- find_orphaned_logs(ctx.plan, retained_logs),
+         replay_from <- replay_from_for_logs(orphaned_logs, from_n),
          {:ok, logs} <- GapFiller.ensure_logs(ctx.plan, filter, replay_from, to_n) do
       removals = Enum.map(orphaned_logs, &Map.put(&1, "removed", true))
       emit_backfill_events(ctx.plan, owner_id, provider_id, removals ++ logs)
@@ -402,15 +402,12 @@ defmodule Lasso.Core.Streaming.Backfill do
     retained_logs
     |> Enum.group_by(&decode_hex(Map.get(&1, "blockNumber", "0x0")))
     |> Enum.sort_by(fn {number, _logs} -> number end, :desc)
-    |> Enum.reduce_while({:ok, [], []}, fn {number, logs}, {:ok, orphaned, canonical_blocks} ->
+    |> Enum.reduce_while({:ok, []}, fn {number, logs}, {:ok, orphaned} ->
       case GapFiller.ensure_blocks(plan, number, number) do
         {:ok, [canonical]} ->
           canonical_hash = Map.get(canonical, "hash")
-
-          case Enum.filter(logs, &(Map.get(&1, "blockHash") != canonical_hash)) do
-            [] -> {:cont, {:ok, orphaned, [number | canonical_blocks]}}
-            at_height -> {:cont, {:ok, at_height ++ orphaned, canonical_blocks}}
-          end
+          at_height = Enum.filter(logs, &(Map.get(&1, "blockHash") != canonical_hash))
+          {:cont, {:ok, at_height ++ orphaned}}
 
         {:error, reason} ->
           {:halt, {:error, reason}}
@@ -418,20 +415,12 @@ defmodule Lasso.Core.Streaming.Backfill do
     end)
   end
 
-  defp replay_from_for_logs([], _canonical_blocks, from_n), do: from_n
+  defp replay_from_for_logs([], from_n), do: from_n
 
-  # The old chain had no logs between its newest unchanged block and the lowest orphaned one,
-  # so replay starts above that block to deliver the new chain's logs there.
-  defp replay_from_for_logs(orphaned_logs, canonical_blocks, from_n) do
-    lowest_orphan =
-      orphaned_logs
-      |> Enum.map(&decode_hex(Map.get(&1, "blockNumber", "0x0")))
-      |> Enum.min()
-
-    canonical_blocks
-    |> Enum.filter(&(&1 < lowest_orphan))
-    |> Enum.max(fn -> lowest_orphan - 1 end)
-    |> Kernel.+(1)
+  defp replay_from_for_logs(orphaned_logs, from_n) do
+    orphaned_logs
+    |> Enum.map(&decode_hex(Map.get(&1, "blockNumber", "0x0")))
+    |> Enum.min()
     |> min(from_n)
   end
 

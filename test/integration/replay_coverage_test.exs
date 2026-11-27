@@ -24,6 +24,11 @@ defmodule Lasso.ReplayCoverageTest do
     assert_continuity(context)
   end
 
+  @tag cascade_removal: true
+  test "a removal from a discarded replacement survives the cascade to the next one", context do
+    assert_continuity(context)
+  end
+
   @tag heads: true, moving_head: true
   test "a moving head retains verified progress during slow replay", context do
     assert_continuity(context)
@@ -207,42 +212,55 @@ defmodule Lasso.ReplayCoverageTest do
     Rpc.close!(wire)
   end
 
+  defp replay_coverage(chain, a, b, c, source, wire, subscription, %{cascade_removal: true}) do
+    # Block 10's log is older than any replay window once 3000's arrives, so only the
+    # discarded replacement's removal can tell the client it left the chain.
+    for height <- [10, 3000] do
+      Fleet.notify(source, log(height))
+      assert_log!(wire, subscription, height)
+    end
+
+    Fleet.script(c, "eth_blockNumber", [], {:answer, hex(3002)})
+
+    Fleet.script(
+      c,
+      "eth_getBlockByNumber",
+      [],
+      {:respond,
+       fn %{"params" => [number | _]} -> {:answer, fork_header(height(number, 3002))} end}
+    )
+
+    Fleet.script(
+      c,
+      "eth_getLogs",
+      [],
+      {:respond,
+       fn %{"params" => [filter]} ->
+         range = height(filter["fromBlock"], 3002)..height(filter["toBlock"], 3002)//1
+         {:answer, Enum.map(range, &fork_log/1)}
+       end}
+    )
+
+    removal = Map.put(log(10), "removed", true)
+    discard_attempt!(chain, a, b, {:logs, %{}}, removal)
+    c_pid = c.pid
+    assert_receive {:fleet, ^c_pid, %{request: %{"method" => "eth_subscribe"}}}, 5_000
+    delivered = frames_until!(wire, subscription, fork_log(3002))
+
+    assert Enum.count(delivered, &(&1 == removal)) == 1
+    assert Enum.uniq(delivered) == delivered
+    ref = wire.reference
+    refute_receive {:rpc_frame, ^ref, _}, 100
+    Rpc.close!(wire)
+  end
+
   defp replay_coverage(chain, a, b, c, source, wire, subscription, context) do
     event = if context[:heads], do: &header/1, else: &log/1
     assert_event = if context[:heads], do: &assert_head!/3, else: &assert_log!/3
     Fleet.notify(source, event.(100))
     assert_event.(wire, subscription, 100)
-    Fleet.script(b, "eth_subscribe", [], {:hold, :pending_logs})
-    Fleet.stop(a)
-    b_pid = b.pid
-
-    assert_receive {:fleet, ^b_pid, %{request: %{"method" => "eth_subscribe"}} = pending},
-                   5_000
-
-    pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via("public", chain)
     key = if context[:heads], do: {:newHeads}, else: {:logs, %{}}
-    owner = :sys.get_state(pool).keys[key].resubscribe_pid
-    true = :erlang.suspend_process(owner)
-    monitor = Process.monitor(owner)
-
-    try do
-      :ok = Fleet.release(b, :pending_logs, {:answer, "pending-logs"})
-      rejected = Map.put(event.(103), "unverified", true)
-      Fleet.notify(%{pending | action: {:answer, "pending-logs"}}, rejected)
-      coordinator = Lasso.Core.Streaming.StreamCoordinator.via("public", chain, key)
-
-      Lasso.Test.Eventually.assert_eventually(fn ->
-        state = :sys.get_state(coordinator)
-        state.failover_status == :switching and state.failover_context.event_buffer_count == 1
-      end)
-
-      # Reject the accepted subscription before its worker can commit the route.
-      Fleet.stop(b)
-      assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 5_000
-    after
-      if Process.alive?(owner), do: :erlang.resume_process(owner)
-    end
-
+    discard_attempt!(chain, a, b, key, Map.put(event.(103), "unverified", true))
     c_pid = c.pid
 
     assert_receive {:fleet, ^c_pid, %{request: %{"method" => "eth_subscribe"}} = winner},
@@ -270,6 +288,58 @@ defmodule Lasso.ReplayCoverageTest do
       refute_receive {:rpc_frame, ^ref, _}, 100
       Rpc.close!(wire)
     end
+  end
+
+  defp discard_attempt!(chain, a, b, key, payload) do
+    Fleet.script(b, "eth_subscribe", [], {:hold, :pending_logs})
+    Fleet.stop(a)
+    b_pid = b.pid
+
+    assert_receive {:fleet, ^b_pid, %{request: %{"method" => "eth_subscribe"}} = pending},
+                   5_000
+
+    pool = Lasso.Core.Streaming.UpstreamSubscriptionPool.via("public", chain)
+    owner = :sys.get_state(pool).keys[key].resubscribe_pid
+    true = :erlang.suspend_process(owner)
+    monitor = Process.monitor(owner)
+
+    try do
+      :ok = Fleet.release(b, :pending_logs, {:answer, "pending-logs"})
+      Fleet.notify(%{pending | action: {:answer, "pending-logs"}}, payload)
+      coordinator = Lasso.Core.Streaming.StreamCoordinator.via("public", chain, key)
+
+      Lasso.Test.Eventually.assert_eventually(fn ->
+        state = :sys.get_state(coordinator)
+        state.failover_status == :switching and state.failover_context.event_buffer_count == 1
+      end)
+
+      # Reject the accepted subscription before its worker can commit the route.
+      Fleet.stop(b)
+      assert_receive {:DOWN, ^monitor, :process, ^owner, _}, 5_000
+    after
+      if Process.alive?(owner), do: :erlang.resume_process(owner)
+    end
+  end
+
+  # The third upstream serves a branch that forked below block 10.
+  defp fork_header(height), do: %{header(height) | "hash" => fork_hash(height)}
+
+  defp fork_log(height),
+    do: %{
+      log(height)
+      | "blockHash" => fork_hash(height),
+        "transactionHash" => fork_hash(height + 1000)
+    }
+
+  defp fork_hash(height), do: "0xf" <> String.pad_leading(Integer.to_string(height, 16), 63, "0")
+
+  defp height("0x" <> digits, _latest), do: String.to_integer(digits, 16)
+  defp height(_tag, latest), do: latest
+
+  defp frames_until!(wire, subscription, last, seen \\ []) do
+    assert %{"params" => %{"subscription" => ^subscription, "result" => result}} = frame!(wire)
+    seen = seen ++ [result]
+    if result == last, do: seen, else: frames_until!(wire, subscription, last, seen)
   end
 
   defp assert_log!(wire, subscription, height) do
