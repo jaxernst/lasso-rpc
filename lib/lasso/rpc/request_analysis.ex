@@ -10,9 +10,22 @@ defmodule Lasso.RPC.RequestAnalysis do
   alias Lasso.Config.ChainConfig
   alias Lasso.JSONRPC.{BlockSelector, MethodParamsValidator}
 
+  @typedoc """
+  The resource class a historical read needs. Clients retain each separately:
+  state (geth-family 128 layers, Nethermind 64, reth full 10,064, Erigon
+  262,144), proofs, traces, and blocks, receipts and logs, which full nodes
+  usually keep. Learned and declared depth attach to the class, not the method.
+  """
+  @type resource :: :blocks | :state | :logs | :receipts | :proofs | :traces | nil
+  @resources [:blocks, :state, :logs, :receipts, :proofs, :traces]
+
+  @doc "Every historical resource class."
+  @spec resources() :: [atom()]
+  def resources, do: @resources
+
   @type requirements :: %{
           requires_archival: boolean(),
-          historical_resource: Lasso.RPC.HistoricalCoverage.resource(),
+          historical_resource: resource(),
           historical_height: non_neg_integer() | nil,
           block_range: non_neg_integer() | nil,
           address_count: non_neg_integer() | nil
@@ -41,7 +54,7 @@ defmodule Lasso.RPC.RequestAnalysis do
   """
   @type block_facts ::
           %{
-            resource: Lasso.RPC.HistoricalCoverage.resource(),
+            resource: resource(),
             block: selector() | nil,
             range: {selector(), selector()} | nil
           }
@@ -154,7 +167,11 @@ defmodule Lasso.RPC.RequestAnalysis do
         nil
 
       {nil, position} ->
-        %{resource: :blocks, block: selector_at(params, position, &hash_selector/1), range: nil}
+        %{
+          resource: historical_resource(method),
+          block: selector_at(params, position, &hash_selector/1),
+          range: nil
+        }
 
       {position, _hash_position} ->
         %{
@@ -254,14 +271,13 @@ defmodule Lasso.RPC.RequestAnalysis do
   defp number_selector(_value), do: :unusable
 
   defp historical_resource("eth_getLogs"), do: :logs
-  defp historical_resource("eth_getBalance"), do: :balance
   defp historical_resource("eth_getBlockReceipts"), do: :receipts
   defp historical_resource("eth_getProof"), do: :proofs
   defp historical_resource("debug_" <> _), do: :traces
   defp historical_resource("trace_" <> _), do: :traces
 
   defp historical_resource(method)
-       when method in ~w(eth_getBlockByNumber eth_getBlockTransactionCountByNumber eth_getTransactionByBlockNumberAndIndex eth_getUncleByBlockNumberAndIndex eth_getUncleCountByBlockNumber) do
+       when method in ~w(eth_feeHistory eth_getBlockByNumber eth_getBlockTransactionCountByNumber eth_getTransactionByBlockNumberAndIndex eth_getUncleByBlockNumberAndIndex eth_getUncleCountByBlockNumber eth_getBlockByHash eth_getBlockTransactionCountByHash eth_getTransactionByBlockHashAndIndex eth_getUncleByBlockHashAndIndex eth_getUncleCountByBlockHash) do
     :blocks
   end
 

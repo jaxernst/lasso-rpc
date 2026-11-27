@@ -217,7 +217,6 @@ defmodule Lasso.RPC.ProviderKnowledge.Evidence do
       evidence.historical_resource in [
         nil,
         :blocks,
-        :balance,
         :state,
         :logs,
         :receipts,

@@ -9,7 +9,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.OutcomeStatistics do
   alias Lasso.RPC.ProviderKnowledge.Stats.{DecayedCounter, LatencyHistogram}
   alias Lasso.RPC.RoutingEvidence.Workload
 
-  @version 2
+  @version 3
   @half_life_ms 15 * 60_000
   @repeat_window_ms 10 * 60_000
   @hour_ms 3_600_000
@@ -220,6 +220,14 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.OutcomeStatistics do
       {@version, %__MODULE__{} = state} ->
         if valid_state?(state), do: {:ok, state}, else: {:error, :invalid}
 
+      # Version 2 could name a separate :balance class, now part of :state.
+      # Those rows retire; every other version-2 row is unchanged.
+      {2, %__MODULE__{key: {_, _, {_, _, {:historical_age, :balance, _}}}}} ->
+        {:error, {:unsupported_version, 2}}
+
+      {2, %__MODULE__{} = state} ->
+        if valid_state?(state), do: {:ok, state}, else: {:error, :invalid}
+
       {1, %__MODULE__{}} ->
         {:error, {:unsupported_version, 1}}
 
@@ -299,7 +307,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Learners.OutcomeStatistics do
 
   defp valid_shape?({:historical_age, resource, band}),
     do:
-      resource in [:blocks, :balance, :state, :logs, :receipts, :proofs, :traces] and
+      resource in [:blocks, :state, :logs, :receipts, :proofs, :traces] and
         valid_band?(band)
 
   defp valid_shape?(_), do: false

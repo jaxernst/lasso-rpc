@@ -575,7 +575,7 @@ defmodule Lasso.RPC.ProviderKnowledge.ReadModel do
       else: :ets.insert(table, {stored_key, hint})
   end
 
-  defp refresh_prediction(HistoricalDepth, table, {_, _, {resource, _}} = key) do
+  defp refresh_prediction(HistoricalDepth, table, {_, _, resource} = key) do
     local = prediction_state(table, :local, key)
     imported = prediction_state(table, :imported, key)
 

@@ -240,14 +240,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
         :transport_unavailable
 
       cursor.filters.requires_archival and
-          Enum.all?(transport_providers, fn provider ->
-            not Lasso.RPC.HistoricalCoverage.eligible?(
-              provider.archival,
-              provider.capabilities,
-              cursor.filters.historical_resource,
-              cursor.filters.historical_height
-            )
-          end) ->
+          Enum.all?(transport_providers, &(&1.archival == false)) ->
         :archive_required
 
       true ->
@@ -728,13 +721,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     descriptors =
       for provider <- plan.providers,
           not MapSet.member?(exclude, provider.id),
-          not filters.requires_archival or
-            Lasso.RPC.HistoricalCoverage.eligible?(
-              provider.archival,
-              provider.capabilities,
-              filters.historical_resource,
-              filters.historical_height
-            ),
+          not filters.requires_archival or provider.archival != false,
           not filters.requires_subscribe_new_heads or
             if(Map.get(provider.config, :subscribe_new_heads, false),
               do: :ok,

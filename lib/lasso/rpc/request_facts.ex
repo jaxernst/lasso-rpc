@@ -129,6 +129,39 @@ defmodule Lasso.RPC.RequestFacts do
 
   def historical_age(%__MODULE__{}, _expected, _dispatched_at_ms), do: {:abstain, :other_request}
 
+  @doc """
+  Whether the lowest block the request names is a fixed number below the
+  phase's qualified reference head. That block is a point selector, or the
+  start of a valid range whose end is a fixed number at or after it or a
+  moving tag. Without a qualified reference the answer is false.
+  """
+  @spec before_reference?(t() | nil) :: boolean()
+  def before_reference?(%__MODULE__{reference: {:qualified, head, _}, block_facts: facts}) do
+    case lowest_fixed_height(facts) do
+      {:ok, height} -> height < head.height
+      _ -> false
+    end
+  end
+
+  def before_reference?(_facts), do: false
+
+  defp lowest_fixed_height(%{range: {from, to}}) do
+    with {:ok, lo} <- fixed_height(%{block: from}),
+         true <- range_end?(to, lo) do
+      {:ok, lo}
+    else
+      _ -> :none
+    end
+  end
+
+  defp lowest_fixed_height(facts), do: fixed_height(facts)
+
+  defp range_end?({:number, hi}, lo), do: hi >= lo
+  defp range_end?({:tag, :earliest, 0}, lo), do: lo == 0
+  defp range_end?({:tag, _moving, nil}, _lo), do: true
+  defp range_end?(:omitted, _lo), do: true
+  defp range_end?(_unusable_or_hash, _lo), do: false
+
   @doc "Numeric requested point or full logs interval, without inferring an unavailable height from a head."
   @spec numeric_interval(RequestAnalysis.block_facts() | nil) ::
           {non_neg_integer(), non_neg_integer()} | nil

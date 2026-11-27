@@ -384,7 +384,7 @@ defmodule Lasso.RPC.ProviderKnowledge.Decision do
               (is_nil(age) or (is_integer(age) and age >= 0)) and
               is_binary(method) do
     valid_common?(d) and
-      resource in [:blocks, :balance, :state, :logs, :receipts, :proofs, :traces] and
+      resource in [:blocks, :state, :logs, :receipts, :proofs, :traces] and
       partition in Lasso.RPC.RoutingEvidence.Workload.partitions() and
       is_integer(omitted) and omitted >= 0 and
       method in Lasso.RPC.MethodRegistry.all_methods() and

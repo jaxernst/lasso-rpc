@@ -330,7 +330,7 @@ defmodule Lasso.RPC.ProviderKnowledge do
       case {kind, dimension} do
         {:outcome_stats, {method, shape}} -> {Map.get(scope, :profile), method, shape}
         {:outcome_stats, _} -> {Map.get(scope, :profile), :all, :all}
-        {:historical_depth, _} -> {dimension, Map.get(scope, :method)}
+        {:historical_depth, _} -> dimension
         _ -> learning_dimension
       end
 
