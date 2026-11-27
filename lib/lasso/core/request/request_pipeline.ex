@@ -733,6 +733,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp pop_candidate([%Channel{} = channel | rest], ctx), do: {channel, rest, ctx}
   defp pop_candidate([], ctx), do: {nil, [], ctx}
+  defp pop_candidate({%Channel{} = channel, rest}, ctx), do: {channel, rest, ctx}
 
   defp pop_candidate(%CandidateCursor{} = cursor, ctx) do
     {cursor, ctx} = capture_cursor_decisions(cursor, ctx)
@@ -2031,8 +2032,43 @@ defmodule Lasso.RPC.RequestPipeline do
   defp serve_ordinary(_error, outcome, channel, rest_channels, ctx, caller_guard),
     do: ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
 
+  # A missing-block error is no answer worth holding, so its extra send only
+  # steers failover: the route whose fresh head reached the block goes next and
+  # the rest of the cursor stays behind it.
   defp recover_missing(
-         result,
+         %JError{} = error,
+         outcome,
+         channel,
+         cursor,
+         ctx,
+         caller_guard,
+         {:recover, _height, routes}
+       ) do
+    with nil <- NullRecovery.denial(ctx.execution_envelope),
+         {:ok, envelope} = ExecutionEnvelope.spend_extra_send(ctx.execution_envelope),
+         {%Channel{} = alternate, rest, steered} <-
+           alternate(cursor, %{ctx | execution_envelope: envelope}, routes, 8) do
+      :ok = NullRecovery.decision(steered, :proposed)
+      ordinary_owner_error(outcome, channel, {alternate, rest}, steered, caller_guard)
+    else
+      {nil, _rest, _ctx} ->
+        decline_missing(
+          error,
+          outcome,
+          channel,
+          cursor,
+          ctx,
+          caller_guard,
+          :alternate_unavailable
+        )
+
+      reason ->
+        decline_missing(error, outcome, channel, cursor, ctx, caller_guard, reason)
+    end
+  end
+
+  defp recover_missing(
+         %Success{} = result,
          %{fact: fact} = outcome,
          channel,
          cursor,
@@ -2055,7 +2091,11 @@ defmodule Lasso.RPC.RequestPipeline do
         }
 
         cursor = cap_recovery_cursor(cursor, ctx.execution_envelope)
-        ctx = record_missing_attempt(ctx, channel, fact, result)
+
+        ctx =
+          ctx
+          |> RequestContext.add_upstream_latency(fact_latency_ms(fact))
+          |> RequestContext.record_channel_success(channel)
 
         case alternate(cursor, ctx, routes, 8) do
           {%Channel{} = alternate, _rest, ctx} ->
@@ -2105,15 +2145,6 @@ defmodule Lasso.RPC.RequestPipeline do
     ordinary_owner_error(outcome, channel, rest_channels, ctx, caller_guard)
   end
 
-  defp record_missing_attempt(ctx, channel, fact, %JError{} = error),
-    do: record_owner_failure(ctx, channel, fact, error)
-
-  defp record_missing_attempt(ctx, channel, fact, %Success{}),
-    do:
-      ctx
-      |> RequestContext.add_upstream_latency(fact_latency_ms(fact))
-      |> RequestContext.record_channel_success(channel)
-
   defp alternate(_cursor, ctx, _routes, 0), do: {nil, [], ctx}
 
   defp alternate(cursor, ctx, routes, budget) do
@@ -2140,10 +2171,7 @@ defmodule Lasso.RPC.RequestPipeline do
         |> RequestContext.mark_upstream_end()
         |> Map.put(:public_response_attempt, state.original_fact)
 
-      case state.original do
-        %Success{} = original -> {:ok, original, RequestContext.record_success(ctx, original)}
-        %JError{} = original -> finalize_error(original, ctx)
-      end
+      {:ok, state.original, RequestContext.record_success(ctx, state.original)}
     else
       Capacity.release(state.original, :caller_abandoned)
       finalize_caller_abandoned(ctx)
@@ -2400,7 +2428,7 @@ defmodule Lasso.RPC.RequestPipeline do
 
   defp retire_last_error(%{last_attempt_error: %JError{} = error} = ctx, reason) do
     retired =
-      if ClaimAudit.holds_original?(ctx, error) or NullRecovery.holds_original?(ctx, error),
+      if ClaimAudit.holds_original?(ctx, error),
         do: JError.summary(error),
         else: Capacity.discard(error, reason)
 

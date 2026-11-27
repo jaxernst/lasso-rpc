@@ -2,7 +2,7 @@ defmodule Lasso.RPC.NullRecovery do
   @moduledoc """
   One extra send for a client's missing numeric block, authorized only by
   fresh evidence of N on another physical instance in the current phase scope.
-  The original answer and provenance survive an unavailable or failed alternate.
+  A held null and its provenance survive an unavailable or failed alternate.
   """
 
   alias Lasso.JSONRPC.Error
@@ -11,14 +11,14 @@ defmodule Lasso.RPC.NullRecovery do
   alias Lasso.RPC.Selection.HeadSuitability
 
   defmodule State do
-    @moduledoc "The original missing answer held while its alternate is sent."
+    @moduledoc "The original null held while its alternate is sent."
 
     @enforce_keys [:height, :original, :original_channel, :original_fact]
     defstruct @enforce_keys ++ [:caller_guard]
 
     @type t :: %__MODULE__{
             height: non_neg_integer(),
-            original: Success.t() | Error.t(),
+            original: Success.t(),
             original_channel: Channel.t(),
             original_fact: term(),
             caller_guard: Lasso.Core.Request.ExecutionScope.CallerGuard.t() | nil
@@ -54,13 +54,6 @@ defmodule Lasso.RPC.NullRecovery do
 
   def missing?(_ctx, %Error{category: :block_not_available}, _head, _channel), do: true
   def missing?(_ctx, _result, _head, _channel), do: false
-
-  @doc "Whether the held error still owns its response bytes during retry setup."
-  @spec holds_original?(map(), term()) :: boolean()
-  def holds_original?(%{null_recovery: %State{original: %Error{} = original}}, error),
-    do: original == error
-
-  def holds_original?(_ctx, _error), do: false
 
   # Routes on other physical instances whose fresh observation reached the block.
   defp alternates(%HeadSuitability{evidence: evidence}, height, channel) do

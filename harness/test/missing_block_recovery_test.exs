@@ -19,16 +19,22 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
   end
 
   test "a block laggards refuse as header not found reaches the half-open upstream that has it" do
+    behind = @block - 1_001
+
     for strategy <- ~w(priority fastest balanced-fast load-balanced) do
-      journey(strategy, fn tenant, laggards, supporter, breaker ->
-        fleets = laggards ++ [supporter]
+      world("missing-#{strategy}", [behind, behind, behind, @block + 1], fn tenant, fleets ->
+        {laggards, [supporter]} = Enum.split(fleets, 3)
         lagging = Enum.map(laggards, & &1.name)
+
+        for fleet <- laggards,
+            do: Fleet.script(fleet, "eth_getBalance", [], {:error, -32_000, "header not found"})
+
+        breaker = half_open!(tenant, supporter)
 
         # The half-open supporter is the cursor's last candidate, behind three closed
         # laggards, until two admitted reads close its breaker.
         for _read <- 1..2 do
-          {response, sends} = read(tenant, fleets, strategy)
-          sent = Enum.map(sends, & &1.fleet)
+          {response, sent} = read(tenant, fleets, strategy)
 
           assert response.body["result"] == "0x10",
                  "#{strategy}: #{inspect({response.body, sent})}"
@@ -45,25 +51,32 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
           end
         end)
 
-        {response, sends} = read(tenant, fleets, strategy)
+        {response, sent} = read(tenant, fleets, strategy)
         assert response.body["result"] == "0x10"
-        assert Enum.map(sends, & &1.fleet) == [supporter.name]
+        assert sent == [supporter.name]
       end)
     end
   end
 
-  defp journey(strategy, fun) do
-    laggards = for i <- 1..3, do: Fleet.start!(self(), "missing-#{strategy}-#{i}")
-    supporter = Fleet.start!(self(), "missing-#{strategy}-supporter")
-    fleets = laggards ++ [supporter]
+  test "a steered send that fails still fails over to the next upstream with the block" do
+    world("steered", [@block + 1, @block + 1, @block + 1], fn tenant, fleets ->
+      [missing, failing, _serving] = fleets
+      Fleet.script(missing, "eth_getBalance", [], {:error, -32_000, "header not found"})
+      Fleet.script(failing, "eth_getBalance", [], {:status, 503, [], "<html>unavailable</html>"})
 
-    for fleet <- laggards do
-      Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(@block - 1_001)})
-      Fleet.script(fleet, "eth_getBalance", [], {:error, -32_000, "header not found"})
-    end
+      {response, sent} = read(tenant, fleets, "priority")
+      assert response.body["result"] == "0x10", inspect({response.body, sent})
+      assert sent == Enum.map(fleets, & &1.name)
+    end)
+  end
 
-    Fleet.script(supporter, "eth_blockNumber", [], {:answer, hex(@block + 1)})
-    Fleet.script(supporter, "eth_getBalance", [], {:answer, "0x10"})
+  defp world(prefix, heads, fun) do
+    fleets =
+      for {head, i} <- Enum.with_index(heads, 1) do
+        fleet = Fleet.start!(self(), "#{prefix}-#{i}")
+        Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(head)})
+        fleet
+      end
 
     tenant =
       Tenant.open!(fleets,
@@ -79,34 +92,38 @@ defmodule Lasso.Harness.MissingBlockRecoveryTest do
         if Enum.all?(fleets, &head_polled?/1), do: {:ok, :polled}
       end)
 
-      instance =
-        Lasso.Providers.Catalog.lookup_instance_id(tenant.profile, 31_337, supporter.name)
-
-      breaker = {instance, :http}
-      recovered = Settle.listen([:lasso, :circuit_breaker, :proactive_recovery])
-
-      try do
-        CircuitBreaker.open(breaker)
-        Settle.event(recovered, &(&1.instance_id == instance and &1.transport == :http))
-      after
-        Settle.unlisten(recovered)
-      end
-
-      fun.(tenant, laggards, supporter, breaker)
+      fun.(tenant, fleets)
     after
       Tenant.close!(tenant)
       Enum.each(fleets, &Fleet.stop/1)
     end
   end
 
+  defp half_open!(tenant, fleet) do
+    instance = Lasso.Providers.Catalog.lookup_instance_id(tenant.profile, 31_337, fleet.name)
+    breaker = {instance, :http}
+    recovered = Settle.listen([:lasso, :circuit_breaker, :proactive_recovery])
+
+    try do
+      CircuitBreaker.open(breaker)
+      Settle.event(recovered, &(&1.instance_id == instance and &1.transport == :http))
+      breaker
+    after
+      Settle.unlisten(recovered)
+    end
+  end
+
   defp read(tenant, fleets, strategy) do
     url = String.replace(tenant.rpc_url, "/priority/", "/#{strategy}/")
 
-    Settle.closed(
-      fn -> Rpc.call(%{rpc_url: url}, "eth_getBalance", @params) end,
-      fleets,
-      %{method: "eth_getBalance", params: @params}
-    )
+    {response, sends} =
+      Settle.closed(
+        fn -> Rpc.call(%{rpc_url: url}, "eth_getBalance", @params) end,
+        fleets,
+        %{method: "eth_getBalance", params: @params}
+      )
+
+    {response, Enum.map(sends, & &1.fleet)}
   end
 
   defp head_polled?(fleet),
