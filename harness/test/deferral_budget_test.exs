@@ -20,25 +20,85 @@ defmodule Lasso.Harness.DeferralBudgetTest do
     end)
   end
 
-  test "a route held back by a learned refusal keeps time to serve after its peer hangs" do
+  # The last resort uses only time ordinary failover leaves unspent: a slow last
+  # ordinary route keeps the whole deadline while a learned refuser waits.
+  for strategy <- ~w(priority fastest balanced-fast load-balanced) do
+    @strategy strategy
+    test "a slow last ordinary route keeps the whole deadline under #{strategy}" do
+      with_short_deadline(fn ->
+        with_fleets(2, fn tenant, fleets ->
+          slow_last_ordinary(tenant, fleets, @strategy)
+        end)
+      end)
+    end
+  end
+
+  test "a slow last ordinary route keeps the whole deadline on a custom candidate list" do
+    previous = Application.get_env(:lasso, :strategy_registry)
+
+    Application.put_env(
+      :lasso,
+      :strategy_registry,
+      Map.put(Lasso.RPC.Strategies.Registry.default_registry(), :fastest, __MODULE__.ByName)
+    )
+
+    try do
+      with_short_deadline(fn ->
+        with_fleets(2, fn tenant, fleets -> slow_last_ordinary(tenant, fleets, "fastest") end)
+      end)
+    after
+      if previous,
+        do: Application.put_env(:lasso, :strategy_registry, previous),
+        else: Application.delete_env(:lasso, :strategy_registry)
+    end
+  end
+
+  defmodule ByName do
+    @moduledoc false
+    defdelegate prepare_context(profile, chain, method, timeout), to: Lasso.RPC.Strategies.Fastest
+
+    def rank_channels(channels, _method, _ctx, _profile, _chain),
+      do: Enum.sort_by(channels, & &1.provider_id)
+  end
+
+  # A keeps refusing. B, rate-limited so the cursor has already set A aside when B
+  # is sent, answers 950 ms into a 1,000 ms budget.
+  defp slow_last_ordinary(tenant, [refuser, slow] = fleets, strategy) do
+    learn(tenant, fleets, refuser, "eth_getCode", @refusal, "method_refusal")
+    Fleet.script(slow, "eth_getCode", [], {:status, 429, [{"retry-after", "30"}], ""})
+    call(tenant, fleets, "eth_getCode", params("eth_getCode"), slow.name)
+
+    token = make_ref()
+    owner = self()
+
+    Fleet.script(
+      slow,
+      "eth_getCode",
+      [],
+      {:respond,
+       fn _ ->
+         send(owner, {:slow_started, token})
+         {:hold, token}
+       end}
+    )
+
+    tenant = %{tenant | rpc_url: String.replace(tenant.rpc_url, "/priority/", "/#{strategy}/")}
+    read = Task.async(fn -> call(tenant, fleets, "eth_getCode", params("eth_getCode")) end)
+    assert_receive {:slow_started, ^token}, 5_000
+    Process.sleep(950)
+    :ok = Fleet.release(slow, token, {:answer, "0xbb"})
+
+    {response, sends} = Task.await(read, 5_000)
+    assert %{"result" => "0xbb"} = response.body
+    assert Enum.map(sends, & &1.fleet) == [slow.name]
+  end
+
+  defp with_short_deadline(scenario) do
     previous = Application.get_env(:lasso, :method_timeouts, %{})
     Application.put_env(:lasso, :method_timeouts, Map.put(previous, "eth_getCode", 1_000))
 
     try do
-      with_fleets(2, fn tenant, [refuser, peer] = fleets ->
-        learn(tenant, fleets, refuser, "eth_getCode", @refusal, "method_refusal")
-        Fleet.script(refuser, "eth_getCode", [], {:answer, "0x11"})
-
-        # A rate limit queues the peer behind the closed routes, so the cursor
-        # has already set the refusing route aside when the peer is sent.
-        Fleet.script(peer, "eth_getCode", [], {:status, 429, [{"retry-after", "30"}], ""})
-        call(tenant, fleets, "eth_getCode", params("eth_getCode"), peer.name)
-        Fleet.script(peer, "eth_getCode", [], {:respond, fn _ -> {:hold, make_ref()} end})
-
-        {response, sends} = call(tenant, fleets, "eth_getCode", params("eth_getCode"))
-        assert %{"result" => "0x11"} = response.body
-        assert Enum.sort(Enum.map(sends, & &1.fleet)) == Enum.sort([refuser.name, peer.name])
-      end)
+      scenario.()
     after
       Application.put_env(:lasso, :method_timeouts, previous)
     end
