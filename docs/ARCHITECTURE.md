@@ -343,7 +343,8 @@ Each node has a unique `LASSO_NODE_ID` (convention: use geographic region names 
 Routes JSON-RPC requests across HTTP and WebSocket transports based on real-time performance.
 
 `Lasso.Core.Request.TransactionConfirmation` confirms rejected raw transactions
-with a single lookup and decorates transaction send errors before terminal projection.
+by hash lookup on the route that answered last and on every earlier send that may
+have broadcast them, and decorates transaction send errors before terminal projection.
 
 ### Request Flow
 
@@ -866,7 +867,7 @@ Drop-in replacement for existing RPC URLs.
 
 **Transactions**:
 
-- `eth_sendRawTransaction` is supported. Without a chain `transactions` block, a send runs once and is not retried after dispatch. With one, sends go only to the listed providers and may be resent among them within the request deadline. See [RPC Standards](RPC_STANDARDS.md#transaction-sends).
+- `eth_sendRawTransaction` is supported. A registered send makes up to three sends to distinct upstreams, one at a time within the request deadline; a refused dispatch (a quota answer, or a `-32601` to `eth_sendRawTransaction`) does not count. With a chain `transactions` block, sends go only to the listed providers, then to the read providers when it sets `fallback: read_providers`. A hash lookup decides a rejected `eth_sendRawTransaction`'s outcome. See [RPC Standards](RPC_STANDARDS.md#transaction-sends).
 - Methods that need node-held keys, such as `eth_sendTransaction`, are rejected.
 
 ---

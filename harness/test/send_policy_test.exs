@@ -402,6 +402,22 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
     end)
   end
 
+  test "a fallback rejection confirms the hash on the transaction provider that may have broadcast it" do
+    journey(fn tenant, [public, relay] = fleets ->
+      Tenant.replace!(tenant, fleets, chain: policy(relay, true))
+      Fleet.script(relay, @send, [], {:error, -32000, "internal server error"})
+      Fleet.script(public, @send, [], {:error, -32000, "nonce too low"})
+      Fleet.script(relay, @lookup, [], {:answer, %{"hash" => hash()}})
+      before = cursors(fleets)
+      response = submit(tenant, fleets)
+      refute response.body["error"]
+      assert response.body["result"] == hash()
+      assert response.body["lasso_meta"]["send_policy"] == metadata(relay, true, "fallback")
+      assert names(ledger(fleets, before, @send)) == [public.name, relay.name]
+      assert names(ledger(fleets, before, @lookup)) == [public.name, relay.name]
+    end)
+  end
+
   test "an unset policy preserves zero-dispatch confirmation behavior" do
     journey(fn tenant, [public, relay] = fleets ->
       overrides = %{relay.name => %{"ws_url" => relay.ws_url, "heads" => "passive"}}
@@ -418,8 +434,8 @@ defmodule Lasso.Test.Harness.SendPolicyTest do
       before = cursors(fleets)
       pinned_send = %{rpc_url: tenant.rpc_url <> "?provider=" <> public.name <> "&transport=ws"}
       response = Rpc.call(pinned_send, @send, [@raw])
-      assert response.body["error"]["code"] == -32000
-      assert ledger(fleets, before, @lookup) == []
+      assert response.body["result"] == hash()
+      assert names(ledger(fleets, before, @lookup)) == [relay.name]
       assert ledger(fleets, before, @send) == []
     end)
   end

@@ -130,6 +130,8 @@ defmodule Lasso.Core.Support.ErrorClassification do
     "request units"
   ]
 
+  @provider_billing_pattern ~r/\b(?:credits|quota|billing|plan)\b/i
+
   @definitive_rate_limit_patterns [
     "chain is not available on free plan"
   ]
@@ -504,6 +506,10 @@ defmodule Lasso.Core.Support.ErrorClassification do
   end
 
   def quota_exhausted?(_value), do: false
+
+  @doc "Identifies provider billing vocabulary rather than sender-balance wording."
+  @spec provider_billing?(binary()) :: boolean()
+  def provider_billing?(message), do: Regex.match?(@provider_billing_pattern, message)
 
   defp affirmative_quota_exhaustion?(clause) do
     negated? = Regex.match?(~r/\b(?:not|never|without)\b|\b\w+n['’]t\b/, clause)

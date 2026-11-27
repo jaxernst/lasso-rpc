@@ -167,21 +167,6 @@ defmodule Lasso.RPC.MethodNotFoundRoutingTest do
     end
   end
 
-  describe "transaction submission" do
-    test "keeps its single dispatch after an upstream -32601", %{chain: chain} do
-      setup_providers([
-        %{id: "unsupported", priority: 1, behavior: unsupported("unsupported")},
-        %{id: "healthy", priority: 2, behavior: healthy("healthy")}
-      ])
-
-      assert {:error, %JError{category: :method_not_found}, ctx} =
-               execute(chain, "eth_sendRawTransaction", ["0x02"])
-
-      assert ctx.execution_envelope.dispatch_count == 1
-      assert upstream_calls("healthy", "eth_sendRawTransaction") == 0
-    end
-  end
-
   describe "mixed outcomes" do
     test "a rejection at the dispatch budget does not hide an earlier provider failure", %{
       chain: chain

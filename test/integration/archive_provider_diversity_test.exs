@@ -292,7 +292,6 @@ defmodule Lasso.RPC.ArchiveProviderDiversityTest do
              LoadBalanced.order_fallbacks(input, "eth_getBalance", MapSet.new(["a"]))
 
     for method <- [
-          "eth_sendRawTransaction",
           "eth_sendTransaction",
           "eth_getFilterChanges",
           "unknown_method"

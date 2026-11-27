@@ -98,11 +98,14 @@ explicitly allow only the headers the upstream contract requires.
 Lasso applies a single method-specific deadline to each JSON-RPC item. Replay-safe
 reads may dispatch to as many as three distinct eligible channels within that
 deadline; the first attempt receives at most 60% of the original budget so that
-fallback retains time. Signing, filter creation and consumption,
-subscriptions, and unknown methods receive one dispatch. A transaction send
-receives one dispatch unless the chain declares
-[transaction providers](ROUTING.md#transaction-providers); then the same signed
-bytes may be sent up to three times, one provider at a time, within the deadline.
+fallback retains time. Filter creation and consumption,
+subscriptions, and unknown methods receive one dispatch. A registered
+transaction send may send the same signed bytes up to three times, one provider
+at a time, within the deadline; a quota refusal, or a `-32601` to
+`eth_sendRawTransaction`, does not count. With
+[transaction providers](ROUTING.md#transaction-providers), those sends stay with
+the listed providers unless `fallback: read_providers` passes them on to the
+read providers once the listed ones are exhausted.
 
 Default deadlines range from one second for simple identity/head methods to
 longer budgets for proofs and trace/debug calls; unknown methods default to ten

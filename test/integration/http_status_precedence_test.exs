@@ -72,7 +72,7 @@ defmodule Lasso.HTTPStatusPrecedenceTest do
          ) ++
            for(
              status <- [429, 401, 403],
-             do: {"eth_sendRawTransaction", ["0x02"], status, -32_600, false}
+             do: {"eth_sendRawTransaction", ["0x02"], status, -32_600, true}
            ) ++
            for(
              status <- [200, 400],

@@ -157,7 +157,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
         request_id,
         context,
         deadline_us,
-        classification_context(channel)
+        Map.put(classification_context(channel), :method, method)
       )
 
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
@@ -185,7 +185,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
         client_id: prepared.client_id,
         context: context,
         deadline_us: deadline_us,
-        classification_context: classification_context(channel)
+        classification_context: Map.put(classification_context(channel), :method, prepared.method)
       })
 
     io_ms = div(System.monotonic_time(:microsecond) - io_start_us, 1000)
@@ -514,7 +514,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
       {:error, %JError{} = error} ->
         resolution =
-          ErrorClassifier.resolve(
+          resolve_error(
             error.code,
             error.message,
             [data: error.data, provider_id: provider_id, emit?: false] ++
@@ -533,7 +533,7 @@ defmodule Lasso.RPC.Transports.WebSocket do
 
         case retain_response(error, response_lease, context, byte_size(raw_bytes)) do
           {:ok, error} ->
-            :ok = ErrorClassifier.observe(resolution, error.message, error.data)
+            :ok = observe_error(resolution, error.message, error.data)
 
             AttemptProtocol.terminal_at(
               context,
@@ -673,6 +673,17 @@ defmodule Lasso.RPC.Transports.WebSocket do
     sequence = System.unique_integer([:positive, :monotonic])
     "lasso-#{sequence}"
   end
+
+  defp resolve_error(code, message, opts) do
+    if opts[:method] == "eth_sendRawTransaction",
+      do: Lasso.Core.Support.TransactionOutcome.resolve(code, message, opts),
+      else: ErrorClassifier.resolve(code, message, opts)
+  end
+
+  defp observe_error(%{classification_path: :transaction_outcome}, _message, _data), do: :ok
+
+  defp observe_error(resolution, message, data),
+    do: ErrorClassifier.observe(resolution, message, data)
 
   defp classification_context(channel) do
     provider_config = Map.get(channel, :config, %{})

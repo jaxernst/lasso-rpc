@@ -29,7 +29,7 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
         certainty <- [:indeterminate, :dispatched] do
       fact = AttemptTerminal.TransportFailure.new(identity(safety), :connection, certainty)
       projection = ExecutionProjector.project(fact)
-      expected = safety == :replay_safe
+      expected = safety in [:replay_safe, :raw_transaction_broadcast]
       assert projection.fallback_eligible == expected
 
       assert projection.recommended_action ==
@@ -92,7 +92,7 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
 
       expected_fallback =
         category in [:quota, :capability] or
-          (category == :provider_failure and safety == :replay_safe)
+          (category == :provider_failure and safety in [:replay_safe, :raw_transaction_broadcast])
 
       assert projection.fallback_eligible == expected_fallback
 
@@ -223,7 +223,10 @@ defmodule Lasso.RPC.ExecutionProjectorTest do
         )
 
       deadline_projection = ExecutionProjector.project(deadline)
-      expected_fallback = certainty == :not_dispatched or safety == :replay_safe
+
+      expected_fallback =
+        certainty == :not_dispatched or safety in [:replay_safe, :raw_transaction_broadcast]
+
       assert deadline_projection.fallback_eligible == expected_fallback
 
       assert deadline_projection.recommended_action ==

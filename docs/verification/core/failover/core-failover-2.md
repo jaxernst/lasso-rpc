@@ -1,6 +1,6 @@
 # core-failover-2
 
-- `core-failover-2` Unknown methods and signed transactions receive at most one upstream dispatch. **unguarded**.
+- `core-failover-2` Unknown methods, and unregistered methods carrying signed bytes, receive at most one upstream dispatch. **unguarded**.
 
 [Area and shared preconditions](README.md).
 

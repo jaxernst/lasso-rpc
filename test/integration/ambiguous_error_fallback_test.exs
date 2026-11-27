@@ -45,17 +45,6 @@ defmodule Lasso.RPC.AmbiguousErrorFallbackTest do
       assert ctx.execution_envelope.dispatch_count == 2
       assert {:ok, after_snapshot} = Snapshot.lookup({instance, :http})
       assert after_snapshot.failure_count == before.failure_count
-
-      assert {:error, %JError{code: ^code}, unsafe_ctx} =
-               RequestPipeline.execute_via_channels(
-                 chain,
-                 "eth_sendRawTransaction",
-                 ["0x1234"],
-                 options()
-               )
-
-      assert unsafe_ctx.execution_envelope.dispatch_count == 1
-      assert unsafe_ctx.retries == 0
     end
   end
 

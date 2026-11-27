@@ -36,8 +36,13 @@ defmodule Lasso.RPC.RoutingPlan do
           head_scope: Lasso.Observations.HeadScope.t(),
           transactions: Lasso.Config.ChainConfig.Transactions.t() | nil
         }
+  @doc """
+  Narrows a plan to the providers one request class selects from in a send phase.
+  `:captured` keeps every captured provider, for routes a request already used in any phase.
+  """
   @spec for_request(t(), atom() | {atom(), atom()}) :: t()
   def for_request(%__MODULE__{transactions: nil} = plan, _request), do: plan
+  def for_request(plan, :captured), do: plan
 
   def for_request(plan, {class, phase}) do
     transaction_providers? = class == :raw_transaction_broadcast and phase == :providers

@@ -191,6 +191,23 @@ defmodule Lasso.Core.Transport.UpstreamResponse do
     end
   end
 
+  @doc "Extracts a bare gateway error, excluding JSON-RPC envelopes and contradictory results."
+  @spec gateway_error(binary() | nil) :: {:ok, integer(), binary(), term()} | :error
+  def gateway_error(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{"code" => code, "message" => message} = error} = envelope}
+      when is_integer(code) and is_binary(message) and
+             not is_map_key(envelope, "jsonrpc") and not is_map_key(envelope, "id") and
+             not is_map_key(envelope, "result") ->
+        {:ok, code, message, Map.get(error, "data")}
+
+      _ ->
+        :error
+    end
+  end
+
+  def gateway_error(_body), do: :error
+
   @doc "Extracts bounded structural request and response identifiers from raw JSON-RPC bytes."
   @spec extract_transport_ids(binary()) :: {:ok, [String.t()]} | {:error, :unattributable}
   def extract_transport_ids(raw_bytes) when is_binary(raw_bytes) do
