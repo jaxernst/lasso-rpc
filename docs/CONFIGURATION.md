@@ -115,9 +115,10 @@ Controls probe frequency and the dashboard lag status threshold. Shared upstream
 | `subscribe_new_heads` | boolean | WebSocket setting | Override automatic `newHeads` observation for the chain. |
 
 Routed client `eth_blockNumber` and `eth_getBlockByNumber("latest")` responses
-are head observations for the transport that served them, sampled at most every
-250 ms per transport. A provider with background observations off keeps head
-evidence while it serves those reads.
+are head observations for the transport that served them. An `eth_blockNumber`
+answer counts whenever it is higher than that transport's last observation; a
+`latest` block response is sampled at most every 250 ms per transport. A provider
+with background observations off keeps head evidence while it serves those reads.
 
 The new intervals accept `0` to disable that activity, or at least 1000 ms. When profiles share a physical upstream, Core uses the shortest positive interval requested by an enabled reference. A disabled reference does not turn off another profile's observations. After a YAML reload, the worker applies the new demand without restarting client requests.
 

@@ -439,7 +439,7 @@ Check both the auth boundary and each route after installation:
 
 ```bash
 curl -i https://rpc.example.com/api/health                 # 401 without credentials
-curl -u operator https://rpc.example.com/api/ready?chain=ethereum
+curl -u operator 'https://rpc.example.com/api/ready?chain=ethereum'
 curl -u operator https://rpc.example.com/metrics
 curl -u operator -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
