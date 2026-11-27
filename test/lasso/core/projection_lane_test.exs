@@ -461,6 +461,34 @@ defmodule Lasso.Core.ProjectionLaneTest do
     assert_receive "b2"
   end
 
+  test "a higher bucket drains while a lower bucket on the same worker still has queued work" do
+    parent = self()
+
+    {lane, metadata} =
+      start_lane(
+        capacity: 8,
+        scope_capacity: 2,
+        sink: fn _scope, payload -> send(parent, payload) end
+      )
+
+    [low, high] =
+      metadata
+      |> scopes_in_distinct_buckets(2)
+      |> Enum.sort_by(&elem(scope_location(metadata, &1), 1))
+
+    worker = worker(lane)
+    suspend(worker)
+
+    for {scope, payload} <- [{low, "low1"}, {low, "low2"}, {high, "high"}] do
+      assert {:ok, _token} = ProjectionLane.enqueue(metadata, scope, payload)
+    end
+
+    resume(worker)
+    assert_receive "low1"
+    assert_receive "high", 500
+    assert_receive "low2"
+  end
+
   test "latest-value coalescing has exact tokens and an independent degradation epoch" do
     parent = self()
 
