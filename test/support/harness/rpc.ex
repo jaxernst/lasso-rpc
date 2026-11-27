@@ -17,7 +17,7 @@ defmodule Lasso.Test.Harness.Rpc do
         [{"content-type", "application/json"}, {"x-request-id", to_string(id)}],
         Jason.encode!(request)
       )
-      |> Finch.request(Lasso.Finch, receive_timeout: 5_000)
+      |> Finch.request(Lasso.Finch, receive_timeout: Keyword.get(opts, :receive_timeout, 5_000))
 
     body =
       case Jason.decode(response.body) do

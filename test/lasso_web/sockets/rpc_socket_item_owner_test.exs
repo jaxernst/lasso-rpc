@@ -229,7 +229,6 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
     assert {:ok, state} = forward(state, 7)
     assert map_size(state.forwarded_items) == 1
     assert_receive {:item_owner_started, item_ref, owner, work}
-    assert work.deadline_us - work.started_at_us == 10_000_000
     assert_receive result = {:rpc_item_result, ^item_ref, ^owner, _result}
 
     assert {:push, {:text, json}, state} = RPCSocket.handle_info(result, state)
@@ -557,9 +556,7 @@ defmodule LassoWeb.RPCSocketItemOwnerTest do
       provider_id: nil,
       jsonrpc_id: 32,
       jsonrpc_id_present?: true,
-      started_at_us: now_us - 10_000,
-      deadline_us: now_us - 1,
-      timeout_ms: 10_000
+      started_at_us: now_us - 20_000_000
     }
 
     assert {:ok, owner} = ItemOwner.start(self(), item_ref, work)

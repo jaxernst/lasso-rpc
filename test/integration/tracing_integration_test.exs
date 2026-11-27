@@ -158,9 +158,7 @@ defmodule Lasso.TracingIntegrationTest do
       strategy: :priority,
       jsonrpc_id_present?: true,
       jsonrpc_id: 1,
-      started_at_us: now,
-      deadline_us: now + 1_000_000,
-      timeout_ms: 1_000
+      started_at_us: now
     }
 
     assert {:ok, pid} = ItemOwner.start(self(), ref, work)

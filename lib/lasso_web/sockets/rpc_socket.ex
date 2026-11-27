@@ -39,7 +39,6 @@ defmodule LassoWeb.RPCSocket do
   @max_forwarded_items 32
   @max_subscriptions 128
   @default_forwarded_byte_limit 32 * 1_024 * 1_024
-  @forward_timeout_ms 10_000
   @max_item_owner_count 9_223_372_036_854_775_807
   @item_owner_counts %{
     byte_capacity_rejected: 0,
@@ -528,7 +527,6 @@ defmodule LassoWeb.RPCSocket do
          reservation
        ) do
     item_ref = make_ref()
-    deadline_us = started_at_us + @forward_timeout_ms * 1_000
     subscription_add? = method == "eth_subscribe"
 
     work = %ItemOwner.Work{
@@ -541,9 +539,7 @@ defmodule LassoWeb.RPCSocket do
       jsonrpc_id: id,
       jsonrpc_id_present?: respond?,
       subscription_known?: subscription_known?(state, method, params),
-      started_at_us: started_at_us,
-      deadline_us: deadline_us,
-      timeout_ms: @forward_timeout_ms
+      started_at_us: started_at_us
     }
 
     case state.item_owner_module.start(self(), item_ref, work) do

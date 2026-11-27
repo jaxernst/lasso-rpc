@@ -1,6 +1,7 @@
 defmodule LassoWeb.RPCSocket.ItemOwner do
   @moduledoc false
 
+  alias Lasso.Config.MethodPolicy
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Streaming.SubscriptionRouter
   alias Lasso.JSONRPC.Error, as: JError
@@ -17,9 +18,7 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
       :profile,
       :strategy,
       :jsonrpc_id_present?,
-      :started_at_us,
-      :deadline_us,
-      :timeout_ms
+      :started_at_us
     ]
     defstruct @enforce_keys ++ [:provider_id, :jsonrpc_id, subscription_known?: false]
 
@@ -33,9 +32,7 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
             jsonrpc_id: integer() | String.t() | nil,
             jsonrpc_id_present?: boolean(),
             subscription_known?: boolean(),
-            started_at_us: integer(),
-            deadline_us: integer(),
-            timeout_ms: pos_integer()
+            started_at_us: integer()
           }
   end
 
@@ -45,26 +42,7 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
     Task.Supervisor.start_child(
       Lasso.TaskSupervisor,
       Lasso.Observability.Tracing.wrap(fn ->
-        context =
-          RequestContext.new(work.chain_id, work.method, work.params,
-            transport: :ws,
-            strategy: work.strategy,
-            plug_start_time: work.started_at_us
-          )
-
-        opts = %RequestOptions{
-          profile: work.profile,
-          strategy: work.strategy,
-          timeout_ms: work.timeout_ms,
-          request_context: context,
-          provider_override: work.provider_id,
-          jsonrpc_id: work.jsonrpc_id,
-          jsonrpc_id_present?: work.jsonrpc_id_present?
-        }
-
-        scope = ExecutionScope.monitored(self(), socket_pid, work.deadline_us)
-
-        result = execute(work, scope, socket_pid, context, opts)
+        result = execute_item(work, socket_pid)
 
         Lasso.RPC.Response.Capacity.deliver(
           result,
@@ -78,7 +56,35 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
     :exit, _reason -> {:error, :supervisor_unavailable}
   end
 
+  defp execute_item(work, socket_pid) do
+    context =
+      RequestContext.new(work.chain_id, work.method, work.params,
+        transport: :ws,
+        strategy: work.strategy,
+        plug_start_time: work.started_at_us
+      )
+
+    timeout_ms = MethodPolicy.timeout_for(work.method)
+
+    opts = %RequestOptions{
+      profile: work.profile,
+      strategy: work.strategy,
+      timeout_ms: timeout_ms,
+      request_context: context,
+      provider_override: work.provider_id,
+      jsonrpc_id: work.jsonrpc_id,
+      jsonrpc_id_present?: work.jsonrpc_id_present?
+    }
+
+    deadline_us = work.started_at_us + timeout_ms * 1_000
+    scope = ExecutionScope.monitored(self(), socket_pid, deadline_us)
+
+    execute(work, scope, socket_pid, context, opts)
+  end
+
   defp execute(%Work{method: "eth_subscribe"} = work, scope, socket_pid, context, _opts) do
+    deadline_us = ExecutionScope.deadline_us(scope)
+
     with_subscription_scope(scope, context, fn guard ->
       with {:ok, key} <- SubscriptionParams.subscribe_key(work.params),
            request_id <-
@@ -87,10 +93,10 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
                client_pid: socket_pid,
                bounded_delivery?: true,
                request_owner_pid: self(),
-               deadline_us: work.deadline_us
+               deadline_us: deadline_us
              ),
            {:ok, subscription_id} <-
-             await_subscription_response(request_id, guard, work.deadline_us) do
+             await_subscription_response(request_id, guard, deadline_us) do
         {:ok, {:subscription_added, subscription_id},
          RequestContext.record_success(context, subscription_id)}
       else
@@ -113,6 +119,8 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
          _opts
        )
        when is_binary(subscription_id) do
+    deadline_us = ExecutionScope.deadline_us(scope)
+
     with_subscription_scope(scope, context, fn guard ->
       request_id =
         SubscriptionRouter.unsubscribe_checked_request(
@@ -121,10 +129,10 @@ defmodule LassoWeb.RPCSocket.ItemOwner do
           subscription_id,
           client_pid: socket_pid,
           request_owner_pid: self(),
-          deadline_us: work.deadline_us
+          deadline_us: deadline_us
         )
 
-      case await_subscription_response(request_id, guard, work.deadline_us) do
+      case await_subscription_response(request_id, guard, deadline_us) do
         {:ok, removed?} ->
           result = {:subscription_removed, subscription_id, removed?}
           {:ok, result, RequestContext.record_success(context, removed?)}
