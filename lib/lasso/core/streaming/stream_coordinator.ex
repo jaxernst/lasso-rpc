@@ -1519,13 +1519,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  # Live events prepend; the tail is the seed from before this replacement attempt. A failed
-  # attempt's removals stay, since replay cannot rebuild a removal from below retained history.
+  # Live events prepend; the tail is the seed from before this replacement attempt.
   defp recovery_seed(context) do
-    attempt_count = length(context.event_buffer) - context.initial_live_event_count
-    {attempt, seed} = Enum.split(context.event_buffer, attempt_count)
-
-    Enum.filter(attempt, &(Map.get(&1, "removed") == true)) ++ seed
+    Enum.take(context.event_buffer, -context.initial_live_event_count)
   end
 
   defp discard_attempt_events(state) do

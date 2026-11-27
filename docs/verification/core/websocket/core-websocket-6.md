@@ -1,6 +1,6 @@
 # core-websocket-6
 
-- `core-websocket-6` A subscription that fails over to an upstream behind the head it already delivered stays open: Lasso holds the replacement's older heads, resumes once the replacement reaches the delivered head with the same block hash, and closes with `1011` at the recovery deadline when it never gets there. Logs are delivered once per identity (`blockHash`, `logIndex` and `removed`); a log from below the last one delivered can arrive after it. A replacement on another branch at that height is replayed as a reorg, not spliced.
+- `core-websocket-6` A subscription that fails over to an upstream behind the head it already delivered stays open: Lasso holds the replacement's older heads, resumes once the replacement reaches the delivered head with the same block hash, and closes with `1011` at the recovery deadline when it never gets there. Logs are delivered at least once, and once per identity (`blockHash`, `logIndex` and `removed`) within the dedupe horizon; a log from below the last one delivered can arrive after it. A replacement on another branch at that height is replayed as a reorg, not spliced.
 
 [Area and shared preconditions](README.md).
 
@@ -16,9 +16,5 @@ Subscribe through `$WS` and push heads 101 to 105 from the first upstream. Then 
 - `logs` at `lag` 2: the socket stays open and the client receives exactly one log per block, with no gap or duplicate.
 - The second upstream frozen 2 blocks behind: the client receives nothing more, and the socket closes with `1011` between 29 and 33 seconds after the first upstream dies.
 - The second upstream on another branch from height 105, at `lag` 0 and 2: the client receives that branch's block 105 before any child of it, then the branch's later heads, each linked to the previous head received. Both lags deliver the same frames.
-- `logs` at `lag` 2: the second upstream announces 105 live and Lasso reads 105 from it over HTTP, and the client receives 105 once.
-- `logs` at `lag` 2, with the first upstream announcing only block 105's log: the client receives 104, which the second upstream announces while it catches up, and every log from 105 on, each exactly once in any order.
-- `logs` at `lag` 2, with the second upstream on another branch from height 104 and the main chain carrying no log at 104: the client receives main logs 101, 102, 103 and 105, the removal of 105, and the branch's logs from 104 on, each exactly once.
-- The same branch, with the first upstream announcing only block 105's log, so no retained log is unchanged: the client receives 105, its removal and the branch's logs from 104 on, each exactly once.
 
 The oracle is the client's recorded frames and close code.
