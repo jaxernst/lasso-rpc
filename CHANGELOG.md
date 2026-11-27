@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-27
+
 ### Added
 
 - BNB Smart Chain (`/rpc/bsc`) and Tempo (`/rpc/tempo`) in the bundled public profile, from keyless endpoints that passed two qualification passes. Evidence is in `docs/evidence/public-template/56.md` and `4217.md`.
@@ -17,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A chain whose profile sets no head-poll interval now polls heads every `max(2 * block_time_ms, 5000)` ms, or 12 s without `block_time_ms`, instead of a fixed 12 s. Periodic `eth_chainId` identity checks run every 30 minutes instead of on every head poll. A routed request that times out still schedules a probe of its upstream, so a hung upstream still leaves rotation. Set `monitoring.chain_identity_interval_ms` to keep a shorter identity interval.
 - `fastest` now ranks every request with the weighted latency permutation that `balanced-fast` uses, at exponent 8 instead of 3. A route half as fast as the quickest goes first about 1 time in 257; one ten times slower, about once in 10^8. One unproven route per request, with no evidence or only stale evidence, competes at the quickest route's weight, so a route that slows down or a new provider is measured again instead of being held off by a cached winner. Unproven routes in `balanced-fast` include stale ones too.
 - A registered transaction send, such as `eth_sendRawTransaction`, reaches up to three providers one at a time with or without a chain `transactions` block. `eth_sendRawTransaction` fails over on every rejection except known transactions and sender faults, which it also reads from a plaintext non-2xx body, and a rate-limit or quota refusal or a `-32601` does not count toward the three. Before returning a rejection, Lasso looks up the hash on the upstream that answered last and on each earlier one that may have broadcast it, and returns the hash when one finds it, or `-32000` "Upstream dispatch outcome is indeterminate" when an earlier send may have broadcast and a lookup could not answer. See [transaction sends](docs/RPC_STANDARDS.md#transaction-sends).
+- Reads that need the latest block are judged by head rounds. Each chain runs one round at a time that asks every upstream for its head at the same moment, and an upstream's lag is the round's highest agreeing height less its own, credited for the blocks the configured block time fits between its answer and the highest one. A route whose lag is above the agreement band is tried after the others until a later round measures it within the band. An upstream that answers first every round while behind keeps its lag, where before a steadily lagging upstream could look current once its observation aged against a newer one. On a local benchmark with blocks alternating between 250 ms and 2 s, reads served more than a block behind fell from 3 to 15% to 0.4% or less. A `head_suitability` decision in `lasso_meta` lists each deferred or unmeasured route with `lag` and `lag_age_ms`, and no longer carries `mark`, `outlier` or `omitted_outliers`. Reads at a fixed block keep their current judgment. See [Head freshness](docs/ROUTING.md#head-freshness).
+- `load-balanced` gives fewer first picks to a route that fails clearly more often than its peers. Each route keeps a recent failure rate per method family; one above both twice the peers' lower median and 1/32 is weighed down by the square of that ratio, never below 1/8 of a peer's share, and returns to an equal share as its rate decays. A rate limit doesn't count, and when every route fails alike none is deferred. With one of three upstreams holding every tenth read until it timed out, reads sent to it fell from about 3% to under 2% and p99 from about 3.1 s to 1.3 s. Set `LASSO_PROVIDER_KNOWLEDGE_FAILURE_RATE_DEFERRAL_MODE=off` to share load equally. See [Load Balanced](docs/ROUTING.md#load-balanced).
 - A failing route's evidence lifetime doubles with each consecutive failure after the first, up to an hour, so a route that never answers is re-sampled a few times a day instead of every five minutes. A success resets it.
 
 ### Removed
@@ -27,6 +31,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - An identity probe whose answer is empty, unparsable, null or not a valid hex chain ID no longer marks the upstream as serving the wrong chain. Only a readable wrong chain ID does. Previously one malformed answer blocked HTTP requests to that upstream until the next identity check; it now counts as an ordinary probe failure and requests keep flowing.
+
+- A background HTTP 429 holds an upstream out of routing only for its `Retry-After`, or 30 s without one. The identity prober recorded a fixed 60 s cooldown on every 429, and the head poller held the route for at least two poll intervals, so a provider that asked for one second could stay out for a minute. A head-poll answer that names exhausted quota still holds the upstream for at least an hour, and a rate-limited probe no longer counts as unhealthy.
+
+### Security
+
+- db_connection 2.10.3, for EEF-CVE-2026-133555.
+
+### Compatibility
+
+- No storage format or configuration changes are required. A container deployment upgrades from v0.9.0 with the new image alone.
+- Expect traffic to move: requests that name no strategy route with `balanced-fast`, `fastest` samples slower routes now and then, `load-balanced` sends fewer first picks to a route that fails often, and a raw transaction send can reach up to three providers.
+- Removed settings (`config :lasso, :routing_exploration` and the `response_latency` effect mode) are no longer read.
+
+### Known issues
+
+- Between head observations, a provider steadily behind can still be chosen for a read at a fixed block it hasn't reached yet. A fix is in review in [#449](https://github.com/jaxernst/lasso-rpc/pull/449).
+- With an even number of upstreams in a head round, a lagging one can become the mark ([#451](https://github.com/jaxernst/lasso-rpc/issues/451)).
+- A pooled HTTP connection can be reused just after the upstream's keep-alive closed it, failing that attempt over ([#450](https://github.com/jaxernst/lasso-rpc/issues/450)).
 
 ## [0.9.0] - 2026-11-21
 
@@ -682,7 +704,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Credo and Dialyzer static analysis
 - Comprehensive test suite (unit + integration)
 
-[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/jaxernst/lasso-rpc/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.6...v0.9.0
 [0.8.6]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.5...v0.8.6
 [0.8.5]: https://github.com/jaxernst/lasso-rpc/compare/v0.8.4...v0.8.5
