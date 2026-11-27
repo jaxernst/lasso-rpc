@@ -24,9 +24,9 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
   alias Lasso.RPC.Selection.{HeadSuitability, SiblingLast}
   alias Lasso.RPC.Strategies.LoadBalanced
 
-  # Each availability tier scans its ordinary routes before the routes deferred
-  # by head suitability or a learned effect.
-  @queue_keys for tier <- 1..4, bucket <- [:ordinary, :deferred], do: {tier, bucket}
+  # Queued channels wait by availability tier. Descriptors arrive in precedence
+  # order, so each tier's queue is already in that order.
+  @queue_keys Enum.to_list(1..4)
   @empty_queues Map.new(@queue_keys, &{&1, :queue.new()})
 
   @enforce_keys [
@@ -48,7 +48,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
                 learning_decision: nil,
                 request_facts: nil,
                 shadow_proposals: [],
-                deferred_routes: MapSet.new(),
+                precedence: %{},
                 excluded_provider_ids: MapSet.new(),
                 returned: 0,
                 excluded_fallback: nil,
@@ -132,7 +132,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
     effect_context = effect_context(opts, method, plan, filters)
 
-    {ordered, deferred_routes, decisions} =
+    {ordered, precedence, decisions} =
       Effects.order_with_decision(descriptors, plan, method, effect_context)
 
     %__MODULE__{
@@ -153,7 +153,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
           effect_context
         ),
       descriptors: ordered,
-      deferred_routes: deferred_routes,
+      precedence: precedence,
       limit: limit,
       deadline_us: Keyword.get(opts, :deadline_us),
       candidate_labels: candidate_labels,
@@ -187,7 +187,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     limit = Keyword.get(opts, :limit, 1000)
     effect_context = effect_context(opts, method, plan, filters)
 
-    {ordered, deferred_routes, decisions} =
+    {ordered, precedence, decisions} =
       Effects.order_with_decision(descriptors, plan, method, effect_context)
 
     %__MODULE__{
@@ -201,7 +201,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       learning_decision: decisions,
       shadow_proposals: Effects.shadow_proposals(descriptors, plan, method, effect_context),
       descriptors: ordered,
-      deferred_routes: deferred_routes,
+      precedence: precedence,
       limit: limit,
       deadline_us: Keyword.get(opts, :deadline_us),
       candidate_labels: [],
@@ -300,22 +300,16 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       {:ok, channel, tier, true} ->
         cursor = %{cursor | supported?: true, unsupported_deferred: @empty_queues}
 
-        case {tier, bucket(cursor, descriptor)} do
-          {1, :ordinary} = key ->
-            if defer_alternate?(cursor, channel),
-              do: cursor |> defer(:supported_deferred, key, channel) |> scan(),
-              else: return(channel, cursor)
-
-          key ->
-            cursor |> defer(:supported_deferred, key, channel) |> scan()
-        end
+        if tier == 1 and not defer_alternate?(cursor, channel),
+          do: return(channel, cursor),
+          else: cursor |> defer(:supported_deferred, tier, channel) |> scan()
 
       {:ok, _channel, _tier, false} when cursor.supported? ->
         scan(cursor)
 
       {:ok, channel, tier, false} ->
         cursor
-        |> defer(:unsupported_deferred, {tier, bucket(cursor, descriptor)}, channel)
+        |> defer(:unsupported_deferred, tier, channel)
         |> scan()
 
       {:skip, reason} ->
@@ -386,17 +380,11 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     }
   end
 
-  defp bucket(cursor, descriptor) do
-    if MapSet.member?(cursor.deferred_routes, Decision.route(descriptor)),
-      do: :deferred,
-      else: :ordinary
-  end
-
   defp defer_alternate?(%{diversity_seen: nil}, _channel), do: false
 
   defp defer_alternate?(cursor, channel) do
     MapSet.member?(cursor.diversity_seen, channel.instance_id) and
-      :queue.len(cursor.supported_deferred[{1, :ordinary}]) < cursor.limit - cursor.returned
+      :queue.len(cursor.supported_deferred[1]) < cursor.limit - cursor.returned
   end
 
   defp order_deferred(%{diversity_seen: nil} = cursor, _field, _tier), do: cursor
@@ -471,7 +459,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
     end
   end
 
-  @doc "Defers known-company siblings within each existing availability and knowledge band."
+  @doc "Defers known-company siblings among routes that share an availability tier and precedence key."
   @spec sibling_last(t(), [atom()]) :: t()
   def sibling_last(cursor, groups) do
     cursor = %{cursor | effect_context: Map.put(cursor.effect_context, :sibling_last, groups)}
@@ -483,7 +471,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
       end)
 
     # Other bands finish materialising into queues before the same rule is applied.
-    band = {1, :ordinary, true}
+    band = {1, true}
 
     ordered =
       entries
@@ -502,7 +490,7 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
   defp cached_band(cursor, descriptor) do
     case materialize(%{cursor | channel_lookup: :cached}, descriptor) do
-      {:ok, _channel, tier, supported?} -> {tier, bucket(cursor, descriptor), supported?}
+      {:ok, _channel, tier, supported?} -> {tier, supported?}
       {:skip, _reason} -> nil
     end
   end
@@ -520,15 +508,14 @@ defmodule Lasso.RPC.Selection.CandidateCursor do
 
         %{template_provider_config: provider.config, transport: transport}
       end,
-      &head_rank(cursor, &1)
+      &precedence(cursor, &1)
     )
   end
 
   defp order_siblings(channels, groups, cursor),
-    do: SiblingLast.order(channels, groups, & &1, &head_rank(cursor, &1))
+    do: SiblingLast.order(channels, groups, & &1, &precedence(cursor, &1))
 
-  defp head_rank(cursor, route),
-    do: HeadSuitability.rank(cursor.effect_context.head_suitability, Decision.route(route))
+  defp precedence(cursor, route), do: Map.get(cursor.precedence, Decision.route(route))
 
   @doc "Records a dispatch so learned recovery cannot add another send."
   @spec attempted_provider(t(), Channel.t()) :: t()

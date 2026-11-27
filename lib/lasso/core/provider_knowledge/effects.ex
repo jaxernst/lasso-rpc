@@ -69,17 +69,17 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   end
 
   @doc """
-  Orders one batch of descriptors by head suitability and learned deferral in
-  one precedence step, and captures the decisions that changed it.
+  Orders one batch of descriptors by a single precedence key and captures the
+  decisions that changed the order.
 
-  Routes deferred by neither come first, in `HeadSuitability.rank/3` order.
-  Routes with head class 2 or an `on`-mode learned deferral follow; the returned
-  set names them so they can wait behind the rest of their availability tier.
-  Shadow-mode effects never change the order.
+  The key is the route's `HeadSuitability.precedence/2` place, then whether an
+  `on`-mode learned deferral applies, then strategy order. The returned map
+  holds each route's key so the cursor orders its queues and sibling bands by
+  the same precedence. Shadow-mode effects never change the order.
   """
   @spec order_with_decision(list(), term(), binary(), map()) ::
-          {list(), MapSet.t(HeadSuitability.route()), [map()]}
-  def order_with_decision([], _plan, _method, _context), do: {[], MapSet.new(), []}
+          {list(), %{HeadSuitability.route() => tuple()}, [map()]}
+  def order_with_decision([], _plan, _method, _context), do: {[], %{}, []}
 
   def order_with_decision(descriptors, plan, method, context) do
     historical_mode = mode(:historical_depth, plan.profile)
@@ -104,34 +104,28 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         context
       )
 
-    {ranks, verdicts} =
-      if head do
-        descriptors
-        |> Enum.map(fn descriptor ->
-          route = Decision.route(descriptor)
-          {_class, verdict, reason} = classification = HeadSuitability.classify(head, route)
-          {HeadSuitability.rank(head, route, classification), {verdict, reason}}
-        end)
-        |> Enum.unzip()
-      else
-        {Enum.map(descriptors, fn _descriptor -> {0, 0} end),
-         Enum.map(descriptors, fn _ -> nil end)}
-      end
+    {places, verdicts} =
+      descriptors
+      |> Enum.map(fn descriptor ->
+        {place, verdict, reason} = HeadSuitability.precedence(head, Decision.route(descriptor))
+        {place, verdict && {verdict, reason}}
+      end)
+      |> Enum.unzip()
 
-    entries = Enum.zip([descriptors, ranks, learned])
+    keys =
+      Enum.zip_with(places, learned, fn {class, position}, learned? ->
+        {class, position, is_map(learned?)}
+      end)
+
+    entries = Enum.zip([descriptors, places, learned])
 
     applied =
-      entries
-      |> Enum.sort_by(fn {_descriptor, {class, position}, learned?} ->
-        {class == 2 or is_map(learned?), class, is_map(learned?), position}
-      end)
+      descriptors
+      |> Enum.zip(keys)
+      |> Enum.sort_by(&elem(&1, 1))
       |> Enum.map(&elem(&1, 0))
 
-    deferred =
-      for {descriptor, {class, _position}, learned?} <- entries,
-          class == 2 or is_map(learned?),
-          into: MapSet.new(),
-          do: Decision.route(descriptor)
+    precedence = descriptors |> Enum.map(&Decision.route/1) |> Enum.zip(keys) |> Map.new()
 
     order = %{baseline: descriptors, applied: applied}
 
@@ -145,12 +139,12 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
          [
            historical_decision(predictions, historical_mode, plan, method, context, order),
            quota_decision(plan, method, context, order),
-           head_decision(head, Enum.zip([descriptors, ranks, learned, verdicts]), plan, order)
+           head_decision(head, Enum.zip([descriptors, places, learned, verdicts]), plan, order)
          ])
       |> Enum.reject(&is_nil/1)
       |> Enum.map(&Decision.capture/1)
 
-    {applied, deferred, decisions}
+    {applied, precedence, decisions}
   end
 
   defp learned_deferrals(entries, historical_mode, plan, method, context) do

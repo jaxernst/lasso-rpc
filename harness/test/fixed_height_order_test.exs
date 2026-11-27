@@ -232,6 +232,31 @@ defmodule Lasso.Harness.FixedHeightOrderTest do
     end
   end
 
+  # The primary was polled at 10,002 and the three others at 9,000. The primary refuses the
+  # read until its limit is learned, then recovers and answers it; the others lack the block.
+  # A learned deferral orders the primary among routes that support the block, never behind
+  # routes below it, so every read reaches it first.
+  test "a route with a learned span limit that supports a fixed block goes before routes below it" do
+    learned_world(
+      "span_limit",
+      "eth_getLogs",
+      [%{"fromBlock" => "0x2700", "toBlock" => "0x2711"}],
+      {:error, -32_600, "You can make eth_getLogs requests with up to a 10 block range"},
+      []
+    )
+  end
+
+  # The same order holds when the learned deferral is the primary's retained state depth.
+  test "a route with a learned state depth that supports a fixed block goes before routes below it" do
+    learned_world(
+      "historical_depth",
+      "eth_getBalance",
+      [@address, "0x2648"],
+      {:error, -32_000, "missing trie node"},
+      "0x10"
+    )
+  end
+
   # Waits until every upstream has answered two head rounds, so the first round has closed
   # and each route has a fresh observation and a round lag before the action reads.
   defp moving_world(other_names, action) do
@@ -286,6 +311,76 @@ defmodule Lasso.Harness.FixedHeightOrderTest do
     after
       Tenant.close!(tenant)
       Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  defp learned_world(kind, method, params, refusal, answer) do
+    for strategy <- ["priority", "fastest", "balanced-fast", "load-balanced"] do
+      [primary | behind] =
+        fleets =
+        Enum.map(
+          ~w(learned-primary learned-behind-1 learned-behind-2 learned-behind-3),
+          &Fleet.start!(self(), "#{&1}-#{strategy}")
+        )
+
+      Fleet.script(primary, "eth_blockNumber", [], {:answer, hex(10_002)})
+      Fleet.script(primary, method, [], refusal)
+
+      for fleet <- behind do
+        Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(9_000)})
+        Fleet.script(fleet, method, [], {:error, -32_000, "header not found"})
+      end
+
+      tenant =
+        Tenant.open!(fleets,
+          chain: %{
+            "block_time_ms" => @block_ms,
+            "monitoring" => %{"http_heads_interval_ms" => 600_000}
+          },
+          providers: Map.new(fleets, &{&1.name, %{"background_observations" => true}})
+        )
+
+      try do
+        Settle.await("every upstream answers a head poll", fn ->
+          if Enum.all?(fleets, &(head_polls(&1) >= 1)), do: {:ok, :polled}
+        end)
+
+        pinned = %{rpc_url: tenant.rpc_url <> "?provider_override=" <> primary.name}
+
+        Settle.await(
+          "the primary's #{kind} is learned",
+          fn ->
+            Rpc.call(pinned, method, params)
+            hints = Tenant.knowledge!(tenant, primary)
+
+            if Enum.any?(hints, &(&1["kind"] == kind and &1["source"] == "learned")),
+              do: {:ok, :learned},
+              else: hints
+          end,
+          10_000
+        )
+
+        Fleet.script(primary, method, [], {:answer, answer})
+        world = strategy_world(tenant, fleets, strategy)
+
+        results =
+          for _ <- 1..20 do
+            {response, sent} =
+              Settle.closed(
+                fn -> Rpc.call(world.credentials, method, params) end,
+                fleets,
+                %{method: method, params: params}
+              )
+
+            {response.body["result"], Enum.map(sent, & &1.fleet)}
+          end
+
+        assert Enum.all?(results, &(&1 == {answer, [primary.name]})),
+               "#{strategy}: #{inspect(Enum.frequencies(results))}"
+      after
+        Tenant.close!(tenant)
+        Enum.each(fleets, &Fleet.stop/1)
+      end
     end
   end
 

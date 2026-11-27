@@ -441,13 +441,13 @@ defmodule Lasso.RPC.Selection do
     # A registry override that resolves to load-balanced gets its fallback diversity too.
     load_balanced? = strategy_mod == LoadBalanced
 
-    # Load-balanced diversity orders within each suitability rank, as the
-    # cursor does within each tier bucket, so it never lifts a deferred route.
+    # Load-balanced diversity orders within each head-suitability place, so it
+    # never lifts a route the head evidence placed later.
     tier_channels(ordered_channels, circuit_state_map, rate_limit_map, fn tier, seen ->
       seen = if load_balanced?, do: MapSet.union(seen, attempted), else: seen
 
       tier
-      |> Enum.group_by(&HeadSuitability.rank(head, {&1.instance_id, &1.transport}))
+      |> Enum.group_by(&elem(HeadSuitability.precedence(head, {&1.instance_id, &1.transport}), 0))
       |> Enum.sort_by(&elem(&1, 0))
       |> Enum.flat_map_reduce(seen, fn {_rank, group}, seen ->
         order_class_group(group, load_balanced?, method, seen)

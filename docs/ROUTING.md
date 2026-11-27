@@ -115,8 +115,11 @@ sources are evidence for the rule, not a qualification of any live provider.
 
 Method refusal, historical depth and `eth_getLogs` span learning are enabled by
 default. Repeated matching outcomes move an unsuitable connection behind other
-eligible connections in the same availability tier, and a learned method refusal
-skips that connection for the method while another candidate remains. Methods
+eligible connections in the same availability tier that head evidence places
+alike, and a learned method refusal skips that connection for the method while
+another candidate remains. Head evidence orders first: a connection observed to
+have a requested block keeps its place ahead of connections observed below it,
+whatever it has learned. Methods
 outside the registry learn sooner, since they cannot fail over within a request.
 A learned limit never removes the final candidate, overrides operator capability
 declarations, increases the request deadline or grants another transaction
