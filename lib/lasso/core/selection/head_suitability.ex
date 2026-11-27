@@ -25,8 +25,9 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   - everything else is `:unknown`.
 
   A verdict orders routes inside their availability tier and never excludes one.
-  Deferred routes go highest fresh observed height first, so when every route is
-  behind, the one nearest the requirement is tried first.
+  A read at a fixed height tries supporting routes first, then routes freshly
+  observed below the height, highest first, then routes with no fresh evidence,
+  then routes on a conflicting branch.
   """
 
   alias Lasso.BlockSync.{Observation, Registry}
@@ -251,11 +252,12 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   def target_height(%__MODULE__{requirement: :at_head}), do: nil
 
   @doc """
-  The route's ordering class with its verdict and reason. Only evidence against
-  a route defers it. Supporting and unknown routes keep strategy order for every
-  read until head observations cover routes often enough to compare them: an
-  unobserved route is not known to lag. A recovery height keeps its two-class
-  preference and defers nothing.
+  The route's ordering class with its verdict and reason. For a moving head,
+  only evidence against a route defers it: supporting and unknown routes keep
+  strategy order, since an unobserved route is not known to lag. For a fixed
+  request height, every route without supporting evidence is deferred, and
+  `rank/3` orders them. A recovery height keeps its two-class preference and
+  defers nothing.
   """
   @spec classify(t() | nil, route()) :: {class(), verdict() | nil, reason() | nil}
   def classify(nil, _route), do: {0, nil, nil}
@@ -269,22 +271,31 @@ defmodule Lasso.RPC.Selection.HeadSuitability do
   def class(capture, route), do: capture |> classify(route) |> elem(0)
 
   @doc """
-  The route's place inside its availability tier: its class, then, for a
-  deferred route, its fresh observed height, highest first. Other classes keep
-  strategy order.
+  The route's place inside its availability tier: its class, then, for a route
+  deferred from a fixed request height, routes observed below it by height,
+  highest first, then routes with no fresh evidence, then branch conflicts.
+  Every other route keeps strategy order within its class.
   """
   @spec rank(t() | nil, route()) :: {class(), integer()}
-  def rank(capture, route), do: rank(capture, route, class(capture, route))
+  def rank(capture, route), do: rank(capture, route, classify(capture, route))
 
-  @doc "The route's rank from the class `classify/2` gave it."
-  @spec rank(t() | nil, route(), class()) :: {class(), integer()}
-  def rank(%__MODULE__{evidence: evidence}, route, 2), do: {2, -evidence[route].height}
-  def rank(_capture, _route, class), do: {class, 0}
+  @doc "The route's rank from the classification `classify/2` gave it."
+  @spec rank(t() | nil, route(), {class(), verdict() | nil, reason() | nil}) ::
+          {class(), integer()}
+  def rank(%__MODULE__{requirement: {:request_height, _height}} = capture, route, {2, _, reason}),
+    do: {2, deferred_position(capture, route, reason)}
+
+  def rank(_capture, _route, {class, _verdict, _reason}), do: {class, 0}
+
+  defp deferred_position(capture, route, :below_height), do: -capture.evidence[route].height
+  defp deferred_position(_capture, _route, :branch_conflict), do: 2
+  defp deferred_position(_capture, _route, _unknown), do: 1
 
   defp verdict_class(_requirement, :supports), do: 0
   defp verdict_class({:recovery_height, _height}, _verdict), do: 1
   defp verdict_class(_requirement, :against), do: 2
-  defp verdict_class(_requirement, :unknown), do: 0
+  defp verdict_class({:request_height, _height}, :unknown), do: 2
+  defp verdict_class(:at_head, :unknown), do: 0
 
   @doc """
   Whether the route's current observation shows it reached the target, for

@@ -86,14 +86,145 @@ defmodule Lasso.Harness.FixedHeightOrderTest do
       end)
 
       for strategy <- ["fastest", "load-balanced"] do
-        url = String.replace(tenant.rpc_url, "/priority/", "/#{strategy}/")
-        world = %{fleets: fleets, credentials: %{rpc_url: url}}
+        world = strategy_world(tenant, fleets, strategy)
 
         # Reads at a block every route has teach fastest that the laggard is quickest.
         for _ <- 1..20, do: read(world, hex(9_000))
 
         served = for _ <- 1..20, {_response, sent} = read(world, hex(10_002)), do: sent
-        assert laggard.name not in served, "#{strategy}: #{inspect(Enum.frequencies(served))}"
+        assert Enum.all?(served, &(laggard.name not in &1)), "#{strategy}: #{inspect(served)}"
+      end
+    after
+      Tenant.close!(tenant)
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  # The primary was polled at 10,000 and already serves 10,001. The backup turns background
+  # observations off, so nothing is known about its head, and it lacks the block. A route
+  # one block short is nearer to the block than a route with no evidence, so every first
+  # send goes to the primary.
+  test "a route observed just short of a fixed block goes before a route with no head evidence" do
+    [primary, backup] =
+      fleets = Enum.map(~w(order-primary order-unobserved), &Fleet.start!(self(), &1))
+
+    Fleet.script(primary, "eth_blockNumber", [], {:answer, hex(10_000)})
+    Fleet.script(primary, "eth_getBalance", [], {:answer, "0x10"})
+    Fleet.script(backup, "eth_getBalance", [], {:error, -32_000, "header not found"})
+
+    tenant =
+      Tenant.open!(fleets,
+        chain: %{
+          "block_time_ms" => @block_ms,
+          "monitoring" => %{"http_heads_interval_ms" => 600_000}
+        },
+        providers: %{primary.name => %{"background_observations" => true}}
+      )
+
+    try do
+      Settle.await("the primary answers a head poll", fn ->
+        if head_polls(primary) >= 1, do: {:ok, :polled}
+      end)
+
+      for strategy <- ["priority", "fastest", "balanced-fast", "load-balanced"] do
+        world = strategy_world(tenant, fleets, strategy)
+        sent = for _ <- 1..20, {_response, sent} = read(world, hex(10_001)), do: sent
+        assert Enum.all?(sent, &(&1 == [primary.name])), "#{strategy}: #{inspect(sent)}"
+      end
+
+      assert head_polls(backup) == 0
+    after
+      Tenant.close!(tenant)
+      Enum.each(fleets, &Fleet.stop/1)
+    end
+  end
+
+  # Five upstreams report 10,002, three of them on hash A, which qualifies it. Those three
+  # refuse eth_getBalance. The primary is two blocks behind on hash A and serves 10,001; the
+  # backup reports 10,002 on hash B and answers from its own branch. A route on another branch
+  # goes after a route that is only behind, so every read returns the primary's balance.
+  test "a route on a conflicting branch goes after a route that is only behind a fixed block" do
+    [behind, conflict | witnesses] =
+      fleets =
+      Enum.map(
+        ~w(order-behind order-conflict order-witness-1 order-witness-2 order-witness-3),
+        &Fleet.start!(self(), &1)
+      )
+
+    for {fleet, height, digit} <-
+          [{behind, 10_000, "a"}, {conflict, 10_002, "b"}] ++
+            Enum.map(witnesses, &{&1, 10_002, "a"}) do
+      Fleet.script(fleet, "eth_blockNumber", [], {:answer, hex(height)})
+
+      Fleet.script(
+        fleet,
+        "eth_getBlockByNumber",
+        [],
+        {:answer,
+         %{
+           "number" => hex(height),
+           "hash" => "0x" <> String.duplicate(digit, 64),
+           "timestamp" => hex(System.system_time(:second))
+         }}
+      )
+    end
+
+    Fleet.script(behind, "eth_getBalance", [], {:answer, "0x10"})
+    Fleet.script(conflict, "eth_getBalance", [], {:answer, "0xbad"})
+
+    providers =
+      Map.new(fleets, fn fleet ->
+        refusal =
+          if fleet in witnesses,
+            do: %{"capabilities" => %{"unsupported_methods" => ["eth_getBalance"]}},
+            else: %{}
+
+        {fleet.name, Map.put(refusal, "background_observations", true)}
+      end)
+
+    tenant =
+      Tenant.open!(fleets,
+        chain: %{
+          "block_time_ms" => @block_ms,
+          "monitoring" => %{"http_heads_interval_ms" => 600_000}
+        },
+        providers: providers
+      )
+
+    try do
+      Settle.await("every upstream answers a head poll", fn ->
+        if Enum.all?(fleets, &(head_polls(&1) >= 1)), do: {:ok, :polled}
+      end)
+
+      # Latest-header reads pinned to each upstream report its block hash.
+      priority = strategy_world(tenant, fleets, "priority")
+
+      Settle.await(
+        "every upstream's block hash is observed",
+        fn ->
+          for fleet <- fleets do
+            pinned = %{rpc_url: tenant.rpc_url <> "?provider_override=" <> fleet.name}
+            assert Rpc.call(pinned, "eth_getBlockByNumber", ["latest", false]).body["result"]
+          end
+
+          case read(priority, hex(10_001)) do
+            {%{body: %{"result" => "0x10"}}, _sent} -> {:ok, :observed}
+            {response, sent} -> {response.body["result"], sent}
+          end
+        end,
+        10_000
+      )
+
+      for strategy <- ["priority", "fastest", "balanced-fast", "load-balanced"] do
+        world = strategy_world(tenant, fleets, strategy)
+
+        results =
+          for _ <- 1..10,
+              {response, sent} = read(world, hex(10_001)),
+              do: {response.body["result"], sent}
+
+        assert Enum.all?(results, &(&1 == {"0x10", [behind.name]})),
+               "#{strategy}: #{inspect(Enum.frequencies(results))}"
       end
     after
       Tenant.close!(tenant)
@@ -159,7 +290,7 @@ defmodule Lasso.Harness.FixedHeightOrderTest do
   end
 
   defp refute_served(reads, fleet) do
-    served = for {response, sent} <- reads, sent == fleet.name, do: response.request
+    served = for {response, sent} <- reads, fleet.name in sent, do: response.request
     latest = Enum.count(served, &match?([_address, "latest"], &1))
 
     assert length(reads) >= 20
@@ -176,7 +307,13 @@ defmodule Lasso.Harness.FixedHeightOrderTest do
     end)
   end
 
-  # The response, tagged with its params, and the upstream that received the first send.
+  defp strategy_world(tenant, fleets, strategy),
+    do: %{
+      fleets: fleets,
+      credentials: %{rpc_url: String.replace(tenant.rpc_url, "/priority/", "/#{strategy}/")}
+    }
+
+  # The response, tagged with its params, and every upstream that received a send.
   defp read(world, selector) do
     params = [@address, selector]
 
@@ -188,7 +325,7 @@ defmodule Lasso.Harness.FixedHeightOrderTest do
       )
 
     assert response.status == 200
-    {Map.put(response, :request, params), reports |> hd() |> Map.fetch!(:fleet)}
+    {Map.put(response, :request, params), Enum.map(reports, & &1.fleet)}
   end
 
   defp head_polls(fleet),

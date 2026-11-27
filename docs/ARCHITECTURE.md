@@ -523,10 +523,10 @@ it against what the request needs: a numeric block, the moving head, or
 nothing. For the moving head, a route is deferred when the latest head round
 that judged its profile found its upstream more than the agreement band behind
 that round's mark; passive observations never change that verdict. For a
-numeric block, a route is deferred when its fresh observation is below the
-block, and deferred routes go highest observed height first.
-A route fresh at the qualified reference height on a different hash is
-deferred too. Deferral stays within the route's health tier and never excludes
+numeric block, routes observed at or above it go first, then routes observed
+below it, highest first, then routes with no fresh observation, then a route
+fresh at the qualified reference height on a different hash. For the moving
+head, a route fresh at that height on a different hash is deferred too. Deferral stays within the route's health tier and never excludes
 it; see [Head freshness](ROUTING.md#head-freshness). Operator
 assessment is separate: the dashboard compares HTTP observations with the
 reference captured before their poll and WebSocket observations with the

@@ -73,10 +73,10 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
   one precedence step, and captures the decisions that changed it.
 
   Routes deferred by neither come first, head class 0 before class 1. Routes
-  with head evidence against suitability or an `on`-mode learned deferral
-  follow, those with head evidence against them highest observed height first;
-  the returned set names them so they can wait behind the rest of their
-  availability tier. Shadow-mode effects never change the order.
+  head suitability defers or an `on`-mode learned deferral defers follow, in
+  `HeadSuitability.rank/3` order; the returned set names them so they can wait
+  behind the rest of their availability tier. Shadow-mode effects never change
+  the order.
   """
   @spec order_with_decision(list(), term(), binary(), map()) ::
           {list(), MapSet.t(HeadSuitability.route()), [map()]}
@@ -110,8 +110,8 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
         descriptors
         |> Enum.map(fn descriptor ->
           route = Decision.route(descriptor)
-          {class, verdict, reason} = HeadSuitability.classify(head, route)
-          {HeadSuitability.rank(head, route, class), {verdict, reason}}
+          {_class, verdict, reason} = classification = HeadSuitability.classify(head, route)
+          {HeadSuitability.rank(head, route, classification), {verdict, reason}}
         end)
         |> Enum.unzip()
       else
@@ -123,13 +123,13 @@ defmodule Lasso.RPC.ProviderKnowledge.Effects do
 
     applied =
       entries
-      |> Enum.sort_by(fn {_descriptor, {class, height}, learned?} ->
-        {class == 2 or is_map(learned?), class, is_map(learned?), height}
+      |> Enum.sort_by(fn {_descriptor, {class, position}, learned?} ->
+        {class == 2 or is_map(learned?), class, is_map(learned?), position}
       end)
       |> Enum.map(&elem(&1, 0))
 
     deferred =
-      for {descriptor, {class, _height}, learned?} <- entries,
+      for {descriptor, {class, _position}, learned?} <- entries,
           class == 2 or is_map(learned?),
           into: MapSet.new(),
           do: Decision.route(descriptor)
