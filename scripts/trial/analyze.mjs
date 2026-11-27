@@ -1,6 +1,7 @@
 // Reads <results>/<run>/<candidate>/ and writes results.json plus tables.md into <results>.
 // Runs named <scenario>-r<N> are repeats of one scenario; the Repeats section reports their spread.
 // Rates and means keep full precision in results.json; only the tables round.
+// Exits 2 when a bar in expected.json fails.
 // Usage: node analyze.mjs [results dir]
 import fs from "node:fs";
 import path from "node:path";
@@ -260,26 +261,34 @@ for (const [run, cands] of Object.entries(results.scenarios)) {
   }
 }
 
-// Repeats: runs named <scenario>-r<N>. run.sh writes plan.json with the repeat count and the
-// runner writes run.json with the candidates it was asked for, so a missing or failed run
-// marks its group incomplete instead of dropping out of the comparison.
+// Repeats: runs group by scenario, from a <scenario>-r<N> name or the run's run.json. run.sh
+// writes plan.json with the scenarios, candidates and repeat count, and the runner writes
+// run.json with the candidates it was asked for, so a missing or failed run marks its group
+// incomplete instead of dropping out of the comparison.
 const readJson = (f) => (fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, "utf8")) : null);
 const plan = readJson(path.join(RES, "plan.json"));
 const groups = {};
-for (const run of runNames) { const m = run.match(/^(.+)-r(\d+)$/); if (m) (groups[m[1]] ||= new Set()).add(run); }
+for (const run of runNames) {
+  const s = run.match(/^(.+)-r(\d+)$/)?.[1] ?? readJson(path.join(RES, run, "run.json"))?.scenario;
+  if (s) (groups[s] ||= new Set()).add(run);
+}
 for (const s of plan?.scenarios ?? []) for (let i = 1; i <= plan.repeats; i++) (groups[s] ||= new Set()).add(`${s}-r${i}`);
 results.repeats = {};
+const range = (xs) => { const v = xs.filter((x) => x !== null && x !== undefined); return v.length ? { min: Math.min(...v), max: Math.max(...v) } : null; };
+const show = (r, fmt) => (r ? (r.min === r.max ? fmt(r.min) : `${fmt(r.min)} to ${fmt(r.max)}`) : "n/a");
+const candidatesFor = (s, runs) => {
+  const planned = plan?.scenarios?.includes(s) ? plan.candidates : [];
+  const asked = new Set([...planned, ...runs.flatMap((r) => [...(readJson(path.join(RES, r, "run.json"))?.candidates ?? []), ...Object.keys(results.scenarios[r] ?? {})])]);
+  return [...asked].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+};
 const repeatGroups = Object.entries(groups).map(([s, runs]) => [s, [...runs].sort((a, b) => a.localeCompare(b, "en", { numeric: true }))])
   .filter(([, runs]) => !runs.some((r) => Object.values(results.scenarios[r] ?? {}).some((a) => a.kind === "idle")));
 if (repeatGroups.length) {
   md += "\n## Repeats\n\nEach cell is the lowest and highest value across repeats. A row agrees when success and stale reads stay within " +
     `${TOLERANCE.success_pp} percentage point, p50 and p95 within the larger of ${TOLERANCE.latency_ms} ms and ${TOLERANCE.latency_frac * 100}% of the lowest value, ` +
     `and upstream calls per request within ${TOLERANCE.calls_per_request}. A row is incomplete when any repeat is missing or failed.\n`;
-  const range = (xs) => { const v = xs.filter((x) => x !== null && x !== undefined); return v.length ? { min: Math.min(...v), max: Math.max(...v) } : null; };
-  const show = (r, fmt) => (r ? (r.min === r.max ? fmt(r.min) : `${fmt(r.min)} to ${fmt(r.max)}`) : "n/a");
   for (const [s, runs] of repeatGroups) {
-    const asked = new Set(runs.flatMap((r) => [...(readJson(path.join(RES, r, "run.json"))?.candidates ?? []), ...Object.keys(results.scenarios[r] ?? {})]));
-    const cands = [...(asked.size ? asked : plan?.candidates ?? [])].sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+    const cands = candidatesFor(s, runs);
     md += `\n### ${s} (${runs.length} ${runs.length === 1 ? "run" : "runs"})\n\n| candidate | success | p50 ms | p95 ms | stale reads | upstream calls per request | agree |\n|---|---|---|---|---|---|---|\n`;
     results.repeats[s] = {};
     for (const c of cands) {
@@ -307,6 +316,48 @@ if (repeatGroups.length) {
     }
   }
 }
+// Expected outcomes: expected.json holds bars per scenario and candidate, each a metric with a min
+// or max. A bar passes when every repeat meets it; a missing or failed repeat fails it.
+const METRICS = {
+  stale_rate: { label: "stale reads", value: (a) => a.freshness?.stale_rate },
+  sent_to_hang_after_30s: { label: "sent to a hung upstream after 30 s", value: (a) => a.tagged?.sent_to_hang_after_30s?.rate },
+  success_after_30s: { label: "success after 30 s", value: (a) => a.after_30s?.success_rate },
+  sends_delivered: { label: "sends delivered", value: (a) => (a.broadcast ? a.broadcast.client_success / a.broadcast.txs : null) },
+};
+const EXPECTED = readJson(path.join(KIT, "expected.json")) ?? {};
+const pcBound = (x) => `${Math.round(x * 1000) / 10}%`;
+results.expected = [];
+for (const [s, runSet] of Object.entries(groups)) {
+  if (!EXPECTED[s]) continue;
+  const runs = [...runSet].sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  const cands = candidatesFor(s, runs);
+  for (const [c, bars] of Object.entries(EXPECTED[s])) {
+    if (!cands.includes(c)) continue;
+    for (const [metric, bound] of Object.entries(bars)) {
+      const m = METRICS[metric];
+      if (!m) throw new Error(`expected.json: unknown metric ${metric} for ${s} ${c}`);
+      const repeats = runs.map((r) => {
+        const a = results.scenarios[r]?.[c];
+        const value = a && !failed(a) ? m.value(a) ?? null : null;
+        return { run: r, value, problem: !a ? "missing" : failed(a) ? "failed" : value === null ? "not measured" : null };
+      });
+      const meets = (v) => (bound.min === undefined || v >= bound.min) && (bound.max === undefined || v <= bound.max);
+      const bar = [m.label, bound.min !== undefined && `at least ${pcBound(bound.min)}`, bound.max !== undefined && `at most ${pcBound(bound.max)}`].filter(Boolean).join(" ");
+      results.expected.push({ scenario: s, candidate: c, metric, ...bound, bar, repeats, pass: repeats.every((x) => !x.problem && meets(x.value)) });
+    }
+  }
+}
+if (results.expected.length) {
+  md += "\n## Expected outcomes\n\nBars from `expected.json`. A bar passes when every repeat meets it.\n\n| scenario | candidate | bar | measured across repeats | result |\n|---|---|---|---|---|\n";
+  for (const e of results.expected) {
+    const problems = e.repeats.filter((x) => x.problem).map((x) => `${x.run.replace(`${e.scenario}-`, "")} ${x.problem}`);
+    const measured = [show(range(e.repeats.map((x) => x.value)), pc), ...problems].join("; ");
+    md += `| ${e.scenario} | ${e.candidate} | ${e.bar} | ${measured} | ${e.pass ? "pass" : "fail"} |\n`;
+  }
+}
 fs.writeFileSync(path.join(RES, "results.json"), JSON.stringify(results, null, 2));
 fs.writeFileSync(path.join(RES, "tables.md"), md);
 console.log(md);
+const missed = results.expected.filter((e) => !e.pass);
+for (const e of missed) console.error(`expected outcome failed: ${e.scenario} ${e.candidate}: ${e.bar}`);
+if (missed.length) process.exitCode = 2;

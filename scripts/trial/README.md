@@ -7,16 +7,16 @@ Runs a wallet-like JSON-RPC workload against mock upstreams whose faults you con
 - Node.js 20 or later. No npm packages.
 - bash or any POSIX sh, for `run.sh`.
 - macOS or Linux. Resource sampling uses `ps`.
-- A Lasso release directory (the one holding `bin/lasso`), in `LASSO_REL`. Either unpack a standalone archive from a [GitHub release](https://github.com/jaxernst/lasso-rpc/releases), which needs no Erlang install, or build one from source with `MIX_ENV=prod mix release` (`_build/prod/rel/lasso`).
+- `curl`, and `shasum` or `sha256sum`, unless you set `LASSO_REL`.
+- macOS on Apple silicon or Linux on x86_64 or aarch64 for the downloaded archive. On anything else, build a release from source with `MIX_ENV=prod mix release` and set `LASSO_REL` to `_build/prod/rel/lasso`.
 
 ## Run
 
 ```sh
-gh release download --repo jaxernst/lasso-rpc --pattern 'lasso-*-macos-aarch64.tar.gz'
-tar -xzf lasso-*-macos-aarch64.tar.gz
-export LASSO_REL="$PWD/lasso"
 scripts/trial/run.sh
 ```
+
+Lasso comes from the release this checkout names. When `LASSO_REL` is unset, `run.sh` reads the version from `mix.exs`, downloads that version's archive for your platform from its [GitHub release](https://github.com/jaxernst/lasso-rpc/releases), checks it against the published checksum and unpacks it into the results directory. It stops if the release has no archive for your platform. To test another build, set `LASSO_REL` to its release directory (the one holding `bin/lasso`).
 
 This runs the default set (S1, S2, S2m, S3, S4, S5, S6, S9b, S9s, S9m) three times at 180 s per scenario, about 90 minutes, then writes `tables.md` and `results.json` into `scripts/trial/results/<UTC time>/`.
 
@@ -35,6 +35,8 @@ This runs the default set (S1, S2, S2m, S3, S4, S5, S6, S9b, S9s, S9m) three tim
 ```sh
 REPEATS=1 DURATION=60 CANDIDATES=direct,lasso,lasso-fastest scripts/trial/run.sh S2,S4,B1
 ```
+
+At a release tag, `run.sh` exits 0 only when that release meets every expected outcome for the scenarios it ran.
 
 To run one scenario by hand: `node scripts/trial/runner.mjs <scenario> [candidates] [duration_s]`, then `node scripts/trial/analyze.mjs [results dir]`.
 
@@ -136,9 +138,33 @@ Sends are real EIP-1559 transfers: 0 value to a fixed address, signed with a fix
 
 A request succeeds when a JSON-RPC result arrives and passes the kit's checks: a receipt is not null, `eth_getLogs` returns exactly one log for every tenth block in the range, each from the requested address, with no duplicates, gaps or blocks outside the range, `eth_chainId` names the scenario's chain, and a send returns the transaction's hash. A result that fails a check counts as a failure, listed as `invalid result` in the errors. `client.jsonl` keeps both: `rpc_ok` for any result, `ok` for a checked one. Success rates, latencies and repeat spreads use `ok`.
 
+## Expected outcomes
+
+`expected.json` holds the outcomes the project commits to, by scenario and candidate. Each bar is a metric with a `min` or a `max`:
+
+| metric | what it measures |
+|---|---|
+| `success_after_30s` | share of reads that succeed after the first 30 s |
+| `stale_rate` | share of reads with a block that are stale |
+| `sent_to_hang_after_30s` | share of tagged reads after the first 30 s that went to an upstream that held them |
+| `sends_delivered` | share of client sends that returned the transaction hash |
+
+`analyze.mjs` checks each bar against every repeat and writes an Expected outcomes section into `tables.md` and `results.json`: the bar, the range measured across repeats, and pass or fail. A bar passes only when every repeat meets it, so a missing or failed repeat fails it. A scenario or candidate with no entry is not checked. `analyze.mjs` exits 2 when a bar fails, and `run.sh` then exits nonzero.
+
+The current bars:
+
+| scenario | candidates | bar |
+|---|---|---|
+| S2 | `lasso`, `lasso-fastest` | success after 30 s at least 99% |
+| S4 | `lasso-fastest`, `lasso-bf` | stale reads at most 2% |
+| S9b, S9m | every Lasso candidate | every send delivered |
+| S12 | `lasso-fastest`, `lasso-lb` | sent to a hung upstream after 30 s at most 2% |
+
+A bar stays in the file while it fails. The failure is the result.
+
 ## Repeats
 
-`run.sh` names each run `<scenario>-r<N>`, and `analyze.mjs` adds a Repeats section: for each scenario and candidate, the lowest and highest success, p50, p95, stale reads and upstream calls per request across repeats. Comparisons use unrounded values. A row whose repeats include a missing or failed run says "incomplete" and which run, rather than comparing the rest. `run.sh` keeps going after a failed run and exits nonzero at the end. Idle scenarios have no repeat rows.
+`run.sh` names each run `<scenario>-r<N>`, and `analyze.mjs` adds a Repeats section: for each scenario and candidate, the lowest and highest success, p50, p95, stale reads and upstream calls per request across repeats. Comparisons use unrounded values. A row whose repeats include a missing or failed run says "incomplete" and which run, rather than comparing the rest. `run.sh` keeps going after a failed run and exits nonzero at the end, as it does when an expected outcome fails. Idle scenarios have no repeat rows.
 
 Repeats agree when every spread (highest minus lowest) stays within:
 
@@ -155,7 +181,7 @@ The scenarios are built so the differences they show are larger than these bound
 
 | variable | meaning |
 |---|---|
-| `LASSO_REL` | Lasso release directory. Needed for `lasso*` candidates. |
+| `LASSO_REL` | Lasso release directory for `lasso*` candidates. Unset, `run.sh` downloads this checkout's release. |
 | `ENDPOINT_URL` | your endpoint's URL. Needed for `endpoint`; when it is set, `run.sh` adds `endpoint` to the default candidates. |
 | `ENDPOINT_CMD` | optional command that starts your endpoint for each run. |
 | `ENDPOINT_WAIT_S` | how long to wait for a started proxy, your endpoint or the first `UPSTREAMS` URL to answer (default 120). |
@@ -196,6 +222,6 @@ The URLs are written into the configuration files under `results/`. If they cont
 Before a run starts, the kit checks that every port the candidate will use is free, including ports meant to stay closed, and that the mock answering its control port is the one it just started. A busy port fails the run.
 
 
-`results/<run>/<candidate>/` holds `client.jsonl` (one line per client request), `upstream.jsonl` (a `call` line when each upstream request arrives and an `outcome` line, `ok`, `error`, `429` or `hang`, when it is settled; a call with no outcome line counts as `unanswered`), `meta.json`, `proxy.log`, `mock.log`, and `resources.json` for idle scenarios. `analyze.mjs` reads `.jsonl.gz` files too.
+A downloaded archive and its unpacked release are in `release/` in the results directory. `results/<run>/<candidate>/` holds `client.jsonl` (one line per client request), `upstream.jsonl` (a `call` line when each upstream request arrives and an `outcome` line, `ok`, `error`, `429` or `hang`, when it is settled; a call with no outcome line counts as `unanswered`), `meta.json`, `proxy.log`, `mock.log`, and `resources.json` for idle scenarios. `analyze.mjs` reads `.jsonl.gz` files too.
 
 In the tables, a read is stale when its block is 2 or more blocks older than the true head when the answer arrived. "Backwards" counts answers older than one received earlier (in brackets, older by more than one block). Upstream calls per tagged request count every upstream call that carried the request's tag, including retries and hedges.
