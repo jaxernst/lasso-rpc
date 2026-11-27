@@ -245,7 +245,7 @@ Orders reliable upstreams by a weighted random permutation over each upstream's 
   weight = (best_mean / candidate_mean)^beta
   ```
 - Generates the permutation with exponential-race keys: `-log(U) / weight`
-- Places upstreams in this order: (1) a weighted permutation of the upstreams with current latency evidence plus one picked at random from the unproven ones, those with no latency evidence or only evidence that has gone stale, which weighs as much as the quickest so it earns a sample instead of being starved and an expired upstream is retried rather than left last; (2) the remaining unproven upstreams, shuffled; (3) upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75), ordered among themselves the same way
+- Places upstreams in this order: (1) a weighted permutation of the upstreams with current latency evidence plus one picked at random from the unproven ones, those with no latency evidence or only evidence that has gone stale, which weighs 1/8 as much as the quickest so it earns a sample instead of being starved and an expired upstream is retried rather than left last; (2) the remaining unproven upstreams, shuffled; (3) upstreams whose evidence is unreliable (three consecutive failures, or recent success probability below 0.75), ordered among themselves the same way
 - Applies reliability as a boundary, not a weight multiplier
 - Bounds the ranking, not every dispatch order: among upstreams that are not unreliable, at most one unproven upstream ranks ahead of those with current latency evidence, but health tiering runs afterwards and can move a measured upstream with a half-open circuit behind unproven ones
 - Uses no latency floor or weight floor
