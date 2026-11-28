@@ -1150,7 +1150,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
       # Replay reached its head but still owes the client heights below the pending live
       # events; another round replays them without spending a repair attempt. It resumes from
-      # what the drain delivered, which for logs is nothing.
+      # what the drain delivered, which for logs is nothing. A stream that has delivered nothing
+      # has no marker, so later rounds resume from the head the first such round replayed to.
       {:extend, new_state, live_events, seed_count, floor} ->
         context = new_state.failover_context
 
@@ -1163,7 +1164,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             replay_buffer: [],
             replay_buffer_count: 0,
             replay_buffer_bytes: 0,
-            continuity_marker: continuity_marker(new_state.state, new_state.key),
+            continuity_marker:
+              continuity_marker(new_state.state, new_state.key) || context.continuity_marker ||
+                replayed_head,
             continuity_snapshot: StreamState.continuity_snapshot(new_state.state),
             backfill_context: %{context.backfill_context | minimum_head: floor}
         }
@@ -1312,8 +1315,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   # or removal, is the only evidence of where the replacement's subscription began. It may sit
   # partway through its block, so replay owes that whole block. Late logs at or below the
   # replayed head say nothing about the start. A round that still owes a block delivers
-  # nothing, so the next one replays again from the recovery's own marker and covers a reorg
-  # into blocks that held no matching log before.
+  # nothing, so the next one replays again from the same start and covers a reorg into blocks
+  # that held no matching log before.
   defp drain_log_buffers(state, replay_buffer, live_buffer, context, replayed_head) do
     seed_count = Map.get(context, :initial_live_event_count, 0)
 
