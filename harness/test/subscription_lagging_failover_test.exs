@@ -90,6 +90,12 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     assert additions(w) == main_logs(101..105)
   end
 
+  test "a log owed across rounds reaches a client that has received no log yet" do
+    quiet = %{{:main, 101} => [], {:main, 102} => []}
+    w = replay_logs(live: [log_at(:main, 104)], delivered: @start, block_logs: quiet)
+    assert additions(w) == main_logs(103..105)
+  end
+
   test "a reorg while the replacement's socket is down replays a log new to its block" do
     live = [log_at(:main, 104), removed(log_at(:other, 106))]
 
@@ -267,7 +273,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
         await(w, &(&1.client_sub != nil and &1.subs.a != []), "client and upstream subscriptions")
 
       w =
-        Enum.reduce((@start + 1)..delivered, w, fn n, w ->
+        Enum.reduce((@start + 1)..delivered//1, w, fn n, w ->
           Agent.update(chain, &%{&1 | a: n, b: n - lag})
           notify(w, :a, n)
           notify(w, :b, n - lag)
@@ -357,7 +363,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     {served, opts} = Keyword.pop(opts, :served, 104)
     {settles, opts} = Keyword.pop(opts, :settles_at, served)
     follow = &buffer_logs_above_replay(&1, rounds, served, settles, opts[:reorg_before_logs_from])
-    w = run(:logs, [lag: 0, delivered: 102, follow: follow] ++ opts)
+    w = run(:logs, Keyword.merge([lag: 0, delivered: 102, follow: follow], opts))
     assert w.closed == nil
     w
   end
