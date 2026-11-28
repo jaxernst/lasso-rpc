@@ -80,7 +80,27 @@ defmodule Lasso.Core.Streaming.Backfill do
             )
         end
 
-      with :ok <- result, do: {:ok, head}
+      case result do
+        :ok ->
+          {:ok, head}
+
+        # The replay range's last block is gone, as when the tip regresses: take a new head
+        # with the same minimum and coverage start, polling as for a source that is behind.
+        {:error, {:range_end_missing, _number}} ->
+          Process.sleep(min(100, recovery_remaining_ms(ctx.plan.deadline_us)))
+
+          execute_backfill(
+            ctx,
+            key,
+            continuity_marker,
+            continuity_snapshot,
+            owner_id,
+            select_retry
+          )
+
+        {:error, _reason} = error ->
+          error
+      end
     end
   end
 
@@ -390,11 +410,13 @@ defmodule Lasso.Core.Streaming.Backfill do
     provider_id = ctx.plan.provider_id
     retained_logs = Map.get(snapshot, :logs, [])
 
-    with {:ok, orphaned_logs} <- find_orphaned_logs(ctx.plan, retained_logs),
-         replay_from <- replay_from_for_logs(orphaned_logs, from_n),
-         {:ok, logs} <- GapFiller.ensure_logs(ctx.plan, filter, replay_from, to_n) do
+    with {:ok, orphaned_logs} <- find_orphaned_logs(ctx.plan, retained_logs) do
+      replay_from = replay_from_for_logs(orphaned_logs, from_n)
       removals = Enum.map(orphaned_logs, &Map.put(&1, "removed", true))
-      emit_backfill_events(ctx.plan, owner_id, provider_id, removals ++ logs)
+
+      GapFiller.with_logs(ctx.plan, filter, replay_from, to_n, fn logs ->
+        emit_backfill_events(ctx.plan, owner_id, provider_id, removals ++ logs)
+      end)
     end
   end
 

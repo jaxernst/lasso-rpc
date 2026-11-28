@@ -108,6 +108,78 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
              Enum.map(103..107, &log_at(:fork, &1))
   end
 
+  test "replay owed across rounds stays within the replacement's log range limit" do
+    w = replay_logs(rounds: two_rounds(), served: 106, logs_range: 3)
+    assert additions(w) == main_logs(101..107)
+  end
+
+  test "a reorg between the halves of a refused log range replays the new branch whole" do
+    w =
+      replay_logs(
+        rounds: two_rounds(),
+        served: 106,
+        logs_range: 3,
+        block_logs: %{{:main, 103} => []},
+        reorg_before_logs_from: 105
+      )
+
+    assert Enum.take(additions(w), 2) == main_logs(101..102)
+
+    assert Enum.filter(additions(w), &(&1["blockHash"] != hash(:main, height(&1)))) ==
+             Enum.map(103..107, &log_at(:fork, &1))
+  end
+
+  test "a split log range whose last block briefly goes missing waits for the new branch" do
+    w = replay_logs(rounds: two_rounds(), served: 106, logs_range: 3, tip_reorg_at: 106)
+    assert additions(w) == main_logs(101..105) ++ Enum.map(106..107, &log_at(:fork, &1))
+  end
+
+  test "a split log range whose tip regresses for good replays to the new head" do
+    w =
+      replay_logs(
+        rounds: [{[log_at(:main, 104)], 102, 104}],
+        served: 106,
+        settles_at: 105,
+        logs_range: 3,
+        tip_regress_at: 106
+      )
+
+    assert additions(w) == main_logs(101..106)
+  end
+
+  test "a log range refused with plan wording is fetched in halves" do
+    w =
+      replay_logs(
+        rounds: two_rounds(),
+        served: 106,
+        logs_range: 3,
+        refusal: {-32_600, "Free tier max block range is 3. Upgrade your plan."}
+      )
+
+    assert additions(w) == main_logs(101..107)
+  end
+
+  # Blocks 103 and 104 each hold three 3 MB logs, more together than one eth_getLogs response
+  # may carry, and HTTP refuses ranges over 2 blocks.
+  @tag timeout: 60_000
+  test "halves of a refused log range stop at one response's size cap" do
+    big = Map.new([103, 104], &{{:main, &1}, [0, 1, 2]})
+
+    w =
+      run(:logs,
+        lag: 0,
+        delivered: 102,
+        logs_range: 2,
+        block_logs: big,
+        log_data_bytes: Map.new([103, 104], &{&1, 3_000_000}),
+        follow: &replay_past_cap/1
+      )
+
+    assert {:remote, 1011, _} = w.closed.reason
+    assert w.log_requests != []
+    assert Enum.all?(w.log_requests, fn {from, _to} -> from <= 104 end)
+  end
+
   test "logs continue without a gap or duplicate on a replacement 2 blocks behind" do
     w = run(:logs, lag: 2)
     blocks = Enum.map(w.events, &hex(&1["blockNumber"]))
@@ -137,6 +209,12 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
           fork_at: opts[:fork_at],
           a_fork: opts[:a_fork],
           block_logs: Keyword.get(opts, :block_logs, %{}),
+          log_data_bytes: Keyword.get(opts, :log_data_bytes, %{}),
+          refusal: Keyword.get(opts, :refusal, {-32_602, "block range too large"}),
+          logs_range: opts[:logs_range],
+          reorg_before_logs_from: opts[:reorg_before_logs_from],
+          tip_reorg_at: opts[:tip_reorg_at],
+          tip_regress_at: opts[:tip_regress_at],
           hold: false
         }
       end)
@@ -152,6 +230,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
 
     tenant = Tenant.open!([a, b], providers: providers)
     held = Settle.listen([:lasso, :subs, :recovery, :event_held])
+    released = Settle.listen([:lasso, :upstream_admission, :released])
 
     url = %{
       URI.parse(tenant.rpc_url)
@@ -168,11 +247,14 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       ref: wire.reference,
       profile: tenant.profile,
       held: held,
+      released: released,
+      released_logs: 0,
       client_sub: nil,
       subs: %{a: [], b: []},
       events: [],
       holds: [],
       upgrades: [],
+      log_requests: [],
       closed: nil,
       killed_at: nil
     }
@@ -199,6 +281,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     after
       close_client(wire)
       Settle.unlisten(held)
+      Settle.unlisten(released)
       Tenant.close!(tenant)
       Fleet.resume_listener(a)
       Fleet.stop(a)
@@ -272,13 +355,20 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     {live, opts} = Keyword.pop(opts, :live, [])
     {rounds, opts} = Keyword.pop(opts, :rounds, [{live, 102, 104}, {[], 103, 104}])
     {served, opts} = Keyword.pop(opts, :served, 104)
-    follow = &buffer_logs_above_replay(&1, rounds, served)
+    {settles, opts} = Keyword.pop(opts, :settles_at, served)
+    follow = &buffer_logs_above_replay(&1, rounds, served, settles, opts[:reorg_before_logs_from])
     w = run(:logs, [lag: 0, delivered: 102, follow: follow] ++ opts)
     assert w.closed == nil
     w
   end
 
-  defp buffer_logs_above_replay(w, rounds, served) do
+  # The replacement pushes the log at 104 while HTTP answers at 102, and an unrelated removal at
+  # 106 while HTTP answers at 104, so the completing round replays 102 to 106.
+  defp two_rounds,
+    do: [{[log_at(:main, 104)], 102, 104}, {[removed(log_at(:other, 106))], 104, 106}]
+
+  # HTTP serves `served`, and replay settles at `settles`, below it when the tip regresses.
+  defp buffer_logs_above_replay(w, rounds, served, settles, reorg_from) do
     w = await_head_request(w)
 
     w =
@@ -287,9 +377,61 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       end)
 
     w = serve_head(w, served)
-    w = await(w, &reached?(&1, served), "logs through #{served}")
-    w = advance_b(w, served + 1)
-    await(w, &reached?(&1, served + 1), "log #{served + 1}")
+    w = if reorg_from, do: reorg_before_logs(w, reorg_from, served), else: w
+    w = await(w, &reached?(&1, settles), "logs through #{settles}")
+    w = advance_b(w, settles + 1)
+    w = await(w, &reached?(&1, settles + 1), "log #{settles + 1}")
+
+    if reorg_from do
+      w = w |> pump(now() + 300) |> tally_released()
+      assert w.released_logs == answered_logs(w)
+      w
+    else
+      w
+    end
+  end
+
+  # Counts the replacement's eth_getLogs responses whose upstream admission leases have
+  # returned their bytes, from the admission's release telemetry.
+  defp tally_released(%{released: %{id: ref}} = w) do
+    receive do
+      {:surface, ^ref, _event, %{bytes: bytes}, %{reason: reason}}
+      when reason in [:backfill_handed_off, :backfill_discarded] and bytes > 0 ->
+        tally_released(%{w | released_logs: w.released_logs + 1})
+
+      {:surface, ^ref, _event, _measurements, _metadata} ->
+        tally_released(w)
+    after
+      0 -> w
+    end
+  end
+
+  # The replacement's eth_getLogs requests within its range limit, answered or held.
+  defp answered_logs(w) do
+    range = Agent.get(w.chain, & &1.logs_range)
+    Enum.count(w.log_requests, fn {from, to} -> to - from + 1 <= range end)
+  end
+
+  # HTTP jumps from 102 to 108 with no event held, so one replay covers 103 to 108.
+  defp replay_past_cap(w) do
+    w = w |> await_head_request() |> serve_head(108)
+    await(w, &(&1.closed != nil), "the subscription to close", 35_000)
+  end
+
+  # Holds the replacement's eth_getLogs from `from`, reorgs its chain from 103 onto a branch
+  # whose block 103 has a matching log, then answers the held request on that branch.
+  defp reorg_before_logs(w, from, to) do
+    w = await(w, &(&1.holds != []), "a held eth_getLogs from #{from}")
+    # The first half's response stays charged while the second half is held.
+    w = w |> pump(now() + 300) |> tally_released()
+    assert w.released_logs == answered_logs(w) - 2
+    Agent.update(w.chain, &%{&1 | fork_at: 103, reorg_before_logs_from: nil})
+    state = Agent.get(w.chain, & &1)
+
+    for token <- w.holds,
+        do: Fleet.release(w.fleets.b, token, {:answer, logs_in(:b, from..to, state)})
+
+    %{w | holds: []}
   end
 
   # Block 103 has no matching log on the first branch. While replay owes 106 for the held
@@ -439,10 +581,26 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
   defp track(w, %{request: %{"method" => "fixture_upgrade"}, action: {:hold, token}}),
     do: %{w | upgrades: w.upgrades ++ [token]}
 
-  defp track(w, %{transport: :http, action: {:hold, token}}),
-    do: %{w | holds: w.holds ++ [token]}
+  defp track(w, %{transport: :http, action: {:hold, token}} = r),
+    do: record_log_request(%{w | holds: w.holds ++ [token]}, r)
+
+  defp track(w, %{transport: :http} = r), do: record_log_request(w, r)
 
   defp track(w, _report), do: w
+
+  defp record_log_request(
+         w,
+         %{request: %{"method" => "eth_getLogs", "params" => [filter]}} = report
+       ) do
+    if id(w, report) == :b,
+      do: %{
+        w
+        | log_requests: w.log_requests ++ [{hex(filter["fromBlock"]), hex(filter["toBlock"])}]
+      },
+      else: w
+  end
+
+  defp record_log_request(w, _report), do: w
 
   defp id(w, report), do: if(report.fleet == w.fleets.a.name, do: :a, else: :b)
 
@@ -472,7 +630,22 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       [],
       respond.(fn %{"params" => [tag | _]}, s ->
         n = if String.starts_with?(tag, "0x"), do: hex(tag), else: s[id]
-        {:answer, if(n <= s[id], do: block(id, n, s))}
+
+        cond do
+          # A tip reorg: the block is missing for one read, then a block on another branch
+          # takes its place.
+          id == :b and n == s.tip_reorg_at ->
+            Agent.update(chain, &%{&1 | tip_reorg_at: nil, fork_at: n})
+            {:answer, nil}
+
+          # The tip regresses for good: the block is gone and the head is its parent.
+          id == :b and n == s.tip_regress_at ->
+            Agent.update(chain, &%{&1 | tip_regress_at: nil, b: n - 1})
+            {:answer, nil}
+
+          true ->
+            {:answer, if(n <= s[id], do: block(id, n, s))}
+        end
       end)
     )
 
@@ -481,8 +654,20 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       "eth_getLogs",
       [],
       respond.(fn %{"params" => [filter | _]}, s ->
-        range = hex(filter["fromBlock"])..min(hex(filter["toBlock"]), s[id])//1
-        {:answer, logs_in(id, range, s)}
+        from = hex(filter["fromBlock"])
+        to = hex(filter["toBlock"])
+
+        cond do
+          id == :b and s.logs_range != nil and to - from + 1 > s.logs_range ->
+            {code, message} = s.refusal
+            {:error, code, message}
+
+          id == :b and s.reorg_before_logs_from == from ->
+            {:hold, make_ref()}
+
+          true ->
+            {:answer, logs_in(id, from..min(to, s[id])//1, s)}
+        end
       end)
     )
 
@@ -497,7 +682,10 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
   defp logs_in(id, range, state) do
     Enum.flat_map(range, fn n ->
       branch = branch(id, n, state)
-      for index <- Map.get(state.block_logs, {branch, n}, [0]), do: log_at(branch, n, index)
+      data = "0x" <> String.duplicate("0", Map.get(state.log_data_bytes, n, 0))
+
+      for index <- Map.get(state.block_logs, {branch, n}, [0]),
+          do: %{log_at(branch, n, index) | "data" => data}
     end)
   end
 
