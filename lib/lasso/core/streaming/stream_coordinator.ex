@@ -338,11 +338,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
     case result do
       {:ok, head} ->
-        if head >= (state.minimum_head || 0) do
-          complete_failover(state, context.new_provider_id, nil)
-        else
-          extend_backfill(state, head)
-        end
+        complete_failover(state, context.new_provider_id, head)
 
       {:error, reason} ->
         handle_backfill_failure(state, reason)
@@ -537,14 +533,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
                ) do
             :ok ->
               updated_context = put_recovery_event(context, kind, payload, payload_bytes)
-
-              # Discarded attempt payloads still require canonical replay through their height.
-              minimum_head =
-                if kind == :live,
-                  do: max(state.minimum_head || 0, max_pending_head([payload])),
-                  else: state.minimum_head
-
-              {:noreply, %{state | failover_context: updated_context, minimum_head: minimum_head}}
+              if kind == :live, do: telemetry_event_held(state, payload)
+              {:noreply, %{state | failover_context: updated_context}}
 
             {:error, reason} ->
               continuity_resource_exhausted(state, reason, retained_bytes)
@@ -553,6 +543,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     else
       {:noreply, state}
     end
+  end
+
+  defp telemetry_event_held(state, payload) do
+    :telemetry.execute([:lasso, :subs, :recovery, :event_held], %{count: 1}, %{
+      profile: state.profile,
+      chain_id: state.chain_id,
+      subscription_type: Subscription.subscription_type(state.key),
+      block_number: head_number(payload)
+    })
   end
 
   defp put_recovery_event(context, :live, payload, payload_bytes) do
@@ -1043,41 +1042,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
      }}
   end
 
-  defp extend_backfill(state, head) do
-    context = state.failover_context
-    replay_only = %{context | event_buffer: [], event_buffer_count: 0, event_buffer_bytes: 0}
-
-    case drain_event_buffer(%{state | failover_context: replay_only}, context.event_buffer_bytes) do
-      {:ok, next_state} ->
-        context = %{
-          context
-          | replay_buffer: [],
-            replay_buffer_count: 0,
-            replay_buffer_bytes: 0,
-            continuity_marker: head,
-            continuity_snapshot: StreamState.continuity_snapshot(next_state.state)
-        }
-
-        start_backfill_after_replacement(
-          %{next_state | failover_context: context},
-          context.new_provider_id,
-          nil
-        )
-
-      {:error, reason, retained_bytes} ->
-        continuity_resource_exhausted(state, reason, retained_bytes)
-    end
-  end
-
   defp start_backfill_after_replacement(state, provider_id, _upstream_id) do
     context = state.failover_context
 
-    minimum_head =
-      Enum.max([
-        state.minimum_head || 0,
-        context.backfill_context.minimum_head || 0,
-        max_pending_head(context.event_buffer)
-      ])
+    minimum_head = max(state.minimum_head || 0, context.backfill_context.minimum_head || 0)
 
     backfill_context = %{context.backfill_context | minimum_head: minimum_head}
     context = %{context | backfill_context: backfill_context}
@@ -1112,10 +1080,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     {:noreply, %{state | failover_status: :backfilling, failover_context: updated_context}}
   end
 
-  defp complete_failover(state, provider_id, _upstream_id) do
+  defp complete_failover(state, provider_id, replayed_head) do
     recovery_kind = Map.get(state.failover_context, :recovery_kind, :failover)
 
-    case drain_event_buffer(state) do
+    case drain_event_buffer(state, replayed_head) do
       {:ok, %{failover_context: %{route_loss: {failed, proposed}}} = new_state} ->
         context = %{
           new_state.failover_context
@@ -1180,6 +1148,32 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
         {:noreply, final_state}
 
+      # Replay reached its head but still owes the client heights below the pending live
+      # events; another round replays them without spending a repair attempt. It resumes from
+      # what the drain delivered, which for logs is nothing.
+      {:extend, new_state, live_events, seed_count, floor} ->
+        context = new_state.failover_context
+
+        context = %{
+          context
+          | event_buffer: Enum.reverse(live_events),
+            event_buffer_count: length(live_events),
+            event_buffer_bytes: event_buffer_bytes(live_events),
+            initial_live_event_count: seed_count,
+            replay_buffer: [],
+            replay_buffer_count: 0,
+            replay_buffer_bytes: 0,
+            continuity_marker: continuity_marker(new_state.state, new_state.key),
+            continuity_snapshot: StreamState.continuity_snapshot(new_state.state),
+            backfill_context: %{context.backfill_context | minimum_head: floor}
+        }
+
+        start_backfill_after_replacement(
+          %{new_state | failover_context: context},
+          provider_id,
+          nil
+        )
+
       {:repair, new_state, pending_events, details} ->
         restart_state = %{
           new_state
@@ -1208,7 +1202,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp drain_event_buffer(state, buffered_bytes \\ 0) do
+  defp drain_event_buffer(state, replayed_head) do
     context = state.failover_context || %{}
     live_buffer = context |> Map.get(:event_buffer, []) |> Enum.reverse()
     replay_buffer = context |> Map.get(:replay_buffer, []) |> Enum.reverse()
@@ -1226,13 +1220,22 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
           drain_head_buffers(state, replay_buffer, live_buffer, context)
 
         {:logs, _filter} ->
-          drain_log_buffers(state, replay_buffer, live_buffer)
+          drain_log_buffers(state, replay_buffer, live_buffer, context, replayed_head)
       end
 
     case result do
-      {:ok, new_state} -> admit_drained_state(new_state, buffered_bytes)
-      {:repair, _new_state, _pending_events, _details} = repair -> repair
-      {:error, reason, retained_bytes} -> {:error, reason, retained_bytes}
+      {:ok, new_state} ->
+        admit_drained_state(new_state, 0)
+
+      {:extend, new_state, live_events, _seed_count, _floor} = extend ->
+        with {:ok, _} <- admit_drained_state(new_state, event_buffer_bytes(live_events)),
+             do: extend
+
+      {:repair, _new_state, _pending_events, _details} = repair ->
+        repair
+
+      {:error, reason, retained_bytes} ->
+        {:error, reason, retained_bytes}
     end
   catch
     {:stream_ingress_exhausted, reason} ->
@@ -1254,6 +1257,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
          {:ok, stream_state} <- merge_live_heads(stream_state, concurrent, state, :concurrent) do
       {:ok, %{state | state: stream_state}}
     else
+      {:gap, stream_state, [first | _] = pending_events} ->
+        {:extend, %{state | state: stream_state}, pending_events, 0, head_number(first) - 1}
+
       {:repair, stream_state, pending_events, details} ->
         {:repair, %{state | state: stream_state}, pending_events, details}
 
@@ -1279,6 +1285,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         telemetry_stale_reorg_head_dropped(state.profile, state.chain_id, state.key, details)
         merge_live_heads(stream_state, rest, state, phase)
 
+      {:discontinuous, details}
+      when phase == :concurrent and details.observed_number > details.latest_number + 1 ->
+        {:gap, stream_state, [payload | rest]}
+
       {:discontinuous, details} ->
         {:repair, stream_state, [payload | rest], details}
 
@@ -1298,23 +1308,42 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  defp drain_log_buffers(state, replay_buffer, live_buffer) do
-    stream_state =
-      replay_buffer
-      |> Kernel.++(live_buffer)
-      |> order_recovery_logs()
-      |> Enum.reduce(state.state, fn payload, stream_state ->
-        case StreamState.ingest_log(stream_state, payload) do
-          {next_stream_state, :emit} ->
-            dispatch_buffered_event(state, payload)
-            next_stream_state
+  # Logs carry no parent link, so the lowest live log event above the replayed head, addition
+  # or removal, is the only evidence of where the replacement's subscription began. It may sit
+  # partway through its block, so replay owes that whole block. Late logs at or below the
+  # replayed head say nothing about the start. A round that still owes a block delivers
+  # nothing, so the next one replays again from the recovery's own marker and covers a reorg
+  # into blocks that held no matching log before.
+  defp drain_log_buffers(state, replay_buffer, live_buffer, context, replayed_head) do
+    seed_count = Map.get(context, :initial_live_event_count, 0)
 
-          {next_stream_state, :skip} ->
-            next_stream_state
-        end
-      end)
+    owed =
+      live_buffer
+      |> Enum.drop(seed_count)
+      |> Enum.map(&head_number/1)
+      |> Enum.filter(&(&1 > replayed_head))
+      |> Enum.min(fn -> 0 end)
 
-    {:ok, %{state | state: stream_state}}
+    if owed > replayed_head do
+      {:extend, state, live_buffer, seed_count, owed}
+    else
+      stream_state =
+        replay_buffer
+        |> Kernel.++(live_buffer)
+        |> order_recovery_logs()
+        |> Enum.reduce(state.state, fn payload, stream_state ->
+          case StreamState.ingest_log(stream_state, payload) do
+            {next_stream_state, :emit} ->
+              dispatch_buffered_event(state, payload)
+              next_stream_state
+
+            {next_stream_state, :skip} ->
+              next_stream_state
+          end
+        end)
+
+      {:ok, %{state | state: stream_state}}
+    end
   end
 
   defp order_recovery_logs(events) do
@@ -1420,15 +1449,10 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     Enum.reduce(buffer, 0, fn payload, bytes -> bytes + StreamState.event_bytes(payload) end)
   end
 
-  defp max_pending_head(events) do
-    events
-    |> Enum.map(fn event ->
-      event
-      |> Map.get("number", Map.get(event, "blockNumber", "0x0"))
-      |> decode_hex()
-    end)
-    |> Enum.max(fn -> 0 end)
-  end
+  defp max_pending_head(events), do: events |> Enum.map(&head_number/1) |> Enum.max(fn -> 0 end)
+
+  defp head_number(event),
+    do: event |> Map.get("number", Map.get(event, "blockNumber", "0x0")) |> decode_hex()
 
   defp continuity_limit(state, :event_too_large), do: state.max_event_bytes
 
@@ -1493,15 +1517,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             key: inspect(state.key)
           )
 
-          preserved_buffer = recovery_seed(state.failover_context)
-
+          state = discard_attempt_events(state)
           reset_state = %{state | failover_status: :active, failover_context: nil}
 
           initiate_failover_with_buffer(
             reset_state,
             state.failover_context.new_provider_id,
             next_provider_id,
-            preserved_buffer
+            state.failover_context.event_buffer
           )
 
         {:error, :no_providers} when reason == :route_lost ->
@@ -1519,18 +1542,17 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     end
   end
 
-  # Live events prepend; the tail is the seed from before this replacement attempt.
-  defp recovery_seed(context) do
-    Enum.take(context.event_buffer, -context.initial_live_event_count)
-  end
-
+  # Live events prepend, so the tail is the seed from before this replacement attempt. The
+  # attempt's own events are dropped unseen, so replay owes the client their height.
   defp discard_attempt_events(state) do
     context = state.failover_context
-    seed = recovery_seed(context)
+    attempt_count = length(context.event_buffer) - context.initial_live_event_count
+    {discarded, seed} = Enum.split(context.event_buffer, attempt_count)
 
     %{
       state
-      | failover_context: %{
+      | minimum_head: max(state.minimum_head || 0, max_pending_head(discarded)),
+        failover_context: %{
           context
           | event_buffer: seed,
             event_buffer_count: length(seed),
@@ -1544,13 +1566,14 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
 
     case pick_next_provider(state, [proposal], include_half_open: false) do
       {:ok, provider_id} ->
+        state = discard_attempt_events(state)
         reset = %{state | failover_status: :active, failover_context: nil}
 
         initiate_failover_with_buffer(
           reset,
           proposal,
           provider_id,
-          recovery_seed(state.failover_context)
+          state.failover_context.event_buffer
         )
 
       {:error, :no_providers} ->

@@ -1,6 +1,6 @@
 defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
   use ExUnit.Case, async: false
-  alias Lasso.Test.Harness.{Fleet, Rpc, Tenant}
+  alias Lasso.Test.Harness.{Fleet, Rpc, Settle, Tenant}
   @moduletag :harness
   @moduletag feature: ["core-websocket-6"]
 
@@ -46,6 +46,68 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     assert numbers(w) == Enum.to_list(101..@delivered)
   end
 
+  @tag timeout: 60_000
+  test "a replacement head announced during its backfill reaches the client while HTTP trails it" do
+    w = run(:newHeads, lag: 0, follow: &announce_during_backfill/1)
+
+    assert w.closed == nil
+    assert numbers(w) == Enum.to_list(101..(@delivered + 2))
+    assert Enum.all?(w.events, &(&1["hash"] == hash(:main, number(&1))))
+    assert linked?(w.events)
+  end
+
+  test "a replacement that announces every second head while HTTP catches up recovers once" do
+    w = run(:newHeads, lag: 0, delivered: 102, follow: &announce_even_heads/1)
+
+    assert w.closed == nil
+    assert numbers(w) == Enum.to_list(101..115)
+    assert Enum.all?(w.events, &(&1["hash"] == hash(:main, number(&1))))
+    assert linked?(w.events)
+  end
+
+  test "a log emitted before the replacement subscribed is replayed once HTTP reaches it" do
+    w = replay_logs(live: [log_at(:main, 104)])
+    assert additions(w) == main_logs(101..105)
+  end
+
+  test "replay covers the whole block a replacement's first live log is part of" do
+    w = replay_logs(live: [log_at(:main, 104, 1)], block_logs: %{{:main, 104} => [0, 1]})
+    assert additions(w) == main_logs(101..104) ++ [log_at(:main, 104, 1), log_at(:main, 105)]
+  end
+
+  test "a replacement's delayed removal below replay does not mark where its logs began" do
+    w = replay_logs(live: [removed(log_at(:fork, 102)), log_at(:main, 104)], a_fork: 102)
+    assert additions(w) == [log_at(:main, 101), log_at(:fork, 102) | main_logs(102..105)]
+  end
+
+  test "a replacement's late log at the replayed head does not mark where its logs began" do
+    w = replay_logs(live: [log_at(:main, 102), log_at(:main, 104)])
+    assert additions(w) == main_logs(101..105)
+  end
+
+  test "a replacement's delayed removal above replay owes the blocks below it" do
+    w = replay_logs(live: [removed(log_at(:fork, 104))])
+    assert additions(w) == main_logs(101..105)
+  end
+
+  test "a reorg while the replacement's socket is down replays a log new to its block" do
+    live = [log_at(:main, 104), removed(log_at(:other, 106))]
+
+    w =
+      run(:logs,
+        lag: 0,
+        delivered: 102,
+        block_logs: %{{:main, 103} => []},
+        follow: &reorg_while_socket_down(&1, live)
+      )
+
+    assert w.closed == nil
+    assert Enum.take(additions(w), 2) == main_logs(101..102)
+
+    assert Enum.filter(additions(w), &(&1["blockHash"] != hash(:main, height(&1)))) ==
+             Enum.map(103..107, &log_at(:fork, &1))
+  end
+
   test "logs continue without a gap or duplicate on a replacement 2 blocks behind" do
     w = run(:logs, lag: 2)
     blocks = Enum.map(w.events, &hex(&1["blockNumber"]))
@@ -64,10 +126,19 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
 
   defp run(kind, opts) do
     lag = Keyword.fetch!(opts, :lag)
+    delivered = Keyword.get(opts, :delivered, @delivered)
 
     {:ok, chain} =
       Agent.start_link(fn ->
-        %{a: @start, b: @start - lag, a_dead: false, fork_at: opts[:fork_at]}
+        %{
+          a: @start,
+          b: @start - lag,
+          a_dead: false,
+          fork_at: opts[:fork_at],
+          a_fork: opts[:a_fork],
+          block_logs: Keyword.get(opts, :block_logs, %{}),
+          hold: false
+        }
       end)
 
     suffix = System.unique_integer([:positive])
@@ -80,6 +151,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       Map.new([a, b], &{&1.name, %{"ws_url" => &1.ws_url, "subscribe_new_heads" => true}})
 
     tenant = Tenant.open!([a, b], providers: providers)
+    held = Settle.listen([:lasso, :subs, :recovery, :event_held])
 
     url = %{
       URI.parse(tenant.rpc_url)
@@ -94,9 +166,13 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       chain: chain,
       fleets: %{a: a, b: b},
       ref: wire.reference,
+      profile: tenant.profile,
+      held: held,
       client_sub: nil,
       subs: %{a: [], b: []},
       events: [],
+      holds: [],
+      upgrades: [],
       closed: nil,
       killed_at: nil
     }
@@ -109,16 +185,20 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
         await(w, &(&1.client_sub != nil and &1.subs.a != []), "client and upstream subscriptions")
 
       w =
-        Enum.reduce((@start + 1)..@delivered, w, fn n, w ->
+        Enum.reduce((@start + 1)..delivered, w, fn n, w ->
           Agent.update(chain, &%{&1 | a: n, b: n - lag})
           notify(w, :a, n)
           notify(w, :b, n - lag)
           await(w, &(length(&1.events) == n - @start), "head #{n} from the first upstream")
         end)
 
-      fail_first(w) |> follow(lag, opts)
+      case opts[:follow] do
+        nil -> w |> fail_first() |> follow(lag, opts)
+        scripted -> w |> hold_heads() |> fail_first() |> scripted.()
+      end
     after
       close_client(wire)
+      Settle.unlisten(held)
       Tenant.close!(tenant)
       Fleet.resume_listener(a)
       Fleet.stop(a)
@@ -159,6 +239,143 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       true -> pump(w, now() + 1_000)
     end
   end
+
+  # The replacement's head over HTTP trails its WebSocket by one block. Its head is announced
+  # while the backfill's head request is held, so recovery buffers it before replay returns.
+  defp announce_during_backfill(w) do
+    w = w |> await_head_request() |> announce(@delivered + 1) |> serve_head(@delivered)
+    w = await(w, &reached?(&1, @delivered + 1), "head #{@delivered + 1}", 35_000)
+    Agent.update(w.chain, &%{&1 | b: @delivered + 1})
+    notify(w, :b, @delivered + 2)
+    await(w, &reached?(&1, @delivered + 2), "head #{@delivered + 2}")
+  end
+
+  # Each round the replacement announces the next even head while a head request is held, and
+  # HTTP answers it at the previous announcement; HTTP reaches 114 once the announcements stop.
+  defp announce_even_heads(w) do
+    w =
+      Enum.reduce(104..114//2, await_head_request(w), fn n, w ->
+        answer_head(w, n - 2, n, &announce(&1, n))
+      end)
+
+    w = serve_head(w, 114)
+    w = await(w, &reached?(&1, 114), "heads through 114")
+    w = advance_b(w, 115)
+    await(w, &reached?(&1, 115), "head 115")
+  end
+
+  # The replacement subscribed after block 103's logs, so it never pushes them. Each round it
+  # pushes its live logs while a head request is held, and HTTP answers that request at `head`
+  # while replay owes `owed`. By default it pushes `live` while HTTP answers at 102, then HTTP
+  # answers at 103 and serves 104.
+  defp replay_logs(opts) do
+    {live, opts} = Keyword.pop(opts, :live, [])
+    {rounds, opts} = Keyword.pop(opts, :rounds, [{live, 102, 104}, {[], 103, 104}])
+    {served, opts} = Keyword.pop(opts, :served, 104)
+    follow = &buffer_logs_above_replay(&1, rounds, served)
+    w = run(:logs, [lag: 0, delivered: 102, follow: follow] ++ opts)
+    assert w.closed == nil
+    w
+  end
+
+  defp buffer_logs_above_replay(w, rounds, served) do
+    w = await_head_request(w)
+
+    w =
+      Enum.reduce(rounds, w, fn {live, head, owed}, w ->
+        answer_head(w, head, owed, &push_logs(&1, live))
+      end)
+
+    w = serve_head(w, served)
+    w = await(w, &reached?(&1, served), "logs through #{served}")
+    w = advance_b(w, served + 1)
+    await(w, &reached?(&1, served + 1), "log #{served + 1}")
+  end
+
+  # Block 103 has no matching log on the first branch. While replay owes 106 for the held
+  # removal, the replacement's socket goes down with its reconnects held, and the chain reorgs
+  # from 103 onto a branch whose block 103 has a matching log; HTTP then serves that branch.
+  defp reorg_while_socket_down(w, live) do
+    w = w |> await_head_request() |> push_logs(live)
+    w = w |> answer_head(102, 104) |> answer_head(104, 106) |> await_head_request()
+
+    Fleet.script(w.fleets.b, "fixture_upgrade", [], {:respond, fn _ -> {:hold, make_ref()} end})
+    for report <- w.subs.b, do: send(report.connection, :fixture_disconnect)
+    Agent.update(w.chain, &%{&1 | fork_at: 103})
+    w = serve_head(w, 106)
+    w = await(w, &reached?(&1, 106), "logs through 106")
+
+    Fleet.script(w.fleets.b, "fixture_upgrade", [], {:answer, true})
+    for token <- w.upgrades, do: Fleet.release(w.fleets.b, token, {:answer, true})
+    w = await(w, &(Enum.count(&1.subs.b, fn report -> logs?(report) end) > 1), "resubscription")
+    w = advance_b(%{w | upgrades: []}, 107)
+    await(w, &reached?(&1, 107), "log 107")
+  end
+
+  defp logs?(report), do: match?(["logs" | _], report.request["params"])
+  defp additions(w), do: Enum.reject(w.events, & &1["removed"])
+  defp main_logs(range), do: Enum.map(range, &log_at(:main, &1))
+  defp removed(log), do: %{log | "removed" => true}
+
+  defp hold_heads(w) do
+    Agent.update(w.chain, &%{&1 | hold: true})
+    w
+  end
+
+  defp await_head_request(w),
+    do: await(w, &(&1.holds != []), "a held HTTP head request on the replacement")
+
+  # Answers the replacement's next head request at `head` once `before` has run, unless recovery
+  # has already delivered the announced height without asking again.
+  defp answer_head(w, head, announced, before \\ & &1) do
+    w = await(w, &(&1.holds != [] or reached?(&1, announced)), "head request at #{head}")
+    w = before.(w)
+    Agent.update(w.chain, &%{&1 | b: head})
+
+    case w.holds do
+      [token | rest] ->
+        :ok = Fleet.release(w.fleets.b, token, {:answer, hex(head)})
+        %{w | holds: rest}
+
+      [] ->
+        w
+    end
+  end
+
+  # Answers held and later head requests at `head` without holding them.
+  defp serve_head(w, head) do
+    Agent.update(w.chain, &%{&1 | b: head, hold: false})
+    for token <- w.holds, do: :ok = Fleet.release(w.fleets.b, token, {:answer, hex(head)})
+    %{w | holds: []}
+  end
+
+  defp announce(w, n) do
+    notify(w, :b, n)
+    await_held(w, n)
+  end
+
+  defp push_logs(w, logs) do
+    for log <- logs, report <- w.subs.b, logs?(report), do: Fleet.notify(report, log)
+    Enum.reduce(logs, w, &await_held(&2, height(&1)))
+  end
+
+  # While a head request is held, waits until recovery has buffered the replacement's event at
+  # height `n`, so releasing the request cannot complete recovery before the event arrives.
+  defp await_held(%{holds: []} = w, _n), do: w
+
+  defp await_held(w, n) do
+    type = if w.kind == :logs, do: :logs, else: :new_heads
+
+    Settle.event(
+      w.held,
+      &(&1.profile == w.profile and &1.subscription_type == type and &1.block_number == n)
+    )
+
+    w
+  end
+
+  defp reached?(w, n), do: Enum.any?(w.events, &(height(&1) >= n))
+  defp height(event), do: hex(event["number"] || event["blockNumber"])
 
   defp advance_b(w, n) do
     Agent.update(w.chain, &%{&1 | b: n})
@@ -219,6 +436,12 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     do:
       update_in(w.subs[id(w, r)], fn subs -> Enum.reject(subs, &(&1.action == {:answer, sub})) end)
 
+  defp track(w, %{request: %{"method" => "fixture_upgrade"}, action: {:hold, token}}),
+    do: %{w | upgrades: w.upgrades ++ [token]}
+
+  defp track(w, %{transport: :http, action: {:hold, token}}),
+    do: %{w | holds: w.holds ++ [token]}
+
   defp track(w, _report), do: w
 
   defp id(w, report), do: if(report.fleet == w.fleets.a.name, do: :a, else: :b)
@@ -233,7 +456,15 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     end
 
     Fleet.script(fleet, "eth_chainId", [], respond.(fn _, _ -> {:answer, "0x7a69"} end))
-    Fleet.script(fleet, "eth_blockNumber", [], respond.(fn _, s -> {:answer, hex(s[id])} end))
+
+    Fleet.script(
+      fleet,
+      "eth_blockNumber",
+      [],
+      respond.(fn _, s ->
+        if id == :b and s.hold, do: {:hold, make_ref()}, else: {:answer, hex(s[id])}
+      end)
+    )
 
     Fleet.script(
       fleet,
@@ -251,7 +482,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       [],
       respond.(fn %{"params" => [filter | _]}, s ->
         range = hex(filter["fromBlock"])..min(hex(filter["toBlock"]), s[id])//1
-        {:answer, Enum.map(range, &log(id, &1, s))}
+        {:answer, logs_in(id, range, s)}
       end)
     )
 
@@ -263,6 +494,14 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     )
   end
 
+  defp logs_in(id, range, state) do
+    Enum.flat_map(range, fn n ->
+      branch = branch(id, n, state)
+      for index <- Map.get(state.block_logs, {branch, n}, [0]), do: log_at(branch, n, index)
+    end)
+  end
+
+  defp branch(:a, n, %{a_fork: n}), do: :fork
   defp branch(:b, n, %{fork_at: fork_at}) when is_integer(fork_at) and n >= fork_at, do: :fork
   defp branch(_id, _n, _state), do: :main
 
@@ -280,16 +519,18 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     }
   end
 
-  defp log(id, n, state) do
+  defp log(id, n, state), do: log_at(branch(id, n, state), n)
+
+  defp log_at(branch, n, index \\ 0) do
     %{
       "address" => @address,
       "topics" => [hash(:topic, 0)],
       "data" => "0x",
       "blockNumber" => hex(n),
-      "blockHash" => hash(branch(id, n, state), n),
-      "transactionHash" => hash(:tx, n),
-      "transactionIndex" => "0x0",
-      "logIndex" => "0x0",
+      "blockHash" => hash(branch, n),
+      "transactionHash" => hash("tx#{index}", n),
+      "transactionIndex" => hex(index),
+      "logIndex" => hex(index),
       "removed" => false
     }
   end
