@@ -533,6 +533,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
                ) do
             :ok ->
               updated_context = put_recovery_event(context, kind, payload, payload_bytes)
+              if kind == :live, do: telemetry_event_held(state, payload)
               {:noreply, %{state | failover_context: updated_context}}
 
             {:error, reason} ->
@@ -542,6 +543,15 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
     else
       {:noreply, state}
     end
+  end
+
+  defp telemetry_event_held(state, payload) do
+    :telemetry.execute([:lasso, :subs, :recovery, :event_held], %{count: 1}, %{
+      profile: state.profile,
+      chain_id: state.chain_id,
+      subscription_type: Subscription.subscription_type(state.key),
+      block_number: head_number(payload)
+    })
   end
 
   defp put_recovery_event(context, :live, payload, payload_bytes) do

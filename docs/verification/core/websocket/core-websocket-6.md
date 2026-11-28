@@ -17,7 +17,7 @@ Subscribe through `$WS` and push heads 101 to 105 from the first upstream. Then 
 - The second upstream frozen 2 blocks behind: the client receives nothing more, and the socket closes with `1011` between 29 and 33 seconds after the first upstream dies.
 - The second upstream on another branch from height 105, at `lag` 0 and 2: the client receives that branch's block 105 before any child of it, then the branch's later heads, each linked to the previous head received. Both lags deliver the same frames.
 
-The remaining cases hold the second upstream's HTTP `eth_blockNumber` requests from just before the first upstream dies, and answer each at a chosen height. Each scripted step continues without a held request once the client has the height it waits for.
+The remaining cases hold the second upstream's HTTP `eth_blockNumber` requests from just before the first upstream dies, and answer each at a chosen height. Each scripted step continues without a held request once the client has the height it waits for. A head or log the second upstream announces while a request is held is released only after the recovery's `[:lasso, :subs, :recovery, :event_held]` telemetry reports that height for the client's profile and subscription type.
 
 - `newHeads` at `lag` 0: the second upstream announces 106 over WebSocket while the backfill's head request is held, and its HTTP head stays at 105. The client receives 106 and then 107, with the socket open.
 - `newHeads` from 102: each round the second upstream announces the next even head, 104 to 114, while a head request is held, and HTTP answers at the previous announcement. The client receives 101 to 115 contiguous, with the socket open.
