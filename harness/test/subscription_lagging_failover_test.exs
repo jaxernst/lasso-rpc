@@ -71,7 +71,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
   end
 
   test "replay covers the whole block a replacement's first live log is part of" do
-    w = replay_logs(live: [log_at(:main, 104, 1)], block_logs: %{104 => [0, 1]})
+    w = replay_logs(live: [log_at(:main, 104, 1)], block_logs: %{{:main, 104} => [0, 1]})
     assert additions(w) == main_logs(101..104) ++ [log_at(:main, 104, 1), log_at(:main, 105)]
   end
 
@@ -88,6 +88,24 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
   test "a replacement's delayed removal above replay owes the blocks below it" do
     w = replay_logs(live: [removed(log_at(:fork, 104))])
     assert additions(w) == main_logs(101..105)
+  end
+
+  test "a reorg while the replacement's socket is down replays a log new to its block" do
+    live = [log_at(:main, 104), removed(log_at(:other, 106))]
+
+    w =
+      run(:logs,
+        lag: 0,
+        delivered: 102,
+        block_logs: %{{:main, 103} => []},
+        follow: &reorg_while_socket_down(&1, live)
+      )
+
+    assert w.closed == nil
+    assert Enum.take(additions(w), 2) == main_logs(101..102)
+
+    assert Enum.filter(additions(w), &(&1["blockHash"] != hash(:main, height(&1)))) ==
+             Enum.map(103..107, &log_at(:fork, &1))
   end
 
   test "logs continue without a gap or duplicate on a replacement 2 blocks behind" do
@@ -151,6 +169,7 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
       subs: %{a: [], b: []},
       events: [],
       holds: [],
+      upgrades: [],
       closed: nil,
       killed_at: nil
     }
@@ -263,6 +282,27 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     await(w, &reached?(&1, 105), "log 105")
   end
 
+  # Block 103 has no matching log on the first branch. While replay owes 106 for the held
+  # removal, the replacement's socket goes down with its reconnects held, and the chain reorgs
+  # from 103 onto a branch whose block 103 has a matching log; HTTP then serves that branch.
+  defp reorg_while_socket_down(w, live) do
+    w = await_head_request(w)
+    for event <- live, report <- w.subs.b, logs?(report), do: Fleet.notify(report, event)
+    w = w |> answer_head(102, 104) |> answer_head(104, 106) |> await_head_request()
+
+    Fleet.script(w.fleets.b, "fixture_upgrade", [], {:respond, fn _ -> {:hold, make_ref()} end})
+    for report <- w.subs.b, do: send(report.connection, :fixture_disconnect)
+    Agent.update(w.chain, &%{&1 | fork_at: 103})
+    w = serve_head(w, 106)
+    w = await(w, &reached?(&1, 106), "logs through 106")
+
+    Fleet.script(w.fleets.b, "fixture_upgrade", [], {:answer, true})
+    for token <- w.upgrades, do: Fleet.release(w.fleets.b, token, {:answer, true})
+    w = await(w, &(Enum.count(&1.subs.b, fn report -> logs?(report) end) > 1), "resubscription")
+    w = advance_b(%{w | upgrades: []}, 107)
+    await(w, &reached?(&1, 107), "log 107")
+  end
+
   defp logs?(report), do: match?(["logs" | _], report.request["params"])
   defp additions(w), do: Enum.reject(w.events, & &1["removed"])
   defp main_logs(range), do: Enum.map(range, &log_at(:main, &1))
@@ -361,6 +401,9 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
     do:
       update_in(w.subs[id(w, r)], fn subs -> Enum.reject(subs, &(&1.action == {:answer, sub})) end)
 
+  defp track(w, %{request: %{"method" => "fixture_upgrade"}, action: {:hold, token}}),
+    do: %{w | upgrades: w.upgrades ++ [token]}
+
   defp track(w, %{transport: :http, action: {:hold, token}}),
     do: %{w | holds: w.holds ++ [token]}
 
@@ -406,9 +449,10 @@ defmodule Lasso.Harness.SubscriptionLaggingFailoverTest do
         range = hex(filter["fromBlock"])..min(hex(filter["toBlock"]), s[id])//1
 
         logs =
-          for n <- range,
-              index <- Map.get(s.block_logs, n, [0]),
-              do: log_at(branch(id, n, s), n, index)
+          Enum.flat_map(range, fn n ->
+            branch = branch(id, n, s)
+            for index <- Map.get(s.block_logs, {branch, n}, [0]), do: log_at(branch, n, index)
+          end)
 
         {:answer, logs}
       end)

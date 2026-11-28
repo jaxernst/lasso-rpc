@@ -1139,7 +1139,8 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
         {:noreply, final_state}
 
       # Replay reached its head but still owes the client heights below the pending live
-      # events; another round replays them without spending a repair attempt.
+      # events; another round replays them without spending a repair attempt. It resumes from
+      # what the drain delivered, which for logs is nothing.
       {:extend, new_state, live_events, seed_count, floor} ->
         context = new_state.failover_context
 
@@ -1152,8 +1153,7 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
             replay_buffer: [],
             replay_buffer_count: 0,
             replay_buffer_bytes: 0,
-            continuity_marker:
-              max(replayed_head, continuity_marker(new_state.state, new_state.key) || 0),
+            continuity_marker: continuity_marker(new_state.state, new_state.key),
             continuity_snapshot: StreamState.continuity_snapshot(new_state.state),
             backfill_context: %{context.backfill_context | minimum_head: floor}
         }
@@ -1301,7 +1301,9 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
   # Logs carry no parent link, so the lowest live log event above the replayed head, addition
   # or removal, is the only evidence of where the replacement's subscription began. It may sit
   # partway through its block, so replay owes that whole block. Late logs at or below the
-  # replayed head say nothing about the start.
+  # replayed head say nothing about the start. A round that still owes a block delivers
+  # nothing, so the next one replays again from the recovery's own marker and covers a reorg
+  # into blocks that held no matching log before.
   defp drain_log_buffers(state, replay_buffer, live_buffer, context, replayed_head) do
     seed_count = Map.get(context, :initial_live_event_count, 0)
 
@@ -1312,27 +1314,26 @@ defmodule Lasso.Core.Streaming.StreamCoordinator do
       |> Enum.filter(&(&1 > replayed_head))
       |> Enum.min(fn -> 0 end)
 
-    if owed > replayed_head,
-      do: {:extend, deliver_logs(state, replay_buffer), live_buffer, seed_count, owed},
-      else: {:ok, deliver_logs(state, replay_buffer ++ live_buffer)}
-  end
+    if owed > replayed_head do
+      {:extend, state, live_buffer, seed_count, owed}
+    else
+      stream_state =
+        replay_buffer
+        |> Kernel.++(live_buffer)
+        |> order_recovery_logs()
+        |> Enum.reduce(state.state, fn payload, stream_state ->
+          case StreamState.ingest_log(stream_state, payload) do
+            {next_stream_state, :emit} ->
+              dispatch_buffered_event(state, payload)
+              next_stream_state
 
-  defp deliver_logs(state, logs) do
-    stream_state =
-      logs
-      |> order_recovery_logs()
-      |> Enum.reduce(state.state, fn payload, stream_state ->
-        case StreamState.ingest_log(stream_state, payload) do
-          {next_stream_state, :emit} ->
-            dispatch_buffered_event(state, payload)
-            next_stream_state
+            {next_stream_state, :skip} ->
+              next_stream_state
+          end
+        end)
 
-          {next_stream_state, :skip} ->
-            next_stream_state
-        end
-      end)
-
-    %{state | state: stream_state}
+      {:ok, %{state | state: stream_state}}
+    end
   end
 
   defp order_recovery_logs(events) do

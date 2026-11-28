@@ -26,5 +26,6 @@ The remaining cases hold the second upstream's HTTP `eth_blockNumber` requests f
 - The same, with the first upstream's log at 102 on a fork and the push opening with its delayed removal before the log at 104: the client receives the canonical log at 102 and then 103 to 105.
 - The same, with a late push of the log at 102 before the log at 104: the client receives 101 to 105 once each.
 - The same, with the only push a delayed removal of a fork log at 104: the client receives 101 to 105.
+- `logs` from 102, where block 103 has no matching log. While replay reaches only 102, the second upstream pushes the log at 104 and an unrelated removal at 106. HTTP answers at 104, then the second upstream's WebSocket closes and its reconnects are held, and the chain reorgs from 103 onto a branch whose block 103 has a matching log. HTTP then serves that branch through 106. The client receives the new branch's logs from 103 to 106, then 107 once the reconnect is released.
 
 The oracle is the client's recorded frames and close code.
