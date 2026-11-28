@@ -5,6 +5,9 @@ defmodule Lasso.Core.Support.GapFiller do
 
   alias Lasso.Core.Request.ExecutionScope
   alias Lasso.Core.Support.CircuitBreaker.Snapshot
+  alias Lasso.Core.Support.{ErrorNormalizer, LogRangeLimit}
+  alias Lasso.Core.Transport.UpstreamAdmission
+  alias Lasso.JSONRPC.Error, as: JError
   alias Lasso.JSONRPC.Quantity
   alias Lasso.Providers.Catalog
   alias Lasso.RPC.{RequestOptions, RequestPipeline, Response}
@@ -117,23 +120,137 @@ defmodule Lasso.Core.Support.GapFiller do
 
   @spec ensure_logs(Plan.t(), map(), pos_integer(), pos_integer()) ::
           {:ok, list()} | {:error, term()}
-  def ensure_logs(%Plan{} = plan, filter, from_n, to_n) when from_n <= to_n do
-    full_filter =
-      Map.merge(filter, %{
-        "fromBlock" => Quantity.encode(from_n),
-        "toBlock" => Quantity.encode(to_n)
-      })
+  def ensure_logs(%Plan{} = plan, filter, from_n, to_n),
+    do: with_logs(plan, filter, from_n, to_n, &{:ok, &1})
 
-    case request(plan, "eth_getLogs", [full_filter]) do
-      {:ok, logs} when is_list(logs) ->
-        ordered =
-          Enum.sort_by(logs, fn log ->
-            {decode_hex(Map.get(log, "blockNumber")), decode_hex(Map.get(log, "logIndex"))}
-          end)
+  @doc """
+  Fetches the logs of `from_n..to_n` and passes them, in block and log index order, to
+  `consume`, returning its result.
 
-        {:ok, ordered}
+  Each log response stays charged to upstream admission until `consume` returns, so the
+  caller hands the logs to its own admission before their bytes are released. A range the
+  upstream refuses as too wide is fetched as halves, recursively, under the same plan
+  deadline and request admission. When the range's last block is missing, this returns
+  `{:error, {:range_end_missing, to_n}}` for the caller to take a new head.
+  """
+  @spec with_logs(Plan.t(), map(), pos_integer(), pos_integer(), (list() -> result)) ::
+          result | {:error, term()}
+        when result: var
+  def with_logs(%Plan{} = plan, filter, from_n, to_n, consume) when from_n <= to_n do
+    {result, held} = fetch_logs_range(plan, filter, from_n, to_n)
 
-      {:ok, other} ->
+    try do
+      with {:ok, logs} <- result, do: consume.(sort_logs(logs))
+    after
+      release(
+        held,
+        if(match?({:ok, _}, result), do: :backfill_handed_off, else: :backfill_discarded)
+      )
+    end
+  end
+
+  def with_logs(%Plan{}, _filter, _from, _to, consume), do: consume.([])
+
+  defp sort_logs(logs) do
+    Enum.sort_by(logs, fn log ->
+      {decode_hex(Map.get(log, "blockNumber")), decode_hex(Map.get(log, "logIndex"))}
+    end)
+  end
+
+  defp release(held, reason), do: Enum.each(held, &Response.Success.release_capacity(&1, reason))
+
+  defp fetch_logs_range(plan, filter, from_n, to_n) do
+    case fetch_logs(plan, filter, from_n, to_n) do
+      {:ok, logs, _bytes, held} ->
+        {{:ok, logs}, held}
+
+      {:error, reason} ->
+        if from_n < to_n and too_wide?(reason),
+          do: fetch_split_logs(plan, filter, from_n, to_n),
+          else: {{:error, reason}, []}
+    end
+  end
+
+  defp too_wide?(%JError{category: :log_range_limit}), do: true
+  defp too_wide?(reason), do: LogRangeLimit.plan_range_refusal?(reason)
+
+  # The halves are separate reads of the chain. A reorg inside the range changes the hash of
+  # block `to_n`, so only a hash that matches before and after the halves publishes them; a
+  # changed hash refetches the whole range.
+  defp fetch_split_logs(plan, filter, from_n, to_n) do
+    case block_hash(plan, to_n) do
+      {:ok, anchor} when is_binary(anchor) ->
+        case fetch_halves(plan, filter, from_n, to_n, {0, []}) do
+          {:ok, logs, {_bytes, held}} ->
+            confirm_anchor(plan, filter, from_n, to_n, anchor, logs, held)
+
+          {:error, :split_response_too_large, {_bytes, held}} ->
+            {{:error, response_too_large(plan)}, held}
+
+          {:error, reason, {_bytes, held}} ->
+            {{:error, reason}, held}
+        end
+
+      {:ok, nil} ->
+        {{:error, {:range_end_missing, to_n}}, []}
+
+      {:error, _reason} = error ->
+        {error, []}
+    end
+  end
+
+  defp confirm_anchor(plan, filter, from_n, to_n, anchor, logs, held) do
+    case block_hash(plan, to_n) do
+      {:ok, ^anchor} ->
+        {{:ok, logs}, held}
+
+      {:ok, nil} ->
+        {{:error, {:range_end_missing, to_n}}, held}
+
+      {:ok, _changed} ->
+        release(held, :backfill_discarded)
+        fetch_logs_range(plan, filter, from_n, to_n)
+
+      {:error, _reason} = error ->
+        {error, held}
+    end
+  end
+
+  # The halves together hold no more response bytes than one unsplit response may, and stay
+  # charged until the whole range is handed off.
+  defp fetch_halves(plan, filter, from_n, to_n, acc) do
+    mid = div(from_n + to_n, 2)
+
+    with {:ok, low, acc} <- fetch_range(plan, filter, from_n, mid, acc),
+         {:ok, high, acc} <- fetch_range(plan, filter, mid + 1, to_n, acc),
+         do: {:ok, low ++ high, acc}
+  end
+
+  defp fetch_range(plan, filter, from_n, to_n, {bytes, held} = acc) do
+    case fetch_logs(plan, filter, from_n, to_n) do
+      {:ok, logs, size, response} ->
+        acc = {bytes + size, response ++ held}
+
+        if bytes + size > UpstreamAdmission.response_limit(),
+          do: {:error, :split_response_too_large, acc},
+          else: {:ok, logs, acc}
+
+      {:error, reason} ->
+        if from_n < to_n and too_wide?(reason),
+          do: fetch_halves(plan, filter, from_n, to_n, acc),
+          else: {:error, reason, acc}
+    end
+  end
+
+  defp fetch_logs(plan, filter, from_n, to_n) do
+    range = %{"fromBlock" => Quantity.encode(from_n), "toBlock" => Quantity.encode(to_n)}
+
+    case held_request(plan, "eth_getLogs", [Map.merge(filter, range)]) do
+      {:ok, logs, bytes, held} when is_list(logs) ->
+        {:ok, logs, bytes, held}
+
+      {:ok, other, _bytes, held} ->
+        release(held, :backfill_discarded)
         {:error, {:invalid_logs_response, other}}
 
       {:error, reason} ->
@@ -141,9 +258,41 @@ defmodule Lasso.Core.Support.GapFiller do
     end
   end
 
-  def ensure_logs(%Plan{}, _filter, _from, _to), do: {:ok, []}
+  # The error the request pipeline returns for one eth_getLogs response over the cap.
+  defp response_too_large(plan) do
+    {:ok, error} =
+      LogRangeLimit.translate(
+        "eth_getLogs",
+        ErrorNormalizer.normalize({:response_limit, :response_too_large},
+          provider_id: plan.provider_id,
+          context: :transport,
+          transport: :http
+        )
+      )
+
+    error
+  end
+
+  defp block_hash(plan, number) do
+    case request(plan, "eth_getBlockByNumber", [Quantity.encode(number), false]) do
+      {:ok, %{"hash" => hash}} when is_binary(hash) -> {:ok, hash}
+      {:ok, nil} -> {:ok, nil}
+      {:ok, other} -> {:error, {:invalid_block_response, other}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   defp request(plan, method, params) do
+    with {:ok, result, _bytes, held} <- held_request(plan, method, params) do
+      release(held, :backfill_consumed)
+      {:ok, result}
+    end
+  end
+
+  # A decoded result keeps its response lease, returned as `held` for the caller to release,
+  # with its size: the raw bytes the transport caps, or the encoded size of a requester's
+  # decoded result.
+  defp held_request(plan, method, params) do
     with {:ok, timeout_ms} <- remaining_timeout_ms(plan.deadline_us),
          true <- Process.alive?(plan.caller_pid) or {:error, :caller_abandoned} do
       scope =
@@ -165,14 +314,17 @@ defmodule Lasso.Core.Support.GapFiller do
 
       case plan.requester.(scope, plan.chain_id, method, params, opts) do
         {:ok, %Response.Success{} = response, _ctx} ->
-          Response.Success.consume_capacity(
-            response,
-            :backfill_consumed,
-            &Response.Success.decode_result/1
-          )
+          case Response.Success.decode_result(response) do
+            {:ok, result} ->
+              {:ok, result, Response.Success.response_size(response), [response]}
+
+            {:error, _reason} = error ->
+              release([response], :backfill_consumed)
+              error
+          end
 
         {:ok, result, _ctx} ->
-          {:ok, result}
+          {:ok, result, result |> Jason.encode_to_iodata!() |> IO.iodata_length(), []}
 
         {:error, reason, ctx} ->
           reason = Response.Capacity.discard(reason, :backfill_consumed)

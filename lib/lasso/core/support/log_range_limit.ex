@@ -127,6 +127,25 @@ defmodule Lasso.Core.Support.LogRangeLimit do
   defp range_advice(_capabilities),
     do: %{reason: :log_range_too_large, action: :reduce_block_range}
 
+  @doc """
+  Whether an upstream plan restriction refuses an eth_getLogs block range.
+
+  The pipeline keeps such a refusal as the upstream's own capability error, so
+  a caller that can narrow the range recognizes it here. A plan restriction
+  without range wording, such as a method the plan excludes, does not qualify.
+  """
+  @spec plan_range_refusal?(term()) :: boolean()
+  def plan_range_refusal?(%JError{code: code, message: message, data: data})
+      when is_binary(message) do
+    ErrorClassification.invalid_request_plan_restriction?(code, message, data) and
+      message
+      |> String.slice(0, 4_096)
+      |> String.downcase()
+      |> String.contains?(["block range" | @patterns])
+  end
+
+  def plan_range_refusal?(_reason), do: false
+
   @doc "Whether a translated limit belongs to the upstream rather than to Lasso's response cap."
   @spec upstream_limit?(term(), keyword()) :: boolean()
   def upstream_limit?(reason, opts \\ []),
